@@ -99,74 +99,130 @@ function filtered() {
   return jobs.filter(j => (!f || (f === "_none" ? !namesOf(j).length : namesOf(j).map(x => x.toLowerCase()).includes((sel?.name || "").toLowerCase())))
     && (!ui.typeF || j.type === ui.typeF));
 }
-function tiles() {
-  const t0 = todayStr(), wk0 = addDays(t0, -dowMon(t0)), wk1 = addDays(wk0, 7), wk2 = addDays(wk0, 14), end = addDays(t0, 14);
-  const up = jobs.filter(j => j.date >= t0 && j.date < end && j.status !== "Cancelled");
-  const cnt = k => { const a = up.filter(j => j.type === k); return [a.length, a.filter(j => j.date < wk1).length, a.filter(j => j.date >= wk1 && j.date < wk2).length]; };
-  const T = [["backslab", "Backslabs"], ["clean", "Site cleans"], ["spoil", "Spoil removals"], ["other", "Other"]];
-  return `<section class="tiles">${T.map(([k, n]) => { const [a, b, c] = cnt(k);
-    return `<button class="tile t-${k} ${ui.typeF === k ? "on" : ""}" data-type="${k}"><span class="big">${a}</span><span class="nm">${n}</span>
-      <span class="sm">This wk ${b} · Next wk ${c}</span></button>`; }).join("")}</section>`;
+// ServiceM8-style queues, derived from existing fields only (status + sm8Status from the importer).
+const QUEUES = ["Quote", "Work Order", "Unsuccessful", "Completed"];
+const QCLS = { "Quote": "q-quote", "Work Order": "q-wo", "Unsuccessful": "q-uns", "Completed": "q-comp" };
+function queueOf(j) {
+  if (j.status === "Cancelled" || j.sm8Status === "Unsuccessful") return "Unsuccessful";
+  if (j.status === "Done" || j.sm8Status === "Completed") return "Completed";
+  if (j.sm8Status === "Quote") return "Quote";
+  return "Work Order";
 }
-function jobCard(j, compact) {
-  const names = namesOf(j).map(label).join(", ") || "Unassigned";
-  return `<div class="job s-${(j.status || "").replace(" ", "")} t-${j.type}" draggable="true" data-id="${j.id}">
-    <div class="jt">${esc(j.time || "")}${j.durationHrs ? ` <small>${esc(j.durationHrs)}h</small>` : ""}</div>
-    <div class="jm"><div class="addr">${esc(j.address || "-")}</div>
-      <div class="cl"><span class="badge t-${j.type}">${esc(TYPES[j.type] || j.type)}</span> ${esc(j.client || "")} · <b>${esc(names)}</b></div>
-      ${compact ? "" : `<div class="ds">${esc(j.description || "")}</div>`}
-      <div class="meta">PO ${esc(j.po || "—")} · <span class="st">${esc(j.status)}</span>${j.loads ? ` · ${j.loads} loads` : ""}${j.sm8JobNo ? ` · SM8 #${esc(j.sm8JobNo)}` : ""}</div></div>
-    <div class="mv"><button class="ghost sm" data-move="-1" title="Previous day">◀</button><button class="ghost sm" data-move="1" title="Next day">▶</button></div></div>`;
+const jobNo = j => j.sm8JobNo ? j.sm8JobNo : "HW-" + String(j.id || "").slice(-4).toUpperCase();
+const firstLine = s => String(s || "").split(/\n|\. /)[0];
+const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Unscheduled";
+const NAV = [["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["clients", "👤", "Clients", 1], ["inbox", "✉", "Inbox", 1],
+  ["invoices", "$", "Invoices", 1], ["reports", "📈", "Reports", 1], ["settings", "⚙", "Settings", 1]];
+ui.view = "jobs"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
+function shell(inner) {
+  return `<div class="sm-layout"><nav class="sm-side">${NAV.map(([k, ic, n, soon]) =>
+    `<button class="sm-nav ${ui.view === k ? "on" : ""} ${soon ? "soon" : ""}" ${soon ? "disabled title=\"Not built yet\"" : `data-view="${k}"`}><span class="ic">${ic}</span><span>${n}</span></button>`).join("")}</nav>
+    <section class="sm-main">${inner}</section></div>`;
+}
+function jobRow(j) {
+  const q = queueOf(j), names = namesOf(j).map(label).join(", ");
+  return `<tr class="jr" data-id="${j.id}" draggable="true"><td><span class="qdot ${QCLS[q]}" title="${q}"></span></td>
+    <td class="jn">#${esc(jobNo(j))}</td><td><b>${esc(j.client || "")}</b><div class="sub">${esc(j.address || "-")}</div></td>
+    <td>${esc(firstLine(j.description))}<div class="sub">${esc(TYPES[j.type] || "")}${j.po ? " · PO " + esc(j.po) : ""}</div></td>
+    <td>${esc(shortDate(j.date))}<div class="sub">${esc(j.time || "")}${j.durationHrs ? " · " + esc(j.durationHrs) + "h" : ""}</div></td>
+    <td>${names ? esc(names) : `<span class="unal">Unallocated</span>`}</td>
+    <td><span class="qpill ${QCLS[q]}">${q}</span>${j.status === "In progress" ? `<div class="sub inprog">In progress</div>` : ""}</td></tr>`;
+}
+function jobsView(all) {
+  const t = ui.q.toLowerCase();
+  const fs = all.filter(j => (!t || [jobNo(j), j.client, j.address, j.description, j.po, namesOf(j).join(" ")].join(" ").toLowerCase().includes(t)));
+  const cnt = q => fs.filter(j => queueOf(j) === q).length;
+  const list = fs.filter(j => ui.queue === "All" || queueOf(j) === ui.queue)
+    .sort((a, b) => ((a.date || "9") + (a.time || "")).localeCompare((b.date || "9") + (b.time || "")));
+  return `<div class="sm-head"><h1>Jobs</h1><button id="new" class="sm-btn primary">+ New Job</button></div>
+    <div class="qtabs"><button data-q="All" class="${ui.queue === "All" ? "on" : ""}">All Jobs <span>${fs.length}</span></button>
+      ${QUEUES.map(q => `<button data-q="${q}" class="${QCLS[q]} ${ui.queue === q ? "on" : ""}"><span class="qdot ${QCLS[q]}"></span>${q} <span>${cnt(q)}</span></button>`).join("")}</div>
+    <div class="filters"><select id="fs"><option value="">All staff</option>${staff.map(s => `<option value="${esc(skey(s))}" ${ui.staffF === skey(s) ? "selected" : ""}>${esc(label(s.name))}</option>`).join("")}<option value="_none" ${ui.staffF === "_none" ? "selected" : ""}>Unallocated</option></select>
+      <select id="ft"><option value="">All categories</option>${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${ui.typeF === k ? "selected" : ""}>${v}</option>`).join("")}</select>
+      <span class="muted sub">Showing 2 weeks back to 4 weeks ahead, plus unscheduled</span></div>
+    <table class="jt"><thead><tr><th></th><th>Job #</th><th>Client / Site</th><th>Description</th><th>Scheduled</th><th>Staff</th><th>Status</th></tr></thead>
+    <tbody>${list.map(jobRow).join("") || `<tr><td colspan="7" class="muted pad">No jobs in this queue</td></tr>`}</tbody></table>`;
+}
+function rowsFor(all) {
+  const rows = staff.map(s => ({ key: skey(s), name: label(s.name), raw: s.name }));
+  rows.push({ key: "_none", name: "Unallocated", raw: null });
+  const has = (j, r) => r.raw ? namesOf(j).map(x => x.toLowerCase()).includes(r.raw.toLowerCase()) : !namesOf(j).length;
+  return rows.map(r => ({ ...r, has: j => has(j, r) }));
+}
+function dispatchView(all) {
+  const t0 = todayStr(), wk0 = addDays(addDays(t0, -dowMon(t0)), 7 * ui.wk);
+  const dayD = addDays(t0, ui.wk);
+  const days = ui.dview === "week" ? [...Array(7)].map((_, i) => addDays(wk0, i)) : [dayD];
+  const sched = all.filter(j => j.date && queueOf(j) !== "Unsuccessful");
+  const rows = rowsFor(all);
+  const chip = j => `<div class="dchip ${QCLS[queueOf(j)]} t-${j.type} ${j.status === "In progress" ? "inprog" : ""}" draggable="true" data-id="${j.id}" title="${esc(j.client)} – ${esc(j.description)}">
+      <b>${esc(j.time || "")}</b> ${esc((j.address || "").split(",")[0])}<div class="sub">${esc(TYPES[j.type] || "")} · #${esc(jobNo(j))}</div></div>`;
+  let grid;
+  if (ui.dview === "week") {
+    grid = `<div class="dgrid" style="grid-template-columns:150px repeat(7,minmax(0,1fr))"><div class="dh"></div>${days.map(d => `<div class="dh ${d === t0 ? "today" : ""}">${shortDate(d)}</div>`).join("")}
+      ${rows.map(r => `<div class="dname">${esc(r.name)}</div>${days.map(d => `<div class="dcell drop ${d === t0 ? "today" : ""}" data-date="${d}" data-staff="${esc(r.key)}">
+        ${sched.filter(j => j.date === d && r.has(j)).sort((a, b) => (a.time || "").localeCompare(b.time || "")).map(chip).join("")}</div>`).join("")}`).join("")}</div>`;
+  } else {
+    const hrs = [...Array(13)].map((_, i) => 6 + i);
+    grid = `<div class="dgrid" style="grid-template-columns:150px repeat(13,minmax(0,1fr))"><div class="dh"></div>${hrs.map(h => `<div class="dh">${h > 12 ? h - 12 + "pm" : h + (h === 12 ? "pm" : "am")}</div>`).join("")}
+      ${rows.map(r => `<div class="dname">${esc(r.name)}</div>${hrs.map(h => `<div class="dcell drop" data-date="${dayD}" data-hour="${h}" data-staff="${esc(r.key)}">
+        ${sched.filter(j => j.date === dayD && r.has(j) && parseInt(j.time || "7") === h).map(chip).join("")}</div>`).join("")}`).join("")}</div>`;
+  }
+  const uns = (ui.undated || []).concat(all.filter(j => !j.date && !(ui.undated || []).some(u => u.id === j.id)));
+  return `<div class="sm-head"><h1>Dispatch Board</h1>
+      <div class="seg"><button data-dv="day" class="${ui.dview === "day" ? "on" : ""}">Day</button><button data-dv="week" class="${ui.dview === "week" ? "on" : ""}">Week</button></div>
+      <button class="sm-btn" data-wk="-1">‹</button><button class="sm-btn" data-wk="0">Today</button><button class="sm-btn" data-wk="1">›</button>
+      <span class="drange">${ui.dview === "week" ? shortDate(days[0]) + " – " + shortDate(days[6]) : dayLabel(dayD)}</span>
+      <button id="new" class="sm-btn primary">+ New Job</button></div>
+    <div class="dwrap"><div class="dboard">${grid}<p class="sub muted">Drag a job to another day or staff member to reschedule (saves to the app only, not ServiceM8).</p></div>
+      <aside class="dside"><h3>Unscheduled <span class="cnt">${uns.length}</span></h3>${uns.map(j => `<div class="uj" draggable="true" data-id="${j.id}"><span class="qdot ${QCLS[queueOf(j)]}"></span><b>#${esc(jobNo(j))}</b> ${esc(j.client || "")}<div class="sub">${esc(j.address || "")}</div><div class="sub">${esc(firstLine(j.description))}</div></div>`).join("") || `<p class="muted sub">Nothing waiting – nice.</p>`}</aside></div>`;
 }
 function renderAdmin() {
   if (!me || me.role !== "admin") return;
-  const t0 = todayStr(), days = [...Array(14)].map((_, i) => addDays(t0, i));
-  const fj = filtered();
-  const overdue = fj.filter(j => j.date < t0 && ["Scheduled", "In progress"].includes(j.status));
-  const undated = (ui.undated || []).filter(j => fj === jobs || (!ui.typeF || j.type === ui.typeF));
-  let body;
-  if (ui.view === "list") {
-    body = days.map(d => { const js = fj.filter(j => j.date === d).sort((a, b) => (a.time || "").localeCompare(b.time || ""));
-      const lab = d === t0 ? " · Today" : d === addDays(t0, 1) ? " · Tomorrow" : "";
-      return `<section class="day drop" data-date="${d}"><h3>${dayLabel(d)}${lab} <span class="cnt">${js.length}</span></h3>
-        ${js.map(j => jobCard(j)).join("") || `<p class="muted empty">No jobs</p>`}</section>`; }).join("");
-  } else {
-    const start = addDays(t0, -dowMon(t0)), cells = [...Array(14)].map((_, i) => addDays(start, i));
-    body = `<div class="cal">${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(x => `<div class="ch">${x}</div>`).join("")}
-      ${cells.map(d => { const js = fj.filter(j => j.date === d).sort((a, b) => (a.time || "").localeCompare(b.time || ""));
-        return `<div class="cc drop ${d === t0 ? "today" : ""} ${d < t0 ? "past" : ""}" data-date="${d}"><div class="cd">${d.slice(8)}/${d.slice(5, 7)}</div>
-          ${js.map(j => `<div class="chip t-${j.type} s-${(j.status || "").replace(" ", "")}" draggable="true" data-id="${j.id}">${esc(j.time || "")} ${esc((j.address || "").split(",")[0])}</div>`).join("")}</div>`; }).join("")}</div>`;
-  }
-  $("#app").innerHTML = `${tiles()}
-    <div class="bar">
-      <div class="seg"><button data-view="list" class="${ui.view === "list" ? "on" : ""}">Days</button><button data-view="cal" class="${ui.view === "cal" ? "on" : ""}">Calendar</button></div>
-      <select id="fs"><option value="">All staff</option>${staff.map(s => `<option value="${esc(skey(s))}" ${ui.staffF === skey(s) ? "selected" : ""}>${esc(label(s.name))}</option>`).join("")}<option value="_none" ${ui.staffF === "_none" ? "selected" : ""}>Unassigned</option></select>
-      <select id="ft"><option value="">All types</option>${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${ui.typeF === k ? "selected" : ""}>${v}</option>`).join("")}</select>
-      <button id="new" class="primary">+ New job</button></div>
-    ${overdue.length ? `<section class="day warn"><h3>Overdue / not marked done <span class="cnt">${overdue.length}</span></h3>${overdue.map(j => jobCard(j, true)).join("")}</section>` : ""}
-    ${undated.length ? `<section class="day"><h3>Unscheduled (open jobs, no booking) <span class="cnt">${undated.length}</span></h3>${undated.map(j => jobCard(j, true)).join("")}</section>` : ""}
-    ${body}`;
+  if ($("#dlg").open) return;          // don't redraw under an open job card
+  document.body.className = "admin";
+  const fj = filtered(), und = (ui.undated || []).filter(j => (!ui.typeF || j.type === ui.typeF));
+  const all = [...fj, ...und.filter(u => !fj.some(j => j.id === u.id))];
+  $("#app").innerHTML = shell(ui.view === "dispatch" ? dispatchView(all) : jobsView(all));
   const A = $("#app");
-  A.querySelectorAll(".tile").forEach(b => b.onclick = () => { ui.typeF = ui.typeF === b.dataset.type ? "" : b.dataset.type; renderAdmin(); });
   A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.view = b.dataset.view; renderAdmin(); });
-  $("#fs").onchange = e => { ui.staffF = e.target.value; renderAdmin(); };
-  $("#ft").onchange = e => { ui.typeF = e.target.value; renderAdmin(); };
-  $("#new").onclick = () => editJob(null);
-  const all = [...jobs, ...(ui.undated || [])];
+  A.querySelectorAll("[data-q]").forEach(b => b.onclick = () => { ui.queue = b.dataset.q; renderAdmin(); });
+  A.querySelectorAll("[data-dv]").forEach(b => b.onclick = () => { ui.dview = b.dataset.dv; ui.wk = 0; renderAdmin(); });
+  A.querySelectorAll("[data-wk]").forEach(b => b.onclick = () => { ui.wk = +b.dataset.wk === 0 ? 0 : ui.wk + +b.dataset.wk; renderAdmin(); });
+  if ($("#fs")) $("#fs").onchange = e => { ui.staffF = e.target.value; renderAdmin(); };
+  if ($("#ft")) $("#ft").onchange = e => { ui.typeF = e.target.value; renderAdmin(); };
+  if ($("#new")) $("#new").onclick = () => editJob(null);
+  const pool = [...jobs, ...(ui.undated || [])];
   A.querySelectorAll("[data-id]").forEach(el => {
-    el.onclick = ev => { if (ev.target.closest("[data-move]")) return; editJob(all.find(j => j.id === el.dataset.id)); };
-    el.ondragstart = ev => { ev.dataTransfer.setData("text/plain", el.dataset.id); el.classList.add("dragging"); };
+    el.onclick = () => editJob(pool.find(j => j.id === el.dataset.id));
+    el.ondragstart = ev => { ev.dataTransfer.setData("text/plain", el.dataset.id + "|" + (el.closest("[data-staff]")?.dataset.staff || "")); el.classList.add("dragging"); };
     el.ondragend = () => el.classList.remove("dragging");
-  });
-  A.querySelectorAll("[data-move]").forEach(b => b.onclick = ev => {
-    ev.stopPropagation(); const j = all.find(x => x.id === b.closest("[data-id]").dataset.id);
-    moveJob(j, addDays(j.date || todayStr(), +b.dataset.move));
   });
   A.querySelectorAll(".drop").forEach(z => {
     z.ondragover = ev => { ev.preventDefault(); z.classList.add("over"); };
     z.ondragleave = () => z.classList.remove("over");
-    z.ondrop = ev => { ev.preventDefault(); z.classList.remove("over"); const j = all.find(x => x.id === ev.dataTransfer.getData("text/plain")); if (j && j.date !== z.dataset.date) moveJob(j, z.dataset.date); };
+    z.ondrop = ev => { ev.preventDefault(); z.classList.remove("over");
+      const [id, from] = ev.dataTransfer.getData("text/plain").split("|"); const j = pool.find(x => x.id === id);
+      if (j) dispatchMove(j, z.dataset.date, from, z.dataset.staff, z.dataset.hour); };
   });
+}
+// Dispatch drag: date (and optionally hour / staff row). Writes Firestore only (admin), marks editedInApp so the
+// 30-min ServiceM8 import keeps the change. Nothing is written to ServiceM8.
+async function dispatchMove(j, date, fromKey, toKey, hour) {
+  const u = { date, editedInApp: true, updatedAt: serverTimestamp(), updatedBy: me.uid };
+  if (hour) u.time = String(hour).padStart(2, "0") + ":" + ((j.time || "00:00").slice(3) || "00");
+  if (toKey && fromKey !== toKey) {
+    const find = k => staff.find(s => skey(s) === k);
+    let names = namesOf(j).slice(); const from = find(fromKey), to = find(toKey);
+    if (from) names = names.filter(n => n.toLowerCase() !== from.name.toLowerCase());
+    if (toKey === "_none") names = []; else if (to && !names.some(n => n.toLowerCase() === to.name.toLowerCase())) names.push(to.name);
+    u.assignedNames = names;
+    u.assigned = names.map(n => (staff.find(s => s.name.toLowerCase() === n.toLowerCase()) || {}).uid).filter(Boolean);
+  }
+  if (j.date === date && !u.assignedNames && !u.time) return;
+  try { await updateDoc(doc(db, "jobs", j.id), u); } catch (e) { return toast("Not saved: " + (e.code || e.message)); }
+  if (ui.undated) ui.undated = ui.undated.filter(x => x.id !== j.id);
+  toast(`Rescheduled to ${shortDate(date)}${u.time ? " " + u.time : ""}${u.assignedNames ? " · " + (u.assignedNames.join(", ") || "Unallocated") : ""}`);
 }
 async function moveJob(j, date) {
   await updateDoc(doc(db, "jobs", j.id), { date, editedInApp: true, updatedAt: serverTimestamp(), updatedBy: me.uid });
@@ -176,23 +232,42 @@ async function moveJob(j, date) {
 function editJob(j) {
   const n = !j; j = j || { date: todayStr(), time: "07:00", durationHrs: 4, status: "Scheduled", type: "spoil", assigned: [], client: CLIENTS[0] };
   const d = $("#dlg");
-  d.innerHTML = `<form method="dialog" id="jf" class="jf"><h2>${n ? "New job" : "Edit job"}</h2>
-    <label>Client<input name="client" list="clients" value="${esc(j.client)}" required><datalist id="clients">${CLIENTS.map(c => `<option value="${esc(c)}">`).join("")}</datalist></label>
-    <label>Address / lot<input name="address" value="${esc(j.address)}" required></label>
-    <div class="row"><label>Job type<select name="type">${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${j.type === k ? "selected" : ""}>${v}</option>`).join("")}</select></label>
-      <label>PO<input name="po" value="${esc(j.po)}"></label></div>
-    <label>Description<textarea name="description" rows="3">${esc(j.description)}</textarea></label>
-    <p class="hint">Spoil removal is always its own job — never add spoil to a backslab job.</p>
-    <div class="row"><label>Date<input type="date" name="date" value="${esc(j.date)}"></label>
-      <label>Time<input type="time" name="time" value="${esc(j.time)}"></label>
-      <label>Hours<input type="number" step="0.5" min="0" name="durationHrs" value="${esc(j.durationHrs)}"></label></div>
-    <fieldset><legend>Assigned staff</legend>${staff.map(s => `<label class="ck"><input type="checkbox" name="assigned" value="${esc(skey(s))}" ${namesOf(j).map(x => x.toLowerCase()).includes(s.name.toLowerCase()) ? "checked" : ""}> ${esc(label(s.name))}</label>`).join("")}</fieldset>
-    <div class="row"><label>Status<select name="status">${STATUSES.map(s => `<option ${j.status === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>
-      <label>Loads<input type="number" min="0" name="loads" value="${esc(j.loads ?? "")}"></label></div>
-    <label>Notes (office)<textarea name="notes" rows="2">${esc(j.notes)}</textarea></label>
-    ${(j.log || []).length ? `<div class="log"><b>Site notes</b>${j.log.map(l => `<div><small>${esc(l.byName)} ${esc(l.at)}</small> ${esc(l.text)}</div>`).join("")}</div>` : ""}
+  const qq = n ? "Work Order" : queueOf(j), hist = [];
+  if (j.source === "sm8") hist.push(["ServiceM8", `Imported from ServiceM8 job #${j.sm8JobNo || "?"} (${j.sm8Status || "?"})`]);
+  if (j.editedInApp) hist.push(["App", "Edited in the app – ServiceM8 import will no longer overwrite this job"]);
+  if (j.completedByName) hist.push([j.completedByName, `Completed${j.loads ? ` · ${j.loads} loads` : ""}`]);
+  const SL = { "Scheduled": "Work Order – scheduled", "In progress": "Work Order – in progress", "Done": "Completed", "Cancelled": "Unsuccessful" };
+  d.className = "jobcard"; d.onclose = () => renderAdmin();
+  d.innerHTML = `<form method="dialog" id="jf" class="jc">
+    <div class="jc-top ${QCLS[qq]}"><div><div class="jc-no">${n ? "New Job" : "Job #" + esc(jobNo(j))}</div><div class="jc-q">${qq}${j.sm8Status === "Quote" ? " (quote in ServiceM8)" : ""}</div></div>
+      <label class="jc-st">Job Status<select name="status">${STATUSES.map(s => `<option value="${s}" ${j.status === s ? "selected" : ""}>${SL[s]}</option>`).join("")}</select></label>
+      <button value="cancel" formnovalidate class="jc-x" title="Close">✕</button></div>
+    <div class="jc-body"><div class="jc-col">
+      <h4>Client &amp; Site</h4>
+      <label>Client<input name="client" list="clients" value="${esc(j.client)}" required><datalist id="clients">${CLIENTS.map(c => `<option value="${esc(c)}">`).join("")}</datalist></label>
+      <label>Job (site) address<input name="address" value="${esc(j.address)}" required></label>
+      ${j.address ? `<a class="sub" href="${mapsUrl(j.address)}" target="_blank" rel="noopener">📍 Open in Maps</a>` : ""}
+      <h4>Job Description</h4>
+      <textarea name="description" rows="4">${esc(j.description)}</textarea>
+      <p class="hint">Spoil removal is always its own job — never add spoil to a backslab job.</p>
+      <div class="row"><label>Category<select name="type">${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${j.type === k ? "selected" : ""}>${v}</option>`).join("")}</select></label>
+        <label>Purchase Order #<input name="po" value="${esc(j.po)}"></label>
+        <label>Loads<input type="number" min="0" name="loads" value="${esc(j.loads ?? "")}"></label></div>
+    </div><div class="jc-col">
+      <h4>Staff Allocation &amp; Schedule</h4>
+      <div class="row"><label>Date<input type="date" name="date" value="${esc(j.date)}"></label>
+        <label>Start<input type="time" name="time" value="${esc(j.time)}"></label>
+        <label>Hours<input type="number" step="0.5" min="0" name="durationHrs" value="${esc(j.durationHrs)}"></label></div>
+      <fieldset class="staffs">${staff.map(s => `<label class="ck"><input type="checkbox" name="assigned" value="${esc(skey(s))}" ${namesOf(j).map(x => x.toLowerCase()).includes(s.name.toLowerCase()) ? "checked" : ""}> <span class="av">${esc(s.name[0])}</span>${esc(label(s.name))}</label>`).join("")}</fieldset>
+      <h4>Notes</h4>
+      <textarea name="notes" rows="2" placeholder="Office notes">${esc(j.notes)}</textarea>
+      <h4>Diary</h4>
+      <div class="diary">${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("")}
+        ${hist.map(([w, t]) => `<div class="de sys"><span class="av">i</span><div><small>${esc(w)}</small><div>${esc(t)}</div></div></div>`).join("")}
+        ${!(j.log || []).length && !hist.length ? `<p class="muted sub">No diary entries yet. Site notes from staff appear here.</p>` : ""}</div>
+    </div></div>
     <p id="ferr" class="err"></p>
-    <div class="btns"><button value="cancel" formnovalidate class="ghost">Close</button><button value="save" class="primary">Save</button></div></form>`;
+    <div class="btns jc-foot"><button value="cancel" formnovalidate class="sm-btn">Close</button><button value="save" class="sm-btn primary">Save Job</button></div></form>`;
   d.showModal();
   const f = $("#jf");
   f.description.oninput = () => { if (n) f.type.value = guessType(f.description.value); };
@@ -212,41 +287,61 @@ function editJob(j) {
     try {
       if (n) await addDoc(collection(db, "jobs"), { ...data, source: "app", log: [], createdAt: serverTimestamp() });
       else await updateDoc(doc(db, "jobs", j.id), data);
-      d.close(); toast("Saved"); if (!data.date) location.reload();
+      d.close(); toast("Saved"); renderAdmin(); if (!data.date) location.reload();
     } catch (e) { $("#ferr").textContent = e.message; }
   };
 }
 
 // ------------------------------------------------------------------ operator
+// ServiceM8 mobile-app style: blue header, today's list -> job detail -> Start / Complete.
 function renderOperator() {
+  document.body.className = "operator";
   const t0 = todayStr(), t1 = addDays(t0, 1), wkEnd = addDays(t0, 7);
   const mine = jobs.filter(j => j.status !== "Cancelled").sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
-  const groups = [["Today", mine.filter(j => j.date === t0 || (j.date < t0 && j.status === "In progress"))],
-    ["Tomorrow", mine.filter(j => j.date === t1)],
-    ["This week", mine.filter(j => j.date > t1 && j.date <= wkEnd)]];
-  $("#app").innerHTML = `<div class="op">${groups.map(([g, js]) => `<section class="opg"><h2>${g} <span class="cnt">${js.length}</span></h2>
-    ${js.map(j => `<article class="opj s-${(j.status || "").replace(" ", "")}" data-id="${j.id}">
-      <div class="opt">${g === "This week" ? dayLabel(j.date).split(" ")[0] + " · " : ""}${esc(j.time || "")} <span class="badge t-${j.type}">${esc(TYPES[j.type] || "")}</span> <span class="st">${esc(j.status)}</span></div>
-      <a class="opa" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener">📍 ${esc(j.address || "-")}</a>
-      <div class="opd">${esc(j.description || "")}</div>
-      <div class="opm">PO <b>${esc(j.po || "—")}</b> · ${esc(j.client || "")}</div>
-      ${(j.log || []).slice(-2).map(l => `<div class="opn">📝 ${esc(l.text)}</div>`).join("")}
-      <div class="opb">${j.status === "Done" ? `<div class="donebar">✔ Done${j.loads ? ` · ${j.loads} loads` : ""}</div>` : `
-        <button class="big start" data-act="start" ${j.status === "In progress" ? "disabled" : ""}>${j.status === "In progress" ? "Started" : "Start"}</button>
-        <button class="big done" data-act="done">Done</button>`}
-        <button class="big note" data-act="note">Add note</button></div></article>`).join("") || `<p class="muted">Nothing booked.</p>`}</section>`).join("")}</div>`;
-  $("#app").querySelectorAll("[data-act]").forEach(b => b.onclick = () => opAction(jobs.find(j => j.id === b.closest("[data-id]").dataset.id), b.dataset.act));
+  const sel = ui.opSel && mine.find(j => j.id === ui.opSel);
+  if (sel) return renderOpDetail(sel);
+  ui.opTab = ui.opTab || "today";
+  const groups = ui.opTab === "today" ? [["Today", mine.filter(j => j.date === t0 || (j.date < t0 && j.status === "In progress"))]]
+    : [["Tomorrow", mine.filter(j => j.date === t1)], ["Later this week", mine.filter(j => j.date > t1 && j.date <= wkEnd)]];
+  $("#app").innerHTML = `<div class="mob"><div class="mob-bar"><div class="mob-title">${ui.opTab === "today" ? "Today" : "My Schedule"}</div><div class="mob-sub">${dayLabel(t0)}</div></div>
+    <div class="mob-tabs"><button data-tab="today" class="${ui.opTab === "today" ? "on" : ""}">Today</button><button data-tab="week" class="${ui.opTab === "week" ? "on" : ""}">Schedule</button></div>
+    ${groups.map(([g, js]) => `<div class="mob-sec">${g} <span>${js.length}</span></div>
+    ${js.map(j => `<div class="mrow" data-id="${j.id}"><div class="mtime">${g === "Today" ? "" : `<small>${esc(dayLabel(j.date).split(" ")[0].slice(0, 3))}</small>`}<b>${esc(j.time || "--")}</b><small>${j.durationHrs ? esc(j.durationHrs) + "h" : ""}</small></div>
+      <div class="mbody"><div class="mcl"><span class="qdot ${QCLS[queueOf(j)]}"></span>${esc(j.client || "")}</div><div class="maddr">${esc(j.address || "-")}</div>
+        <div class="mdesc">${esc(firstLine(j.description))}</div>
+        <div class="mst ${j.status === "In progress" ? "inprog" : j.status === "Done" ? "done" : ""}">${j.status === "Done" ? "✔ Completed" : j.status === "In progress" ? "● In progress" : "Scheduled"} · #${esc(jobNo(j))}</div></div>
+      <div class="chev">›</div></div>`).join("") || `<p class="muted pad">Nothing booked.</p>`}`).join("")}</div>`;
+  $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; renderOperator(); });
+  $("#app").querySelectorAll(".mrow").forEach(r => r.onclick = () => { ui.opSel = r.dataset.id; renderOperator(); window.scrollTo(0, 0); });
+}
+function renderOpDetail(j) {
+  const q = queueOf(j), done = j.status === "Done", started = j.status === "In progress";
+  $("#app").innerHTML = `<div class="mob"><div class="mob-bar det ${QCLS[q]}"><button class="mback" id="back">‹ Jobs</button><div class="mob-title">Job #${esc(jobNo(j))}</div>
+      <div class="mob-sub">${done ? "Completed" : started ? "In progress" : "Work Order"}</div></div>
+    <div class="mcard"><div class="mlbl">Client</div><div class="mval">${esc(j.client || "")}</div></div>
+    <a class="mcard link" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener"><div class="mlbl">Job Address</div><div class="mval big">📍 ${esc(j.address || "-")}</div><div class="chev">›</div></a>
+    <div class="mcard"><div class="mlbl">Scheduled</div><div class="mval">${esc(dayLabel(j.date))} · ${esc(j.time || "")}${j.durationHrs ? " · " + esc(j.durationHrs) + "h" : ""}</div></div>
+    <div class="mcard"><div class="mlbl">Job Description</div><div class="mval">${esc(j.description || "")}</div>
+      <div class="mlbl" style="margin-top:8px">Purchase Order</div><div class="mval"><b>${esc(j.po || "—")}</b></div>
+      ${(j.assignedNames || []).length ? `<div class="mlbl" style="margin-top:8px">Staff</div><div class="mval">${esc(j.assignedNames.join(", "))}</div>` : ""}</div>
+    <div class="mcard"><div class="mlbl">Diary</div>${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("") || `<div class="muted sub">No notes yet</div>`}
+      <button class="mnote" data-act="note">＋ Add Note</button></div>
+    <div class="mactions">${done ? `<div class="donebar">✔ Completed${j.loads ? ` · ${j.loads} loads` : ""}</div>` :
+      `<button class="mbtn start" data-act="start" ${started ? "disabled" : ""}>${started ? "Started" : "▶ Start Job"}</button>
+       <button class="mbtn complete" data-act="done">✔ Complete</button>`}</div></div>`;
+  $("#back").onclick = () => { ui.opSel = null; renderOperator(); };
+  $("#app").querySelectorAll("[data-act]").forEach(b => b.onclick = () => opAction(j, b.dataset.act));
 }
 const logEntry = text => ({ text, by: me.uid, byName: me.name, at: new Date().toLocaleString("en-AU", { timeZone: TZ, dateStyle: "short", timeStyle: "short" }) });
 async function opAction(j, act) {
   const ref = doc(db, "jobs", j.id), base = { updatedAt: serverTimestamp(), updatedBy: me.uid };
   if (act === "start") { await updateDoc(ref, { ...base, status: "In progress", startedAt: serverTimestamp() }); return toast("Started"); }
-  const d = $("#dlg");
-  d.innerHTML = `<form method="dialog" id="of" class="jf"><h2>${act === "done" ? "Mark done" : "Add note"}</h2>
+  const d = $("#dlg"); d.className = ""; d.onclose = null;
+  d.innerHTML = `<form method="dialog" id="of" class="jf"><h2>${act === "done" ? "Complete job" : "Add note"}</h2>
     <p class="muted">${esc(j.address)}</p>
     ${act === "done" ? `<label>Loads (optional)<input name="loads" type="number" inputmode="numeric" min="0" value="${esc(j.loads ?? "")}"></label>` : ""}
     <label>Note${act === "done" ? " (optional)" : ""}<textarea name="note" rows="3" ${act === "note" ? "required" : ""}></textarea></label>
-    <div class="btns"><button value="cancel" formnovalidate class="ghost big">Cancel</button><button value="ok" class="primary big">${act === "done" ? "Done ✔" : "Save note"}</button></div></form>`;
+    <div class="btns"><button value="cancel" formnovalidate class="ghost big">Cancel</button><button value="ok" class="primary big">${act === "done" ? "Complete ✔" : "Save note"}</button></div></form>`;
   d.showModal();
   $("#of").onsubmit = async ev => {
     if (ev.submitter?.value !== "ok") return;
