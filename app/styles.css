@@ -78,7 +78,7 @@ table.jt{width:100%;border-collapse:collapse;background:#fff;border:1px solid va
 .jn{font-weight:600;color:var(--sm-blue);white-space:nowrap}.sub{font-size:12px;color:var(--sm-mut)}.unal{color:var(--q-uns);font-size:13px}.inprog{color:#d35400;font-weight:600}
 /* dispatch */
 .drange{font-weight:600;margin-left:6px}
-.dwrap{display:grid;grid-template-columns:1fr 250px;gap:12px}
+.dwrap{display:grid;grid-template-columns:1fr;gap:12px}
 .dgrid{display:grid;background:#fff;border:1px solid var(--sm-line)}
 .dh{background:#f7f9fa;font-size:12px;font-weight:600;color:var(--sm-mut);padding:6px;border-bottom:1px solid var(--sm-line);border-left:1px solid var(--sm-line);text-align:center}
 .dh.today{background:#e3f1fb;color:var(--sm-blue)}
