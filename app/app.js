@@ -87,14 +87,11 @@ function renderLogin() {
 }
 
 // ------------------------------------------------------------------ admin
-// staff = people with a login {uid,name} + name-only people from ServiceM8 (e.g. Nick) {uid:null,name}.
+// staff = people with an app login {uid,name} only (Alex, Patrick). Anyone else shows as Unallocated.
 // Jobs keep assigned[] (login uids, used by the rules) and assignedNames[] (everyone, used for display/filter).
 const staffName = uid => (staff.find(s => s.uid === uid) || {}).name || "?";
 const skey = s => s.uid || "name:" + s.name;
-function addNameOnlyStaff(list) {
-  for (const j of list) for (const n of j.assignedNames || [])
-    if (!staff.some(s => s.name.toLowerCase() === n.toLowerCase())) staff.push({ uid: null, name: n });
-}
+function addNameOnlyStaff(list) { /* no name-only staff: only app logins are listed */ }
 const namesOf = j => (j.assignedNames && j.assignedNames.length ? j.assignedNames : (j.assigned || []).map(staffName));
 const label = n => staff.some(s => !s.uid && s.name === n) ? `${n} (no login)` : n;
 function filtered() {
