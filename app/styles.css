@@ -124,3 +124,6 @@ body.operator main{padding:0;max-width:560px}
 .mbtn.complete{background:var(--q-comp);border-color:var(--q-comp);color:#fff}.mactions .donebar{grid-column:1/-1}
 @media (max-width:700px){.sm-layout{grid-template-columns:1fr}.sm-side{flex-direction:row;overflow:auto}.dwrap,.jc-body{grid-template-columns:1fr}}
 .dcell,.dh{min-width:0;overflow:hidden}
+/* invoicing */
+.jt.inv input{padding:5px 7px;border-radius:4px;border-color:var(--sm-line);font-size:13px}.jt.inv .iamt{width:110px}.jt.inv .isel{width:auto}
+.warnt{color:var(--q-quote)}.sm-btn:disabled{opacity:.5;cursor:default}
