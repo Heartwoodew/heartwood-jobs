@@ -63,7 +63,7 @@ onAuthStateChanged(auth, async user => {
     const q = query(collection(db, "jobs"), where("date", ">=", addDays(todayStr(), -14)), where("date", "<=", addDays(todayStr(), 28)), orderBy("date"));
     const u1 = onSnapshot(q, s => { jobs = s.docs.map(d => ({ id: d.id, ...d.data() })); addNameOnlyStaff(jobs); renderAdmin(); });
     // Invoicing: every Done job (any date), admin only.
-    const u2 = onSnapshot(query(collection(db, "jobs"), where("status", "==", "Done")), s => { ui.done = s.docs.map(d => ({ id: d.id, ...d.data() })); if (ui.view === "invoices") renderAdmin(); });
+    const u2 = onSnapshot(query(collection(db, "jobs"), where("status", "==", "Done")), s => { ui.done = s.docs.map(d => ({ id: d.id, ...d.data() })); if (ui.view === "invoices" || ui.view === "completed") renderAdmin(); });
     unsub = () => { u1(); u2(); };
     getDocs(query(collection(db, "jobs"), where("date", "==", ""))).then(s => { ui.undated = s.docs.map(d => ({ id: d.id, ...d.data() })); addNameOnlyStaff(ui.undated); renderAdmin(); });
   } else {
@@ -100,7 +100,7 @@ function filtered() {
     && (!ui.typeF || j.type === ui.typeF));
 }
 // ServiceM8-style queues, derived from existing fields only (status + sm8Status from the importer).
-const QUEUES = ["Quote", "Work Order", "Unsuccessful", "Completed"];
+const QUEUES = ["Work Order", "Quote"];          // main Jobs screen: open work only; Completed/Unsuccessful have their own screen
 const QCLS = { "Quote": "q-quote", "Work Order": "q-wo", "Unsuccessful": "q-uns", "Completed": "q-comp" };
 function queueOf(j) {
   if (j.status === "Cancelled" || j.sm8Status === "Unsuccessful") return "Unsuccessful";
@@ -111,7 +111,7 @@ function queueOf(j) {
 const jobNo = j => j.sm8JobNo ? j.sm8JobNo : "HW-" + String(j.id || "").slice(-4).toUpperCase();
 const firstLine = s => String(s || "").split(/\n|\. /)[0];
 const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Unscheduled";
-const NAV = [["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["clients", "👤", "Clients", 1], ["inbox", "✉", "Inbox", 1],
+const NAV = [["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["completed", "✔", "Completed"], ["clients", "👤", "Clients", 1], ["inbox", "✉", "Inbox", 1],
   ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["settings", "⚙", "Settings", 1]];
 ui.view = "jobs"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
 function shell(inner) {
@@ -135,17 +135,32 @@ function groupByDate(list) {
 function jobsView(all) {
   const t = ui.q.toLowerCase();
   const fs = all.filter(j => (!t || [jobNo(j), j.client, j.address, j.description, j.po, namesOf(j).join(" ")].join(" ").toLowerCase().includes(t)));
-  const cnt = q => fs.filter(j => queueOf(j) === q).length;
-  const list = fs.filter(j => ui.queue === "All" || queueOf(j) === ui.queue)
+  const open = fs.filter(j => QUEUES.includes(queueOf(j)));
+  if (!QUEUES.includes(ui.queue)) ui.queue = "All";
+  const cnt = q => open.filter(j => queueOf(j) === q).length;
+  const list = open.filter(j => ui.queue === "All" || queueOf(j) === ui.queue)
     .sort((a, b) => ((a.date || "9") + (a.time || "")).localeCompare((b.date || "9") + (b.time || "")));
   return `<div class="sm-head"><h1>Jobs</h1><button id="new" class="sm-btn primary">+ New Job</button></div>
-    <div class="qtabs"><button data-q="All" class="${ui.queue === "All" ? "on" : ""}">All Jobs <span>${fs.length}</span></button>
+    <div class="qtabs"><button data-q="All" class="${ui.queue === "All" ? "on" : ""}">All open <span>${open.length}</span></button>
       ${QUEUES.map(q => `<button data-q="${q}" class="${QCLS[q]} ${ui.queue === q ? "on" : ""}"><span class="qdot ${QCLS[q]}"></span>${q} <span>${cnt(q)}</span></button>`).join("")}</div>
     <div class="filters"><select id="fs"><option value="">All staff</option>${staff.map(s => `<option value="${esc(skey(s))}" ${ui.staffF === skey(s) ? "selected" : ""}>${esc(label(s.name))}</option>`).join("")}<option value="_none" ${ui.staffF === "_none" ? "selected" : ""}>Unallocated</option></select>
       <select id="ft"><option value="">All categories</option>${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${ui.typeF === k ? "selected" : ""}>${v}</option>`).join("")}</select>
       <span class="muted sub">Showing 2 weeks back to 4 weeks ahead, plus unscheduled</span></div>
     <table class="jt"><thead><tr><th></th><th>Job #</th><th>Client / Site</th><th>Description</th><th>Scheduled</th><th>Staff</th><th>Status</th></tr></thead>
     <tbody>${groupByDate(list).map(([d, js]) => `<tr class="dayhdr"><td colspan="7">${esc(d ? dayLabel(d) : "Unscheduled")} <span class="cnt">${js.length}</span></td></tr>${js.map(jobRow).join("")}`).join("") || `<tr><td colspan="7" class="muted pad">No jobs in this queue</td></tr>`}</tbody></table>`;
+}
+// Completed screen: Completed (default) or Unsuccessful, newest first, grouped by day. Uses the 6-week window plus
+// every Done job (ui.done, any date) so older completions are still listed.
+function completedView(all) {
+  const kind = ui.cq === "Unsuccessful" ? "Unsuccessful" : "Completed", t = ui.q.toLowerCase();
+  const m = new Map(); for (const j of [...all, ...(ui.done || [])]) if (!m.has(j.id)) m.set(j.id, j);
+  const pool = [...m.values()].filter(j => (!ui.typeF || j.type === ui.typeF) && (!t || [jobNo(j), j.client, j.address, j.description, j.po].join(" ").toLowerCase().includes(t)));
+  const cnt = k => pool.filter(j => queueOf(j) === k).length;
+  const list = pool.filter(j => queueOf(j) === kind).sort((a, b) => ((b.date || "") + (b.time || "")).localeCompare((a.date || "") + (a.time || "")));
+  return `<div class="sm-head"><h1>${kind} jobs</h1></div>
+    <div class="qtabs">${["Completed", "Unsuccessful"].map(k => `<button data-cq="${k}" class="${QCLS[k]} ${kind === k ? "on" : ""}"><span class="qdot ${QCLS[k]}"></span>${k} <span>${cnt(k)}</span></button>`).join("")}</div>
+    <table class="jt"><thead><tr><th></th><th>Job #</th><th>Client / Site</th><th>Description</th><th>Scheduled</th><th>Staff</th><th>Status</th></tr></thead>
+    <tbody>${groupByDate(list).map(([d, js]) => `<tr class="dayhdr"><td colspan="7">${esc(d ? dayLabel(d) : "No date")} <span class="cnt">${js.length}</span></td></tr>${js.map(jobRow).join("")}`).join("") || `<tr><td colspan="7" class="muted pad">No ${kind.toLowerCase()} jobs</td></tr>`}</tbody></table>`;
 }
 function rowsFor(all) {
   const rows = staff.map(s => ({ key: skey(s), name: label(s.name), raw: s.name }));
@@ -187,10 +202,11 @@ function renderAdmin() {
   document.body.className = "admin";
   const fj = filtered(), und = (ui.undated || []).filter(j => (!ui.typeF || j.type === ui.typeF));
   const all = [...fj, ...und.filter(u => !fj.some(j => j.id === u.id))];
-  $("#app").innerHTML = shell(ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : jobsView(all));
+  $("#app").innerHTML = shell(ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "completed" ? completedView(all) : jobsView(all));
   const A = $("#app");
   if (ui.view === "invoices") bindInvoices(A);
   A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.view = b.dataset.view; renderAdmin(); });
+  A.querySelectorAll("[data-cq]").forEach(b => b.onclick = () => { ui.cq = b.dataset.cq; renderAdmin(); });
   A.querySelectorAll("[data-q]").forEach(b => b.onclick = () => { ui.queue = b.dataset.q; renderAdmin(); });
   A.querySelectorAll("[data-dv]").forEach(b => b.onclick = () => { ui.dview = b.dataset.dv; ui.wk = 0; renderAdmin(); });
   A.querySelectorAll("[data-wk]").forEach(b => b.onclick = () => { ui.wk = +b.dataset.wk === 0 ? 0 : ui.wk + +b.dataset.wk; renderAdmin(); });
@@ -451,16 +467,19 @@ function renderOperator() {
   const sel = ui.opSel && mine.find(j => j.id === ui.opSel);
   if (sel) return renderOpDetail(sel);
   ui.opTab = ui.opTab || "today";
-  const groups = ui.opTab === "today" ? [["Today", mine.filter(j => j.date === t0 || (j.date < t0 && j.status === "In progress"))]]
-    : groupByDate(mine.filter(j => j.date >= t1 && j.date <= wkEnd)).map(([d, js]) => [(d === t1 ? "Tomorrow · " : "") + dayLabel(d), js]);
-  $("#app").innerHTML = `<div class="mob"><div class="mob-bar"><div class="mob-title">${ui.opTab === "today" ? "Today" : "My Schedule"}</div><div class="mob-sub">${dayLabel(t0)}</div></div>
-    <div class="mob-tabs"><button data-tab="today" class="${ui.opTab === "today" ? "on" : ""}">Today</button><button data-tab="week" class="${ui.opTab === "week" ? "on" : ""}">Schedule</button></div>
+  const isDone = j => queueOf(j) === "Completed" || queueOf(j) === "Unsuccessful";
+  const open = mine.filter(j => !isDone(j)), doneL = mine.filter(j => queueOf(j) === "Completed" && j.date >= addDays(t0, -30) && j.date <= t0).reverse();
+  const groups = ui.opTab === "today" ? [["Today", open.filter(j => j.date === t0 || (j.date < t0 && j.status === "In progress"))]]
+    : ui.opTab === "done" ? groupByDate(doneL).map(([d, js]) => [d === t0 ? "Today · " + dayLabel(d) : dayLabel(d), js])
+    : groupByDate(open.filter(j => j.date >= t1 && j.date <= wkEnd)).map(([d, js]) => [(d === t1 ? "Tomorrow · " : "") + dayLabel(d), js]);
+  $("#app").innerHTML = `<div class="mob"><div class="mob-bar"><div class="mob-title">${ui.opTab === "today" ? "Today" : ui.opTab === "done" ? "Completed" : "My Schedule"}</div><div class="mob-sub">${dayLabel(t0)}</div></div>
+    <div class="mob-tabs"><button data-tab="today" class="${ui.opTab === "today" ? "on" : ""}">Today</button><button data-tab="week" class="${ui.opTab === "week" ? "on" : ""}">Schedule</button><button data-tab="done" class="${ui.opTab === "done" ? "on" : ""}">Completed</button></div>
     ${groups.map(([g, js]) => `<div class="mob-sec mday">${g} <span>${js.length}</span></div>
     ${js.map(j => `<div class="mrow" data-id="${j.id}"><div class="mtime">${g === "Today" ? "" : `<small>${esc(dayLabel(j.date).split(" ")[0].slice(0, 3))}</small>`}<b>${esc(j.time || "--")}</b><small>${j.durationHrs ? esc(j.durationHrs) + "h" : ""}</small></div>
       <div class="mbody"><div class="mcl"><span class="qdot ${QCLS[queueOf(j)]}"></span>${esc(j.client || "")}</div><div class="maddr">${esc(j.address || "-")}</div>
         <div class="mdesc">${esc(firstLine(j.description))}</div>
         <div class="mst ${j.status === "In progress" ? "inprog" : j.status === "Done" ? "done" : ""}">${j.status === "Done" ? "✔ Completed" : j.status === "In progress" ? "● In progress" : "Scheduled"} · #${esc(jobNo(j))}</div></div>
-      <div class="chev">›</div></div>`).join("") || `<p class="muted pad">Nothing booked.</p>`}`).join("") || `<p class="muted pad">Nothing booked this week.</p>`}</div>`;
+      <div class="chev">›</div></div>`).join("") || `<p class="muted pad">Nothing booked.</p>`}`).join("") || `<p class="muted pad">${ui.opTab === "done" ? "No completed jobs in the last 30 days." : "Nothing booked this week."}</p>`}</div>`;
   $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; renderOperator(); });
   $("#app").querySelectorAll(".mrow").forEach(r => r.onclick = () => { ui.opSel = r.dataset.id; renderOperator(); window.scrollTo(0, 0); });
 }

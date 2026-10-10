@@ -108,13 +108,13 @@ body.operator main{padding:0;max-width:560px}
 .mob-bar{background:var(--sm-blue);color:#fff;padding:14px 16px 12px;position:relative}.mob-title{font-size:22px;font-weight:700}.mob-sub{font-size:13px;opacity:.85}
 .mob-bar.det.q-comp{background:var(--q-comp)}.mob-bar.det.q-quote{background:var(--q-quote)}
 .mback{background:none;border:none;color:#fff;padding:0 0 6px;font-size:16px}
-.mob-tabs{display:grid;grid-template-columns:1fr 1fr;background:#fff;border-bottom:1px solid var(--sm-line)}
+.mob-tabs{display:grid;grid-template-columns:1fr 1fr 1fr;background:#fff;border-bottom:1px solid var(--sm-line)}
 .mob-tabs button{border:none;border-radius:0;background:none;padding:12px;color:var(--sm-mut);border-bottom:3px solid transparent;font-weight:600}.mob-tabs .on{color:var(--sm-blue);border-bottom-color:var(--sm-blue)}
 .mob-sec{padding:14px 16px 6px;font-size:13px;font-weight:700;text-transform:uppercase;color:var(--sm-mut)}
 .mrow{display:grid;grid-template-columns:58px 1fr 18px;gap:10px;background:#fff;border-bottom:1px solid var(--sm-line);padding:12px 14px;cursor:pointer}
 .mtime{display:grid;align-content:start;text-align:center}.mtime b{font-size:16px}.mtime small{color:var(--sm-mut);font-size:12px}
 .mcl{display:flex;gap:6px;align-items:center;font-weight:700}.maddr{font-size:15px;margin-top:2px}.mdesc{font-size:13px;color:var(--sm-mut);margin-top:2px}
-.mst{font-size:12px;color:var(--q-wo);margin-top:4px;font-weight:600}.mst.inprog{color:#d35400}.mst.done{color:var(--q-comp)}
+.mst{font-size:12px;color:var(--q-wo);margin-top:4px;font-weight:600}.mst.inprog{color:#d35400}.mst.done{color:var(--q-comp);background:none;border:none}
 .chev{color:#b5bec8;font-size:26px;align-self:center}
 .mcard{display:block;position:relative;background:#fff;margin:10px 10px 0;border-radius:8px;padding:12px 14px;color:inherit;text-decoration:none;border:1px solid var(--sm-line)}
 .mcard.link .chev{position:absolute;right:12px;top:18px}.mlbl{font-size:12px;text-transform:uppercase;color:var(--sm-mut);font-weight:600}.mval{font-size:16px;margin-top:2px}.mval.big{font-weight:700;color:var(--sm-blue);padding-right:20px}
