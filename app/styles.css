@@ -127,3 +127,16 @@ body.operator main{padding:0;max-width:560px}
 /* invoicing */
 .jt.inv input{padding:5px 7px;border-radius:4px;border-color:var(--sm-line);font-size:13px}.jt.inv .iamt{width:110px}.jt.inv .isel{width:auto}
 .warnt{color:var(--q-quote)}.sm-btn:disabled{opacity:.5;cursor:default}
+/* ---- thick separators: 2px mid-grey between jobs, 4px dark between days (Alex 10/10) */
+.jt td{border-bottom:2px solid #9aa3ab}
+.jt tr.dayhdr td{background:#2f3a44;color:#fff;font-weight:700;font-size:14px;padding:7px 10px;border-top:4px solid #1d252c;border-bottom:2px solid #1d252c}
+.jt tr.dayhdr .cnt{background:#fff;color:#2f3a44;margin-left:6px}
+.dchip{margin-bottom:0;border-bottom:2px solid #9aa3ab;border-radius:0}.dchip+.dchip{margin-top:3px}
+.dh{border-left:4px solid #1d252c;border-bottom:4px solid #1d252c;background:#2f3a44;color:#fff;font-weight:700}
+.dh.today{background:#1b6fb0;color:#fff}
+.dcell{border-left:4px solid #1d252c;border-bottom:2px solid #9aa3ab}
+.dname{border-bottom:2px solid #9aa3ab}
+.dside .uj{border-bottom:2px solid #9aa3ab}
+.mrow{border-bottom:2px solid #9aa3ab}
+.mob-sec.mday{background:#2f3a44;color:#fff;border-top:4px solid #1d252c;padding:9px 16px;margin-top:6px}
+.mob-sec.mday span{background:#fff;color:#2f3a44;border-radius:10px;padding:0 8px;margin-left:6px}

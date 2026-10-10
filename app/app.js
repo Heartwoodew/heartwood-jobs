@@ -128,6 +128,10 @@ function jobRow(j) {
     <td>${names ? esc(names) : `<span class="unal">Unallocated</span>`}</td>
     <td><span class="qpill ${QCLS[q]}">${q}</span>${j.status === "In progress" ? `<div class="sub inprog">In progress</div>` : ""}</td></tr>`;
 }
+function groupByDate(list) {
+  const m = new Map(); for (const j of list) { const k = j.date || ""; if (!m.has(k)) m.set(k, []); m.get(k).push(j); }
+  return [...m.entries()];
+}
 function jobsView(all) {
   const t = ui.q.toLowerCase();
   const fs = all.filter(j => (!t || [jobNo(j), j.client, j.address, j.description, j.po, namesOf(j).join(" ")].join(" ").toLowerCase().includes(t)));
@@ -141,7 +145,7 @@ function jobsView(all) {
       <select id="ft"><option value="">All categories</option>${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${ui.typeF === k ? "selected" : ""}>${v}</option>`).join("")}</select>
       <span class="muted sub">Showing 2 weeks back to 4 weeks ahead, plus unscheduled</span></div>
     <table class="jt"><thead><tr><th></th><th>Job #</th><th>Client / Site</th><th>Description</th><th>Scheduled</th><th>Staff</th><th>Status</th></tr></thead>
-    <tbody>${list.map(jobRow).join("") || `<tr><td colspan="7" class="muted pad">No jobs in this queue</td></tr>`}</tbody></table>`;
+    <tbody>${groupByDate(list).map(([d, js]) => `<tr class="dayhdr"><td colspan="7">${esc(d ? dayLabel(d) : "Unscheduled")} <span class="cnt">${js.length}</span></td></tr>${js.map(jobRow).join("")}`).join("") || `<tr><td colspan="7" class="muted pad">No jobs in this queue</td></tr>`}</tbody></table>`;
 }
 function rowsFor(all) {
   const rows = staff.map(s => ({ key: skey(s), name: label(s.name), raw: s.name }));
@@ -448,15 +452,15 @@ function renderOperator() {
   if (sel) return renderOpDetail(sel);
   ui.opTab = ui.opTab || "today";
   const groups = ui.opTab === "today" ? [["Today", mine.filter(j => j.date === t0 || (j.date < t0 && j.status === "In progress"))]]
-    : [["Tomorrow", mine.filter(j => j.date === t1)], ["Later this week", mine.filter(j => j.date > t1 && j.date <= wkEnd)]];
+    : groupByDate(mine.filter(j => j.date >= t1 && j.date <= wkEnd)).map(([d, js]) => [(d === t1 ? "Tomorrow · " : "") + dayLabel(d), js]);
   $("#app").innerHTML = `<div class="mob"><div class="mob-bar"><div class="mob-title">${ui.opTab === "today" ? "Today" : "My Schedule"}</div><div class="mob-sub">${dayLabel(t0)}</div></div>
     <div class="mob-tabs"><button data-tab="today" class="${ui.opTab === "today" ? "on" : ""}">Today</button><button data-tab="week" class="${ui.opTab === "week" ? "on" : ""}">Schedule</button></div>
-    ${groups.map(([g, js]) => `<div class="mob-sec">${g} <span>${js.length}</span></div>
+    ${groups.map(([g, js]) => `<div class="mob-sec mday">${g} <span>${js.length}</span></div>
     ${js.map(j => `<div class="mrow" data-id="${j.id}"><div class="mtime">${g === "Today" ? "" : `<small>${esc(dayLabel(j.date).split(" ")[0].slice(0, 3))}</small>`}<b>${esc(j.time || "--")}</b><small>${j.durationHrs ? esc(j.durationHrs) + "h" : ""}</small></div>
       <div class="mbody"><div class="mcl"><span class="qdot ${QCLS[queueOf(j)]}"></span>${esc(j.client || "")}</div><div class="maddr">${esc(j.address || "-")}</div>
         <div class="mdesc">${esc(firstLine(j.description))}</div>
         <div class="mst ${j.status === "In progress" ? "inprog" : j.status === "Done" ? "done" : ""}">${j.status === "Done" ? "✔ Completed" : j.status === "In progress" ? "● In progress" : "Scheduled"} · #${esc(jobNo(j))}</div></div>
-      <div class="chev">›</div></div>`).join("") || `<p class="muted pad">Nothing booked.</p>`}`).join("")}</div>`;
+      <div class="chev">›</div></div>`).join("") || `<p class="muted pad">Nothing booked.</p>`}`).join("") || `<p class="muted pad">Nothing booked this week.</p>`}</div>`;
   $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; renderOperator(); });
   $("#app").querySelectorAll(".mrow").forEach(r => r.onclick = () => { ui.opSel = r.dataset.id; renderOperator(); window.scrollTo(0, 0); });
 }
