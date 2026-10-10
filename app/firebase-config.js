@@ -10,3 +10,5 @@ export const firebaseConfig = {
 };
 // Local testing: open the app with ?emu=1 (or on localhost) to use the Firebase Emulator Suite.
 export const useEmulator = location.hostname === "localhost" || location.hostname === "127.0.0.1" || new URLSearchParams(location.search).has("emu");
+// Firebase Storage photos are NOT used (needs Blaze); photos are emailed instead. Kept false; see dormant_storage/.
+export const photosEnabled = false;

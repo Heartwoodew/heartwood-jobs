@@ -286,10 +286,12 @@ function editJob(j) {
       <div class="diary">${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("")}
         ${hist.map(([w, t]) => `<div class="de sys"><span class="av">i</span><div><small>${esc(w)}</small><div>${esc(t)}</div></div></div>`).join("")}
         ${!(j.log || []).length && !hist.length ? `<p class="muted sub">No diary entries yet. Site notes from staff appear here.</p>` : ""}</div>
+      ${!n ? `<h4>Photos</h4><button type="button" class="sm-btn" id="emailph">📧 Email photos</button> <span class="sub muted">Photos go to ${OFFICE_EMAIL} by email</span>` : ""}
     </div></div>
     <p id="ferr" class="err"></p>
     <div class="btns jc-foot"><button value="cancel" formnovalidate class="sm-btn">Close</button><button value="save" class="sm-btn primary">Save Job</button></div></form>`;
   d.showModal();
+  if (!n) $("#emailph").onclick = () => emailPhotos(j);
   const f = $("#jf");
   f.description.oninput = () => { if (n) f.type.value = guessType(f.description.value); };
   f.onsubmit = async ev => {
@@ -495,9 +497,12 @@ function renderOpDetail(j) {
       ${(j.assignedNames || []).length ? `<div class="mlbl" style="margin-top:8px">Staff</div><div class="mval">${esc(j.assignedNames.join(", "))}</div>` : ""}</div>
     <div class="mcard"><div class="mlbl">Diary</div>${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("") || `<div class="muted sub">No notes yet</div>`}
       <button class="mnote" data-act="note">＋ Add Note</button></div>
+    <div class="mcard"><div class="mlbl">Photos</div><button type="button" class="mnote" id="emailph">📧 Email photos</button>
+      <div class="muted sub">Send site photos to Alex by email</div></div>
     <div class="mactions">${done ? `<div class="donebar">✔ Completed${j.loads ? ` · ${j.loads} loads` : ""}</div>` :
       `<button class="mbtn start" data-act="start" ${started ? "disabled" : ""}>${started ? "Started" : "▶ Start Job"}</button>
        <button class="mbtn complete" data-act="done">✔ Complete</button>`}</div></div>`;
+  $("#emailph").onclick = () => emailPhotos(j);
   $("#back").onclick = () => { ui.opSel = null; renderOperator(); };
   $("#app").querySelectorAll("[data-act]").forEach(b => b.onclick = () => opAction(j, b.dataset.act));
 }
@@ -523,4 +528,133 @@ async function opAction(j, act) {
     updateDoc(ref, u).then(() => toast(act === "done" ? "Marked done" : "Note saved")).catch(e => toast("Not saved: " + e.code));
     if (!navigator.onLine) toast("Offline — will sync when back in signal");
   };
+}
+
+// ------------------------------------------------------------------ email photos (no Firebase Storage)
+// Pick photos -> (downscale) -> share sheet (Mail / Gmail) with subject + body, or a mailto: fallback. Then a diary entry.
+// The share must be started by a fresh tap (browsers require a user gesture), so the picked photos are shown in a
+// small dialog with a "Send" button.
+const OFFICE_EMAIL = "alex@heartwoodew.com";
+const emailSubject = j => `[Job Photos] Job #${jobNo(j)} – ${j.address || "(no address)"}`;
+const emailBody = (j, infos, attached) => [`Job #${jobNo(j)}`, `Address: ${j.address || "-"}`, `Client: ${j.client || "-"}`, `PO: ${j.po || "-"}`,
+  `Job date: ${j.date ? dayLabel(j.date) : "-"}`, "",
+  attached ? `${infos.length} photo${infos.length > 1 ? "s" : ""} attached:` : `Please attach ${infos.length > 1 ? `these ${infos.length} photos` : "this photo"} to this email:`,
+  ...infos.map((x, i) => `${i + 1}. ${x.time} (Brisbane) · ${fmtLL(x.gps)}${x.gps ? ` (${x.gps.src === "photo" ? "photo GPS" : "phone location"}) ${mapLink(x.gps)}` : ""}`),
+  "", `From ${me.name}`].join("\n");
+// Minimal EXIF reader (JPEG APP1): DateTimeOriginal + GPS. Returns {}, never throws.
+async function readExif(f) {
+  try {
+    const v = new DataView(await f.slice(0, 256 * 1024).arrayBuffer());
+    if (v.getUint16(0) !== 0xFFD8) return {};
+    let o = 2;
+    while (o + 4 < v.byteLength) {
+      const m = v.getUint16(o), len = v.getUint16(o + 2);
+      if (m === 0xFFE1 && v.getUint32(o + 4) === 0x45786966) return parseTiff(v, o + 10);
+      if ((m & 0xFF00) !== 0xFF00) break; o += 2 + len;
+    }
+  } catch {}
+  return {};
+}
+function parseTiff(v, t) {
+  const le = v.getUint16(t) === 0x4949, u16 = o => v.getUint16(o, le), u32 = o => v.getUint32(o, le);
+  const ifd = off => { const out = {}, n = u16(t + off); for (let i = 0; i < n; i++) { const e = t + off + 2 + i * 12; out[u16(e)] = { type: u16(e + 2), cnt: u32(e + 4), at: e + 8 }; } return out; };
+  const str = e => { const p = e.cnt > 4 ? t + u32(e.at) : e.at; let r = ""; for (let i = 0; i < e.cnt - 1; i++) r += String.fromCharCode(v.getUint8(p + i)); return r; };
+  const rats = e => { const p = t + u32(e.at); return [...Array(e.cnt)].map((_, i) => u32(p + i * 8) / (u32(p + i * 8 + 4) || 1)); };
+  const out = {}, i0 = ifd(u32(t + 4));
+  if (i0[0x8769]) { const ex = ifd(u32(i0[0x8769].at)); const d = ex[0x9003] || ex[0x9004]; if (d) out.taken = str(d); }
+  if (!out.taken && i0[0x0132]) out.taken = str(i0[0x0132]);
+  if (i0[0x8825]) {
+    const g = ifd(u32(i0[0x8825].at));
+    if (g[2] && g[4]) {
+      const dms = a => a[0] + a[1] / 60 + a[2] / 3600, ref = k => g[k] ? String.fromCharCode(v.getUint8(g[k].at)) : "";
+      out.lat = dms(rats(g[2])) * (ref(1) === "S" ? -1 : 1); out.lng = dms(rats(g[4])) * (ref(3) === "W" ? -1 : 1);
+    }
+  }
+  return out;
+}
+// EXIF "YYYY:MM:DD HH:MM:SS" is camera-local (phones here = Brisbane); lastModified is an instant.
+function takenAt(f, ex) {
+  const m = /^(\d{4}):(\d\d):(\d\d) (\d\d):(\d\d)/.exec(ex.taken || "");
+  if (m) return { label: `${+m[3]}/${+m[2]}/${m[1]} ${m[4]}:${m[5]}`, src: "camera" };
+  const d = new Date(f.lastModified || Date.now());
+  return { label: d.toLocaleString("en-AU", { timeZone: TZ, day: "numeric", month: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).replace(",", ""), src: "file" };
+}
+let geoAsked = null;
+function hereNow() {     // asked once per session; resolves null if denied / unavailable
+  if (!navigator.geolocation) return Promise.resolve(null);
+  if (geoAsked) return geoAsked;
+  geoAsked = new Promise(r => navigator.geolocation.getCurrentPosition(p => r({ lat: p.coords.latitude, lng: p.coords.longitude }), () => r(null),
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 120000 }));
+  geoAsked.then(x => { if (!x) setTimeout(() => { geoAsked = null; }, 60000); });
+  return geoAsked;
+}
+const fmtLL = g => g ? `${g.lat.toFixed(5)}, ${g.lng.toFixed(5)}` : "location unavailable";
+const mapLink = g => g ? `https://maps.google.com/?q=${g.lat.toFixed(5)},${g.lng.toFixed(5)}` : "";
+// Stamp (always) + downscale (unless keeping full size): black bar at the bottom, job number big, then time, GPS, address.
+async function stampPhoto(f, j, info, max) {
+  try {
+    const bmp = await createImageBitmap(f, { imageOrientation: "from-image" });
+    const k = max ? Math.min(1, max / Math.max(bmp.width, bmp.height)) : 1;
+    const c = document.createElement("canvas"); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+    const g = c.getContext("2d"); g.drawImage(bmp, 0, 0, c.width, c.height); bmp.close?.();
+    const u = Math.max(14, Math.round(Math.min(c.width, c.height) / 40)), pad = Math.round(u * 0.7);
+    const lines = [[`${info.time}   ·   ${fmtLL(info.gps)}`, u], [j.address || "", u]];
+    const barH = pad * 2 + Math.round(u * 2.2) + lines.length * Math.round(u * 1.35);
+    g.fillStyle = "rgba(0,0,0,0.6)"; g.fillRect(0, c.height - barH, c.width, barH);
+    g.fillStyle = "#fff"; g.textBaseline = "top";
+    let y = c.height - barH + pad;
+    g.font = `bold ${Math.round(u * 1.9)}px system-ui, sans-serif`; g.fillText(`JOB #${jobNo(j)}`, pad, y); y += Math.round(u * 2.2);
+    for (const [t, sz] of lines) { g.font = `${sz}px system-ui, sans-serif`; g.fillText(t, pad, y, c.width - pad * 2); y += Math.round(sz * 1.35); }
+    const b = await new Promise(r => c.toBlob(r, "image/jpeg", max ? 0.85 : 0.92));
+    return b ? new File([b], `job${jobNo(j)}_${f.name.replace(/\.[^.]+$/, "")}.jpg`, { type: "image/jpeg" }) : f;
+  } catch { return f; }       // a format the browser can't decode: send the original unstamped
+}
+function emailPhotos(j) {
+  const inp = document.createElement("input"); inp.type = "file"; inp.accept = "image/*"; inp.multiple = true;
+  inp.style.cssText = "position:fixed;left:-9999px;opacity:0"; document.body.appendChild(inp);
+  inp.onchange = async () => {
+    const picked = [...inp.files].filter(f => /^image\//.test(f.type || "image/jpeg")); inp.remove();
+    if (!picked.length) return;
+    toast("Preparing photos…");
+    const exifs = await Promise.all(picked.map(readExif));
+    const here = exifs.every(e => e.lat != null) ? null : await hereNow();
+    const keep = picked.length <= 3 && picked.reduce((a, f) => a + f.size, 0) <= 20e6;
+    const infos = picked.map((f, i) => ({ name: f.name, time: takenAt(f, exifs[i]).label,
+      gps: exifs[i].lat != null ? { lat: exifs[i].lat, lng: exifs[i].lng, src: "photo" } : here && { ...here, src: "phone" } }));
+    const files = await Promise.all(picked.map((f, i) => stampPhoto(f, j, infos[i], keep ? 0 : 2560)));
+    emailDialog(j, files, infos);
+  };
+  inp.click();
+}
+function emailDialog(j, files, infos) {
+  const mb = files.reduce((a, f) => a + f.size, 0) / 1e6, n = files.length;
+  const canShare = !!(navigator.canShare && navigator.canShare({ files }));
+  const mailto = `mailto:${OFFICE_EMAIL}?subject=${encodeURIComponent(emailSubject(j))}&body=${encodeURIComponent(emailBody(j, infos, false))}`;
+  const v = document.createElement("div"); v.className = "emdlg";
+  v.innerHTML = `<div class="embox"><h3>📧 Email ${n} photo${n > 1 ? "s" : ""}</h3>
+    <div class="emthumbs">${files.map(f => `<img src="${URL.createObjectURL(f)}" alt="">`).join("")}</div>
+    <p class="sub muted">Job #${esc(jobNo(j))} · ${esc(j.address || "")} · ${mb.toFixed(1)} MB${mb > 24 ? " — may be too big for one email, send fewer at a time" : ""}</p>
+    ${canShare ? `<button type="button" class="mbtn complete" data-a="share">Send via email app</button>
+      <p class="sub muted">Choose Mail or Gmail, then put <b>${OFFICE_EMAIL}</b> in the To box (the subject and job details are filled in).</p>`
+    : `<p class="sub">This browser can't attach photos automatically. Tap below to open an email to ${OFFICE_EMAIL}, then attach the photos yourself.</p>
+      <a class="mbtn complete" data-a="mail" href="${mailto}">Open email to Alex</a>
+      <button type="button" class="mbtn" data-a="sent">I've sent it</button>`}
+    <button type="button" class="mbtn ghost" data-a="x">Cancel</button></div>`;
+  (document.querySelector("dialog[open]") || document.body).appendChild(v);
+  const close = () => v.remove();
+  v.querySelector('[data-a="x"]').onclick = close;
+  const logIt = async () => {
+    const ref = doc(db, "jobs", j.id);
+    try { await updateDoc(ref, { log: arrayUnion(logEntry(`Photos emailed (${n}) by ${me.name}: ` + infos.map(x => `${x.time} @ ${fmtLL(x.gps)}`).join("; "))), updatedAt: serverTimestamp(), updatedBy: me.uid }); toast("Noted in the diary"); }
+    catch (e) { toast("Diary not updated: " + (e.code || e.message)); }
+  };
+  const sh = v.querySelector('[data-a="share"]');
+  if (sh) sh.onclick = async () => {
+    try {
+      await navigator.share({ files, title: emailSubject(j), text: `To: ${OFFICE_EMAIL}\nSubject: ${emailSubject(j)}\n\n${emailBody(j, infos, true)}` });
+      close(); logIt();
+    } catch (e) { if (e.name !== "AbortError") toast("Share failed: " + e.message); }
+  };
+  const sent = v.querySelector('[data-a="sent"]');
+  if (sent) sent.onclick = () => { close(); logIt(); };
 }
