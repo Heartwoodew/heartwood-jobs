@@ -158,3 +158,37 @@ body.operator main{padding:0;max-width:560px}
 .embox .mbtn.complete{background:var(--q-comp);border-color:var(--q-comp);color:#fff}
 @media(min-width:700px){.emdlg{align-items:center}.embox{border-radius:14px}}
 .emthumbs{display:flex;gap:6px;overflow-x:auto}.emthumbs img{height:90px;border-radius:6px}
+/* ---- phone admin (<=760px): hamburger menu + one-day dispatch agenda */
+.sm-burgerbar{display:none}
+@media (max-width:760px){
+  html,body{overflow-x:hidden}
+  .sm-layout{grid-template-columns:1fr;position:relative}
+  .sm-burgerbar{display:flex;align-items:center;gap:10px;background:var(--sm-side);color:#fff;padding:0 8px;min-height:48px}
+  .sm-burger{min-width:44px;min-height:44px;font-size:22px;background:none;border:none;color:#fff}
+  .sm-side{display:none}
+  .navopen .sm-side{display:flex;flex-direction:column;position:absolute;top:48px;left:0;right:0;z-index:50;box-shadow:0 8px 20px rgba(0,0,0,.3)}
+  .navopen .sm-nav{min-height:48px;font-size:16px}
+  .sm-main{padding:8px;overflow-x:hidden}
+  .sm-head{flex-wrap:wrap}
+  .sm-btn,.qtabs button,select{min-height:44px}
+}
+.mdisp{max-width:100%}
+.mdh{position:sticky;top:0;z-index:10;background:var(--sm-bg);padding-bottom:6px;border-bottom:4px solid #1d252c}
+.mdh-row{display:flex;align-items:center;gap:6px}.mdh-row .sm-btn{min-width:44px;min-height:44px;font-size:18px}
+.mdh-date{flex:1;text-align:center;line-height:1.2}.mdh-date b{display:block;font-size:17px}
+.mstrip{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;margin-top:6px}
+.mstrip button{min-height:56px;padding:2px 0;border:1px solid var(--sm-line);border-radius:6px;background:#fff;display:flex;flex-direction:column;align-items:center;line-height:1.1}
+.mstrip button small{font-size:11px;color:var(--sm-mut)}.mstrip button b{font-size:15px}
+.mstrip button span{font-size:11px;background:var(--sm-blue);color:#fff;border-radius:8px;padding:0 6px;margin-top:2px}.mstrip button span.zero{background:#c8ced5}
+.mstrip button.today{border-color:var(--sm-blue)}.mstrip button.on{background:#2f3a44;color:#fff;border-color:#1d252c}.mstrip button.on small{color:#cfd6df}
+.mgrp{background:#2f3a44;color:#fff;font-weight:700;padding:9px 12px;border-top:4px solid #1d252c;margin-top:10px;border-radius:2px}
+.mgrp .cnt{background:#fff;color:#2f3a44;margin-left:6px}
+.mdc{background:#fff;border-left:6px solid var(--q-wo);border-bottom:2px solid #9aa3ab;padding:10px 12px;cursor:pointer}
+.mdc.q-comp{border-left-color:var(--q-comp)}.mdc.q-quote{border-left-color:var(--q-quote)}
+.mdc-top{display:flex;align-items:center;gap:8px}.mdc-time{font-size:20px}.mdc-no{font-weight:700;color:var(--sm-blue)}.mdc-top .qpill{margin-left:auto}
+.mdc-cl{font-weight:700;margin-top:4px}
+.mdc-addr{display:block;min-height:44px;line-height:22px;padding:4px 0;color:var(--sm-blue);font-weight:600;text-decoration:none;word-break:break-word}
+.mdc-desc{color:var(--sm-ink);word-break:break-word}
+.mdc-foot{display:flex;align-items:center;gap:8px;margin-top:6px}.mdc-foot .sub{flex:1}.mdc-move{min-height:44px;min-width:88px}
+.msheet .row{display:grid;grid-template-columns:1fr 1fr;gap:8px}.msheet input{min-height:44px;width:100%}.msheet .ck{min-height:44px;display:flex;align-items:center;gap:8px}
+.msheet .ck input{width:24px;height:24px;min-height:0;margin:0}.msheet .staffs{display:grid;gap:4px;border:none;padding:0}

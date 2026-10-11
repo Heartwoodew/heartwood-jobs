@@ -114,8 +114,12 @@ const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU"
 const NAV = [["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["completed", "✔", "Completed"], ["clients", "👤", "Clients", 1], ["inbox", "✉", "Inbox", 1],
   ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["settings", "⚙", "Settings", 1]];
 ui.view = "jobs"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
+const PHONE = matchMedia("(max-width:760px)");
+PHONE.addEventListener?.("change", () => { if (me && me.role === "admin") renderAdmin(); });
 function shell(inner) {
-  return `<div class="sm-layout"><nav class="sm-side">${NAV.map(([k, ic, n, soon]) =>
+  const cur = NAV.find(n => n[0] === ui.view);
+  return `<div class="sm-layout ${ui.navOpen ? "navopen" : ""}"><div class="sm-burgerbar"><button class="sm-burger" id="burger" aria-label="Menu">☰</button><b>${esc(cur ? cur[2] : "")}</b></div>
+    <nav class="sm-side">${NAV.map(([k, ic, n, soon]) =>
     `<button class="sm-nav ${ui.view === k ? "on" : ""} ${soon ? "soon" : ""}" ${soon ? "disabled title=\"Not built yet\"" : `data-view="${k}"`}><span class="ic">${ic}</span><span>${n}</span></button>`).join("")}</nav>
     <section class="sm-main">${inner}</section></div>`;
 }
@@ -185,6 +189,7 @@ function rowsFor(all) {
   return rows.map(r => ({ ...r, has: j => has(j, r) }));
 }
 function dispatchView(all) {
+  if (PHONE.matches) return mobileDispatch(all);
   const t0 = todayStr(), wk0 = addDays(addDays(t0, -dowMon(t0)), 7 * ui.wk);
   const dayD = addDays(t0, ui.wk);
   const days = ui.dview === "week" ? [...Array(7)].map((_, i) => addDays(wk0, i)) : [dayD];
@@ -208,7 +213,7 @@ function dispatchView(all) {
       <button class="sm-btn" data-wk="-1">‹</button><button class="sm-btn" data-wk="0">Today</button><button class="sm-btn" data-wk="1">›</button>
       <span class="drange">${ui.dview === "week" ? shortDate(days[0]) + " – " + shortDate(days[6]) : dayLabel(dayD)}</span>
       <button id="new" class="sm-btn primary">+ New Job</button></div>
-    <div class="dwrap"><div class="dboard">${grid}<p class="sub muted">Drag a job to another day or staff member to reschedule (saves to the app only, not ServiceM8).</p></div>
+    <div class="dwrap"><div class="dboard">${grid}<p class="sub muted">Drag a job to another day or staff member to reschedule (saved in the app, sent to ServiceM8 by the next sync).</p></div>
       </div>`;
 }
 function renderAdmin() {
@@ -220,7 +225,9 @@ function renderAdmin() {
   $("#app").innerHTML = shell(ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : jobsView(all));
   const A = $("#app");
   if (ui.view === "invoices") bindInvoices(A);
-  A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.view = b.dataset.view; renderAdmin(); });
+  A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.view = b.dataset.view; ui.navOpen = false; renderAdmin(); });
+  if ($("#burger")) $("#burger").onclick = () => { ui.navOpen = !ui.navOpen; renderAdmin(); };
+  if (ui.view === "dispatch" && PHONE.matches) bindMobileDispatch(A, [...jobs, ...(ui.undated || [])]);
   A.querySelectorAll("[data-cq]").forEach(b => b.onclick = () => { ui.cq = b.dataset.cq; renderAdmin(); });
   A.querySelectorAll("[data-q]").forEach(b => b.onclick = () => { ui.queue = b.dataset.q; renderAdmin(); });
   A.querySelectorAll("[data-dv]").forEach(b => b.onclick = () => { ui.dview = b.dataset.dv; ui.wk = 0; renderAdmin(); });
@@ -675,4 +682,64 @@ function emailDialog(j, files, infos) {
   };
   const sent = v.querySelector('[data-a="sent"]');
   if (sent) sent.onclick = () => { close(); logIt(); };
+}
+
+// ------------------------------------------------------------------ Dispatch Board on a phone (<= 760px): one-day agenda
+// Sticky day header (‹ Today ›, swipe left/right), 7-day strip with counts, jobs grouped by staff in bold bands,
+// big cards; "Move" opens a bottom sheet (date / time / staff) that saves exactly like the desktop drag
+// (editedInApp -> pushed to ServiceM8 by the box sync).
+function mobileDispatch(all) {
+  const t0 = todayStr(); ui.mday = ui.mday || t0; const d = ui.mday;
+  const sched = all.filter(j => j.date && queueOf(j) !== "Unsuccessful");
+  const wk0 = addDays(d, -dowMon(d)), strip = [...Array(7)].map((_, i) => addDays(wk0, i));
+  const dayJobs = sched.filter(j => j.date === d).sort((a, b) => (a.time || "").localeCompare(b.time || ""));
+  const card = j => `<div class="mdc ${QCLS[queueOf(j)]}" data-id="${j.id}">
+      <div class="mdc-top"><b class="mdc-time">${esc(j.time || "--:--")}</b><span class="mdc-no">#${esc(jobNo(j))}</span><span class="qpill ${QCLS[queueOf(j)]}">${esc(queueOf(j))}</span></div>
+      <div class="mdc-cl">${esc(j.client || "")}</div>
+      <a class="mdc-addr" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener">📍 ${esc(j.address || "-")}</a>
+      <div class="mdc-desc">${esc(firstLine(j.description))}</div>
+      <div class="mdc-foot"><span class="sub">${j.po ? "PO " + esc(j.po) : "No PO"}${j.durationHrs ? " · " + esc(j.durationHrs) + "h" : ""}${j.status === "In progress" ? ' · <b class="inprog">In progress</b>' : ""}</span>
+        <button type="button" class="sm-btn mdc-move" data-move="${j.id}">⇄ Move</button></div></div>`;
+  const groups = rowsFor(all).map(r => [r, dayJobs.filter(r.has)]);
+  return `<div class="mdisp" id="mdisp"><div class="mdh">
+      <div class="mdh-row"><button class="sm-btn" data-md="-1" aria-label="Previous day">‹</button>
+        <div class="mdh-date"><b>${esc(dayLabel(d))}</b>${d === t0 ? '<span class="sub">Today</span>' : ""}</div>
+        <button class="sm-btn" data-md="1" aria-label="Next day">›</button><button class="sm-btn" data-md="0">Today</button></div>
+      <div class="mstrip">${strip.map(x => { const n = sched.filter(j => j.date === x).length;
+        return `<button class="${x === d ? "on" : ""} ${x === t0 ? "today" : ""}" data-mday="${x}"><small>${new Date(x + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", timeZone: "UTC" })}</small><b>${+x.slice(8)}</b><span class="${n ? "" : "zero"}">${n}</span></button>`; }).join("")}</div></div>
+    ${groups.map(([r, js]) => `<div class="mgrp">${esc(r.name)} <span class="cnt">${js.length}</span></div>${js.map(card).join("") || `<p class="muted sub pad">Nothing booked.</p>`}`).join("")}
+    <p class="sub muted pad">Swipe left / right to change day. Tap a card to open the job.</p></div>`;
+}
+function bindMobileDispatch(A, pool) {
+  const go = d => { ui.mday = d; renderAdmin(); window.scrollTo(0, 0); };
+  A.querySelectorAll("[data-md]").forEach(b => b.onclick = () => go(+b.dataset.md === 0 ? todayStr() : addDays(ui.mday, +b.dataset.md)));
+  A.querySelectorAll("[data-mday]").forEach(b => b.onclick = () => go(b.dataset.mday));
+  A.querySelectorAll(".mdc").forEach(c => { c.draggable = false; c.ondragstart = null; });
+  A.querySelectorAll(".mdc-addr").forEach(a => a.addEventListener("click", ev => ev.stopPropagation()));
+  A.querySelectorAll("[data-move]").forEach(b => b.onclick = ev => { ev.stopPropagation(); const j = pool.find(x => x.id === b.dataset.move); if (j) moveSheet(j); });
+  const el = $("#mdisp"); let x0 = null, y0 = null;
+  if (el) {
+    el.addEventListener("touchstart", e => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
+    el.addEventListener("touchend", e => { if (x0 == null) return; const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0; x0 = null;
+      if (Math.abs(dx) > 70 && Math.abs(dx) > 1.5 * Math.abs(dy)) go(addDays(ui.mday, dx < 0 ? 1 : -1)); }, { passive: true });
+  }
+}
+function moveSheet(j) {
+  const v = document.createElement("div"); v.className = "emdlg"; const cur = namesOf(j).map(n => n.toLowerCase());
+  v.innerHTML = `<form class="embox msheet"><h3>Move #${esc(jobNo(j))}</h3><p class="sub muted">${esc(j.address || "")}</p>
+    <div class="row"><label>Date<input type="date" name="date" value="${esc(j.date || todayStr())}" required></label><label>Time<input type="time" name="time" value="${esc(j.time || "07:00")}"></label></div>
+    <fieldset class="staffs">${staff.map(s => `<label class="ck"><input type="checkbox" name="st" value="${esc(skey(s))}" ${cur.includes(s.name.toLowerCase()) ? "checked" : ""}> ${esc(s.name)}</label>`).join("")}</fieldset>
+    <p class="sub muted">No one ticked = Unallocated. Saved to the app, then sent to ServiceM8 by the next sync.</p>
+    <button class="mbtn complete">Save</button><button type="button" class="mbtn" data-x>Cancel</button></form>`;
+  document.body.appendChild(v);
+  v.querySelector("[data-x]").onclick = () => v.remove();
+  v.onclick = e => { if (e.target === v) v.remove(); };
+  v.querySelector("form").onsubmit = async e => {
+    e.preventDefault(); const f = e.target;
+    const picked = [...f.querySelectorAll("[name=st]:checked")].map(x => staff.find(s => skey(s) === x.value)).filter(Boolean);
+    const u = { date: f.date.value, time: f.time.value, assignedNames: picked.map(s => s.name), assigned: picked.filter(s => s.uid).map(s => s.uid),
+      editedInApp: true, updatedAt: serverTimestamp(), updatedBy: me.uid };
+    try { await updateDoc(doc(db, "jobs", j.id), u); } catch (err) { return toast("Not saved: " + (err.code || err.message)); }
+    v.remove(); ui.mday = u.date; toast(`Moved to ${shortDate(u.date)} ${u.time} · ${u.assignedNames.join(", ") || "Unallocated"}`); renderAdmin();
+  };
 }
