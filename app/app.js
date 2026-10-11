@@ -40,6 +40,7 @@ function guessType(text) {
 }
 
 let me = null, staff = [], jobs = [], unsub = null;
+const ALEX_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";      // Alex has no users/{uid} profile doc; always staff
 const ui = { view: "list", staffF: "", typeF: "" };
 
 // ------------------------------------------------------------------ auth
@@ -47,18 +48,19 @@ $("#logout").onclick = () => signOut(auth);
 onAuthStateChanged(auth, async user => {
   if (unsub) { unsub(); unsub = null; }
   if (!user) { me = null; $("#who").textContent = ""; $("#logout").classList.add("hidden"); return renderLogin(); }
-  // Admin = UID listed in firestore.rules (no role doc needed): detected by being allowed to list users.
-  // Operator = users/{uid} doc with role "operator".
+  // Admin = UID listed in firestore.rules (Alex, sync, Patrick): detected by being ALLOWED to list users - so if the
+  // rules don't (yet) make someone admin they simply fall back to the operator view. Operator = users/{uid} role "operator".
+  // Patrick is both: admin in the rules and still an "operator" profile so he is staff (bookable, on the board).
   const snap = await getDoc(doc(db, "users", user.uid)).catch(() => null);
   const prof = snap && snap.exists() ? snap.data() : null;
   let users = null;
-  if (!prof || prof.role !== "operator") users = await getDocs(collection(db, "users")).catch(() => null);
+  users = await getDocs(collection(db, "users")).catch(() => null);
   if (!prof && !users) { $("#app").innerHTML = `<p class="pad">No access for ${esc(user.email)}. Ask Alex to add you.</p>`; return; }
-  me = users ? { uid: user.uid, name: (prof && prof.name) || "Alex", role: "admin" } : { uid: user.uid, ...prof };
+  me = users ? { uid: user.uid, name: (prof && prof.name) || "Alex", role: "admin", staffRole: prof && prof.role } : { uid: user.uid, ...prof };
   $("#who").textContent = `${me.name} · ${me.role}`; $("#logout").classList.remove("hidden");
   if (me.role === "admin") {
     const logins = users.docs.map(d => ({ uid: d.id, ...d.data() })).filter(u => u.role === "operator");
-    staff = [{ uid: me.uid, name: me.name }, ...logins];
+    staff = [{ uid: ALEX_UID, name: "Alex" }, ...logins.filter(u => u.uid !== ALEX_UID)];
     // two weeks back (catch overdue work) to 4 weeks ahead, plus anything undated
     const q = query(collection(db, "jobs"), where("date", ">=", addDays(todayStr(), -14)), where("date", "<=", addDays(todayStr(), 28)), orderBy("date"));
     const u1 = onSnapshot(q, s => { jobs = s.docs.map(d => ({ id: d.id, ...d.data() })); addNameOnlyStaff(jobs); renderAdmin(); });
@@ -112,7 +114,7 @@ const jobNo = j => j.sm8JobNo ? j.sm8JobNo : "HW-" + String(j.id || "").slice(-4
 const firstLine = s => String(s || "").split(/\n|\. /)[0];
 const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Unscheduled";
 const NAV = [["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["completed", "✔", "Completed"], ["clients", "👤", "Clients", 1], ["inbox", "✉", "Inbox", 1],
-  ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["settings", "⚙", "Settings", 1]];
+  ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["settings", "⚙", "Settings", 1]];
 ui.view = "jobs"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
 const PHONE = matchMedia("(max-width:760px)");
 PHONE.addEventListener?.("change", () => { if (me && me.role === "admin") renderAdmin(); });
@@ -218,6 +220,7 @@ function dispatchView(all) {
 }
 function renderAdmin() {
   if (!me || me.role !== "admin") return;
+  if (ui.myJobs) return renderOperator();
   if ($("#dlg").open) return;          // don't redraw under an open job card
   document.body.className = "admin";
   const fj = filtered(), und = (ui.undated || []).filter(j => (!ui.typeF || j.type === ui.typeF));
@@ -225,7 +228,9 @@ function renderAdmin() {
   $("#app").innerHTML = shell(ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : jobsView(all));
   const A = $("#app");
   if (ui.view === "invoices") bindInvoices(A);
-  A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.view = b.dataset.view; ui.navOpen = false; renderAdmin(); });
+  A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.navOpen = false;
+    if (b.dataset.view === "myjobs") { ui.myJobs = true; ui.opSel = null; window.scrollTo(0, 0); return renderAdmin(); }
+    ui.view = b.dataset.view; renderAdmin(); });
   if ($("#burger")) $("#burger").onclick = () => { ui.navOpen = !ui.navOpen; renderAdmin(); };
   if (ui.view === "dispatch" && PHONE.matches) bindMobileDispatch(A, [...jobs, ...(ui.undated || [])]);
   A.querySelectorAll("[data-cq]").forEach(b => b.onclick = () => { ui.cq = b.dataset.cq; renderAdmin(); });
@@ -490,7 +495,7 @@ async function markInvoiced(list) {
 function renderOperator() {
   document.body.className = "operator";
   const t0 = todayStr(), t1 = addDays(t0, 1), wkEnd = addDays(t0, 7);
-  const mine = jobs.filter(j => j.status !== "Cancelled").sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
+  const mine = jobs.filter(j => j.status !== "Cancelled" && (me.role !== "admin" || (j.assigned || []).includes(me.uid))).sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
   const sel = ui.opSel && mine.find(j => j.id === ui.opSel);
   if (sel) return renderOpDetail(sel);
   ui.opTab = ui.opTab || "today";
@@ -499,7 +504,7 @@ function renderOperator() {
   const groups = ui.opTab === "today" ? [["Today", open.filter(j => j.date === t0 || (j.date < t0 && j.status === "In progress"))]]
     : ui.opTab === "done" ? groupByDate(doneL).map(([d, js]) => [d === t0 ? "Today · " + dayLabel(d) : dayLabel(d), js])
     : groupByDate(open.filter(j => j.date >= t1 && j.date <= wkEnd)).map(([d, js]) => [(d === t1 ? "Tomorrow · " : "") + dayLabel(d), js]);
-  $("#app").innerHTML = `<div class="mob"><div class="mob-bar"><div class="mob-title">${ui.opTab === "today" ? "Today" : ui.opTab === "done" ? "Completed" : "My Schedule"}</div><div class="mob-sub">${dayLabel(t0)}</div></div>
+  $("#app").innerHTML = `<div class="mob">${me.role === "admin" ? `<button class="mback adminback" id="toadmin">‹ Admin view</button>` : ""}<div class="mob-bar"><div class="mob-title">${ui.opTab === "today" ? "Today" : ui.opTab === "done" ? "Completed" : "My Schedule"}</div><div class="mob-sub">${dayLabel(t0)}</div></div>
     <div class="mob-tabs"><button data-tab="today" class="${ui.opTab === "today" ? "on" : ""}">Today</button><button data-tab="week" class="${ui.opTab === "week" ? "on" : ""}">Schedule</button><button data-tab="done" class="${ui.opTab === "done" ? "on" : ""}">Completed</button></div>
     ${groups.map(([g, js]) => `<div class="mob-sec mday">${g} <span>${js.length}</span></div>
     ${js.map(j => `<div class="mrow" data-id="${j.id}"><div class="mtime">${g === "Today" ? "" : `<small>${esc(dayLabel(j.date).split(" ")[0].slice(0, 3))}</small>`}<b>${esc(j.time || "--")}</b><small>${j.durationHrs ? esc(j.durationHrs) + "h" : ""}</small></div>
@@ -507,6 +512,7 @@ function renderOperator() {
         <div class="mdesc">${esc(firstLine(j.description))}</div>
         <div class="mst ${j.status === "In progress" ? "inprog" : j.status === "Done" ? "done" : ""}">${j.status === "Done" ? "✔ Completed" : j.status === "In progress" ? "● In progress" : "Scheduled"} · #${esc(jobNo(j))}</div></div>
       <div class="chev">›</div></div>`).join("") || `<p class="muted pad">Nothing booked.</p>`}`).join("") || `<p class="muted pad">${ui.opTab === "done" ? "No completed jobs in the last 30 days." : "Nothing booked this week."}</p>`}</div>`;
+  if ($("#toadmin")) $("#toadmin").onclick = () => { ui.myJobs = false; ui.opSel = null; renderAdmin(); };
   $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; renderOperator(); });
   $("#app").querySelectorAll(".mrow").forEach(r => r.onclick = () => { ui.opSel = r.dataset.id; renderOperator(); window.scrollTo(0, 0); });
 }

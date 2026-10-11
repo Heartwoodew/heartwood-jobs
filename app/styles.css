@@ -192,3 +192,4 @@ body.operator main{padding:0;max-width:560px}
 .mdc-foot{display:flex;align-items:center;gap:8px;margin-top:6px}.mdc-foot .sub{flex:1}.mdc-move{min-height:44px;min-width:88px}
 .msheet .row{display:grid;grid-template-columns:1fr 1fr;gap:8px}.msheet input{min-height:44px;width:100%}.msheet .ck{min-height:44px;display:flex;align-items:center;gap:8px}
 .msheet .ck input{width:24px;height:24px;min-height:0;margin:0}.msheet .staffs{display:grid;gap:4px;border:none;padding:0}
+.adminback{display:block;color:var(--sm-blue);background:#fff;padding:10px 14px;min-height:44px;width:100%;text-align:left;font-weight:600;border-bottom:1px solid var(--sm-line)}
