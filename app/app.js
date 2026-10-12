@@ -306,6 +306,7 @@ function editJob(j) {
         <label>Loads<input type="number" min="0" name="loads" value="${esc(j.loads ?? "")}"></label></div>
       <div class="row"><label>PO value $ (ex GST)<input type="number" step="0.01" min="0" name="poAmount" value="${esc(j.poAmount ?? "")}" placeholder="from the PO"></label></div>
       ${j.poAmount != null ? `<p class="hint">PO value $${esc(Number(j.poAmount).toFixed(2))} ex GST${j.poAmountBasis ? " · " + esc(j.poAmountBasis) : ""}${j.poAmountSource ? " · " + esc(j.poAmountSource) : ""}</p>` : ""}
+      ${n ? "" : `<div class="row"><button type="button" id="findpo" class="btn">🔎 Find PO</button><span id="polk" class="sub">${poLookupHtml(j)}</span></div>`}
     </div><div class="jc-col">
       <h4>Staff Allocation &amp; Schedule</h4>
       <div class="row"><label>Date<input type="date" name="date" value="${esc(j.date)}"></label>
@@ -324,6 +325,7 @@ function editJob(j) {
     <div class="btns jc-foot"><button value="cancel" formnovalidate class="sm-btn">Close</button><button value="save" class="sm-btn primary">Save Job</button></div></form>`;
   d.showModal();
   if (!n) $("#emailph").onclick = () => emailPhotos(j);
+  if (!n) wireFindPo(j);
   const f = $("#jf");
   f.description.oninput = () => { if (n) f.type.value = guessType(f.description.value); };
   f.onsubmit = async ev => {
@@ -382,6 +384,36 @@ function invDescDefault(j) {        // hwdata.xero_description: "<Task> - <tidy 
 }
 // hwdata.py has no per-m³ / per-load rule (spoil has been priced by hours, e.g. 4 hrs = $2000), so no price is guessed.
 // PO value (poAmount, ex GST, from the builder's PO) pre-fills the price until one is typed (invoiceAmount wins).
+// ---- Find PO: the button flags the job (poLookupStatus 'pending'); the box worker tools/po_lookup.py (cron, 2 min,
+// 6am-8pm) searches saved PO PDFs / Gmail hits and writes status + candidates back onto the job doc.
+const PO_ST = { pending: "⏳ queued", searching: "🔍 searching", found: "✅ found", choose: "☝️ pick one", "not found": "❌ not found", "needs portal": "🌐 needs Orbit portal" };
+function poLookupHtml(j) {
+  if (!j.poLookupStatus) return "";
+  const cands = (j.poLookupCandidates || []).map((c, i) => `<div class="pocand">${esc(c.po)}${c.kind ? " · " + esc(c.kind) : ""}${c.amount != null ? ` · $${esc(Number(c.amount).toFixed(2))} ex GST` : " · no amount"} <span class="sub">${esc(c.source || "")}</span>
+      ${j.po === c.po && j.poAmount === c.amount ? "" : `<button type="button" class="btn usepo" data-i="${i}">Use this</button>`}</div>`).join("");
+  return `<b>${PO_ST[j.poLookupStatus] || esc(j.poLookupStatus)}</b> ${esc(j.poLookupMsg || "")}${j.poLookupAt ? ` <span class="sub">(${esc(String(j.poLookupAt).slice(0, 16).replace("T", " "))})</span>` : ""}${cands}`;
+}
+function wireFindPo(j) {
+  const box = $("#polk");
+  const wireUse = (cur) => box.querySelectorAll(".usepo").forEach(b => b.onclick = async () => {
+    const c = cur.poLookupCandidates[+b.dataset.i];
+    try { await updateDoc(doc(db, "jobs", j.id), { po: c.po, poAmount: c.amount ?? null, poAmountBasis: c.amount != null ? (c.basis || "ex GST") : null,
+      poAmountSource: c.amount != null ? "Find PO: " + (c.source || "") : null, poLookupStatus: "found", poLookupMsg: `picked ${c.po} by ${me.name}`,
+      editedInApp: true, updatedAt: serverTimestamp(), updatedBy: me.uid }); toast("PO set to " + c.po); $("#dlg").close(); }
+    catch (e) { toast("Not saved: " + (e.code || e.message)); } });
+  wireUse(j);
+  const unsub = onSnapshot(doc(db, "jobs", j.id), s => { if (!s.exists()) return; const cur = { id: s.id, ...s.data() }; box.innerHTML = poLookupHtml(cur); wireUse(cur); });
+  $("#dlg").addEventListener("close", unsub, { once: true });
+  $("#findpo").onclick = async () => {
+    const at = new Date().toISOString();
+    let rid = null;
+    try { rid = (await addDoc(collection(db, "poLookups"), { jobId: j.id, address: j.address || "", lot: (String(j.address || "").match(/lot\s*(?:no\.?\s*)?(\w+)/i) || [])[1] || "",
+      client: j.client || "", type: j.type || "", requestedBy: me.name, requestedByUid: me.uid, status: "pending", createdAt: serverTimestamp() })).id; } catch (e) { /* rules not pasted yet: job flag alone still works */ }
+    try { await updateDoc(doc(db, "jobs", j.id), { poLookupStatus: "pending", poLookupMsg: "waiting for the box (checks every 2 min, 6am-8pm)", poLookupAt: at,
+      poLookupRequestedBy: me.name, poLookupCandidates: [], ...(rid ? { poLookupId: rid } : {}), updatedAt: serverTimestamp(), updatedBy: me.uid }); toast("Find PO requested"); }
+    catch (e) { toast("Not requested: " + (e.code || e.message)); }
+  };
+}
 const invAmountDefault = j => (j.invoiceAmount ?? j.poAmount ?? null);
 const xd = s => { const [y, m, d] = s.split("-"); return `${+d}/${m}/${y}`; };     // d/mm/yyyy like hwdata.d_fmt
 const csvCell = v => { v = String(v ?? ""); return /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; };
