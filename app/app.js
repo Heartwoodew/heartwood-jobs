@@ -304,6 +304,8 @@ function editJob(j) {
       <div class="row"><label>Category<select name="type">${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${j.type === k ? "selected" : ""}>${v}</option>`).join("")}</select></label>
         <label>Purchase Order #<input name="po" value="${esc(j.po)}"></label>
         <label>Loads<input type="number" min="0" name="loads" value="${esc(j.loads ?? "")}"></label></div>
+      <div class="row"><label>PO value $ (ex GST)<input type="number" step="0.01" min="0" name="poAmount" value="${esc(j.poAmount ?? "")}" placeholder="from the PO"></label></div>
+      ${j.poAmount != null ? `<p class="hint">PO value $${esc(Number(j.poAmount).toFixed(2))} ex GST${j.poAmountBasis ? " · " + esc(j.poAmountBasis) : ""}${j.poAmountSource ? " · " + esc(j.poAmountSource) : ""}</p>` : ""}
     </div><div class="jc-col">
       <h4>Staff Allocation &amp; Schedule</h4>
       <div class="row"><label>Date<input type="date" name="date" value="${esc(j.date)}"></label>
@@ -335,7 +337,8 @@ function editJob(j) {
     const data = { client: f.client.value.trim(), address: f.address.value.trim(), type: typ, po: f.po.value.trim().toUpperCase().replace(/\s+/g, ""),
       description: f.description.value.trim(), date: f.date.value, time: f.time.value, durationHrs: f.durationHrs.value ? +f.durationHrs.value : null,
       assigned, assignedNames: picked.map(s => s.name), status: f.status.value, notes: f.notes.value.trim(),
-      loads: f.loads.value === "" ? null : +f.loads.value, editedInApp: true, updatedAt: serverTimestamp(), updatedBy: me.uid };
+      loads: f.loads.value === "" ? null : +f.loads.value, editedInApp: true,
+      ...(String(j.poAmount ?? "") !== f.poAmount.value ? { poAmount: f.poAmount.value === "" ? null : Math.round(+f.poAmount.value * 100) / 100, poAmountBasis: f.poAmount.value === "" ? null : "entered in app (ex GST)", poAmountSource: "app" } : {}), updatedAt: serverTimestamp(), updatedBy: me.uid };
     if (data.status === "Done" && j.status !== "Done") Object.assign(data, { completedAt: serverTimestamp(), completedBy: me.uid });
     try {
       if (n) await addDoc(collection(db, "jobs"), { ...data, source: "app", log: [], createdAt: serverTimestamp() });
@@ -378,7 +381,8 @@ function invDescDefault(j) {        // hwdata.xero_description: "<Task> - <tidy 
   return s;
 }
 // hwdata.py has no per-m³ / per-load rule (spoil has been priced by hours, e.g. 4 hrs = $2000), so no price is guessed.
-const invAmountDefault = j => (j.invoiceAmount ?? null);
+// PO value (poAmount, ex GST, from the builder's PO) pre-fills the price until one is typed (invoiceAmount wins).
+const invAmountDefault = j => (j.invoiceAmount ?? j.poAmount ?? null);
 const xd = s => { const [y, m, d] = s.split("-"); return `${+d}/${m}/${y}`; };     // d/mm/yyyy like hwdata.d_fmt
 const csvCell = v => { v = String(v ?? ""); return /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; };
 function xeroCsv(list) {
@@ -413,7 +417,7 @@ function invoicesView() {
         <td>${esc(shortDate(j.date))}<div class="sub">#${esc(jobNo(j))}</div></td>
         <td><b>${esc(invContact(j))}</b>${STD_CLIENTS.includes(invContact(j)) || / \(private\)$/.test(invContact(j)) ? "" : ` <span class="warnt" title="Not one of the standard Xero contact names">⚠</span>`}<div class="sub">${esc(j.address || "")}</div>
           <div class="sub">${esc(j.description || "")}${j.loads ? ` · <b>${esc(j.loads)} loads</b>` : ""}${j.completedByName ? " · " + esc(j.completedByName) : ""}</div></td>
-        <td>${isRealPo(j.po) ? esc(j.po) : `<span class="unal">${j.po ? esc(j.po) + " (not a PO)" : "no PO"}</span>`}</td>
+        <td>${isRealPo(j.po) ? esc(j.po) : `<span class="unal">${j.po ? esc(j.po) + " (not a PO)" : "no PO"}</span>`}${j.poAmount != null ? `<div class="sub" title="${esc(j.poAmountBasis || "")}">PO value $${esc(Number(j.poAmount).toFixed(2))} ex GST</div>` : ""}</td>
         <td><input class="idesc" value="${esc(j.invoiceDescription || invDescDefault(j))}"></td>
         <td><input class="iamt" type="number" step="0.01" min="0" placeholder="price" value="${esc(invAmountDefault(j) ?? "")}"></td></tr>`
     : `<tr class="jr" data-id="${j.id}"><td>${ui.inv === "numbered" ? `<input type="checkbox" class="isel" ${ui.invSel.has(j.id) ? "checked" : ""}>` : `<input type="checkbox" class="isel" ${ui.invSel.has(j.id) ? "checked" : ""}>`}</td>
