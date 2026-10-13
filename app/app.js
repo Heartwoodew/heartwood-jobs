@@ -561,7 +561,7 @@ function downloadCsv(list) {
 }
 ui.inv = "ready"; ui.invSel = new Set();
 function invoicesView() {
-  const done = (ui.done || []).filter(j => j.status === "Done");
+  const done = (ui.done || []).filter(j => j.status === "Done" && matchQ(j));
   const excl = j => j.invoiceExcluded === true;          // "Remove" on the Invoices screen (job kept, never invoiced)
   const removed = done.filter(j => excl(j) && !j.invoiceNo).sort((a, b) => (b.invoiceExcludedAt || "").localeCompare(a.invoiceExcludedAt || ""));
   const ready = done.filter(j => !j.invoiceNo && !excl(j) && !j.doNotInvoice).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
@@ -572,6 +572,16 @@ function invoicesView() {
   const sel = list.filter(j => ui.invSel.has(j.id));
   const tot = a => a.reduce((t, j) => t + (+j.invoiceAmount || 0), 0);
   const money = v => v == null || v === "" ? "" : "$" + Number(v).toLocaleString("en-AU", { minimumFractionDigits: 2 });
+  // Monthly totals: all invoiced (numbered) jobs, by invoice month (fallback: job/completed date). Removed / do-not-invoice excluded.
+  const monthOf = j => String(j.invoiceDate || j.date || "").slice(0, 7);
+  const allInv = done.filter(j => j.invoiceNo && !excl(j) && !j.doNotInvoice);
+  const months = {}; for (const j of allInv) { const m = monthOf(j) || "?"; (months[m] ||= { n: 0, ex: 0 }); months[m].n++; months[m].ex += +j.invoiceAmount || 0; }
+  const mName = m => { const [y, mo] = m.split("-"); return mo ? new Date(+y, +mo - 1, 1).toLocaleString("en-AU", { month: "short", year: "numeric" }) : "No date"; };
+  const mStr = m => `${months[m]?.n || 0} invoice${months[m]?.n === 1 ? "" : "s"} · <b>${money(months[m]?.ex || 0) || "$0.00"}</b> ex GST · ${money((months[m]?.ex || 0) * 1.1) || "$0.00"} inc GST`;
+  const curM = todayStr().slice(0, 7);
+  const stripMs = [...new Set([curM, ...Object.keys(months)])].sort().reverse().slice(0, 4);
+  const strip = ui.inv === "numbered" || ui.inv === "recent" ? `<div class="mstrip">${stripMs.map(m => `<div class="mcard${m === curM ? " cur" : ""}"><div class="mn">${esc(mName(m))}${m === curM ? " (this month)" : ""}</div><div>${mStr(m)}</div></div>`).join("")}${ui.q ? `<span class="sub">Totals for jobs matching the search</span>` : ""}</div>` : "";
+  if (ui.inv === "numbered" || ui.inv === "recent") list.sort((a, b) => monthOf(b).localeCompare(monthOf(a)) || +b.invoiceNo - +a.invoiceNo);
   const tab = (k, n, a) => `<button data-inv="${k}" class="${ui.inv === k ? "on" : ""}">${n} <span>${a.length}</span></button>`;
   const head = ui.inv === "removed" ? `<th></th><th>Date</th><th>Client / Site</th><th>PO</th><th>Removed</th><th></th>` : ui.inv === "ready" ? `<th></th><th>Date</th><th>Client / Site</th><th>PO</th><th>Invoice description</th><th>Amount (ex GST)</th><th></th>`
     : `<th></th><th>Invoice #</th><th>Date</th><th>Contact</th><th>Reference</th><th>Description</th><th>Amount (ex GST)</th>${ui.inv === "recent" ? "<th>Marked</th>" : ""}`;
@@ -597,11 +607,12 @@ function invoicesView() {
     : `<button id="icsv" class="sm-btn" ${sel.length ? "" : "disabled"}>Download Xero CSV (${sel.length})</button>
        ${ui.inv === "numbered" ? `<button id="imark" class="sm-btn primary" ${sel.length ? "" : "disabled"}>Mark invoiced (${sel.length})</button>` : ""}`;
   return `<div class="sm-head"><h1>Invoices</h1><button id="findall" class="sm-btn" title="Run Find PO on every open and not-yet-invoiced job">🔎 Find all POs</button><span class="sub">Next invoice number: <b id="inext">${nextInvoiceGuess()}</b></span></div>
+    ${searchBar()}${strip}
     <div class="qtabs">${tab("ready", "Ready to invoice", ready)}${tab("numbered", "Invoiced (numbered, import into Xero)", numbered)}${tab("recent", "Recent (last 30 days)", recent)}${tab("removed", "Removed", removed)}</div>
     <div class="filters">${acts}<label class="ck sub"><input type="checkbox" id="iall"> select all</label>
       <span class="sub">Selected total ${money(tot(sel)) || "$0.00"} ex GST</span>
       <span class="sub muted" style="margin-left:auto">${ui.inv === "ready" ? "Completed jobs with no invoice number. Price and description save as you type. Invoice date = job date, due +7 days." : ui.inv === "numbered" ? "Import the CSV into Xero, then Mark invoiced." : ""}</span></div>
-    <table class="jt inv"><thead><tr>${head}</tr></thead><tbody>${list.map(row).join("") || `<tr><td colspan="8" class="muted pad">Nothing here.</td></tr>`}</tbody></table>`;
+    <table class="jt inv"><thead><tr>${head}</tr></thead><tbody>${(ui.inv === "numbered" || ui.inv === "recent" ? list.map((j, i) => (i === 0 || monthOf(list[i - 1]) !== monthOf(j) ? `<tr class="mhead"><td colspan="8"><b>${esc(mName(monthOf(j) || "?"))}</b> · ${mStr(monthOf(j) || "?")}${ui.inv === "recent" ? " (whole month)" : ""}</td></tr>` : "") + row(j)) : list.map(row)).join("") || `<tr><td colspan="8" class="muted pad">Nothing here.</td></tr>`}</tbody></table>`;
 }
 function nextInvoiceGuess() {
   const m = Math.max(INV_FLOOR, ui.invMeta?.lastNo || 0, ui.invMeta?.boxMax || 0, ...(ui.done || []).map(j => parseInt(j.invoiceNo) || 0));

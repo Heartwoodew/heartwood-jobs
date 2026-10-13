@@ -277,3 +277,10 @@ body.operator main{padding:0;max-width:560px}
 /* Over PO note (never blocks the price) */
 .overpo{display:inline-block;background:#fff1e0;color:#b45309;border:1px solid #f59e0b;border-radius:6px;padding:1px 6px;font-size:12px;font-weight:600;margin-top:3px}
 .opo .emailsup{margin-top:3px;font-size:12px;padding:2px 6px}
+/* Invoices: monthly totals */
+.mstrip{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 10px}
+.mcard{flex:1 1 180px;border:1px solid #d6dde6;border-radius:8px;padding:6px 10px;background:#f8fafc;font-size:13px}
+.mcard.cur{border-color:#2563eb;background:#eff6ff}
+.mcard .mn{font-weight:700;margin-bottom:2px}
+tr.mhead td{background:#eef2f7;font-size:13px;padding:6px 8px}
+@media (max-width:760px){ .mcard{flex:1 1 45%} table.jt.inv tr.mhead{display:block} table.jt.inv tr.mhead td{display:block;width:auto} }
