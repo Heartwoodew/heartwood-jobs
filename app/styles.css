@@ -202,3 +202,61 @@ body.operator main{padding:0;max-width:560px}
 .sbar-ic{position:absolute;left:9px;font-size:14px;opacity:.55;pointer-events:none}
 .sbar-x{position:absolute;right:4px;width:28px;height:28px;border:0;border-radius:50%;background:#e7ebef;color:#555;font-size:13px;cursor:pointer}
 @media (max-width:700px){.sbar{max-width:none}.sbar input{font-size:16px;height:40px}}
+/* ===== mobile pass (13/10/2026): <=760px phones ===== */
+@media (max-width:760px){
+  body{-webkit-text-size-adjust:100%}
+  input,select,textarea{font-size:16px!important;max-width:100%}
+  .sm-layout{align-content:start;grid-auto-rows:auto}
+  .sm-burgerbar{position:sticky;top:0;z-index:40;align-self:start}
+  .navopen .sm-side{position:fixed;top:48px;max-height:calc(100dvh - 48px);overflow:auto}
+  .sbar{position:sticky;top:48px;z-index:30;background:var(--sm-bg);margin:0 -8px 8px;padding:6px 8px;max-width:none}
+  .sm-head h1{font-size:22px}
+  /* tabs: one row, swipe sideways */
+  .qtabs{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .qtabs::-webkit-scrollbar{display:none}
+  .qtabs button{flex:0 0 auto;white-space:nowrap;min-height:44px;padding:8px 12px}
+  .filters{display:flex;flex-wrap:wrap;gap:8px}.filters select{flex:1 1 140px}
+  .filters .muted.sub,.filters .sub.muted{display:none}
+  .sm-btn,button,.btn{min-height:44px}
+  /* tables -> stacked job cards */
+  .jt,.jt tbody{display:block;width:100%}
+  .jt thead{display:none}
+  .jt tr.dayhdr{display:block}.jt tr.dayhdr td{display:block;border-radius:2px}
+  .jt tr.jr{display:grid;grid-template-columns:14px auto 1fr auto;gap:2px 8px;align-items:start;background:#fff;
+    border-left:6px solid var(--q-wo);border-bottom:2px solid #9aa3ab;padding:10px 12px;margin:0}
+  .jt tr.jr td{display:block;padding:0;border:0;min-width:0;word-break:break-word}
+  .jt tr.jr td:nth-child(1){grid-column:1;grid-row:1;padding-top:5px}
+  .jt tr.jr td:nth-child(2){grid-column:2;grid-row:1;font-weight:700;font-size:16px}
+  .jt tr.jr td:nth-child(3){grid-column:1 / -1;grid-row:2}
+  .jt tr.jr td:nth-child(3) b{font-size:15px}
+  .jt tr.jr td:nth-child(3) .sub{font-size:14px;color:var(--sm-ink);font-weight:600}
+  .jt tr.jr td:nth-child(4){grid-column:1 / -1;grid-row:3}
+  .jt tr.jr td:nth-child(5){grid-column:3;grid-row:1;text-align:right;font-weight:600}
+  .jt tr.jr td:nth-child(5) .sub{display:inline;margin-left:4px}
+  .jt tr.jr td:nth-child(6){grid-column:1 / 4;grid-row:4;color:var(--sm-mut);font-size:14px}
+  .jt tr.jr td:nth-child(7){grid-column:4;grid-row:1 / 5;align-self:start}
+  .jt tr.jr td:nth-child(n+8){grid-column:1 / -1}
+  /* invoices: stack every cell; checkbox top-left */
+  .jt.inv tr.jr{grid-template-columns:32px 1fr}
+  .jt.inv tr.jr td{grid-column:2!important;grid-row:auto!important;text-align:left!important}
+  .jt.inv tr.jr td:first-child{grid-column:1!important;grid-row:1 / 9!important}
+  .jt.inv .isel{width:24px;height:24px}
+  .jt.inv input.idesc,.jt.inv input.iamt{width:100%;min-height:44px;margin-top:4px}
+  .filters #inum,.filters #icsv,.filters #imark{flex:1 1 100%}
+  /* job card / modal: full screen, one column */
+  dialog#dlg,dialog.jobcard{width:100vw;max-width:100vw;height:100dvh;max-height:100dvh;margin:0;border-radius:0;padding:0}
+  .jc{display:flex;flex-direction:column;height:100%}
+  .jc-body{overflow-y:auto;flex:1;-webkit-overflow-scrolling:touch}
+  .jc-top{position:sticky;top:0;z-index:5;display:grid!important;grid-template-columns:1fr auto;gap:6px;align-items:center;padding:8px 12px}
+  .jc-top .jc-st{grid-column:1 / -1;grid-row:2;margin:0}.jc-top .jc-x{grid-column:2;grid-row:1}
+  .jc-top .jc-no{display:inline;font-size:20px}.jc-top .jc-q{display:inline;margin-left:8px}
+  .jc-x{min-width:44px;min-height:44px;font-size:20px}
+  .jc .row{display:grid;grid-template-columns:1fr!important;gap:8px}
+  .jc label{display:block;width:100%}
+  .jc input,.jc select,.jc textarea{width:100%;box-sizing:border-box;min-height:44px}
+  .jc input[type=checkbox],.jc input[type=radio]{width:24px;height:24px;min-height:0}
+  #findpo,#emailph,.jc button.btn,.jc .sm-btn{width:100%;min-height:48px;font-size:16px}
+  .pocand .usepo{display:block;width:100%;margin:6px 0 0}
+  .jc-foot,.jc .actions{position:sticky;bottom:0;background:#fff;padding:8px;box-shadow:0 -2px 8px rgba(0,0,0,.12);display:flex;gap:8px}
+  .jc-foot button,.jc .actions button{flex:1;min-height:48px}
+}
