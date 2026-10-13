@@ -260,3 +260,15 @@ body.operator main{padding:0;max-width:560px}
   .jc-foot,.jc .actions{position:sticky;bottom:0;background:#fff;padding:8px;box-shadow:0 -2px 8px rgba(0,0,0,.12);display:flex;gap:8px}
   .jc-foot button,.jc .actions button{flex:1;min-height:48px}
 }
+/* invoices: Remove / Restore + Undo toast */
+.jt.inv .iremove,.jt.inv .irestore{white-space:nowrap;color:#b3261e;border-color:#e2b4b0;background:#fff}
+.jt.inv .irestore{color:var(--sm-blue);border-color:var(--sm-line)}
+.toast-undo{margin-left:10px;min-height:36px;padding:4px 14px;border:1px solid #fff;border-radius:4px;background:transparent;color:#fff;font-weight:700;cursor:pointer}
+#toast{pointer-events:auto}
+@media (max-width:760px){.jt.inv .iremove,.jt.inv .irestore{width:100%;min-height:44px;margin-top:6px}.toast-undo{min-height:44px}}
+.jt.inv .iremove.arm{background:#b3261e;color:#fff;border-color:#b3261e}
+.qpill.mixed{background:#f59e0b;color:#fff;margin-left:6px;font-size:11px;white-space:nowrap}
+.splitbox{margin:8px 0;padding:8px 10px;border:1px solid #f3c47a;background:#fff8ec;border-radius:6px}
+.splitbox .ck{display:flex;gap:8px;align-items:center;min-height:40px}
+#splitbtn.arm{background:#b3261e;color:#fff;border-color:#b3261e}
+@media (max-width:760px){#splitbtn,#splitundo{width:100%;min-height:48px}}

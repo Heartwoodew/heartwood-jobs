@@ -3,7 +3,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/fireba
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, connectAuthEmulator }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator,
-  collection, doc, getDoc, getDocs, query, where, orderBy, onSnapshot, addDoc, updateDoc, serverTimestamp, arrayUnion, runTransaction }
+  collection, doc, getDoc, getDocs, query, where, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, serverTimestamp, arrayUnion, runTransaction }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { firebaseConfig, useEmulator } from "./firebase-config.js";
 
@@ -20,7 +20,7 @@ if ("serviceWorker" in navigator && !useEmulator) navigator.serviceWorker.regist
 
 // ------------------------------------------------------------------ constants / helpers
 export const CLIENTS = ["Orbit Homes (Qld) Pty Ltd", "Torsion Built Pty Ltd", "Silkwood Homes", "OJ Pippin Homes", "Envision Homes", "Private"];
-const TYPES = { spoil: "Spoil removal", backslab: "Backslab", clean: "Site clean", other: "Other" };
+const TYPES = { spoil: "Spoil removal", backslab: "Backslab", waterproof: "Waterproofing", clean: "Site clean", other: "Other" };
 const STATUSES = ["Scheduled", "In progress", "Done", "Cancelled"];
 const TZ = "Australia/Brisbane";
 const $ = (s, el = document) => el.querySelector(s);
@@ -31,6 +31,11 @@ const addDays = (s, n) => { const d = new Date(s + "T00:00:00Z"); d.setUTCDate(d
 const dayLabel = s => new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "short", timeZone: "UTC" });
 const dowMon = s => (new Date(s + "T00:00:00Z").getUTCDay() + 6) % 7;      // 0 = Monday
 const mapsUrl = a => "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(a + ", QLD");
+function undoToast(msg, undo) {
+  const t = $("#toast"); t.innerHTML = `${esc(msg)} <button type="button" class="toast-undo">Undo</button>`; t.classList.remove("hidden");
+  t.querySelector(".toast-undo").onclick = async () => { t.classList.add("hidden"); try { await undo(); } catch (e) { toast("Undo failed: " + (e.code || e.message)); } };
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.add("hidden"), 7000);
+}
 function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.remove("hidden"); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.add("hidden"), 2500); }
 function guessType(text) {
   const t = (text || "").toLowerCase();
@@ -125,11 +130,22 @@ function shell(inner) {
     `<button class="sm-nav ${ui.view === k ? "on" : ""} ${soon ? "soon" : ""}" ${soon ? "disabled title=\"Not built yet\"" : `data-view="${k}"`}><span class="ic">${ic}</span><span>${n}</span></button>`).join("")}</nav>
     <section class="sm-main">${inner}</section></div>`;
 }
+// ---- Mixed work: a job whose description lines are different task types (spoil vs backslab vs waterproofing vs clean)
+const TASK_RX = [["waterproof", /water ?proof/i], ["spoil", /spoil|soil removal/i], ["backslab", /back ?slab|back ?blade|slab clean|level site/i], ["clean", /\b(site |final )?clean\b/i]];
+const lineKind = l => (TASK_RX.find(([, rx]) => rx.test(l)) || [null])[0];
+function taskLines(desc) {
+  let ls = String(desc || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+  if (ls.length <= 1 && ls[0]) ls = ls[0].split(/(?=\b(?:back ?slab|spoil removal|waterproof\w*|site clean|slab clean)\b)/i).map(x => x.trim()).filter(Boolean);
+  return ls.map(t => ({ t, k: lineKind(t) }));
+}
+const mixedKinds = j => [...new Set(taskLines(j.description).map(x => x.k).filter(Boolean))];
+const isMixed = j => mixedKinds(j).length > 1;
+const mixedBadge = j => isMixed(j) ? ` <span class="qpill mixed" title="${esc(mixedKinds(j).map(k => TYPES[k] || k).join(" + "))} on one job - split it">Mixed work</span>` : "";
 function jobRow(j) {
   const q = queueOf(j), names = namesOf(j).map(label).join(", ");
   return `<tr class="jr" data-id="${j.id}" draggable="true"><td><span class="qdot ${QCLS[q]}" title="${q}"></span></td>
     <td class="jn">#${esc(jobNo(j))}</td><td><b>${esc(j.client || "")}</b><div class="sub">${esc(j.address || "-")}</div></td>
-    <td>${esc(firstLine(j.description))}<div class="sub">${esc(TYPES[j.type] || "")}${j.po ? " · PO " + esc(j.po) : ""}</div></td>
+    <td>${esc(firstLine(j.description))}${mixedBadge(j)}<div class="sub">${esc(TYPES[j.type] || "")}${j.po ? " · PO " + esc(j.po) : ""}</div></td>
     <td>${esc(shortDate(j.date))}<div class="sub">${esc(j.time || "")}${j.durationHrs ? " · " + esc(j.durationHrs) + "h" : ""}</div></td>
     <td>${names ? esc(names) : `<span class="unal">Unallocated</span>`}</td>
     <td><span class="qpill ${QCLS[q]}">${q}</span>${j.status === "In progress" ? `<div class="sub inprog">In progress</div>` : ""}</td></tr>`;
@@ -295,6 +311,38 @@ async function moveJob(j, date) {
   if (ui.undated) ui.undated = ui.undated.filter(x => x.id !== j.id);
   toast(`Moved to ${dayLabel(date)}`);
 }
+// Split: new app job (same client/site/booking) gets the ticked lines; the original keeps the rest. The existing PO stays on
+// the job whose type matches the original type. Both get a Find PO request. splitHoldUntil (10 min) keeps sm8_push off
+// both so the split can be undone before it reaches ServiceM8; the push then creates the new job (source app, no sm8Uuid).
+const SPLIT_COPY = ["client", "address", "contactName", "contactPhone", "date", "time", "durationHrs", "assigned", "assignedNames", "status", "notes", "clientUuid", "companyUuid"];
+async function splitJob(j, pick) {
+  const lines = taskLines(j.description), mv = lines.filter((_, i) => pick.includes(i)), keep = lines.filter((_, i) => !pick.includes(i));
+  const kindOf = ls => { const ks = [...new Set(ls.map(x => x.k).filter(Boolean))]; return ks.length === 1 ? ks[0] : (ks[0] || "other"); };
+  const newType = kindOf(mv), keepType = kindOf(keep), origType = j.type || keepType;
+  const poToNew = newType === origType && keepType !== origType;
+  const hold = new Date(Date.now() + 10 * 60000).toISOString(), at = new Date().toISOString(), lk = { poLookupStatus: "pending", poLookupAt: at, poLookupRequestedBy: me.name + " (split)", poLookupCandidates: [] };
+  const base = Object.fromEntries(SPLIT_COPY.filter(k => j[k] !== undefined).map(k => [k, j[k]]));
+  const nj = { ...base, type: newType, description: mv.map(x => x.t).join("\n"), po: poToNew ? (j.po || "") : "", source: "app", log: [],
+    splitFrom: j.id, splitAt: at, splitBy: me.name, splitHoldUntil: hold, editedInApp: false, ...lk, createdAt: serverTimestamp(), updatedAt: serverTimestamp(), updatedBy: me.uid };
+  const ref = await addDoc(collection(db, "jobs"), nj);
+  const undo = { description: j.description || "", type: j.type || null, po: j.po || "", poAmount: j.poAmount ?? null, editedInApp: !!j.editedInApp };
+  await updateDoc(doc(db, "jobs", j.id), { description: keep.map(x => x.t).join("\n"), type: keepType, ...(poToNew ? { po: "", poAmount: null } : {}),
+    splitTo: ref.id, splitAt: at, splitUndo: undo, splitHoldUntil: hold, editedInApp: true, ...lk, updatedAt: serverTimestamp(), updatedBy: me.uid });
+  $("#dlg").close();
+  undoToast(`Split #${jobNo(j)}: new ${TYPES[newType] || newType} job created (syncs to ServiceM8 in ~10 min)`, () => undoSplit({ ...j, splitTo: ref.id, splitUndo: undo }));
+}
+async function undoSplit(j) {
+  const nd = await getDoc(doc(db, "jobs", j.splitTo));
+  if (!nd.exists()) throw new Error("the new job has already synced to ServiceM8 - undo there");
+  if (nd.data().sm8Uuid) throw new Error("the new job is already in ServiceM8 - undo there");
+  const o = (await getDoc(doc(db, "jobs", j.id))).data() || {}, u = o.splitUndo || j.splitUndo;
+  if (!u) throw new Error("no undo data");
+  if (nd.exists()) await deleteDoc(doc(db, "jobs", j.splitTo));
+  await updateDoc(doc(db, "jobs", j.id), { description: u.description, type: u.type, po: u.po, poAmount: u.poAmount, editedInApp: u.editedInApp,
+    splitTo: null, splitUndo: null, splitHoldUntil: null, updatedAt: serverTimestamp(), updatedBy: me.uid });
+  if ($("#dlg").open) $("#dlg").close();
+  toast("Split undone");
+}
 function editJob(j) {
   const n = !j; j = j || { date: todayStr(), time: "07:00", durationHrs: 4, status: "Scheduled", type: "spoil", assigned: [], client: CLIENTS[0] };
   const d = $("#dlg");
@@ -315,6 +363,10 @@ function editJob(j) {
       ${j.address ? `<a class="sub" href="${mapsUrl(j.address)}" target="_blank" rel="noopener">📍 Open in Maps</a>` : ""}
       <h4>Job Description</h4>
       <textarea name="description" rows="4">${esc(j.description)}</textarea>
+      ${!n && isMixed(j) ? `<div class="splitbox"><b>⚠ Mixed work:</b> ${esc(mixedKinds(j).map(k => TYPES[k] || k).join(" + "))}. Tick the lines to move to a new job:
+        ${taskLines(j.description).map((x, i) => `<label class="ck"><input type="checkbox" class="spl" data-i="${i}" ${x.k && x.k !== (j.type || taskLines(j.description)[0].k) ? "checked" : ""}> ${esc(x.t)} <span class="sub">${esc(TYPES[x.k] || "?")}</span></label>`).join("")}
+        <button type="button" id="splitbtn" class="btn">✂ Split into new job</button></div>` : ""}
+      ${!n && j.splitTo && !j.splitSynced ? `<div class="splitbox">Split into a new job (${esc(j.splitTo)}). <button type="button" id="splitundo" class="btn">↩ Undo split</button></div>` : ""}
       <p class="hint">Spoil removal is always its own job — never add spoil to a backslab job.</p>
       <div class="row"><label>Category<select name="type">${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${j.type === k ? "selected" : ""}>${v}</option>`).join("")}</select></label>
         <label>Purchase Order #<input name="po" value="${esc(j.po)}"></label>
@@ -341,6 +393,13 @@ function editJob(j) {
   d.showModal();
   if (!n) $("#emailph").onclick = () => emailPhotos(j);
   if (!n) wireFindPo(j);
+  if (!n && $("#splitbtn")) $("#splitbtn").onclick = ev => { const b = ev.currentTarget;
+    const lines = taskLines(j.description), pick = [...d.querySelectorAll(".spl")].filter(c => c.checked).map(c => +c.dataset.i);
+    if (!pick.length || pick.length === lines.length) return toast("Tick some (not all) lines to move");
+    if (!b.classList.contains("arm")) { b.classList.add("arm"); b.textContent = `Tap again: move ${pick.length} line(s) to a new job`; clearTimeout(b._t);
+      b._t = setTimeout(() => { b.classList.remove("arm"); b.textContent = "✂ Split into new job"; }, 5000); return; }
+    splitJob(j, pick).catch(e => toast("Not split: " + (e.code || e.message))); };
+  if (!n && $("#splitundo")) $("#splitundo").onclick = () => undoSplit(j).catch(e => toast("Undo failed: " + (e.code || e.message)));
   const f = $("#jf");
   f.description.oninput = () => { if (n) f.type.value = guessType(f.description.value); };
   f.onsubmit = async ev => {
@@ -448,34 +507,42 @@ function downloadCsv(list) {
 ui.inv = "ready"; ui.invSel = new Set();
 function invoicesView() {
   const done = (ui.done || []).filter(j => j.status === "Done");
-  const ready = done.filter(j => !j.invoiceNo).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  const excl = j => j.invoiceExcluded === true;          // "Remove" on the Invoices screen (job kept, never invoiced)
+  const removed = done.filter(j => excl(j) && !j.invoiceNo).sort((a, b) => (b.invoiceExcludedAt || "").localeCompare(a.invoiceExcludedAt || ""));
+  const ready = done.filter(j => !j.invoiceNo && !excl(j) && !j.doNotInvoice).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
   const numbered = done.filter(j => j.invoiceNo && !j.invoiced).sort((a, b) => +a.invoiceNo - +b.invoiceNo);
   const since = addDays(todayStr(), -30);
   const recent = done.filter(j => j.invoiceNo && j.invoiced && (j.invoiceDate || j.date || "") >= since).sort((a, b) => +b.invoiceNo - +a.invoiceNo);
-  const list = { ready, numbered, recent }[ui.inv];
+  const list = { ready, numbered, recent, removed }[ui.inv];
   const sel = list.filter(j => ui.invSel.has(j.id));
   const tot = a => a.reduce((t, j) => t + (+j.invoiceAmount || 0), 0);
   const money = v => v == null || v === "" ? "" : "$" + Number(v).toLocaleString("en-AU", { minimumFractionDigits: 2 });
   const tab = (k, n, a) => `<button data-inv="${k}" class="${ui.inv === k ? "on" : ""}">${n} <span>${a.length}</span></button>`;
-  const head = ui.inv === "ready" ? `<th></th><th>Date</th><th>Client / Site</th><th>PO</th><th>Invoice description</th><th>Amount (ex GST)</th>`
+  const head = ui.inv === "removed" ? `<th></th><th>Date</th><th>Client / Site</th><th>PO</th><th>Removed</th><th></th>` : ui.inv === "ready" ? `<th></th><th>Date</th><th>Client / Site</th><th>PO</th><th>Invoice description</th><th>Amount (ex GST)</th><th></th>`
     : `<th></th><th>Invoice #</th><th>Date</th><th>Contact</th><th>Reference</th><th>Description</th><th>Amount (ex GST)</th>${ui.inv === "recent" ? "<th>Marked</th>" : ""}`;
-  const row = j => ui.inv === "ready"
+  const row = j => ui.inv === "removed"
+    ? `<tr class="jr" data-id="${j.id}"><td></td><td>${esc(shortDate(j.date))}<div class="sub">#${esc(jobNo(j))}</div></td>
+        <td><b>${esc(invContact(j))}</b><div class="sub">${esc(j.address || "")}</div><div class="sub">${esc(j.description || "")}</div></td>
+        <td>${esc(j.po || "no PO")}</td><td class="sub">${esc(j.invoiceExcludedByName || "")} ${esc(String(j.invoiceExcludedAt || "").slice(0, 16).replace("T", " "))}</td>
+        <td><button type="button" class="sm-btn irestore">↩ Restore</button></td></tr>`
+    : ui.inv === "ready"
     ? `<tr class="jr" data-id="${j.id}"><td><input type="checkbox" class="isel" ${ui.invSel.has(j.id) ? "checked" : ""}></td>
         <td>${esc(shortDate(j.date))}<div class="sub">#${esc(jobNo(j))}</div></td>
         <td><b>${esc(invContact(j))}</b>${STD_CLIENTS.includes(invContact(j)) || / \(private\)$/.test(invContact(j)) ? "" : ` <span class="warnt" title="Not one of the standard Xero contact names">⚠</span>`}<div class="sub">${esc(j.address || "")}</div>
-          <div class="sub">${esc(j.description || "")}${j.loads ? ` · <b>${esc(j.loads)} loads</b>` : ""}${j.completedByName ? " · " + esc(j.completedByName) : ""}</div></td>
+          <div class="sub">${esc(j.description || "")}${mixedBadge(j)}${j.loads ? ` · <b>${esc(j.loads)} loads</b>` : ""}${j.completedByName ? " · " + esc(j.completedByName) : ""}</div></td>
         <td>${isRealPo(j.po) ? esc(j.po) : `<span class="unal">${j.po ? esc(j.po) + " (not a PO)" : "no PO"}</span>`}${j.poAmount != null ? `<div class="sub" title="${esc(j.poAmountBasis || "")}">PO value $${esc(Number(j.poAmount).toFixed(2))} ex GST</div>` : ""}</td>
         <td><input class="idesc" value="${esc(j.invoiceDescription || invDescDefault(j))}"></td>
-        <td><input class="iamt" type="number" step="0.01" min="0" placeholder="price" value="${esc(invAmountDefault(j) ?? "")}"></td></tr>`
+        <td><input class="iamt" type="number" step="0.01" min="0" placeholder="price" value="${esc(invAmountDefault(j) ?? "")}"></td>
+        <td><button type="button" class="sm-btn iremove" title="Take off the to-invoice list (job is kept)">✕ Remove</button></td></tr>`
     : `<tr class="jr" data-id="${j.id}"><td>${ui.inv === "numbered" ? `<input type="checkbox" class="isel" ${ui.invSel.has(j.id) ? "checked" : ""}>` : `<input type="checkbox" class="isel" ${ui.invSel.has(j.id) ? "checked" : ""}>`}</td>
         <td class="jn">${esc(j.invoiceNo)}</td><td>${esc(xd(j.invoiceDate || j.date))}</td><td>${esc(invContact(j))}</td><td>${esc(isRealPo(j.po) ? j.po : "")}</td>
         <td>${esc(j.invoiceDescription || invDescDefault(j))}</td><td>${money(j.invoiceAmount)}</td>${ui.inv === "recent" ? `<td><span class="qpill q-comp">Invoiced</span></td>` : ""}</tr>`;
-  const acts = ui.inv === "ready"
+  const acts = ui.inv === "removed" ? `<span class="sub">Removed jobs are kept but never invoiced or exported. Restore puts a job back on Ready to invoice.</span>` : ui.inv === "ready"
     ? `<button id="inum" class="sm-btn primary" ${sel.length ? "" : "disabled"}>Assign invoice numbers &amp; download Xero CSV (${sel.length})</button>`
     : `<button id="icsv" class="sm-btn" ${sel.length ? "" : "disabled"}>Download Xero CSV (${sel.length})</button>
        ${ui.inv === "numbered" ? `<button id="imark" class="sm-btn primary" ${sel.length ? "" : "disabled"}>Mark invoiced (${sel.length})</button>` : ""}`;
   return `<div class="sm-head"><h1>Invoices</h1><span class="sub">Next invoice number: <b id="inext">${nextInvoiceGuess()}</b></span></div>
-    <div class="qtabs">${tab("ready", "Ready to invoice", ready)}${tab("numbered", "Invoiced (numbered, import into Xero)", numbered)}${tab("recent", "Recent (last 30 days)", recent)}</div>
+    <div class="qtabs">${tab("ready", "Ready to invoice", ready)}${tab("numbered", "Invoiced (numbered, import into Xero)", numbered)}${tab("recent", "Recent (last 30 days)", recent)}${tab("removed", "Removed", removed)}</div>
     <div class="filters">${acts}<label class="ck sub"><input type="checkbox" id="iall"> select all</label>
       <span class="sub">Selected total ${money(tot(sel)) || "$0.00"} ex GST</span>
       <span class="sub muted" style="margin-left:auto">${ui.inv === "ready" ? "Completed jobs with no invoice number. Price and description save as you type. Invoice date = job date, due +7 days." : ui.inv === "numbered" ? "Import the CSV into Xero, then Mark invoiced." : ""}</span></div>
@@ -501,6 +568,24 @@ function bindInvoices(A) {
     catch (e) { toast("Not saved: " + (e.code || e.message)); } };
   A.querySelectorAll(".iamt").forEach(el => save(el, "invoiceAmount", v => v === "" ? null : Math.round(+v * 100) / 100));
   A.querySelectorAll(".idesc").forEach(el => save(el, "invoiceDescription", v => v.trim() || null));
+  const setExcl = async (j, on) => {
+    const u = on ? { invoiceExcluded: true, invoiceExcludedAt: new Date().toISOString(), invoiceExcludedBy: me.uid, invoiceExcludedByName: me.name }
+                 : { invoiceExcluded: false, invoiceRestoredAt: new Date().toISOString(), invoiceRestoredByName: me.name };
+    const w = updateDoc(doc(db, "jobs", j.id), { ...u, updatedAt: serverTimestamp(), updatedBy: me.uid });   // Firestore only; nothing goes to ServiceM8
+    w.catch(e => toast("Not saved: " + (e.code || e.message)));
+    Object.assign(j, u); ui.invSel.delete(j.id); renderAdmin();
+  };
+  A.querySelectorAll(".iremove").forEach(b => b.onclick = async ev => { ev.stopPropagation();
+    const j = byId(b.closest("[data-id]").dataset.id); if (!j) return;
+    if (!b.classList.contains("arm")) {          // quick confirmation: second tap within 4 s
+      b.classList.add("arm"); b.textContent = "Tap again to remove"; clearTimeout(b._t);
+      b._t = setTimeout(() => { b.classList.remove("arm"); b.textContent = "✕ Remove"; }, 4000); return; }
+    try { await setExcl(j, true); undoToast(`Removed #${jobNo(j)} from invoicing`, () => setExcl(j, false).then(() => toast("Restored"))); }
+    catch (e) { toast("Not removed: " + (e.code || e.message)); } });
+  A.querySelectorAll(".irestore").forEach(b => b.onclick = async ev => { ev.stopPropagation();
+    const j = byId(b.closest("[data-id]").dataset.id); if (!j) return;
+    try { await setExcl(j, false); undoToast(`Restored #${jobNo(j)} to Ready to invoice`, () => setExcl(j, true)); }
+    catch (e) { toast("Not restored: " + (e.code || e.message)); } });
   if ($("#inum")) $("#inum").onclick = () => assignNumbers([...ui.invSel].map(byId).filter(Boolean));
   if ($("#icsv")) $("#icsv").onclick = () => downloadCsv([...ui.invSel].map(byId).filter(Boolean));
   if ($("#imark")) $("#imark").onclick = () => markInvoiced([...ui.invSel].map(byId).filter(Boolean));
