@@ -398,7 +398,7 @@ function editJob(j) {
     <div class="btns jc-foot"><button value="cancel" formnovalidate class="sm-btn">Close</button><button value="save" class="sm-btn primary">Save Job</button></div></form>`;
   d.showModal();
   if (!n) $("#emailph").onclick = () => emailPhotos(j);
-  if (!n) wireFindPo(j);
+  if (!n) { wireFindPo(j); supervisors(); }
   if (!n) $("#emailsupj").onclick = () => emailSupervisor({ ...j, po: $("#jf").po.value.trim() || j.po, poAmount: $("#jf").poAmount.value === "" ? j.poAmount : +$("#jf").poAmount.value }, invAmountDefault(j)).catch(e => toast(e.message));
   if (!n && $("#splitbtn")) $("#splitbtn").onclick = ev => { const b = ev.currentTarget;
     const lines = taskLines(j.description), pick = [...d.querySelectorAll(".spl")].filter(c => c.checked).map(c => +c.dataset.i);
@@ -539,8 +539,10 @@ Thanks,
 Alex Daly
 Heartwood Earthworx
 0499 802 812`;
-  const url = `mailto:${encodeURIComponent(s.email).replace(/%40/g, "@")}?subject=${encodeURIComponent(`PO exceeded - ${j.address || ""} - PO ${po}`)}&body=${encodeURIComponent(body)}`;
-  window.HW_LAST_MAILTO = url; location.href = url;      // opens the mail app; nothing is sent from here
+  const url = "https://mail.google.com/mail/?authuser=" + encodeURIComponent("alex@heartwoodew.com") + "&view=cm&fs=1&to=" + encodeURIComponent(s.email)
+    + "&su=" + encodeURIComponent(`PO exceeded - ${j.address || ""} - PO ${po}`) + "&body=" + encodeURIComponent(body);
+  window.HW_LAST_MAILTO = url;      // Gmail compose in a new tab; nothing is sent from here
+  const a2 = document.createElement("a"); a2.href = url; a2.target = "_blank"; a2.rel = "noopener"; document.body.appendChild(a2); a2.click(); a2.remove();
 }
 const xd = s => { const [y, m, d] = s.split("-"); return `${+d}/${m}/${y}`; };     // d/mm/yyyy like hwdata.d_fmt
 const csvCell = v => { v = String(v ?? ""); return /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; };
@@ -611,6 +613,7 @@ async function loadInvMeta() {
   const el = $("#inext"); if (el) el.textContent = nextInvoiceGuess();
 }
 function bindInvoices(A) {
+  supervisors();
   if (!ui.invMeta) loadInvMeta();
   const all = ui.done || [], byId = id => all.find(j => j.id === id);
   A.querySelectorAll("[data-inv]").forEach(b => b.onclick = () => { ui.inv = b.dataset.inv; ui.invSel.clear(); renderAdmin(); });
