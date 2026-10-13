@@ -194,3 +194,11 @@ body.operator main{padding:0;max-width:560px}
 .msheet .ck input{width:24px;height:24px;min-height:0;margin:0}.msheet .staffs{display:grid;gap:4px;border:none;padding:0}
 .adminback{display:block;color:var(--sm-blue);background:#fff;padding:10px 14px;min-height:44px;width:100%;text-align:left;font-weight:600;border-bottom:1px solid var(--sm-line)}
 .pocand{margin:4px 0;padding:4px 6px;border:1px solid #ddd;border-radius:6px}.pocand .usepo{margin-left:6px;padding:2px 8px}#polk{display:block;margin-top:4px}
+/* job-list search (ServiceM8-style) */
+.sbar{position:relative;display:flex;align-items:center;margin:8px 0 10px;max-width:520px}
+.sbar input{width:100%;height:36px;padding:0 34px 0 32px;border:1px solid #cfd6dd;border-radius:4px;background:#fff;font-size:15px;box-sizing:border-box;-webkit-appearance:none}
+.sbar input:focus{outline:none;border-color:#2b7de9;box-shadow:0 0 0 2px rgba(43,125,233,.15)}
+.sbar input::-webkit-search-cancel-button{display:none}
+.sbar-ic{position:absolute;left:9px;font-size:14px;opacity:.55;pointer-events:none}
+.sbar-x{position:absolute;right:4px;width:28px;height:28px;border:0;border-radius:50%;background:#e7ebef;color:#555;font-size:13px;cursor:pointer}
+@media (max-width:700px){.sbar{max-width:none}.sbar input{font-size:16px;height:40px}}

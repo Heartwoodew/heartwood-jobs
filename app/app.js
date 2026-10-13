@@ -134,19 +134,28 @@ function jobRow(j) {
     <td>${names ? esc(names) : `<span class="unal">Unallocated</span>`}</td>
     <td><span class="qpill ${QCLS[q]}">${q}</span>${j.status === "In progress" ? `<div class="sub inprog">In progress</div>` : ""}</td></tr>`;
 }
+// Job-list search: every typed word must appear somewhere in job no / address (lot, street) / client / PO /
+// description / staff. Case-insensitive; "#659" == "659".
+const qWords = () => (ui.q || "").toLowerCase().replace(/#/g, " ").split(/\s+/).filter(Boolean);
+function matchQ(j) {
+  const w = qWords(); if (!w.length) return true;
+  const hay = [jobNo(j), j.sm8JobNo, j.client, j.address, j.description, j.po, j.type, TYPES[j.type], namesOf(j).join(" ")].map(x => String(x ?? "")).join(" ").toLowerCase();
+  return w.every(x => hay.includes(x));
+}
+const searchBar = () => `<div class="sbar"><span class="sbar-ic">🔍</span><input id="jq" type="search" inputmode="search" autocomplete="off" placeholder="Search job #, address, client, PO, staff…" value="${esc(ui.q || "")}">${ui.q ? `<button type="button" id="jqx" class="sbar-x" title="Clear" aria-label="Clear search">✕</button>` : ""}</div>`;
 function groupByDate(list) {
   const m = new Map(); for (const j of list) { const k = j.date || ""; if (!m.has(k)) m.set(k, []); m.get(k).push(j); }
   return [...m.entries()];
 }
 function jobsView(all) {
   const t = ui.q.toLowerCase();
-  const fs = all.filter(j => (!t || [jobNo(j), j.client, j.address, j.description, j.po, namesOf(j).join(" ")].join(" ").toLowerCase().includes(t)));
+  const fs = all.filter(matchQ);
   const open = fs.filter(j => j.date && QUEUES.includes(queueOf(j)));      // unscheduled jobs have their own screen
   if (!QUEUES.includes(ui.queue)) ui.queue = "All";
   const cnt = q => open.filter(j => queueOf(j) === q).length;
   const list = open.filter(j => ui.queue === "All" || queueOf(j) === ui.queue)
     .sort((a, b) => ((a.date || "9") + (a.time || "")).localeCompare((b.date || "9") + (b.time || "")));
-  return `<div class="sm-head"><h1>Jobs</h1><button id="new" class="sm-btn primary">+ New Job</button></div>
+  return `<div class="sm-head"><h1>Jobs</h1><button id="new" class="sm-btn primary">+ New Job</button></div>${searchBar()}
     <div class="qtabs"><button data-q="All" class="${ui.queue === "All" ? "on" : ""}">All open <span>${open.length}</span></button>
       ${QUEUES.map(q => `<button data-q="${q}" class="${QCLS[q]} ${ui.queue === q ? "on" : ""}"><span class="qdot ${QCLS[q]}"></span>${q} <span>${cnt(q)}</span></button>`).join("")}</div>
     <div class="filters"><select id="fs"><option value="">All staff</option>${staff.map(s => `<option value="${esc(skey(s))}" ${ui.staffF === skey(s) ? "selected" : ""}>${esc(label(s.name))}</option>`).join("")}<option value="_none" ${ui.staffF === "_none" ? "selected" : ""}>Unallocated</option></select>
@@ -161,9 +170,9 @@ const createdOf = j => j.sm8Created || (j.createdAt && j.createdAt.toDate ? ymd(
 function unscheduledView(all) {
   const t = ui.q.toLowerCase();
   const list = all.filter(j => !j.date && QUEUES.includes(queueOf(j)) && (!ui.typeF || j.type === ui.typeF)
-      && (!t || [jobNo(j), j.client, j.address, j.description, j.po].join(" ").toLowerCase().includes(t)))
+      && matchQ(j))
     .sort((a, b) => createdOf(b).localeCompare(createdOf(a)) || String(b.sm8JobNo || "").localeCompare(String(a.sm8JobNo || ""), undefined, { numeric: true }));
-  return `<div class="sm-head"><h1>Unscheduled jobs <span class="cnt">${list.length}</span></h1><button id="new" class="sm-btn primary">+ New Job</button></div>
+  return `<div class="sm-head"><h1>Unscheduled jobs <span class="cnt">${list.length}</span></h1><button id="new" class="sm-btn primary">+ New Job</button></div>${searchBar()}
     <p class="sub muted">Open jobs with no booking date, newest first. Jobs created in ServiceM8 more than 3 months ago are not shown.</p>
     <table class="jt"><thead><tr><th></th><th>Job #</th><th>Client / Site</th><th>Description</th><th>PO</th><th>Created</th><th></th></tr></thead>
     <tbody>${list.map(j => `<tr class="jr" data-id="${j.id}"><td><span class="qdot ${QCLS[queueOf(j)]}"></span></td><td class="jn">#${esc(jobNo(j))}</td>
@@ -176,10 +185,10 @@ function unscheduledView(all) {
 function completedView(all) {
   const kind = ui.cq === "Unsuccessful" ? "Unsuccessful" : "Completed", t = ui.q.toLowerCase();
   const m = new Map(); for (const j of [...all, ...(ui.done || [])]) if (!m.has(j.id)) m.set(j.id, j);
-  const pool = [...m.values()].filter(j => (!ui.typeF || j.type === ui.typeF) && (!t || [jobNo(j), j.client, j.address, j.description, j.po].join(" ").toLowerCase().includes(t)));
+  const pool = [...m.values()].filter(j => (!ui.typeF || j.type === ui.typeF) && matchQ(j));
   const cnt = k => pool.filter(j => queueOf(j) === k).length;
   const list = pool.filter(j => queueOf(j) === kind).sort((a, b) => ((b.date || "") + (b.time || "")).localeCompare((a.date || "") + (a.time || "")));
-  return `<div class="sm-head"><h1>${kind} jobs</h1></div>
+  return `<div class="sm-head"><h1>${kind} jobs</h1></div>${searchBar()}
     <div class="qtabs">${["Completed", "Unsuccessful"].map(k => `<button data-cq="${k}" class="${QCLS[k]} ${kind === k ? "on" : ""}"><span class="qdot ${QCLS[k]}"></span>${k} <span>${cnt(k)}</span></button>`).join("")}</div>
     <table class="jt"><thead><tr><th></th><th>Job #</th><th>Client / Site</th><th>Description</th><th>Scheduled</th><th>Staff</th><th>Status</th></tr></thead>
     <tbody>${groupByDate(list).map(([d, js]) => `<tr class="dayhdr"><td colspan="7">${esc(d ? dayLabel(d) : "No date")} <span class="cnt">${js.length}</span></td></tr>${js.map(jobRow).join("")}`).join("") || `<tr><td colspan="7" class="muted pad">No ${kind.toLowerCase()} jobs</td></tr>`}</tbody></table>`;
@@ -240,6 +249,12 @@ function renderAdmin() {
   if ($("#fs")) $("#fs").onchange = e => { ui.staffF = e.target.value; renderAdmin(); };
   if ($("#ft")) $("#ft").onchange = e => { ui.typeF = e.target.value; renderAdmin(); };
   if ($("#new")) $("#new").onclick = () => editJob(null);
+  const jq = $("#jq");
+  if (jq) {
+    jq.oninput = () => { const pos = jq.selectionStart; ui.q = jq.value; renderAdmin(); const n = $("#jq"); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (e) {} } };
+    jq.onkeydown = e => { if (e.key === "Escape" && ui.q) { ui.q = ""; renderAdmin(); $("#jq")?.focus(); } };
+  }
+  if ($("#jqx")) $("#jqx").onclick = () => { ui.q = ""; renderAdmin(); $("#jq")?.focus(); };
   A.querySelectorAll("[data-sched]").forEach(b => b.onclick = ev => { ev.stopPropagation();
     const j = [...jobs, ...(ui.undated || [])].find(x => x.id === b.dataset.sched); if (!j) return;
     editJob(j); const f = $("#jf"); if (f) { f.date.value = todayStr(); f.date.focus(); f.date.showPicker?.(); } });
