@@ -377,6 +377,8 @@ function editJob(j) {
         <label>Loads<input type="number" min="0" name="loads" value="${esc(j.loads ?? "")}"></label></div>
       <div class="row"><label>PO value $ (ex GST)<input type="number" step="0.01" min="0" name="poAmount" value="${esc(j.poAmount ?? "")}" placeholder="from the PO"></label></div>
       ${j.poAmount != null ? `<p class="hint">PO value $${esc(Number(j.poAmount).toFixed(2))} ex GST${j.poAmountBasis ? " · " + esc(j.poAmountBasis) : ""}${j.poAmountSource ? " · " + esc(j.poAmountSource) : ""}</p>` : ""}
+      ${!n && overBy(j, invAmountDefault(j)) ? `<p class="hint"><span class="overpo">Over PO by ${$$(overBy(j, invAmountDefault(j)))}</span> (charged ${$$(invAmountDefault(j))} ex GST)</p>` : ""}
+      ${n ? "" : `<div class="row"><button type="button" id="emailsupj" class="btn" title="Opens your email app (nothing is sent automatically)">✉ Email supervisor (PO exceeded)</button></div>`}
       ${n ? "" : `<div class="row"><button type="button" id="findpo" class="btn">🔎 Find PO</button><span id="polk" class="sub">${poLookupHtml(j)}</span></div>`}
     </div><div class="jc-col">
       <h4>Staff Allocation &amp; Schedule</h4>
@@ -397,6 +399,7 @@ function editJob(j) {
   d.showModal();
   if (!n) $("#emailph").onclick = () => emailPhotos(j);
   if (!n) wireFindPo(j);
+  if (!n) $("#emailsupj").onclick = () => emailSupervisor({ ...j, po: $("#jf").po.value.trim() || j.po, poAmount: $("#jf").poAmount.value === "" ? j.poAmount : +$("#jf").poAmount.value }, invAmountDefault(j)).catch(e => toast(e.message));
   if (!n && $("#splitbtn")) $("#splitbtn").onclick = ev => { const b = ev.currentTarget;
     const lines = taskLines(j.description), pick = [...d.querySelectorAll(".spl")].filter(c => c.checked).map(c => +c.dataset.i);
     if (!pick.length || pick.length === lines.length) return toast("Tick some (not all) lines to move");
@@ -493,6 +496,52 @@ function wireFindPo(j) {
   };
 }
 const invAmountDefault = j => (j.invoiceAmount ?? j.poAmount ?? null);
+// Over PO: the price is always free to edit; the PO value is only the pre-fill. This is a note, never a block or a correction.
+const overBy = (j, amt = j.invoiceAmount) => (amt == null || amt === "" || j.poAmount == null || !(+amt > +j.poAmount + 0.005)) ? 0 : Math.round((+amt - +j.poAmount) * 100) / 100;
+const $$ = v => "$" + Number(v).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const overPoHtml = (j, amt) => { const o = overBy(j, amt); return o ? `<span class="overpo">Over PO by ${$$(o)}</span> <button type="button" class="sm-btn emailsup" title="Opens your email app with a message to the supervisor (nothing is sent automatically)">✉ Email supervisor</button>` : ""; };
+// Supervisor email: job field, then meta/supervisors (Orbit Call Forward / Torsion PO sender, by PO), then Torsion default, then remembered per client.
+let SUPS = null;
+async function supervisors() { if (!SUPS) { try { SUPS = (await getDoc(doc(db, "meta", "supervisors"))).data() || {}; } catch { SUPS = {}; } } return SUPS; }
+async function supervisorFor(j) {
+  if (j.supervisorEmail) return { email: j.supervisorEmail, name: j.supervisorName || "" };
+  const m = await supervisors(), base = String(j.po || "").split("/")[0].replace(/\D/g, "");
+  return (base && m.byPo?.[base]) || m.byClient?.[j.client] || m.remembered?.[(j.client || "").replace(/[.\/]/g, "_")] || null;
+}
+async function emailSupervisor(j, amt) {
+  let s = await supervisorFor(j);
+  if (!s) {
+    const e = (prompt(`Supervisor email for ${j.client || "this client"} (remembered for next time):`, "") || "").trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) return toast(e ? "That doesn't look like an email address" : "No email entered");
+    s = { email: e, name: "" };
+    const k = (j.client || "unknown").replace(/[.\/]/g, "_");
+    setDoc(doc(db, "meta", "supervisors"), { remembered: { [k]: s } }, { merge: true }).then(() => { (SUPS ||= {}).remembered = { ...(SUPS.remembered || {}), [k]: s }; })
+      .catch(e2 => toast("Email not remembered: " + (e2.code || e2.message)));
+    updateDoc(doc(db, "jobs", j.id), { supervisorEmail: e, updatedAt: serverTimestamp(), updatedBy: me.uid }).catch(() => {});
+  }
+  const a = amt ?? j.invoiceAmount, po = j.po || "(no PO)", task = (j.invoiceDescription || j.description || TYPES[j.type] || "").split("\n")[0];
+  const first = (s.name || "").split(" ")[0];
+  const body = `Hi ${first || "there"},
+
+The requested task for the job below has come in over the PO value.
+
+Job / address: ${j.address || ""}${j.sm8JobNo ? " (our job #" + j.sm8JobNo + ")" : ""}
+Task: ${task}
+PO: ${po}
+PO value (ex GST): ${j.poAmount != null ? $$(j.poAmount) : "unknown"}
+Amount charged (ex GST): ${a != null && a !== "" ? $$(a) : ""}
+Difference (ex GST): ${$$(overBy(j, a))}
+Reason: 
+
+Could you please raise a variation or send an amended PO to cover the difference?
+
+Thanks,
+Alex Daly
+Heartwood Earthworx
+0499 802 812`;
+  const url = `mailto:${encodeURIComponent(s.email).replace(/%40/g, "@")}?subject=${encodeURIComponent(`PO exceeded - ${j.address || ""} - PO ${po}`)}&body=${encodeURIComponent(body)}`;
+  window.HW_LAST_MAILTO = url; location.href = url;      // opens the mail app; nothing is sent from here
+}
 const xd = s => { const [y, m, d] = s.split("-"); return `${+d}/${m}/${y}`; };     // d/mm/yyyy like hwdata.d_fmt
 const csvCell = v => { v = String(v ?? ""); return /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; };
 function xeroCsv(list) {
@@ -536,11 +585,11 @@ function invoicesView() {
           <div class="sub">${esc(j.description || "")}${mixedBadge(j)}${j.loads ? ` · <b>${esc(j.loads)} loads</b>` : ""}${j.completedByName ? " · " + esc(j.completedByName) : ""}</div></td>
         <td>${isRealPo(j.po) ? esc(j.po) : `<span class="unal">${j.po ? esc(j.po) + " (not a PO)" : "no PO"}</span>`}${j.poAmount != null ? `<div class="sub" title="${esc(j.poAmountBasis || "")}">PO value $${esc(Number(j.poAmount).toFixed(2))} ex GST</div>` : ""}</td>
         <td><input class="idesc" value="${esc(j.invoiceDescription || invDescDefault(j))}"></td>
-        <td><input class="iamt" type="number" step="0.01" min="0" placeholder="price" value="${esc(invAmountDefault(j) ?? "")}"></td>
+        <td><input class="iamt" type="number" step="0.01" min="0" placeholder="price" value="${esc(invAmountDefault(j) ?? "")}"><div class="opo">${overPoHtml(j, invAmountDefault(j))}</div></td>
         <td><button type="button" class="sm-btn iremove" title="Take off the to-invoice list (job is kept)">✕ Remove</button></td></tr>`
     : `<tr class="jr" data-id="${j.id}"><td>${ui.inv === "numbered" ? `<input type="checkbox" class="isel" ${ui.invSel.has(j.id) ? "checked" : ""}>` : `<input type="checkbox" class="isel" ${ui.invSel.has(j.id) ? "checked" : ""}>`}</td>
         <td class="jn">${esc(j.invoiceNo)}</td><td>${esc(xd(j.invoiceDate || j.date))}</td><td>${esc(invContact(j))}</td><td>${esc(isRealPo(j.po) ? j.po : "")}</td>
-        <td>${esc(j.invoiceDescription || invDescDefault(j))}</td><td>${money(j.invoiceAmount)}</td>${ui.inv === "recent" ? `<td><span class="qpill q-comp">Invoiced</span></td>` : ""}</tr>`;
+        <td>${esc(j.invoiceDescription || invDescDefault(j))}</td><td>${money(j.invoiceAmount)}<div class="opo">${overPoHtml(j)}</div></td>${ui.inv === "recent" ? `<td><span class="qpill q-comp">Invoiced</span></td>` : ""}</tr>`;
   const acts = ui.inv === "removed" ? `<span class="sub">Removed jobs are kept but never invoiced or exported. Restore puts a job back on Ready to invoice.</span>` : ui.inv === "ready"
     ? `<button id="inum" class="sm-btn primary" ${sel.length ? "" : "disabled"}>Assign invoice numbers &amp; download Xero CSV (${sel.length})</button>`
     : `<button id="icsv" class="sm-btn" ${sel.length ? "" : "disabled"}>Download Xero CSV (${sel.length})</button>
@@ -571,6 +620,12 @@ function bindInvoices(A) {
     try { await updateDoc(doc(db, "jobs", id), { [field]: conv(el.value), updatedAt: serverTimestamp(), updatedBy: me.uid }); toast("Saved"); }
     catch (e) { toast("Not saved: " + (e.code || e.message)); } };
   A.querySelectorAll(".iamt").forEach(el => save(el, "invoiceAmount", v => v === "" ? null : Math.round(+v * 100) / 100));
+  A.querySelectorAll(".iamt").forEach(el => el.oninput = () => { const j = byId(el.closest("[data-id]").dataset.id); const o = el.parentNode.querySelector(".opo");
+    if (j && o) { o.innerHTML = overPoHtml(j, el.value); bindSup(o); } });
+  const bindSup = root => root.querySelectorAll(".emailsup").forEach(b => b.onclick = ev => { ev.stopPropagation();
+    const tr = b.closest("[data-id]"), j = byId(tr.dataset.id), inp = tr.querySelector(".iamt");
+    if (j) emailSupervisor(j, inp ? (inp.value === "" ? null : +inp.value) : j.invoiceAmount).catch(e => toast(e.message)); });
+  bindSup(A);
   A.querySelectorAll(".idesc").forEach(el => save(el, "invoiceDescription", v => v.trim() || null));
   const setExcl = async (j, on) => {
     const u = on ? { invoiceExcluded: true, invoiceExcludedAt: new Date().toISOString(), invoiceExcludedBy: me.uid, invoiceExcludedByName: me.name }
@@ -603,6 +658,8 @@ async function assignNumbers(list) {
   if (bad.length) return alert("Set a price first for:\n" + bad.map(j => `• ${shortDate(j.date)} ${j.address}`).join("\n"));
   const nopo = list.filter(j => STD_CLIENTS.includes(invContact(j)) && !isRealPo(j.po));
   if (nopo.length && !confirm(`${nopo.length} job(s) have no PO (Reference will be blank):\n` + nopo.map(j => "• " + j.address).join("\n") + "\n\nContinue?")) return;
+  const over = list.filter(j => overBy(j));      // review note only; the price is used exactly as typed
+  if (over.length && !confirm(`Over PO (note only, prices are kept as entered):\n` + over.map(j => `• ${j.address} PO ${j.po}: ${$$(j.invoiceAmount)} vs PO ${$$(j.poAmount)} - Over PO by ${$$(overBy(j))}`).join("\n") + "\n\nContinue?")) return;
   list.sort((a, b) => (a.date || "").localeCompare(b.date || "") || a.id.localeCompare(b.id));   // date order, like hwdata
   let out;
   try {

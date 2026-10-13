@@ -274,3 +274,6 @@ body.operator main{padding:0;max-width:560px}
 @media (max-width:760px){#splitbtn,#splitundo{width:100%;min-height:48px}}
 .conf{font-size:11px;font-weight:700;border-radius:3px;padding:1px 6px;color:#fff;margin-left:4px}.conf-high{background:#2e9d5b}.conf-medium{background:#d98a00}.conf-low{background:#9aa3ab}
 .headbtns{display:flex;gap:8px;flex-wrap:wrap}
+/* Over PO note (never blocks the price) */
+.overpo{display:inline-block;background:#fff1e0;color:#b45309;border:1px solid #f59e0b;border-radius:6px;padding:1px 6px;font-size:12px;font-weight:600;margin-top:3px}
+.opo .emailsup{margin-top:3px;font-size:12px;padding:2px 6px}
