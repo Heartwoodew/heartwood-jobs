@@ -284,3 +284,4 @@ body.operator main{padding:0;max-width:560px}
 .mcard .mn{font-weight:700;margin-bottom:2px}
 tr.mhead td{background:#eef2f7;font-size:13px;padding:6px 8px}
 @media (max-width:760px){ .mcard{flex:1 1 45%} table.jt.inv tr.mhead{display:block} table.jt.inv tr.mhead td{display:block;width:auto} }
+.mall{flex-basis:100%;font-size:13px}.mall summary{cursor:pointer;color:#2563eb}.mall .mrow{padding:2px 0;border-bottom:1px solid #eef2f7}

@@ -575,12 +575,22 @@ function invoicesView() {
   // Monthly totals: all invoiced (numbered) jobs, by invoice month (fallback: job/completed date). Removed / do-not-invoice excluded.
   const monthOf = j => String(j.invoiceDate || j.date || "").slice(0, 7);
   const allInv = done.filter(j => j.invoiceNo && !excl(j) && !j.doNotInvoice);
-  const months = {}; for (const j of allInv) { const m = monthOf(j) || "?"; (months[m] ||= { n: 0, ex: 0 }); months[m].n++; months[m].ex += +j.invoiceAmount || 0; }
+  const months = {}, seenNo = {};
+  for (const j of allInv) { const m = monthOf(j) || "?"; (months[m] ||= { n: 0, ex: 0 }); (seenNo[m] ||= new Set()).add(String(j.invoiceNo)); months[m].ex += +j.invoiceAmount || 0; }
+  // read-only box history (meta/invHist_*), already deduped against app invoice numbers when loaded
+  if (!ui.invHist) loadInvHist();
+  const qw = qWords();
+  for (const r of ui.invHist || []) { const [no, d, addr, cl, amt, po, task] = r;
+    if (qw.length && !qw.every(w => `${no} ${addr} ${cl} ${po} ${task}`.toLowerCase().includes(w))) continue;
+    if (allInv.some(j => String(j.invoiceNo) === no)) continue;
+    const m = String(d).slice(0, 7) || "?"; (months[m] ||= { n: 0, ex: 0 }); (seenNo[m] ||= new Set()).add(no); months[m].ex += +amt || 0; }
+  for (const m in months) months[m].n = seenNo[m].size;
   const mName = m => { const [y, mo] = m.split("-"); return mo ? new Date(+y, +mo - 1, 1).toLocaleString("en-AU", { month: "short", year: "numeric" }) : "No date"; };
-  const mStr = m => `${months[m]?.n || 0} invoice${months[m]?.n === 1 ? "" : "s"} · <b>${money(months[m]?.ex || 0) || "$0.00"}</b> ex GST · ${money((months[m]?.ex || 0) * 1.1) || "$0.00"} inc GST`;
+  const mStr = m => `${months[m]?.n || 0} invoice${months[m]?.n === 1 ? "" : "s"} · <b>${$$(months[m]?.ex || 0)}</b> ex GST · ${$$(Math.round((months[m]?.ex || 0) * 110) / 100)} inc GST`;
   const curM = todayStr().slice(0, 7);
-  const stripMs = [...new Set([curM, ...Object.keys(months)])].sort().reverse().slice(0, 4);
-  const strip = ui.inv === "numbered" || ui.inv === "recent" ? `<div class="mstrip">${stripMs.map(m => `<div class="mcard${m === curM ? " cur" : ""}"><div class="mn">${esc(mName(m))}${m === curM ? " (this month)" : ""}</div><div>${mStr(m)}</div></div>`).join("")}${ui.q ? `<span class="sub">Totals for jobs matching the search</span>` : ""}</div>` : "";
+  const stripMs = [...new Set([curM, ...Object.keys(months)])].filter(m => /^\d{4}-\d{2}$/.test(m) && m <= curM).sort().reverse().slice(0, 4);
+  const strip = ui.inv === "numbered" || ui.inv === "recent" ? `<div class="mstrip">${stripMs.map(m => `<div class="mcard${m === curM ? " cur" : ""}"><div class="mn">${esc(mName(m))}${m === curM ? " (this month)" : ""}</div><div>${mStr(m)}</div></div>`).join("")}${ui.q ? `<span class="sub">Totals for jobs matching the search</span>` : ""}
+    <details class="mall"><summary>All months${ui.invHist ? "" : " (loading history…)"}</summary>${Object.keys(months).sort().reverse().map(m => `<div class="mrow"><b>${esc(mName(m))}</b> · ${mStr(m)}</div>`).join("")}<div class="sub">Includes read-only invoice history from the box records.</div></details></div>` : "";
   if (ui.inv === "numbered" || ui.inv === "recent") list.sort((a, b) => monthOf(b).localeCompare(monthOf(a)) || +b.invoiceNo - +a.invoiceNo);
   const tab = (k, n, a) => `<button data-inv="${k}" class="${ui.inv === k ? "on" : ""}">${n} <span>${a.length}</span></button>`;
   const head = ui.inv === "removed" ? `<th></th><th>Date</th><th>Client / Site</th><th>PO</th><th>Removed</th><th></th>` : ui.inv === "ready" ? `<th></th><th>Date</th><th>Client / Site</th><th>PO</th><th>Invoice description</th><th>Amount (ex GST)</th><th></th>`
@@ -617,6 +627,14 @@ function invoicesView() {
 function nextInvoiceGuess() {
   const m = Math.max(INV_FLOOR, ui.invMeta?.lastNo || 0, ui.invMeta?.boxMax || 0, ...(ui.done || []).map(j => parseInt(j.invoiceNo) || 0));
   return m + 1;
+}
+async function loadInvHist() {
+  if (loadInvHist.busy) return; loadInvHist.busy = true;
+  try { const ix = (await getDoc(doc(db, "meta", "invHistIndex"))).data();
+    const parts = await Promise.all((ix?.years || []).map(y => getDoc(doc(db, "meta", "invHist_" + y))));
+    ui.invHist = parts.flatMap(p => { try { return JSON.parse(p.data()?.rows || "[]"); } catch { return []; } });
+  } catch (e) { ui.invHist = []; toast("Invoice history not loaded: " + (e.code || e.message)); }
+  if (ui.view === "invoices") renderAdmin();
 }
 async function loadInvMeta() {
   const [a, b] = await Promise.all([getDoc(doc(db, "meta", "invoicing")), getDoc(doc(db, "meta", "boxInvoiceMax"))]).catch(e => { toast("Invoicing rules not live: " + (e.code || e.message)); return []; });
