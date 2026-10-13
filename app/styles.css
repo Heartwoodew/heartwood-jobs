@@ -272,3 +272,5 @@ body.operator main{padding:0;max-width:560px}
 .splitbox .ck{display:flex;gap:8px;align-items:center;min-height:40px}
 #splitbtn.arm{background:#b3261e;color:#fff;border-color:#b3261e}
 @media (max-width:760px){#splitbtn,#splitundo{width:100%;min-height:48px}}
+.conf{font-size:11px;font-weight:700;border-radius:3px;padding:1px 6px;color:#fff;margin-left:4px}.conf-high{background:#2e9d5b}.conf-medium{background:#d98a00}.conf-low{background:#9aa3ab}
+.headbtns{display:flex;gap:8px;flex-wrap:wrap}

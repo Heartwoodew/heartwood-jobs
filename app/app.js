@@ -3,7 +3,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/fireba
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, connectAuthEmulator }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator,
-  collection, doc, getDoc, getDocs, query, where, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, serverTimestamp, arrayUnion, runTransaction }
+  collection, doc, getDoc, getDocs, query, where, orderBy, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, serverTimestamp, arrayUnion, runTransaction }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { firebaseConfig, useEmulator } from "./firebase-config.js";
 
@@ -171,7 +171,7 @@ function jobsView(all) {
   const cnt = q => open.filter(j => queueOf(j) === q).length;
   const list = open.filter(j => ui.queue === "All" || queueOf(j) === ui.queue)
     .sort((a, b) => ((a.date || "9") + (a.time || "")).localeCompare((b.date || "9") + (b.time || "")));
-  return `<div class="sm-head"><h1>Jobs</h1><button id="new" class="sm-btn primary">+ New Job</button></div>${searchBar()}
+  return `<div class="sm-head"><h1>Jobs</h1><span class="headbtns"><button id="findall" class="sm-btn" title="Run Find PO on every open and not-yet-invoiced job">🔎 Find all POs</button><button id="new" class="sm-btn primary">+ New Job</button></span></div>${searchBar()}
     <div class="qtabs"><button data-q="All" class="${ui.queue === "All" ? "on" : ""}">All open <span>${open.length}</span></button>
       ${QUEUES.map(q => `<button data-q="${q}" class="${QCLS[q]} ${ui.queue === q ? "on" : ""}"><span class="qdot ${QCLS[q]}"></span>${q} <span>${cnt(q)}</span></button>`).join("")}</div>
     <div class="filters"><select id="fs"><option value="">All staff</option>${staff.map(s => `<option value="${esc(skey(s))}" ${ui.staffF === skey(s) ? "selected" : ""}>${esc(label(s.name))}</option>`).join("")}<option value="_none" ${ui.staffF === "_none" ? "selected" : ""}>Unallocated</option></select>
@@ -265,6 +265,10 @@ function renderAdmin() {
   if ($("#fs")) $("#fs").onchange = e => { ui.staffF = e.target.value; renderAdmin(); };
   if ($("#ft")) $("#ft").onchange = e => { ui.typeF = e.target.value; renderAdmin(); };
   if ($("#new")) $("#new").onclick = () => editJob(null);
+  if ($("#findall")) $("#findall").onclick = async () => {
+    try { await setDoc(doc(db, "meta", "findAllPos"), { status: "pending", requestedBy: me.name, requestedAt: new Date().toISOString() });
+      toast("Find all POs queued - the box runs it within 2 min (6am-8pm); each job shows its result"); }
+    catch (e) { toast("Not queued: " + (e.code || e.message)); } };
   const jq = $("#jq");
   if (jq) {
     jq.oninput = () => { const pos = jq.selectionStart; ui.q = jq.value; renderAdmin(); const n = $("#jq"); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (e) {} } };
@@ -460,10 +464,10 @@ function invDescDefault(j) {        // hwdata.xero_description: "<Task> - <tidy 
 // PO value (poAmount, ex GST, from the builder's PO) pre-fills the price until one is typed (invoiceAmount wins).
 // ---- Find PO: the button flags the job (poLookupStatus 'pending'); the box worker tools/po_lookup.py (cron, 2 min,
 // 6am-8pm) searches saved PO PDFs / Gmail hits and writes status + candidates back onto the job doc.
-const PO_ST = { pending: "⏳ queued", searching: "🔍 searching", found: "✅ found", choose: "☝️ pick one", "not found": "❌ not found", "needs portal": "🌐 needs Orbit portal" };
+const PO_ST = { "orbit login needed": "🔒 Orbit login needed", pending: "⏳ queued", searching: "🔍 searching", found: "✅ found", choose: "☝️ pick one", "not found": "❌ not found", "needs portal": "🌐 needs Orbit portal" };
 function poLookupHtml(j) {
   if (!j.poLookupStatus) return "";
-  const cands = (j.poLookupCandidates || []).map((c, i) => `<div class="pocand">${esc(c.po)}${c.kind ? " · " + esc(c.kind) : ""}${c.amount != null ? ` · $${esc(Number(c.amount).toFixed(2))} ex GST` : " · no amount"} <span class="sub">${esc(c.source || "")}</span>
+  const cands = (j.poLookupCandidates || []).map((c, i) => `<div class="pocand">${esc(c.po)}${c.kind ? " · " + esc(c.kind) : ""}${c.amount != null ? ` · $${esc(Number(c.amount).toFixed(2))} ex GST` : " · no amount"}${c.confidence ? ` <span class="conf conf-${esc(c.confidence)}">${esc(c.confidence)}</span>` : ""}<div class="sub">Source: ${esc(c.source || "?")}</div>
       ${j.po === c.po && j.poAmount === c.amount ? "" : `<button type="button" class="btn usepo" data-i="${i}">Use this</button>`}</div>`).join("");
   return `<b>${PO_ST[j.poLookupStatus] || esc(j.poLookupStatus)}</b> ${esc(j.poLookupMsg || "")}${j.poLookupAt ? ` <span class="sub">(${esc(String(j.poLookupAt).slice(0, 16).replace("T", " "))})</span>` : ""}${cands}`;
 }
@@ -541,7 +545,7 @@ function invoicesView() {
     ? `<button id="inum" class="sm-btn primary" ${sel.length ? "" : "disabled"}>Assign invoice numbers &amp; download Xero CSV (${sel.length})</button>`
     : `<button id="icsv" class="sm-btn" ${sel.length ? "" : "disabled"}>Download Xero CSV (${sel.length})</button>
        ${ui.inv === "numbered" ? `<button id="imark" class="sm-btn primary" ${sel.length ? "" : "disabled"}>Mark invoiced (${sel.length})</button>` : ""}`;
-  return `<div class="sm-head"><h1>Invoices</h1><span class="sub">Next invoice number: <b id="inext">${nextInvoiceGuess()}</b></span></div>
+  return `<div class="sm-head"><h1>Invoices</h1><button id="findall" class="sm-btn" title="Run Find PO on every open and not-yet-invoiced job">🔎 Find all POs</button><span class="sub">Next invoice number: <b id="inext">${nextInvoiceGuess()}</b></span></div>
     <div class="qtabs">${tab("ready", "Ready to invoice", ready)}${tab("numbered", "Invoiced (numbered, import into Xero)", numbered)}${tab("recent", "Recent (last 30 days)", recent)}${tab("removed", "Removed", removed)}</div>
     <div class="filters">${acts}<label class="ck sub"><input type="checkbox" id="iall"> select all</label>
       <span class="sub">Selected total ${money(tot(sel)) || "$0.00"} ex GST</span>
