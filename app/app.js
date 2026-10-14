@@ -386,16 +386,9 @@ function reimbPill() {
   reimbSubs();
   const L = owedList(); if (!L.length) { if (el) el.remove(); return; }
   if (!el) { el = document.createElement("div"); el.id = "rbpill"; fw.insertBefore(el, fw.firstChild); }
-  const open = localStorage.getItem("hwReimbPill") === "open", tot = L.reduce((t, r) => t + (+r.amountInc || 0), 0), by = {};
-  for (const r of L) (by[r.workerName || "?"] ||= []).push(r);
-  el.className = "donepill rbpill" + (open ? " open" : "");
-  el.innerHTML = `<button type="button" class="dp-head" aria-expanded="${open}"><span class="dp-tick">🧾</span> <b>${L.length}</b> to reimburse · ${$$(tot)}<span class="dp-car">${open ? "▾" : "▴"}</span></button>
-    ${open ? `<div class="dp-body">${Object.entries(by).map(([w, rs]) => `<div class="dp-grp">${esc(w)} · ${$$(rs.reduce((t, r) => t + (+r.amountInc || 0), 0))}</div>
-      ${rs.map(r => `<button type="button" class="dp-row" data-rp="${esc(r.id)}"><span class="dp-no">${r.jobNo ? "#" + esc(r.jobNo) : "–"}</span>
-        <span class="dp-main"><b>${esc(r.supplier || "receipt")}</b><small>${esc(String(r.date || "").slice(0, 10))}${r.pending ? " · queued" : ""}</small></span>
-        <span class="dp-amt">${$$(r.amountInc || 0)}</span></button>`).join("")}`).join("")}
-      <div class="dp-foot sub">Total owed (inc GST) ${$$(tot)} · tap a row to open</div></div>` : ""}`;
-  el.querySelector(".dp-head").onclick = () => { localStorage.setItem("hwReimbPill", open ? "closed" : "open"); reimbPill(); };
+  el.className = "donepill rbpill rblines";
+  el.innerHTML = L.map(r => `<button type="button" class="dp-head rb-line" data-rp="${esc(r.id)}" title="${esc(String(r.date || "").slice(0, 10))}${r.pending ? " · queued" : ""}">
+    <span class="dp-tick">🧾</span><span class="rb-t">${esc(r.workerName || "?")} · ${esc(r.supplier || "receipt")}${r.jobNo ? " · #" + esc(r.jobNo) : ""}</span><b class="rb-a">${$$(r.amountInc || 0)}</b></button>`).join("");
   el.querySelectorAll("[data-rp]").forEach(b => b.onclick = () => { const r = L.find(x => x.id === b.dataset.rp) || {};
     const all = [...jobs, ...(ui.undated || []), ...(ui.done || [])];
     const j = (r.jobId && all.find(x => x.id === r.jobId)) || (r.jobNo && all.find(x => String(jobNo(x)) === String(r.jobNo)));
