@@ -119,14 +119,14 @@ const jobNo = j => j.sm8JobNo ? j.sm8JobNo : "HW-" + String(j.id || "").slice(-4
 const firstLine = s => String(s || "").split(/\n|\. /)[0];
 const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Unscheduled";
 const NAV = [["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["completed", "✔", "Completed"], ["clients", "👤", "Clients", 1], ["inbox", "✉", "Inbox", 1],
-  ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["settings", "⚙", "Settings", 1]];
+  ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["reimb", "💵", "Reimbursements", 0, 1], ["settings", "⚙", "Settings", 1]];
 ui.view = "jobs"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
 const PHONE = matchMedia("(max-width:760px)");
 PHONE.addEventListener?.("change", () => { if (me && me.role === "admin") renderAdmin(); });
 function shell(inner) {
   const cur = NAV.find(n => n[0] === ui.view);
   return `<div class="sm-layout ${ui.navOpen ? "navopen" : ""}"><div class="sm-burgerbar"><button class="sm-burger" id="burger" aria-label="Menu">☰</button><b>${esc(cur ? cur[2] : "")}</b></div>
-    <nav class="sm-side">${NAV.map(([k, ic, n, soon]) =>
+    <nav class="sm-side">${NAV.filter(x => !x[4] || isOwner()).map(([k, ic, n, soon]) =>
     `<button class="sm-nav ${ui.view === k ? "on" : ""} ${soon ? "soon" : ""}" ${soon ? "disabled title=\"Not built yet\"" : `data-view="${k}"`}><span class="ic">${ic}</span><span>${n}</span></button>`).join("")}</nav>
     <section class="sm-main">${inner}</section></div>`;
 }
@@ -256,11 +256,92 @@ function doneToday() {
   const ms = j => j.completedAt?.toMillis?.() ?? (j.completedAt === null ? Date.now() : 0);
   return [...m.values()].sort((a, b) => ms(b) - ms(a));
 }
+// ---- Receipts: worker photo + amount -> receipts/{id} + receiptChunks (base64 JPEG, free Firestore, no Storage).
+// The box (tools/receipts_worker.py, cron every 2 min) emails it from Alex's account to his Hubdoc email-in address,
+// records personally-paid ones in reimbursements/ (owner only) and notifies Alex. Workers only see their own Queued/Filed.
+const OWNER_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";
+const isOwner = () => me && me.uid === OWNER_UID;
+async function shrinkImage(file, max = 1600, q = 0.72) {
+  const bmp = await createImageBitmap(file).catch(() => null);
+  if (!bmp) throw new Error("Can't read that image - try a JPEG/PNG photo");
+  const k = Math.min(1, max / Math.max(bmp.width, bmp.height)), c = document.createElement("canvas");
+  c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k); c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+  return c.toDataURL("image/jpeg", q).split(",")[1];
+}
+function receiptDialog() {
+  let d = $("#rdlg"); if (!d) { d = document.createElement("dialog"); d.id = "rdlg"; d.className = "rdlg"; document.body.appendChild(d); }
+  d.innerHTML = `<form id="rf" method="dialog"><h3>🧾 Upload receipt</h3>
+    <label class="rphoto">Photo of the receipt<input name="photo" type="file" accept="image/*" capture="environment" required></label>
+    <div class="row"><label>Amount $ (inc GST)<input name="amt" type="number" step="0.01" min="0" inputmode="decimal" required></label>
+      <label>Job # (optional)<input name="job" inputmode="numeric" placeholder="e.g. 697"></label></div>
+    <label>Supplier / what it was for<input name="sup" required placeholder="e.g. Bunnings - silt fence"></label>
+    <label class="ck"><input type="checkbox" name="mine" checked> I paid for this myself (reimburse me)</label>
+    <p id="rerr" class="err"></p>
+    <div class="btns"><button value="cancel" formnovalidate class="sm-btn">Close</button><button value="send" class="sm-btn primary" id="rsend">Upload</button></div>
+    <h4>My recent receipts</h4><div id="rmine" class="sub">Loading…</div></form>`;
+  d.showModal();
+  const f = $("#rf"), mine = $("#rmine");
+  getDocs(query(collection(db, "receipts"), where("uid", "==", me.uid))).then(sn => {
+    const L = sn.docs.map(x => ({ id: x.id, ...x.data() })).sort((a, b) => String(b.createdAtIso || "").localeCompare(String(a.createdAtIso || ""))).slice(0, 8);
+    mine.innerHTML = L.map(r => `<div class="rrow"><span>${esc(String(r.createdAtIso || "").slice(0, 10))} · ${esc(r.supplier || "")} · ${$$(r.amountInc || 0)}</span>
+      <span class="qpill ${r.status === "filed" ? "q-comp" : ""}">${r.status === "filed" ? "Filed" : "Queued"}</span></div>`).join("") || "None yet.";
+  }).catch(e => { mine.textContent = "Receipts not available yet (" + (e.code || e.message) + ")"; });
+  f.onsubmit = async ev => {
+    if (ev.submitter?.value !== "send") return; ev.preventDefault();
+    const file = f.photo.files[0], amt = Math.round(+f.amt.value * 100) / 100;
+    if (!file || !(amt > 0) || !f.sup.value.trim()) { $("#rerr").textContent = "Photo, amount and supplier are needed."; return; }
+    $("#rsend").disabled = true; $("#rsend").textContent = "Uploading…";
+    try {
+      const b64 = await shrinkImage(file), CH = 700000, n = Math.ceil(b64.length / CH);
+      const ref = doc(collection(db, "receipts"));
+      for (let i = 0; i < n; i++) await setDoc(doc(db, "receiptChunks", `${ref.id}_${i}`), { rid: ref.id, i, uid: me.uid, data: b64.slice(i * CH, (i + 1) * CH) });
+      await setDoc(ref, { uid: me.uid, workerName: me.name, amountInc: amt, supplier: f.sup.value.trim(), paidPersonally: f.mine.checked,
+        jobNo: f.job.value.trim().replace(/^#/, "") || null, chunks: n, mime: "image/jpeg", bytes: Math.round(b64.length * 0.75),
+        status: "queued", createdAt: serverTimestamp(), createdAtIso: new Date().toISOString() });
+      d.close(); toast("Receipt uploaded - queued for Hubdoc");
+    } catch (e) { $("#rerr").textContent = "Not uploaded: " + (e.code || e.message); $("#rsend").disabled = false; $("#rsend").textContent = "Upload"; }
+  };
+}
+function reimbView() {
+  if (!isOwner()) return `<div class="sm-head"><h1>Reimbursements</h1></div><p class="muted pad">Owner only.</p>`;
+  const L = ui.reimb || [], open = L.filter(r => !r.paid), by = {};
+  for (const r of open) (by[r.workerName || "?"] ||= []).push(r);
+  const hd = ui.hubdocCfg?.email || "";
+  return `<div class="sm-head"><h1>Reimbursements</h1><span class="sub">Owed to workers for receipts they paid personally (owner only)</span></div>
+    <div class="filters"><label>Hubdoc email-in address <input id="hdmail" value="${esc(hd)}" placeholder="yourname.xxxx@app.hubdoc.com" size="34"></label>
+      <button id="hdsave" class="sm-btn">Save</button><span class="sub">${hd ? "Receipts are emailed here from alex@heartwoodew.com." : "<b>Not set</b> - receipts stay queued until it is."}</span></div>
+    ${Object.keys(by).length ? Object.entries(by).map(([w, rs]) => `<h3>${esc(w)} · owed <b>${$$(rs.reduce((t, r) => t + (+r.amountInc || 0), 0))}</b> inc GST (${rs.length})</h3>
+      <table class="jt"><thead><tr><th>Date</th><th>Supplier / for</th><th>Job</th><th>Amount</th><th>Hubdoc</th><th></th></tr></thead><tbody>${rs.map(r => `<tr data-rb="${esc(r.id)}">
+        <td>${esc(String(r.date || "").slice(0, 10))}</td><td>${esc(r.supplier || "")}</td><td>${r.jobNo ? "#" + esc(r.jobNo) : ""}</td><td>${$$(r.amountInc || 0)}</td>
+        <td><span class="qpill ${r.hubdocStatus === "filed" ? "q-comp" : ""}">${r.hubdocStatus === "filed" ? "Filed" : "Queued"}</span></td>
+        <td><button class="sm-btn rbpaid">Mark paid</button></td></tr>`).join("")}</tbody></table>`).join("") : `<p class="muted pad">Nothing owed.</p>`}
+    <p class="sub">Paid: ${L.filter(r => r.paid).length} entr${L.filter(r => r.paid).length === 1 ? "y" : "ies"} (${$$(L.filter(r => r.paid).reduce((t, r) => t + (+r.amountInc || 0), 0))}).</p>`;
+}
+function bindReimb(A) {
+  if (!isOwner()) return;
+  if (!ui.reimbSub) {
+    ui.reimbSub = onSnapshot(collection(db, "reimbursements"), s => { ui.reimb = s.docs.map(x => ({ id: x.id, ...x.data() })); if (ui.view === "reimb") renderAdmin(); },
+      e => toast("Reimbursements not available: " + (e.code || e.message)));
+    getDoc(doc(db, "ownerSettings", "hubdoc")).then(x => { ui.hubdocCfg = x.data() || {}; if (ui.view === "reimb") renderAdmin(); }).catch(() => {});
+  }
+  if ($("#hdsave")) $("#hdsave").onclick = async () => { const v = $("#hdmail").value.trim().toLowerCase();
+    if (v && !/^[a-z0-9._+-]+@app\.hubdoc\.com$/.test(v)) return toast("Hubdoc addresses end in @app.hubdoc.com");
+    try { await setDoc(doc(db, "ownerSettings", "hubdoc"), { email: v || null, updatedAt: serverTimestamp() }); ui.hubdocCfg = { email: v }; toast("Saved"); renderAdmin(); }
+    catch (e) { toast("Not saved: " + (e.code || e.message)); } };
+  A.querySelectorAll(".rbpaid").forEach(b => b.onclick = async () => { const id = b.closest("[data-rb]").dataset.rb;
+    if (!armBtn(b, "Mark paid", "Tap again: paid")) return;
+    try { await updateDoc(doc(db, "reimbursements", id), { paid: true, paidAt: new Date().toISOString() }); toast("Marked paid"); }
+    catch (e) { toast("Not saved: " + (e.code || e.message)); } });
+}
 function donePill() {
   let el = $("#donepill");
   const show = me && me.role === "admin" && !ui.myJobs && (ui.view === "dispatch" || ui.view === "jobs");
-  if (!show) { if (el) el.remove(); return; }
-  if (!el) { el = document.createElement("div"); el.id = "donepill"; document.body.appendChild(el); }
+  let fw = $("#fabwrap");
+  if (!show) { if (fw) fw.remove(); return; }
+  if (!fw) { fw = document.createElement("div"); fw.id = "fabwrap"; fw.className = "fabwrap";
+    fw.innerHTML = `<button type="button" id="rcptbtn" class="hubdocbtn" title="Upload receipt" aria-label="Upload receipt">🧾<span class="rb-l">Upload receipt</span></button>`; document.body.appendChild(fw);
+    $("#rcptbtn").onclick = () => receiptDialog(); }
+  if (!el) { el = document.createElement("div"); el.id = "donepill"; fw.appendChild(el); }
   const L = doneToday(), open = localStorage.getItem("hwDonePill") === "open";
   const amt = j => j.invoiceAmount ?? j.poAmount ?? null, known = L.filter(j => amt(j) != null);
   const tot = known.reduce((t, j) => t + +amt(j), 0);
@@ -282,9 +363,10 @@ function renderAdmin() {
   document.body.className = "admin";
   const fj = filtered(), und = (ui.undated || []).filter(j => (!ui.typeF || j.type === ui.typeF));
   const all = [...fj, ...und.filter(u => !fj.some(j => j.id === u.id))];
-  $("#app").innerHTML = shell(ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : jobsView(all));
+  $("#app").innerHTML = shell(ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : jobsView(all));
   const A = $("#app");
   if (ui.view === "invoices") bindInvoices(A);
+  if (ui.view === "reimb") bindReimb(A);
   A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.navOpen = false;
     if (b.dataset.view === "myjobs") { ui.myJobs = true; ui.opSel = null; window.scrollTo(0, 0); return renderAdmin(); }
     ui.view = b.dataset.view; renderAdmin(); });
