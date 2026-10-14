@@ -309,3 +309,4 @@ tr.mhead td{background:#eef2f7;font-size:13px;padding:6px 8px}
 .rdlg h3{margin:0 0 10px}.rdlg label{display:block;margin:8px 0}.rdlg input:not([type=checkbox]){width:100%;box-sizing:border-box}
 .rdlg .row{display:flex;gap:10px}.rdlg .row label{flex:1}.rdlg .btns{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}
 .rrow{display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px solid #eef2f7}
+.jrc{margin-top:6px}

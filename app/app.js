@@ -268,12 +268,13 @@ async function shrinkImage(file, max = 1600, q = 0.72) {
   c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k); c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
   return c.toDataURL("image/jpeg", q).split(",")[1];
 }
-function receiptDialog() {
+function receiptDialog(j) {
+  const jn = j ? String(jobNo(j) || "") : "";
   let d = $("#rdlg"); if (!d) { d = document.createElement("dialog"); d.id = "rdlg"; d.className = "rdlg"; document.body.appendChild(d); }
-  d.innerHTML = `<form id="rf" method="dialog"><h3>🧾 Upload receipt</h3>
+  d.innerHTML = `<form id="rf" method="dialog"><h3>🧾 Upload receipt${jn ? ` · Job #${esc(jn)}` : ""}</h3>${j ? `<div class="sub">${esc(j.address || "")}</div>` : ""}
     <label class="rphoto">Photo of the receipt<input name="photo" type="file" accept="image/*" capture="environment" required></label>
     <div class="row"><label>Amount $ (inc GST)<input name="amt" type="number" step="0.01" min="0" inputmode="decimal" required></label>
-      <label>Job # (optional)<input name="job" inputmode="numeric" placeholder="e.g. 697"></label></div>
+      <label>Job # (optional)<input name="job" inputmode="numeric" placeholder="e.g. 697" value="${esc(jn)}" ${j ? "readonly" : ""}></label></div>
     <label>Supplier / what it was for<input name="sup" required placeholder="e.g. Bunnings - silt fence"></label>
     <label class="ck"><input type="checkbox" name="mine" checked> I paid for this myself (reimburse me)</label>
     <p id="rerr" class="err"></p>
@@ -296,12 +297,25 @@ function receiptDialog() {
       const ref = doc(collection(db, "receipts"));
       for (let i = 0; i < n; i++) await setDoc(doc(db, "receiptChunks", `${ref.id}_${i}`), { rid: ref.id, i, uid: me.uid, data: b64.slice(i * CH, (i + 1) * CH) });
       await setDoc(ref, { uid: me.uid, workerName: me.name, amountInc: amt, supplier: f.sup.value.trim(), paidPersonally: f.mine.checked,
-        jobNo: f.job.value.trim().replace(/^#/, "") || null, chunks: n, mime: "image/jpeg", bytes: Math.round(b64.length * 0.75),
+        jobNo: f.job.value.trim().replace(/^#/, "") || null, jobId: j ? j.id : null, address: j ? (j.address || null) : null, chunks: n, mime: "image/jpeg", bytes: Math.round(b64.length * 0.75),
         status: "queued", createdAt: serverTimestamp(), createdAtIso: new Date().toISOString() });
-      d.close(); toast("Receipt uploaded - queued for Hubdoc");
+      d.close(); toast("Receipt uploaded - queued for Hubdoc"); if (j) loadJobReceipts(j);
     } catch (e) { $("#rerr").textContent = "Not uploaded: " + (e.code || e.message); $("#rsend").disabled = false; $("#rsend").textContent = "Upload"; }
   };
 }
+// Job card: Upload receipt + that job's receipts. Workers see their own; Alex sees all (rules enforce the same).
+const jobReceiptsHtml = j => `<h4>Receipts</h4><button type="button" class="sm-btn" id="jrcbtn">🧾 Upload receipt</button><div id="jrc" class="jrc sub">Loading…</div>`;
+async function loadJobReceipts(j) {
+  const box = $("#jrc"); if (!box) return;
+  try {
+    const qs = isOwner() ? query(collection(db, "receipts"), where("jobId", "==", j.id)) : query(collection(db, "receipts"), where("jobId", "==", j.id), where("uid", "==", me.uid));
+    const L = (await getDocs(qs)).docs.map(x => ({ id: x.id, ...x.data() })).sort((a, b) => String(b.createdAtIso || "").localeCompare(String(a.createdAtIso || "")));
+    if ($("#jrc") !== box) return;
+    box.innerHTML = L.map(r => `<div class="rrow"><span>🧾 ${esc(String(r.createdAtIso || "").slice(0, 10))} · <b>${$$(r.amountInc || 0)}</b> · ${esc(r.supplier || "")}${isOwner() ? ` · ${esc(r.workerName || "")}${r.paidPersonally ? " (to reimburse)" : ""}` : ""}</span>
+      <span class="qpill ${r.status === "filed" ? "q-comp" : ""}">${r.status === "filed" ? "Filed" : "Queued"}</span></div>`).join("") || "No receipts on this job yet.";
+  } catch (e) { box.textContent = "Receipts not available yet (" + (e.code || e.message) + ")"; }
+}
+function wireJobReceipts(j) { const b = $("#jrcbtn"); if (!b) return; b.onclick = () => receiptDialog(j); loadJobReceipts(j); }
 function reimbView() {
   if (!isOwner()) return `<div class="sm-head"><h1>Reimbursements</h1></div><p class="muted pad">Owner only.</p>`;
   const L = ui.reimb || [], open = L.filter(r => !r.paid), by = {};
@@ -339,8 +353,7 @@ function donePill() {
   let fw = $("#fabwrap");
   if (!show) { if (fw) fw.remove(); return; }
   if (!fw) { fw = document.createElement("div"); fw.id = "fabwrap"; fw.className = "fabwrap";
-    fw.innerHTML = `<button type="button" id="rcptbtn" class="hubdocbtn" title="Upload receipt" aria-label="Upload receipt">🧾<span class="rb-l">Upload receipt</span></button>`; document.body.appendChild(fw);
-    $("#rcptbtn").onclick = () => receiptDialog(); }
+    document.body.appendChild(fw); }
   if (!el) { el = document.createElement("div"); el.id = "donepill"; fw.appendChild(el); }
   const L = doneToday(), open = localStorage.getItem("hwDonePill") === "open";
   const amt = j => j.invoiceAmount ?? j.poAmount ?? null, known = L.filter(j => amt(j) != null);
@@ -522,13 +535,13 @@ function editJob(j) {
       <div class="diary">${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("")}
         ${hist.map(([w, t]) => `<div class="de sys"><span class="av">i</span><div><small>${esc(w)}</small><div>${esc(t)}</div></div></div>`).join("")}
         ${!(j.log || []).length && !hist.length ? `<p class="muted sub">No diary entries yet. Site notes from staff appear here.</p>` : ""}</div>
-      ${!n ? `<h4>Photos</h4><button type="button" class="sm-btn" id="emailph">📧 Email photos</button> <span class="sub muted">Photos go to ${OFFICE_EMAIL} by email</span>` : ""}
+      ${!n ? `<h4>Photos</h4><button type="button" class="sm-btn" id="emailph">📧 Email photos</button> <span class="sub muted">Photos go to ${OFFICE_EMAIL} by email</span>${jobReceiptsHtml(j)}` : ""}
     </div></div>
     <p id="ferr" class="err"></p>
     <div class="btns jc-foot"><button value="cancel" formnovalidate class="sm-btn">Close</button><button value="save" class="sm-btn primary">Save Job</button></div></form>`;
   d.showModal();
   if (!n) $("#emailph").onclick = () => emailPhotos(j);
-  if (!n) { wireFindPo(j); supervisors(); }
+  if (!n) { wireFindPo(j); supervisors(); wireJobReceipts(j); }
   if (!n && $("#unschbtn")) $("#unschbtn").onclick = ev => { if (!armBtn(ev.currentTarget, "✕ Remove from dispatch board", "Tap again to remove from the board")) return;
     d.close(); unscheduleJob(j).catch(e => toast("Not removed: " + (e.code || e.message))); };
   if (!n) $("#emailsupj").onclick = () => emailSupervisor({ ...j, po: $("#jf").po.value.trim() || j.po, poAmount: $("#jf").poAmount.value === "" ? j.poAmount : +$("#jf").poAmount.value }, invAmountDefault(j)).catch(e => toast(e.message));
@@ -891,10 +904,11 @@ function renderOpDetail(j) {
       <button class="mnote" data-act="note">＋ Add Note</button></div>
     <div class="mcard"><div class="mlbl">Photos</div><button type="button" class="mnote" id="emailph">📧 Email photos</button>
       <div class="muted sub">Send site photos to Alex by email</div></div>
+    <div class="mcard">${jobReceiptsHtml(j)}</div>
     <div class="mactions">${done ? `<div class="donebar">✔ Completed${j.loads ? ` · ${j.loads} loads` : ""}</div>` :
       `<button class="mbtn start" data-act="start" ${started ? "disabled" : ""}>${started ? "Started" : "▶ Start Job"}</button>
        <button class="mbtn complete" data-act="done">✔ Complete</button>`}</div></div>`;
-  $("#emailph").onclick = () => emailPhotos(j);
+  $("#emailph").onclick = () => emailPhotos(j); wireJobReceipts(j);
   $("#back").onclick = () => { ui.opSel = null; renderOperator(); };
   $("#app").querySelectorAll("[data-act]").forEach(b => b.onclick = () => opAction(j, b.dataset.act));
 }
