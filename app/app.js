@@ -368,8 +368,41 @@ function donePill() {
   el.querySelector(".dp-head").onclick = () => { localStorage.setItem("hwDonePill", open ? "closed" : "open"); donePill(); };
   el.querySelectorAll("[data-dp]").forEach(b => b.onclick = () => { const j = L.find(x => x.id === b.dataset.dp); if (j) editJob(j); });
 }
+// ---- Owner-only amber "to reimburse" pill (same look/behaviour as the done-today pill). Ledger + queued personally-paid
+// receipts the box hasn't written to the ledger yet. Never rendered (or subscribed) for anyone but Alex's UID.
+function reimbSubs() {
+  if (!isOwner() || ui.rpSubs) return; ui.rpSubs = true;
+  if (!ui.reimbSub) ui.reimbSub = onSnapshot(collection(db, "reimbursements"), s => { ui.reimb = s.docs.map(x => ({ id: x.id, ...x.data() })); reimbPill(); if (ui.view === "reimb") renderAdmin(); }, () => {});
+  onSnapshot(query(collection(db, "receipts"), where("paidPersonally", "==", true)), s => { ui.rqueued = s.docs.map(x => ({ id: x.id, ...x.data() })); reimbPill(); }, () => {});
+}
+function owedList() {
+  const led = ui.reimb || [], ids = new Set(led.map(r => r.receiptId || r.id));
+  const L = [...led.filter(r => !r.paid), ...(ui.rqueued || []).filter(r => r.status === "queued" && !ids.has(r.id)).map(r => ({ ...r, date: r.createdAtIso, pending: true }))];
+  return L.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+}
+function reimbPill() {
+  const fw = $("#fabwrap"); let el = $("#rbpill");
+  if (!fw || !isOwner()) { if (el) el.remove(); return; }
+  reimbSubs();
+  const L = owedList(); if (!L.length) { if (el) el.remove(); return; }
+  if (!el) { el = document.createElement("div"); el.id = "rbpill"; fw.insertBefore(el, fw.firstChild); }
+  const open = localStorage.getItem("hwReimbPill") === "open", tot = L.reduce((t, r) => t + (+r.amountInc || 0), 0), by = {};
+  for (const r of L) (by[r.workerName || "?"] ||= []).push(r);
+  el.className = "donepill rbpill" + (open ? " open" : "");
+  el.innerHTML = `<button type="button" class="dp-head" aria-expanded="${open}"><span class="dp-tick">🧾</span> <b>${L.length}</b> to reimburse · ${$$(tot)}<span class="dp-car">${open ? "▾" : "▴"}</span></button>
+    ${open ? `<div class="dp-body">${Object.entries(by).map(([w, rs]) => `<div class="dp-grp">${esc(w)} · ${$$(rs.reduce((t, r) => t + (+r.amountInc || 0), 0))}</div>
+      ${rs.map(r => `<button type="button" class="dp-row" data-rp="${esc(r.id)}"><span class="dp-no">${r.jobNo ? "#" + esc(r.jobNo) : "–"}</span>
+        <span class="dp-main"><b>${esc(r.supplier || "receipt")}</b><small>${esc(String(r.date || "").slice(0, 10))}${r.pending ? " · queued" : ""}</small></span>
+        <span class="dp-amt">${$$(r.amountInc || 0)}</span></button>`).join("")}`).join("")}
+      <div class="dp-foot sub">Total owed (inc GST) ${$$(tot)} · tap a row to open</div></div>` : ""}`;
+  el.querySelector(".dp-head").onclick = () => { localStorage.setItem("hwReimbPill", open ? "closed" : "open"); reimbPill(); };
+  el.querySelectorAll("[data-rp]").forEach(b => b.onclick = () => { const r = L.find(x => x.id === b.dataset.rp) || {};
+    const all = [...jobs, ...(ui.undated || []), ...(ui.done || [])];
+    const j = (r.jobId && all.find(x => x.id === r.jobId)) || (r.jobNo && all.find(x => String(jobNo(x)) === String(r.jobNo)));
+    if (j) editJob(j); else { ui.view = "reimb"; renderAdmin(); } });
+}
 function renderAdmin() {
-  donePill();
+  donePill(); reimbPill();
   if (!me || me.role !== "admin") return;
   if (ui.myJobs) return renderOperator();
   if ($("#dlg").open) return;          // don't redraw under an open job card

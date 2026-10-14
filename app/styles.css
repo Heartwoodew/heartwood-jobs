@@ -310,3 +310,6 @@ tr.mhead td{background:#eef2f7;font-size:13px;padding:6px 8px}
 .rdlg .row{display:flex;gap:10px}.rdlg .row label{flex:1}.rdlg .btns{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}
 .rrow{display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px solid #eef2f7}
 .jrc{margin-top:6px}
+.rbpill .dp-head{background:#b45309}.rbpill .dp-tick{background:#fff;font-size:11px}.rbpill .dp-row:hover{background:#fffbeb}
+.dp-grp{padding:6px 12px;background:#fef3c7;color:#92400e;font-weight:600;font-size:13px}
+@media (max-width:760px){.fabwrap{flex-direction:column;align-items:flex-end}.fabwrap:has(.donepill.open){align-items:stretch}.fabwrap .donepill.open{flex:none}}
