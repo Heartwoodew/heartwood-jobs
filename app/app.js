@@ -70,7 +70,7 @@ onAuthStateChanged(auth, async user => {
     const q = query(collection(db, "jobs"), where("date", ">=", addDays(todayStr(), -14)), where("date", "<=", addDays(todayStr(), 28)), orderBy("date"));
     const u1 = onSnapshot(q, s => { jobs = s.docs.map(d => ({ id: d.id, ...d.data() })); addNameOnlyStaff(jobs); renderAdmin(); });
     // Invoicing: every Done job (any date), admin only.
-    const u2 = onSnapshot(query(collection(db, "jobs"), where("status", "==", "Done")), s => { ui.done = s.docs.map(d => ({ id: d.id, ...d.data() })); if (ui.view === "invoices" || ui.view === "completed") renderAdmin(); });
+    const u2 = onSnapshot(query(collection(db, "jobs"), where("status", "==", "Done")), s => { ui.done = s.docs.map(d => ({ id: d.id, ...d.data() })); donePill(); if (ui.view === "invoices" || ui.view === "completed") renderAdmin(); });
     unsub = () => { u1(); u2(); };
     getDocs(query(collection(db, "jobs"), where("date", "==", ""))).then(s => { ui.undated = s.docs.map(d => ({ id: d.id, ...d.data() })); addNameOnlyStaff(ui.undated); renderAdmin(); });
   } else {
@@ -243,7 +243,39 @@ function dispatchView(all) {
     <div class="dwrap"><div class="dboard">${grid}<p class="sub muted">Drag a job to another day or staff member to reschedule (saved in the app, sent to ServiceM8 by the next sync).</p></div>
       </div>`;
 }
+// Floating "Done today" card (dispatch board + job list). Today = Brisbane date of completedAt (fallback: job date when
+// there is no completion stamp). Live via the Done-jobs snapshot. Collapsed state remembered on this device.
+const tsDay = v => { if (v == null) return null; const d = v.toDate ? v.toDate() : new Date(v); return isNaN(d) ? null : ymd(d); };
+function doneToday() {
+  const t = todayStr(), m = new Map();
+  for (const j of [...(ui.done || []), ...jobs.filter(x => x.status === "Done")]) {
+    if (j.status !== "Done" || m.has(j.id)) continue;
+    const cd = j.completedAt === null ? t : tsDay(j.completedAt);        // null = our own pending server timestamp
+    if (cd ? cd === t : j.date === t) m.set(j.id, j);
+  }
+  const ms = j => j.completedAt?.toMillis?.() ?? (j.completedAt === null ? Date.now() : 0);
+  return [...m.values()].sort((a, b) => ms(b) - ms(a));
+}
+function donePill() {
+  let el = $("#donepill");
+  const show = me && me.role === "admin" && !ui.myJobs && (ui.view === "dispatch" || ui.view === "jobs");
+  if (!show) { if (el) el.remove(); return; }
+  if (!el) { el = document.createElement("div"); el.id = "donepill"; document.body.appendChild(el); }
+  const L = doneToday(), open = localStorage.getItem("hwDonePill") === "open";
+  const amt = j => j.invoiceAmount ?? j.poAmount ?? null, known = L.filter(j => amt(j) != null);
+  const tot = known.reduce((t, j) => t + +amt(j), 0);
+  const who = j => j.completedByName || (namesOf(j).join(", ") || "—");
+  el.className = "donepill" + (open ? " open" : "");
+  el.innerHTML = `<button type="button" class="dp-head" aria-expanded="${open}"><span class="dp-tick">✓</span> <b>${L.length}</b> done today${known.length ? ` · ${$$(tot)}` : ""}<span class="dp-car">${open ? "▾" : "▴"}</span></button>
+    ${open ? `<div class="dp-body">${L.map(j => `<button type="button" class="dp-row" data-dp="${esc(j.id)}"><span class="dp-no">#${esc(jobNo(j))}</span>
+      <span class="dp-main"><b>${esc(tidyAddress(j.address || "").split(",")[0])}</b> · ${esc(TYPES[j.type] || firstLine(j.description || ""))}<small>${esc(who(j))}</small></span>
+      <span class="dp-amt">${amt(j) != null ? $$(amt(j)) : "–"}</span></button>`).join("") || `<p class="sub pad">Nothing completed yet today.</p>`}
+      <div class="dp-foot sub">Total ex GST ${$$(tot)}${known.length < L.length ? ` (${L.length - known.length} without a PO/invoice amount)` : ""}</div></div>` : ""}`;
+  el.querySelector(".dp-head").onclick = () => { localStorage.setItem("hwDonePill", open ? "closed" : "open"); donePill(); };
+  el.querySelectorAll("[data-dp]").forEach(b => b.onclick = () => { const j = L.find(x => x.id === b.dataset.dp); if (j) editJob(j); });
+}
 function renderAdmin() {
+  donePill();
   if (!me || me.role !== "admin") return;
   if (ui.myJobs) return renderOperator();
   if ($("#dlg").open) return;          // don't redraw under an open job card
