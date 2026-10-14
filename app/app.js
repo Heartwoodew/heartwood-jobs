@@ -310,6 +310,21 @@ async function dispatchMove(j, date, fromKey, toKey, hour) {
   if (ui.undated) ui.undated = ui.undated.filter(x => x.id !== j.id);
   toast(`Rescheduled to ${shortDate(date)}${u.time ? " " + u.time : ""}${u.assignedNames ? " · " + (u.assignedNames.join(", ") || "Unallocated") : ""}`);
 }
+// "Remove from dispatch board": clears date/time (job goes back to Unscheduled; nothing is deleted). The next sync deletes
+// this visit's staff bookings in ServiceM8 (sm8_push), not the job. Undo puts the date/time back.
+async function unscheduleJob(j) {
+  const prev = { date: j.date || "", time: j.time || "" };
+  const u = { date: "", time: "", editedInApp: true, unscheduledFrom: prev, unscheduledAt: new Date().toISOString(), unscheduledByName: me.name, updatedAt: serverTimestamp(), updatedBy: me.uid };
+  await updateDoc(doc(db, "jobs", j.id), u);
+  Object.assign(j, { date: "", time: "" }); if (ui.undated && !ui.undated.some(x => x.id === j.id)) ui.undated.push(j);
+  undoToast(`#${jobNo(j)} removed from the dispatch board (now Unscheduled)`, async () => {
+    await updateDoc(doc(db, "jobs", j.id), { ...prev, editedInApp: true, unscheduledFrom: null, updatedAt: serverTimestamp(), updatedBy: me.uid });
+    Object.assign(j, prev); if (ui.undated) ui.undated = ui.undated.filter(x => x.id !== j.id); toast("Back on " + shortDate(prev.date)); renderAdmin(); });
+  renderAdmin();
+}
+const armBtn = (b, label, armed, ms = 4000) => { if (b.classList.contains("arm")) return true;
+  b.classList.add("arm"); const o = b.textContent; b.textContent = armed; clearTimeout(b._t);
+  b._t = setTimeout(() => { b.classList.remove("arm"); b.textContent = label || o; }, ms); return false; };
 async function moveJob(j, date) {
   await updateDoc(doc(db, "jobs", j.id), { date, editedInApp: true, updatedAt: serverTimestamp(), updatedBy: me.uid });
   if (ui.undated) ui.undated = ui.undated.filter(x => x.id !== j.id);
@@ -385,6 +400,7 @@ function editJob(j) {
       <div class="row"><label>Date<input type="date" name="date" value="${esc(j.date)}"></label>
         <label>Start<input type="time" name="time" value="${esc(j.time)}"></label>
         <label>Hours<input type="number" step="0.5" min="0" name="durationHrs" value="${esc(j.durationHrs)}"></label></div>
+      ${!n && j.date && !["Done", "Cancelled"].includes(j.status) ? `<div class="row"><button type="button" id="unschbtn" class="btn">✕ Remove from dispatch board</button><span class="sub">Back to Unscheduled; the ServiceM8 booking is removed at the next sync (the job stays).</span></div>` : ""}
       <fieldset class="staffs">${staff.map(s => `<label class="ck"><input type="checkbox" name="assigned" value="${esc(skey(s))}" ${namesOf(j).map(x => x.toLowerCase()).includes(s.name.toLowerCase()) ? "checked" : ""}> <span class="av">${esc(s.name[0])}</span>${esc(label(s.name))}</label>`).join("")}</fieldset>
       <h4>Notes</h4>
       <textarea name="notes" rows="2" placeholder="Office notes">${esc(j.notes)}</textarea>
@@ -399,6 +415,8 @@ function editJob(j) {
   d.showModal();
   if (!n) $("#emailph").onclick = () => emailPhotos(j);
   if (!n) { wireFindPo(j); supervisors(); }
+  if (!n && $("#unschbtn")) $("#unschbtn").onclick = ev => { if (!armBtn(ev.currentTarget, "✕ Remove from dispatch board", "Tap again to remove from the board")) return;
+    d.close(); unscheduleJob(j).catch(e => toast("Not removed: " + (e.code || e.message))); };
   if (!n) $("#emailsupj").onclick = () => emailSupervisor({ ...j, po: $("#jf").po.value.trim() || j.po, poAmount: $("#jf").poAmount.value === "" ? j.poAmount : +$("#jf").poAmount.value }, invAmountDefault(j)).catch(e => toast(e.message));
   if (!n && $("#splitbtn")) $("#splitbtn").onclick = ev => { const b = ev.currentTarget;
     const lines = taskLines(j.description), pick = [...d.querySelectorAll(".spl")].filter(c => c.checked).map(c => +c.dataset.i);
@@ -589,7 +607,7 @@ function invoicesView() {
   const mStr = m => `${months[m]?.n || 0} invoice${months[m]?.n === 1 ? "" : "s"} · <b>${$$(months[m]?.ex || 0)}</b> ex GST · ${$$(Math.round((months[m]?.ex || 0) * 110) / 100)} inc GST`;
   const curM = todayStr().slice(0, 7);
   const stripMs = [...new Set([curM, ...Object.keys(months)])].filter(m => /^\d{4}-\d{2}$/.test(m) && m <= curM).sort().reverse().slice(0, 4);
-  const strip = ui.inv === "numbered" || ui.inv === "recent" ? `<div class="mstrip">${stripMs.map(m => `<div class="mcard${m === curM ? " cur" : ""}"><div class="mn">${esc(mName(m))}${m === curM ? " (this month)" : ""}</div><div>${mStr(m)}</div></div>`).join("")}${ui.q ? `<span class="sub">Totals for jobs matching the search</span>` : ""}
+  const strip = ui.inv === "numbered" || ui.inv === "recent" ? `<div class="minvstrip">${stripMs.map(m => `<div class="mcard${m === curM ? " cur" : ""}"><div class="mn">${esc(mName(m))}${m === curM ? " (this month)" : ""}</div><div>${mStr(m)}</div></div>`).join("")}${ui.q ? `<span class="sub">Totals for jobs matching the search</span>` : ""}
     <details class="mall"><summary>All months${ui.invHist ? "" : " (loading history…)"}</summary>${Object.keys(months).sort().reverse().map(m => `<div class="mrow"><b>${esc(mName(m))}</b> · ${mStr(m)}</div>`).join("")}<div class="sub">Includes read-only invoice history from the box records.</div></details></div>` : "";
   if (ui.inv === "numbered" || ui.inv === "recent") list.sort((a, b) => monthOf(b).localeCompare(monthOf(a)) || +b.invoiceNo - +a.invoiceNo);
   const tab = (k, n, a) => `<button data-inv="${k}" class="${ui.inv === k ? "on" : ""}">${n} <span>${a.length}</span></button>`;
@@ -934,7 +952,7 @@ function mobileDispatch(all) {
       <a class="mdc-addr" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener">📍 ${esc(j.address || "-")}</a>
       <div class="mdc-desc">${esc(firstLine(j.description))}</div>
       <div class="mdc-foot"><span class="sub">${j.po ? "PO " + esc(j.po) : "No PO"}${j.durationHrs ? " · " + esc(j.durationHrs) + "h" : ""}${j.status === "In progress" ? ' · <b class="inprog">In progress</b>' : ""}</span>
-        <button type="button" class="sm-btn mdc-move" data-move="${j.id}">⇄ Move</button></div></div>`;
+        <span><button type="button" class="sm-btn mdc-unsch" data-unsch="${j.id}" title="Remove from dispatch board (back to Unscheduled)">✕ Off board</button> <button type="button" class="sm-btn mdc-move" data-move="${j.id}">⇄ Move</button></span></div></div>`;
   const groups = rowsFor(all).map(r => [r, dayJobs.filter(r.has)]);
   return `<div class="mdisp" id="mdisp"><div class="mdh">
       <div class="mdh-row"><button class="sm-btn" data-md="-1" aria-label="Previous day">‹</button>
@@ -952,6 +970,8 @@ function bindMobileDispatch(A, pool) {
   A.querySelectorAll(".mdc").forEach(c => { c.draggable = false; c.ondragstart = null; });
   A.querySelectorAll(".mdc-addr").forEach(a => a.addEventListener("click", ev => ev.stopPropagation()));
   A.querySelectorAll("[data-move]").forEach(b => b.onclick = ev => { ev.stopPropagation(); const j = pool.find(x => x.id === b.dataset.move); if (j) moveSheet(j); });
+  A.querySelectorAll("[data-unsch]").forEach(b => b.onclick = ev => { ev.stopPropagation(); const j = pool.find(x => x.id === b.dataset.unsch); if (!j) return;
+    if (!armBtn(b, "✕ Off board", "Tap again to remove")) return; unscheduleJob(j).catch(e => toast("Not removed: " + (e.code || e.message))); });
   const el = $("#mdisp"); let x0 = null, y0 = null;
   if (el) {
     el.addEventListener("touchstart", e => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
