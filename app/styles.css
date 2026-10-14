@@ -316,3 +316,4 @@ tr.mhead td{background:#eef2f7;font-size:13px;padding:6px 8px}
 .rblines{max-height:min(40vh,240px);overflow-y:auto;border-radius:16px}
 .rblines .rb-line{border-bottom:1px solid rgba(255,255,255,.25)}.rblines .rb-line:last-child{border-bottom:0}
 .rb-t{overflow:hidden;text-overflow:ellipsis;min-width:0}.rb-a{margin-left:auto;padding-left:8px}
+.rb-csv{background:#92400e;justify-content:center}

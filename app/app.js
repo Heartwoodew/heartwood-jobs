@@ -380,6 +380,23 @@ function owedList() {
   const L = [...led.filter(r => !r.paid), ...(ui.rqueued || []).filter(r => r.status === "queued" && !ids.has(r.id)).map(r => ({ ...r, date: r.createdAtIso, pending: true }))];
   return L.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
 }
+// Read-only export of the currently owed receipts (does not touch paid status).
+async function reimbCsv(L) {
+  const all = [...jobs, ...(ui.undated || []), ...(ui.done || [])], q = v => `"${String(v ?? "").replace(/"/g, '""')}"`, r2 = v => (Math.round(v * 100) / 100).toFixed(2);
+  const addr = r => r.address || ((r.jobId && all.find(x => x.id === r.jobId)) || (r.jobNo && all.find(x => String(jobNo(x)) === String(r.jobNo))) || {}).address || "";
+  let ti = 0, tg = 0;
+  const rows = [["Worker", "Date", "Supplier/Description", "Job #", "Job address", "Amount inc GST", "GST", "Amount ex GST", "Status", "Receipt ID"]];
+  for (const r of L) { const inc = +r.amountInc || 0, g = inc / 11; ti += inc; tg += g;
+    rows.push([r.workerName || "", String(r.date || "").slice(0, 10), r.supplier || "", r.jobNo || "", addr(r), r2(inc), r2(g), r2(inc - g), r.pending ? "queued" : "owed", r.receiptId || r.id]); }
+  rows.push(["TOTAL", "", `${L.length} receipt${L.length === 1 ? "" : "s"}`, "", "", r2(ti), r2(tg), r2(ti - tg), "", ""]);
+  const csv = "\ufeff" + rows.map(x => x.map(q).join(",")).join("\r\n") + "\r\n";
+  const name = `reimbursements_${new Date().toLocaleDateString("en-CA", { timeZone: "Australia/Brisbane" })}.csv`;
+  const iOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const file = new File([csv], name, { type: "text/csv" });
+  if (iOS && navigator.canShare?.({ files: [file] })) return navigator.share({ files: [file], title: name });
+  const url = URL.createObjectURL(file), a = document.createElement("a");
+  a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
 function reimbPill() {
   const fw = $("#fabwrap"); let el = $("#rbpill");
   if (!fw || !isOwner()) { if (el) el.remove(); return; }
@@ -389,6 +406,8 @@ function reimbPill() {
   el.className = "donepill rbpill rblines";
   el.innerHTML = L.map(r => `<button type="button" class="dp-head rb-line" data-rp="${esc(r.id)}" title="${esc(String(r.date || "").slice(0, 10))}${r.pending ? " · queued" : ""}">
     <span class="dp-tick">🧾</span><span class="rb-t">${esc(r.workerName || "?")} · ${esc(r.supplier || "receipt")}${r.jobNo ? " · #" + esc(r.jobNo) : ""}</span><b class="rb-a">${$$(r.amountInc || 0)}</b></button>`).join("");
+  el.insertAdjacentHTML("beforeend", `<button type="button" class="dp-head rb-csv" id="rbcsv"><span class="dp-tick">⬇</span><span class="rb-t">CSV · ${L.length} owed</span></button>`);
+  $("#rbcsv").onclick = () => reimbCsv(L).catch(e => e?.name !== "AbortError" && toast("CSV failed: " + (e.message || e)));
   el.querySelectorAll("[data-rp]").forEach(b => b.onclick = () => { const r = L.find(x => x.id === b.dataset.rp) || {};
     const all = [...jobs, ...(ui.undated || []), ...(ui.done || [])];
     const j = (r.jobId && all.find(x => x.id === r.jobId)) || (r.jobNo && all.find(x => String(jobNo(x)) === String(r.jobNo)));
