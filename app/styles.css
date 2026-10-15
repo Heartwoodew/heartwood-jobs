@@ -317,3 +317,6 @@ tr.mhead td{background:#eef2f7;font-size:13px;padding:6px 8px}
 .rblines .rb-line{border-bottom:1px solid rgba(255,255,255,.25)}.rblines .rb-line:last-child{border-bottom:0}
 .rb-t{overflow:hidden;text-overflow:ellipsis;min-width:0}.rb-a{margin-left:auto;padding-left:8px}
 .rb-csv{background:#92400e;justify-content:center}
+.rb-line{cursor:pointer}.rb-a{margin-left:auto;padding-left:8px}
+.rb-done{flex:none;display:inline-grid;place-items:center;width:28px;height:28px;margin:-4px -6px -4px 6px;border-radius:50%;border:1.5px solid rgba(255,255,255,.85);background:transparent;color:#fff;font:inherit;font-weight:700;cursor:pointer}
+.rb-done:hover,.rb-done:focus-visible{background:#fff;color:#b45309}

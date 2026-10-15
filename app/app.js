@@ -31,10 +31,10 @@ const addDays = (s, n) => { const d = new Date(s + "T00:00:00Z"); d.setUTCDate(d
 const dayLabel = s => new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "short", timeZone: "UTC" });
 const dowMon = s => (new Date(s + "T00:00:00Z").getUTCDay() + 6) % 7;      // 0 = Monday
 const mapsUrl = a => "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(a + ", QLD");
-function undoToast(msg, undo) {
+function undoToast(msg, undo, ms = 7000) {
   const t = $("#toast"); t.innerHTML = `${esc(msg)} <button type="button" class="toast-undo">Undo</button>`; t.classList.remove("hidden");
   t.querySelector(".toast-undo").onclick = async () => { t.classList.add("hidden"); try { await undo(); } catch (e) { toast("Undo failed: " + (e.code || e.message)); } };
-  clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.add("hidden"), 7000);
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.add("hidden"), ms);
 }
 function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.remove("hidden"); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.add("hidden"), 2500); }
 function guessType(text) {
@@ -344,7 +344,7 @@ function bindReimb(A) {
     catch (e) { toast("Not saved: " + (e.code || e.message)); } };
   A.querySelectorAll(".rbpaid").forEach(b => b.onclick = async () => { const id = b.closest("[data-rb]").dataset.rb;
     if (!armBtn(b, "Mark paid", "Tap again: paid")) return;
-    try { await updateDoc(doc(db, "reimbursements", id), { paid: true, paidAt: new Date().toISOString() }); toast("Marked paid"); }
+    try { const at = new Date().toISOString(); await updateDoc(doc(db, "reimbursements", id), { paid: true, reimbursed: true, paidAt: at, reimbursedAt: at, reimbursedBy: me.uid, reimbursedByName: me.name }); toast("Marked paid"); }
     catch (e) { toast("Not saved: " + (e.code || e.message)); } });
 }
 function donePill() {
@@ -380,6 +380,17 @@ function owedList() {
   const L = [...led.filter(r => !r.paid), ...(ui.rqueued || []).filter(r => r.status === "queued" && !ids.has(r.id)).map(r => ({ ...r, date: r.createdAtIso, pending: true }))];
   return L.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
 }
+// "Done" on a pill line: paid back to the worker. Ledger entry reimbursements/{receiptId} gets paid/reimbursed + who/when
+// (created from the receipt if the box hasn't written it yet; the box keeps an existing entry and skips its "you owe" text).
+// Nothing is deleted; Undo (5 s) puts paid back to false.
+async function markReimbursed(r) {
+  const id = r.receiptId || r.id, ref = doc(db, "reimbursements", id), at = new Date().toISOString();
+  const base = r.pending ? { receiptId: id, uid: r.uid || null, workerName: r.workerName || null, date: r.createdAtIso || r.date || null, supplier: r.supplier || null,
+    amountInc: +r.amountInc || 0, jobNo: r.jobNo || null, jobId: r.jobId || null, hubdocStatus: "queued", createdFrom: "pill" } : {};
+  await setDoc(ref, { ...base, paid: true, reimbursed: true, paidAt: at, reimbursedAt: at, reimbursedBy: me.uid, reimbursedByName: me.name }, { merge: true });
+  undoToast(`Reimbursed ${r.workerName || ""} ${$$(+r.amountInc || 0)} (${r.supplier || "receipt"})`, () =>
+    setDoc(ref, { paid: false, reimbursed: false, paidAt: null, reimbursedAt: null, reimbursedBy: null, reimbursedByName: null, undoneAt: new Date().toISOString() }, { merge: true }), 5000);
+}
 // Read-only export of the currently owed receipts (does not touch paid status).
 async function reimbCsv(L) {
   const all = [...jobs, ...(ui.undated || []), ...(ui.done || [])], q = v => `"${String(v ?? "").replace(/"/g, '""')}"`, r2 = v => (Math.round(v * 100) / 100).toFixed(2);
@@ -404,10 +415,13 @@ function reimbPill() {
   const L = owedList(); if (!L.length) { if (el) el.remove(); return; }
   if (!el) { el = document.createElement("div"); el.id = "rbpill"; fw.insertBefore(el, fw.firstChild); }
   el.className = "donepill rbpill rblines";
-  el.innerHTML = L.map(r => `<button type="button" class="dp-head rb-line" data-rp="${esc(r.id)}" title="${esc(String(r.date || "").slice(0, 10))}${r.pending ? " · queued" : ""}">
-    <span class="dp-tick">🧾</span><span class="rb-t">${esc(r.workerName || "?")} · ${esc(r.supplier || "receipt")}${r.jobNo ? " · #" + esc(r.jobNo) : ""}</span><b class="rb-a">${$$(r.amountInc || 0)}</b></button>`).join("");
+  el.innerHTML = L.map(r => `<div role="button" tabindex="0" class="dp-head rb-line" data-rp="${esc(r.id)}" title="${esc(String(r.date || "").slice(0, 10))}${r.pending ? " · queued" : ""}">
+    <span class="dp-tick">🧾</span><span class="rb-t">${esc(r.workerName || "?")} · ${esc(r.supplier || "receipt")}${r.jobNo ? " · #" + esc(r.jobNo) : ""}</span><b class="rb-a">${$$(r.amountInc || 0)}</b>
+    <button type="button" class="rb-done" data-rbdone="${esc(r.id)}" title="Done - paid back to ${esc(r.workerName || "worker")}" aria-label="Mark reimbursed">✓</button></div>`).join("");
   el.insertAdjacentHTML("beforeend", `<button type="button" class="dp-head rb-csv" id="rbcsv"><span class="dp-tick">⬇</span><span class="rb-t">CSV · ${L.length} owed</span></button>`);
   $("#rbcsv").onclick = () => reimbCsv(L).catch(e => e?.name !== "AbortError" && toast("CSV failed: " + (e.message || e)));
+  el.querySelectorAll("[data-rbdone]").forEach(b => b.onclick = ev => { ev.stopPropagation(); ev.preventDefault();
+    const r = L.find(x => x.id === b.dataset.rbdone); if (r) markReimbursed(r).catch(e => toast("Not saved: " + (e.code || e.message))); });
   el.querySelectorAll("[data-rp]").forEach(b => b.onclick = () => { const r = L.find(x => x.id === b.dataset.rp) || {};
     const all = [...jobs, ...(ui.undated || []), ...(ui.done || [])];
     const j = (r.jobId && all.find(x => x.id === r.jobId)) || (r.jobNo && all.find(x => String(jobNo(x)) === String(r.jobNo)));
