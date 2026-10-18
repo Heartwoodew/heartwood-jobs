@@ -119,7 +119,7 @@ const jobNo = j => j.sm8JobNo ? j.sm8JobNo : "HW-" + String(j.id || "").slice(-4
 const firstLine = s => String(s || "").split(/\n|\. /)[0];
 const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Unscheduled";
 const NAV = [["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["completed", "✔", "Completed"], ["clients", "👤", "Clients", 1], ["inbox", "✉", "Inbox", 1],
-  ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["reimb", "💵", "Reimbursements", 0, 1], ["settings", "⚙", "Settings", 1]];
+  ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["reimb", "💵", "Reimbursements", 0, 1], ["settings", "⚙", "Settings", 1]];
 ui.view = "jobs"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
 const PHONE = matchMedia("(max-width:760px)");
 PHONE.addEventListener?.("change", () => { if (me && me.role === "admin") renderAdmin(); });
@@ -368,6 +368,93 @@ function donePill() {
   el.querySelector(".dp-head").onclick = () => { localStorage.setItem("hwDonePill", open ? "closed" : "open"); donePill(); };
   el.querySelectorAll("[data-dp]").forEach(b => b.onclick = () => { const j = L.find(x => x.id === b.dataset.dp); if (j) editJob(j); });
 }
+// ---- Timesheets: timesheets/{uid}_{weekStart(Mon)}. Workers edit their own week; Alex (owner) sees everyone's and
+// emails accounts via a mailto: link (never sent by the app/server). "Sent" is set by Alex only (rules enforce it).
+const ACCOUNTS_EMAIL = "accounts@heartwoodew.com";
+const TS_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const weekStartOf = s => { const d = new Date(s + "T00:00:00Z"); return addDays(s, -((d.getUTCDay() + 6) % 7)); };
+const dmy = s => s ? `${s.slice(8, 10)}/${s.slice(5, 7)}/${s.slice(0, 4)}` : "";
+const tsMin = t => { const m = /^(\d{1,2}):(\d{2})$/.exec(t || ""); return m ? +m[1] * 60 + +m[2] : null; };
+function tsHours(d) {
+  const a = tsMin(d?.start), b = tsMin(d?.finish); if (a == null || b == null) return 0;
+  const m = (b >= a ? b - a : b + 1440 - a) - (+d.brk || 0); return Math.max(0, Math.round(m / 60 * 100) / 100);
+}
+const tsTotal = days => Math.round(Object.values(days || {}).reduce((t, d) => t + tsHours(d), 0) * 100) / 100;
+const hrs = h => (Math.round(h * 100) / 100).toFixed(2).replace(/\.?0+$/, "") + " h";
+function tsWeek() { ui.tsWs = ui.tsWs || weekStartOf(todayStr()); return ui.tsWs; }
+function tsNav() {
+  const ws = tsWeek(), cur = ws === weekStartOf(todayStr());
+  return `<div class="ts-nav"><button type="button" class="sm-btn" data-tsw="-7">‹</button><b>Mon ${dmy(ws)} – Sun ${dmy(addDays(ws, 6))}</b><button type="button" class="sm-btn" data-tsw="7">›</button>${cur ? "" : `<button type="button" class="sm-btn" data-tsw="0">This week</button>`}</div>`;
+}
+function tsEditor() {
+  const ws = tsWeek(), t = ui.tsMine && ui.tsMine.weekStart === ws ? ui.tsMine : null, days = (t && t.days) || {};
+  if (!ui.tsMineLoaded || ui.tsMineLoaded !== ws) return tsNav() + `<p class="sub pad">Loading…</p>`;
+  return `${tsNav()}<form id="tsf" class="ts-form">${TS_DAYS.map((n, i) => { const ds = addDays(ws, i), d = days[ds] || {};
+    return `<div class="ts-day" data-ds="${ds}"><div class="ts-dl"><b>${n}</b> <span class="sub">${dmy(ds).slice(0, 5)}</span><span class="ts-h">${tsHours(d) ? hrs(tsHours(d)) : ""}</span></div>
+      <div class="ts-in"><label>Start<input type="time" name="start" value="${esc(d.start || "")}"></label><label>Finish<input type="time" name="finish" value="${esc(d.finish || "")}"></label>
+      <label>Break (min)<input type="number" name="brk" min="0" step="5" inputmode="numeric" value="${esc(d.brk ?? "")}"></label></div>
+      <input class="ts-note" name="note" placeholder="Note / job (optional)" value="${esc(d.note || "")}"></div>`; }).join("")}
+    <div class="ts-tot">Week total <b id="tstot">${hrs(tsTotal(days))}</b></div>
+    <div class="btns"><span id="tsmsg" class="sub">${t && t.sent ? `Sent to accounts ${esc(dmy(String(t.sentAt || "").slice(0, 10)))}${String(t.updatedAtIso || "") > String(t.sentAt || "") ? " · edited since" : ""}` : t ? "Saved" : ""}</span>
+      <button type="submit" class="sm-btn primary">Save hours</button></div></form>`;
+}
+function tsText(t, name) {
+  const ws = t.weekStart, L = [`${name} - timesheet, week ending Sun ${dmy(addDays(ws, 6))}`, ""];
+  TS_DAYS.forEach((n, i) => { const ds = addDays(ws, i), d = (t.days || {})[ds] || {}, h = tsHours(d);
+    L.push(h || d.note ? `${n} ${dmy(ds)}: ${d.start || "--"} - ${d.finish || "--"}, break ${+d.brk || 0} min = ${hrs(h)}${d.note ? ` (${d.note})` : ""}` : `${n} ${dmy(ds)}: -`); });
+  L.push("", `Total: ${hrs(tsTotal(t.days))}`, "", "Thanks,", "Alex Daly", "Heartwood Earthworx Pty Ltd", "0499 802 812");
+  return L.join("\n");
+}
+function tsAdmin() {
+  const ws = tsWeek(), L = ui.tsAll && ui.tsAllWs === ws ? ui.tsAll : null;
+  if (!L) return tsNav() + `<p class="sub pad">Loading…</p>`;
+  const people = [...staff.filter(p => p.uid !== ALEX_UID).map(p => ({ uid: p.uid, name: p.name })), ...L.filter(t => !staff.some(p => p.uid === t.uid && p.uid !== ALEX_UID)).map(t => ({ uid: t.uid, name: t.name || "?" }))];
+  return tsNav() + people.map(p => { const t = L.find(x => x.uid === p.uid);
+    if (!t) return `<div class="ts-card"><h3>${esc(p.name)}</h3><p class="sub">No hours entered for this week.</p></div>`;
+    const subj = `${p.name} timesheet – week ending Sun ${dmy(addDays(ws, 6))}`, body = tsText(t, p.name);
+    return `<div class="ts-card" data-tsid="${esc(t.id)}"><h3>${esc(p.name)} · <b>${hrs(tsTotal(t.days))}</b>${t.sent ? ` <span class="qpill q-comp">Sent ${esc(dmy(String(t.sentAt || "").slice(0, 10)))}</span>` : ""}${t.sent && String(t.updatedAtIso || "") > String(t.sentAt || "") ? ` <span class="qpill">Edited since sent</span>` : ""}</h3>
+      <table class="jt ts-t"><thead><tr><th>Day</th><th>Start</th><th>Finish</th><th>Break</th><th>Hours</th><th>Note</th></tr></thead><tbody>${TS_DAYS.map((n, i) => { const ds = addDays(ws, i), d = (t.days || {})[ds] || {};
+        return `<tr><td>${n} ${dmy(ds).slice(0, 5)}</td><td>${esc(d.start || "")}</td><td>${esc(d.finish || "")}</td><td>${d.brk ? esc(d.brk) + "m" : ""}</td><td>${tsHours(d) ? hrs(tsHours(d)) : ""}</td><td>${esc(d.note || "")}</td></tr>`; }).join("")}</tbody></table>
+      <div class="btns"><a class="sm-btn primary tssend" href="mailto:${ACCOUNTS_EMAIL}?subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(body)}">✉ Send to accounts</a>
+        <button type="button" class="sm-btn tscopy">Copy</button>${t.sent ? `<button type="button" class="sm-btn tsunsent">Unmark sent</button>` : ""}</div>
+      <p class="sub">Opens your mail app addressed to ${ACCOUNTS_EMAIL} (Nicole); you press Send.</p></div>`; }).join("");
+}
+function tsView() {
+  return `<div class="sm-head"><h1>Timesheet</h1><span class="sub">${isOwner() ? "Staff hours - send to accounts" : "Enter your hours for the week"}</span></div><div class="ts-wrap">${isOwner() ? tsAdmin() : tsEditor()}</div>`;
+}
+function bindTs(A, rerender) {
+  const ws = tsWeek();
+  A.querySelectorAll("[data-tsw]").forEach(b => b.onclick = () => { const n = +b.dataset.tsw;
+    if (ui.tsDirty && !confirm("You have unsaved hours. Leave this week without saving?")) return; ui.tsDirty = false; ui.tsWs = n ? addDays(ws, n) : weekStartOf(todayStr()); rerender(); });
+  if (isOwner()) {
+    if (ui.tsSubWs !== ws) { ui.tsSub?.(); ui.tsSubWs = ws; ui.tsAll = null;
+      ui.tsSub = onSnapshot(query(collection(db, "timesheets"), where("weekStart", "==", ws)), s => { ui.tsAll = s.docs.map(x => ({ id: x.id, ...x.data() })); ui.tsAllWs = ws;
+        if (ui.view === "timesheet" && !$("#dlg").open) rerender(); }, e => { A.querySelector(".ts-wrap") && (A.querySelector(".ts-wrap").innerHTML = tsNav() + `<p class="err pad">Timesheets not available: ${esc(e.code || e.message)}</p>`); }); }
+    A.querySelectorAll("[data-tsid]").forEach(c => { const t = (ui.tsAll || []).find(x => x.id === c.dataset.tsid); if (!t) return;
+      const name = (staff.find(p => p.uid === t.uid) || {}).name || t.name || "?";
+      c.querySelector(".tssend").onclick = () => { updateDoc(doc(db, "timesheets", t.id), { sent: true, sentAt: new Date().toISOString(), sentBy: me.uid }).catch(e => toast("Not marked sent: " + (e.code || e.message))); };
+      c.querySelector(".tscopy").onclick = async () => { const txt = tsText(t, name);
+        try { await navigator.clipboard.writeText(txt); } catch { const ta = document.createElement("textarea"); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); }
+        toast("Timesheet copied"); };
+      const un = c.querySelector(".tsunsent"); if (un) un.onclick = () => updateDoc(doc(db, "timesheets", t.id), { sent: false, sentAt: null, sentBy: null }).catch(e => toast("Not saved: " + (e.code || e.message)));
+    });
+    return;
+  }
+  const id = `${me.uid}_${ws}`;
+  if (ui.tsMineLoaded !== ws) { getDoc(doc(db, "timesheets", id)).then(x => { ui.tsMine = x.exists() ? x.data() : null; ui.tsMineLoaded = ws; rerender(); })
+    .catch(e => { const w = A.querySelector(".ts-wrap") || A.querySelector(".pad"); if (w) w.innerHTML = tsNav() + `<p class="err pad">Timesheet not available: ${esc(e.code || e.message)}</p>`; }); return; }
+  const f = A.querySelector("#tsf"); if (!f) return;
+  const read = () => { const days = {}; f.querySelectorAll(".ts-day").forEach(r => { const g = n => r.querySelector(`[name=${n}]`).value.trim();
+    const d = { start: g("start"), finish: g("finish"), brk: g("brk") === "" ? 0 : Math.max(0, +g("brk") || 0), note: g("note") };
+    if (d.start || d.finish || d.note || d.brk) days[r.dataset.ds] = d; }); return days; };
+  f.oninput = () => { const days = read(); $("#tstot").textContent = hrs(tsTotal(days));
+    f.querySelectorAll(".ts-day").forEach(r => { const h = tsHours(days[r.dataset.ds]); r.querySelector(".ts-h").textContent = h ? hrs(h) : ""; }); $("#tsmsg").textContent = "Not saved"; ui.tsDirty = true; };
+  f.onsubmit = async ev => { ev.preventDefault(); const days = read();
+    for (const [ds, d] of Object.entries(days)) if ((d.start && !d.finish) || (!d.start && d.finish)) { $("#tsmsg").textContent = `${dmy(ds).slice(0, 5)}: enter both start and finish`; return; }
+    const data = { uid: me.uid, name: me.name, weekStart: ws, weekEnd: addDays(ws, 6), days, totalHrs: tsTotal(days), updatedAt: serverTimestamp(), updatedAtIso: new Date().toISOString() };
+    try { await setDoc(doc(db, "timesheets", id), data, { merge: true }); ui.tsMine = { ...(ui.tsMine || {}), ...data }; ui.tsDirty = false; $("#tsmsg").textContent = "Saved ✓"; toast("Hours saved"); }
+    catch (e) { $("#tsmsg").textContent = "Not saved: " + (e.code || e.message); } };
+}
 // ---- Owner-only amber "to reimburse" pill (same look/behaviour as the done-today pill). Ledger + queued personally-paid
 // receipts the box hasn't written to the ledger yet. Never rendered (or subscribed) for anyone but Alex's UID.
 function reimbSubs() {
@@ -432,13 +519,15 @@ function renderAdmin() {
   if (!me || me.role !== "admin") return;
   if (ui.myJobs) return renderOperator();
   if ($("#dlg").open) return;          // don't redraw under an open job card
+  if (ui.view === "timesheet" && ui.tsDirty && $("#tsf")) return;   // don't wipe unsaved hours
   document.body.className = "admin";
   const fj = filtered(), und = (ui.undated || []).filter(j => (!ui.typeF || j.type === ui.typeF));
   const all = [...fj, ...und.filter(u => !fj.some(j => j.id === u.id))];
-  $("#app").innerHTML = shell(ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : jobsView(all));
+  $("#app").innerHTML = shell(ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : jobsView(all));
   const A = $("#app");
   if (ui.view === "invoices") bindInvoices(A);
   if (ui.view === "reimb") bindReimb(A);
+  if (ui.view === "timesheet") bindTs(A, renderAdmin);
   A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.navOpen = false;
     if (b.dataset.view === "myjobs") { ui.myJobs = true; ui.opSel = null; window.scrollTo(0, 0); return renderAdmin(); }
     ui.view = b.dataset.view; renderAdmin(); });
@@ -932,13 +1021,22 @@ function renderOperator() {
   const sel = ui.opSel && mine.find(j => j.id === ui.opSel);
   if (sel) return renderOpDetail(sel);
   ui.opTab = ui.opTab || "today";
+  if (ui.opTab === "hours" && ui.tsDirty && $("#tsf") && !ui.opSel) return;
+  if (ui.opTab === "hours" && !ui.opSel) {
+    $("#app").innerHTML = `<div class="mob">${me.role === "admin" ? `<button class="mback adminback" id="toadmin">‹ Admin view</button>` : ""}<div class="mob-bar"><div class="mob-title">My hours</div><div class="mob-sub">Timesheet</div></div>
+      <div class="mob-tabs"><button data-tab="today">Today</button><button data-tab="week">Schedule</button><button data-tab="done">Completed</button><button data-tab="hours" class="on">Hours</button></div>
+      <div class="pad">${tsEditor()}</div></div>`;
+    if ($("#toadmin")) $("#toadmin").onclick = () => { ui.myJobs = false; ui.opSel = null; renderAdmin(); };
+    $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; renderOperator(); });
+    bindTs($("#app"), renderOperator); return;
+  }
   const isDone = j => queueOf(j) === "Completed" || queueOf(j) === "Unsuccessful";
   const open = mine.filter(j => !isDone(j)), doneL = mine.filter(j => queueOf(j) === "Completed" && j.date >= addDays(t0, -30) && j.date <= t0).reverse();
   const groups = ui.opTab === "today" ? [["Today", open.filter(j => j.date === t0 || (j.date < t0 && j.status === "In progress"))]]
     : ui.opTab === "done" ? groupByDate(doneL).map(([d, js]) => [d === t0 ? "Today · " + dayLabel(d) : dayLabel(d), js])
     : groupByDate(open.filter(j => j.date >= t1 && j.date <= wkEnd)).map(([d, js]) => [(d === t1 ? "Tomorrow · " : "") + dayLabel(d), js]);
   $("#app").innerHTML = `<div class="mob">${me.role === "admin" ? `<button class="mback adminback" id="toadmin">‹ Admin view</button>` : ""}<div class="mob-bar"><div class="mob-title">${ui.opTab === "today" ? "Today" : ui.opTab === "done" ? "Completed" : "My Schedule"}</div><div class="mob-sub">${dayLabel(t0)}</div></div>
-    <div class="mob-tabs"><button data-tab="today" class="${ui.opTab === "today" ? "on" : ""}">Today</button><button data-tab="week" class="${ui.opTab === "week" ? "on" : ""}">Schedule</button><button data-tab="done" class="${ui.opTab === "done" ? "on" : ""}">Completed</button></div>
+    <div class="mob-tabs"><button data-tab="today" class="${ui.opTab === "today" ? "on" : ""}">Today</button><button data-tab="week" class="${ui.opTab === "week" ? "on" : ""}">Schedule</button><button data-tab="done" class="${ui.opTab === "done" ? "on" : ""}">Completed</button><button data-tab="hours" class="${ui.opTab === "hours" ? "on" : ""}">Hours</button></div>
     ${groups.map(([g, js]) => `<div class="mob-sec mday">${g} <span>${js.length}</span></div>
     ${js.map(j => `<div class="mrow" data-id="${j.id}"><div class="mtime">${g === "Today" ? "" : `<small>${esc(dayLabel(j.date).split(" ")[0].slice(0, 3))}</small>`}<b>${esc(j.time || "--")}</b><small>${j.durationHrs ? esc(j.durationHrs) + "h" : ""}</small></div>
       <div class="mbody"><div class="mcl"><span class="qdot ${QCLS[queueOf(j)]}"></span>${esc(j.client || "")}</div><div class="maddr">${esc(j.address || "-")}</div>
