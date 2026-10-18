@@ -405,6 +405,9 @@ const tsDayLbl = (ds, wd) => `${wd} ${+ds.slice(8, 10)} ${TS_MON[+ds.slice(5, 7)
 const tsLong = (ds, wd) => `${tsDayLbl(ds, wd)} ${ds.slice(0, 4)}`;
 const ampm = t => { const m = /^(\d{1,2}):(\d{2})$/.exec(t || ""); if (!m) return t || ""; const h = +m[1]; return `${h % 12 || 12}:${m[2]}${h < 12 ? "am" : "pm"}`; };
 const hr1 = h => { const r = Math.round(h * 100) / 100; return (Number.isInteger(r * 10) ? r.toFixed(1) : String(r)) + " hrs"; };
+// Gmail web compose (desktop; on phones Gmail usually hands off to the Gmail app or mobile Gmail). Newlines -> %0A.
+const tsGmailUrl = (su, body) => "https://mail.google.com/mail/?view=cm&fs=1&authuser=" + encodeURIComponent("alex@heartwoodew.com") +
+  "&to=" + encodeURIComponent(ACCOUNTS_EMAIL) + "&su=" + encodeURIComponent(su) + "&body=" + encodeURIComponent(body);
 const tsSubject = (t, name) => `Timesheet: ${name}, week of ${tsLong(t.weekStart, "Mon")}`;
 function tsText(t, name, eol = "\n") {
   const ws = t.weekStart, L = ["Hi Nicole,", "", `Here are ${name}'s hours for the week of ${tsLong(ws, "Mon")} to ${tsLong(addDays(ws, 6), "Sun")}.`, ""];
@@ -422,13 +425,14 @@ function tsAdmin() {
   const people = [...staff.filter(p => p.uid !== ALEX_UID).map(p => ({ uid: p.uid, name: p.name })), ...L.filter(t => !staff.some(p => p.uid === t.uid && p.uid !== ALEX_UID)).map(t => ({ uid: t.uid, name: t.name || "?" }))];
   return tsNav() + people.map(p => { const t = L.find(x => x.uid === p.uid);
     if (!t) return `<div class="ts-card"><h3>${esc(p.name)}</h3><p class="sub">No hours entered for this week.</p></div>`;
-    const subj = tsSubject(t, p.name), body = tsText(t, p.name, "\r\n");   // CRLF -> %0D%0A in the mailto
+    const subj = tsSubject(t, p.name), body = tsText(t, p.name, "\r\n");   // CRLF -> %0D%0A in the mailto fallback
     return `<div class="ts-card" data-tsid="${esc(t.id)}"><h3>${esc(p.name)} · <b>${hrs(tsTotal(t.days))}</b>${t.sent ? ` <span class="qpill q-comp">Sent ${esc(dmy(String(t.sentAt || "").slice(0, 10)))}</span>` : ""}${t.sent && String(t.updatedAtIso || "") > String(t.sentAt || "") ? ` <span class="qpill">Edited since sent</span>` : ""}</h3>
       <table class="jt ts-t"><thead><tr><th>Day</th><th>Start</th><th>Finish</th><th>Lunch</th><th>Hours</th><th>Note</th></tr></thead><tbody>${TS_DAYS.map((n, i) => { const ds = addDays(ws, i), d = (t.days || {})[ds] || {};
         return `<tr><td>${n} ${dmy(ds).slice(0, 5)}</td><td>${esc(d.start || "")}</td><td>${esc(d.finish || "")}</td><td>${tsHours(d) ? "−30m" : ""}</td><td>${tsHours(d) ? hrs(tsHours(d)) : ""}</td><td>${esc(d.note || "")}</td></tr>`; }).join("")}</tbody></table>
-      <div class="btns"><a class="sm-btn primary tssend" href="mailto:${ACCOUNTS_EMAIL}?subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(body)}">✉ Send to accounts</a>
+      <div class="btns"><a class="sm-btn primary tssend" target="_blank" rel="noopener" href="${esc(tsGmailUrl(subj, tsText(t, p.name)))}">✉ Send to accounts (Gmail)</a>
+        <a class="tsmailto sub" href="mailto:${ACCOUNTS_EMAIL}?subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(body)}">Other mail app</a>
         <button type="button" class="sm-btn tscopy">Copy</button>${t.sent ? `<button type="button" class="sm-btn tsunsent">Unmark sent</button>` : ""}</div>
-      <p class="sub">Opens your mail app addressed to ${ACCOUNTS_EMAIL} (Nicole); you press Send.</p></div>`; }).join("");
+      <p class="sub">Opens a Gmail draft (alex@heartwoodew.com) to ${ACCOUNTS_EMAIL} (Nicole); you press Send.</p></div>`; }).join("");
 }
 function tsView() {
   return `<div class="sm-head"><h1>Timesheet</h1><span class="sub">${isOwner() ? "Staff hours - send to accounts" : "Enter your hours for the week"}</span></div><div class="ts-wrap">${isOwner() ? tsAdmin() : tsEditor()}</div>`;
@@ -443,7 +447,7 @@ function bindTs(A, rerender) {
         if (ui.view === "timesheet" && !$("#dlg").open) rerender(); }, e => { A.querySelector(".ts-wrap") && (A.querySelector(".ts-wrap").innerHTML = tsNav() + `<p class="err pad">Timesheets not available: ${esc(e.code || e.message)}</p>`); }); }
     A.querySelectorAll("[data-tsid]").forEach(c => { const t = (ui.tsAll || []).find(x => x.id === c.dataset.tsid); if (!t) return;
       const name = (staff.find(p => p.uid === t.uid) || {}).name || t.name || "?";
-      c.querySelector(".tssend").onclick = () => { updateDoc(doc(db, "timesheets", t.id), { sent: true, sentAt: new Date().toISOString(), sentBy: me.uid }).catch(e => toast("Not marked sent: " + (e.code || e.message))); };
+      c.querySelectorAll(".tssend,.tsmailto").forEach(a => a.onclick = () => { updateDoc(doc(db, "timesheets", t.id), { sent: true, sentAt: new Date().toISOString(), sentBy: me.uid }).catch(e => toast("Not marked sent: " + (e.code || e.message))); });
       c.querySelector(".tscopy").onclick = async () => { const txt = tsText(t, name);
         try { await navigator.clipboard.writeText(txt); } catch { const ta = document.createElement("textarea"); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); }
         toast("Timesheet copied"); };

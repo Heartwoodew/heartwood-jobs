@@ -333,3 +333,4 @@ tr.mhead td{background:#eef2f7;font-size:13px;padding:6px 8px}
 .ts-t td,.ts-t th{padding:5px 8px}a.sm-btn{text-decoration:none;display:inline-flex;align-items:center}
 @media (max-width:760px){.ts-wrap{padding:0 8px 24px}.ts-t{font-size:13px}.ts-card{overflow-x:auto}}
 .ts-lunch{align-self:end;font-size:12px;color:#64748b;padding-bottom:9px}
+.tsmailto{align-self:center;color:#2563eb}
