@@ -399,12 +399,22 @@ function tsEditor() {
     <div class="btns"><span id="tsmsg" class="sub">${t && t.sent ? `Sent to accounts ${esc(dmy(String(t.sentAt || "").slice(0, 10)))}${String(t.updatedAtIso || "") > String(t.sentAt || "") ? " · edited since" : ""}` : t ? "Saved" : ""}</span>
       <button type="submit" class="sm-btn primary">Save hours</button></div></form>`;
 }
-function tsText(t, name) {
-  const ws = t.weekStart, L = [`${name} - timesheet, week ending Sun ${dmy(addDays(ws, 6))}`, ""];
+// Plain-text email for accounts (mailto: can't carry HTML). Reads well in Gmail on a phone: one short line per day worked.
+const TS_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const tsDayLbl = (ds, wd) => `${wd} ${+ds.slice(8, 10)} ${TS_MON[+ds.slice(5, 7) - 1]}`;
+const tsLong = (ds, wd) => `${tsDayLbl(ds, wd)} ${ds.slice(0, 4)}`;
+const ampm = t => { const m = /^(\d{1,2}):(\d{2})$/.exec(t || ""); if (!m) return t || ""; const h = +m[1]; return `${h % 12 || 12}:${m[2]}${h < 12 ? "am" : "pm"}`; };
+const hr1 = h => { const r = Math.round(h * 100) / 100; return (Number.isInteger(r * 10) ? r.toFixed(1) : String(r)) + " hrs"; };
+const tsSubject = (t, name) => `Timesheet: ${name}, week of ${tsLong(t.weekStart, "Mon")}`;
+function tsText(t, name, eol = "\n") {
+  const ws = t.weekStart, L = ["Hi Nicole,", "", `Here are ${name}'s hours for the week of ${tsLong(ws, "Mon")} to ${tsLong(addDays(ws, 6), "Sun")}.`, ""];
+  let worked = 0;
   TS_DAYS.forEach((n, i) => { const ds = addDays(ws, i), d = (t.days || {})[ds] || {}, h = tsHours(d);
-    L.push(h ? `${n} ${dmy(ds)}: ${d.start} - ${d.finish}, less 30 min lunch = ${hrs(h)}${d.note ? ` (${d.note})` : ""}` : `${n} ${dmy(ds)}: -${d.note ? ` (${d.note})` : ""}`); });
-  L.push("", `Total: ${hrs(tsTotal(t.days))} (30 min unpaid lunch deducted each day worked)`, "", "Thanks,", "Alex Daly", "Heartwood Earthworx Pty Ltd", "0499 802 812");
-  return L.join("\n");
+    if (h) { worked++; L.push(`${tsDayLbl(ds, n)}   ${ampm(d.start)} to ${ampm(d.finish)}   ${hr1(h)}`); if (d.note) L.push(`      ${d.note}`); }
+    else if (d.note) L.push(`${tsDayLbl(ds, n)}   not worked (${d.note})`); });
+  if (!worked) L.push("No hours entered this week.");
+  L.push("", "A 30-minute lunch break has already been taken off each day.", "", `TOTAL: ${hr1(tsTotal(t.days))}`, "", "Thanks,", "Alex", "Heartwood Earthworx");
+  return L.join(eol);
 }
 function tsAdmin() {
   const ws = tsWeek(), L = ui.tsAll && ui.tsAllWs === ws ? ui.tsAll : null;
@@ -412,7 +422,7 @@ function tsAdmin() {
   const people = [...staff.filter(p => p.uid !== ALEX_UID).map(p => ({ uid: p.uid, name: p.name })), ...L.filter(t => !staff.some(p => p.uid === t.uid && p.uid !== ALEX_UID)).map(t => ({ uid: t.uid, name: t.name || "?" }))];
   return tsNav() + people.map(p => { const t = L.find(x => x.uid === p.uid);
     if (!t) return `<div class="ts-card"><h3>${esc(p.name)}</h3><p class="sub">No hours entered for this week.</p></div>`;
-    const subj = `${p.name} timesheet – week ending Sun ${dmy(addDays(ws, 6))}`, body = tsText(t, p.name);
+    const subj = tsSubject(t, p.name), body = tsText(t, p.name, "\r\n");   // CRLF -> %0D%0A in the mailto
     return `<div class="ts-card" data-tsid="${esc(t.id)}"><h3>${esc(p.name)} · <b>${hrs(tsTotal(t.days))}</b>${t.sent ? ` <span class="qpill q-comp">Sent ${esc(dmy(String(t.sentAt || "").slice(0, 10)))}</span>` : ""}${t.sent && String(t.updatedAtIso || "") > String(t.sentAt || "") ? ` <span class="qpill">Edited since sent</span>` : ""}</h3>
       <table class="jt ts-t"><thead><tr><th>Day</th><th>Start</th><th>Finish</th><th>Lunch</th><th>Hours</th><th>Note</th></tr></thead><tbody>${TS_DAYS.map((n, i) => { const ds = addDays(ws, i), d = (t.days || {})[ds] || {};
         return `<tr><td>${n} ${dmy(ds).slice(0, 5)}</td><td>${esc(d.start || "")}</td><td>${esc(d.finish || "")}</td><td>${tsHours(d) ? "−30m" : ""}</td><td>${tsHours(d) ? hrs(tsHours(d)) : ""}</td><td>${esc(d.note || "")}</td></tr>`; }).join("")}</tbody></table>
