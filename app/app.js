@@ -371,13 +371,14 @@ function donePill() {
 // ---- Timesheets: timesheets/{uid}_{weekStart(Mon)}. Workers edit their own week; Alex (owner) sees everyone's and
 // emails accounts via a mailto: link (never sent by the app/server). "Sent" is set by Alex only (rules enforce it).
 const ACCOUNTS_EMAIL = "accounts@heartwoodew.com";
+const TS_LUNCH = 30;   // fixed unpaid lunch (min) deducted on every day with start+finish (Alex, 18/10/26)
 const TS_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const weekStartOf = s => { const d = new Date(s + "T00:00:00Z"); return addDays(s, -((d.getUTCDay() + 6) % 7)); };
 const dmy = s => s ? `${s.slice(8, 10)}/${s.slice(5, 7)}/${s.slice(0, 4)}` : "";
 const tsMin = t => { const m = /^(\d{1,2}):(\d{2})$/.exec(t || ""); return m ? +m[1] * 60 + +m[2] : null; };
 function tsHours(d) {
   const a = tsMin(d?.start), b = tsMin(d?.finish); if (a == null || b == null) return 0;
-  const m = (b >= a ? b - a : b + 1440 - a) - (+d.brk || 0); return Math.max(0, Math.round(m / 60 * 100) / 100);
+  const m = (b >= a ? b - a : b + 1440 - a) - TS_LUNCH; return Math.max(0, Math.round(m / 60 * 100) / 100);
 }
 const tsTotal = days => Math.round(Object.values(days || {}).reduce((t, d) => t + tsHours(d), 0) * 100) / 100;
 const hrs = h => (Math.round(h * 100) / 100).toFixed(2).replace(/\.?0+$/, "") + " h";
@@ -392,7 +393,7 @@ function tsEditor() {
   return `${tsNav()}<form id="tsf" class="ts-form">${TS_DAYS.map((n, i) => { const ds = addDays(ws, i), d = days[ds] || {};
     return `<div class="ts-day" data-ds="${ds}"><div class="ts-dl"><b>${n}</b> <span class="sub">${dmy(ds).slice(0, 5)}</span><span class="ts-h">${tsHours(d) ? hrs(tsHours(d)) : ""}</span></div>
       <div class="ts-in"><label>Start<input type="time" name="start" value="${esc(d.start || "")}"></label><label>Finish<input type="time" name="finish" value="${esc(d.finish || "")}"></label>
-      <label>Break (min)<input type="number" name="brk" min="0" step="5" inputmode="numeric" value="${esc(d.brk ?? "")}"></label></div>
+      <span class="ts-lunch">less 30 min lunch</span></div>
       <input class="ts-note" name="note" placeholder="Note / job (optional)" value="${esc(d.note || "")}"></div>`; }).join("")}
     <div class="ts-tot">Week total <b id="tstot">${hrs(tsTotal(days))}</b></div>
     <div class="btns"><span id="tsmsg" class="sub">${t && t.sent ? `Sent to accounts ${esc(dmy(String(t.sentAt || "").slice(0, 10)))}${String(t.updatedAtIso || "") > String(t.sentAt || "") ? " · edited since" : ""}` : t ? "Saved" : ""}</span>
@@ -401,8 +402,8 @@ function tsEditor() {
 function tsText(t, name) {
   const ws = t.weekStart, L = [`${name} - timesheet, week ending Sun ${dmy(addDays(ws, 6))}`, ""];
   TS_DAYS.forEach((n, i) => { const ds = addDays(ws, i), d = (t.days || {})[ds] || {}, h = tsHours(d);
-    L.push(h || d.note ? `${n} ${dmy(ds)}: ${d.start || "--"} - ${d.finish || "--"}, break ${+d.brk || 0} min = ${hrs(h)}${d.note ? ` (${d.note})` : ""}` : `${n} ${dmy(ds)}: -`); });
-  L.push("", `Total: ${hrs(tsTotal(t.days))}`, "", "Thanks,", "Alex Daly", "Heartwood Earthworx Pty Ltd", "0499 802 812");
+    L.push(h ? `${n} ${dmy(ds)}: ${d.start} - ${d.finish}, less 30 min lunch = ${hrs(h)}${d.note ? ` (${d.note})` : ""}` : `${n} ${dmy(ds)}: -${d.note ? ` (${d.note})` : ""}`); });
+  L.push("", `Total: ${hrs(tsTotal(t.days))} (30 min unpaid lunch deducted each day worked)`, "", "Thanks,", "Alex Daly", "Heartwood Earthworx Pty Ltd", "0499 802 812");
   return L.join("\n");
 }
 function tsAdmin() {
@@ -413,8 +414,8 @@ function tsAdmin() {
     if (!t) return `<div class="ts-card"><h3>${esc(p.name)}</h3><p class="sub">No hours entered for this week.</p></div>`;
     const subj = `${p.name} timesheet – week ending Sun ${dmy(addDays(ws, 6))}`, body = tsText(t, p.name);
     return `<div class="ts-card" data-tsid="${esc(t.id)}"><h3>${esc(p.name)} · <b>${hrs(tsTotal(t.days))}</b>${t.sent ? ` <span class="qpill q-comp">Sent ${esc(dmy(String(t.sentAt || "").slice(0, 10)))}</span>` : ""}${t.sent && String(t.updatedAtIso || "") > String(t.sentAt || "") ? ` <span class="qpill">Edited since sent</span>` : ""}</h3>
-      <table class="jt ts-t"><thead><tr><th>Day</th><th>Start</th><th>Finish</th><th>Break</th><th>Hours</th><th>Note</th></tr></thead><tbody>${TS_DAYS.map((n, i) => { const ds = addDays(ws, i), d = (t.days || {})[ds] || {};
-        return `<tr><td>${n} ${dmy(ds).slice(0, 5)}</td><td>${esc(d.start || "")}</td><td>${esc(d.finish || "")}</td><td>${d.brk ? esc(d.brk) + "m" : ""}</td><td>${tsHours(d) ? hrs(tsHours(d)) : ""}</td><td>${esc(d.note || "")}</td></tr>`; }).join("")}</tbody></table>
+      <table class="jt ts-t"><thead><tr><th>Day</th><th>Start</th><th>Finish</th><th>Lunch</th><th>Hours</th><th>Note</th></tr></thead><tbody>${TS_DAYS.map((n, i) => { const ds = addDays(ws, i), d = (t.days || {})[ds] || {};
+        return `<tr><td>${n} ${dmy(ds).slice(0, 5)}</td><td>${esc(d.start || "")}</td><td>${esc(d.finish || "")}</td><td>${tsHours(d) ? "−30m" : ""}</td><td>${tsHours(d) ? hrs(tsHours(d)) : ""}</td><td>${esc(d.note || "")}</td></tr>`; }).join("")}</tbody></table>
       <div class="btns"><a class="sm-btn primary tssend" href="mailto:${ACCOUNTS_EMAIL}?subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(body)}">✉ Send to accounts</a>
         <button type="button" class="sm-btn tscopy">Copy</button>${t.sent ? `<button type="button" class="sm-btn tsunsent">Unmark sent</button>` : ""}</div>
       <p class="sub">Opens your mail app addressed to ${ACCOUNTS_EMAIL} (Nicole); you press Send.</p></div>`; }).join("");
@@ -445,8 +446,8 @@ function bindTs(A, rerender) {
     .catch(e => { const w = A.querySelector(".ts-wrap") || A.querySelector(".pad"); if (w) w.innerHTML = tsNav() + `<p class="err pad">Timesheet not available: ${esc(e.code || e.message)}</p>`; }); return; }
   const f = A.querySelector("#tsf"); if (!f) return;
   const read = () => { const days = {}; f.querySelectorAll(".ts-day").forEach(r => { const g = n => r.querySelector(`[name=${n}]`).value.trim();
-    const d = { start: g("start"), finish: g("finish"), brk: g("brk") === "" ? 0 : Math.max(0, +g("brk") || 0), note: g("note") };
-    if (d.start || d.finish || d.note || d.brk) days[r.dataset.ds] = d; }); return days; };
+    const d = { start: g("start"), finish: g("finish"), note: g("note") };
+    if (d.start || d.finish || d.note) days[r.dataset.ds] = d; }); return days; };
   f.oninput = () => { const days = read(); $("#tstot").textContent = hrs(tsTotal(days));
     f.querySelectorAll(".ts-day").forEach(r => { const h = tsHours(days[r.dataset.ds]); r.querySelector(".ts-h").textContent = h ? hrs(h) : ""; }); $("#tsmsg").textContent = "Not saved"; ui.tsDirty = true; };
   f.onsubmit = async ev => { ev.preventDefault(); const days = read();
