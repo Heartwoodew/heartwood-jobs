@@ -335,5 +335,8 @@ tr.mhead td{background:#eef2f7;font-size:13px;padding:6px 8px}
 .ts-lunch{align-self:end;font-size:12px;color:#64748b;padding-bottom:9px}
 .tsmailto{align-self:center;color:#2563eb}
 
-.qpill.ip{background:var(--q-comp);margin-left:6px;font-size:11px;padding:1px 6px;vertical-align:1px}.qpill.ip.sm{font-size:10px;padding:0 5px}.qpill.ip.onbar{box-shadow:0 0 0 1px #fff;margin-left:6px}
-.mob-sub .qpill.ip{margin-left:0}
+.qpill.ip{background:var(--q-comp);font-size:11px;padding:1px 6px;vertical-align:1px}.qpill.ip.sm{font-size:10px;padding:0 5px}.qpill.ip.onbar{box-shadow:0 0 0 1px #fff}
+.pstack{display:inline-flex;flex-direction:column;align-items:flex-start;gap:3px;vertical-align:top}.mdc-top .pstack{margin-left:auto;align-items:flex-end}.mdc-top .pstack .qpill{margin-left:0}
+.ptop{display:flex;justify-content:flex-end;margin-bottom:3px}.jc-top .ptop,.mob-bar .ptop{justify-content:flex-start;margin:3px 0}
+@media (max-width:760px){.jt tr.jr .pstack{align-items:flex-end}}
+.ptop .qpill.ip.sm{padding:1px 6px;font-size:11px}
