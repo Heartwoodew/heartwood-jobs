@@ -334,3 +334,6 @@ tr.mhead td{background:#eef2f7;font-size:13px;padding:6px 8px}
 @media (max-width:760px){.ts-wrap{padding:0 8px 24px}.ts-t{font-size:13px}.ts-card{overflow-x:auto}}
 .ts-lunch{align-self:end;font-size:12px;color:#64748b;padding-bottom:9px}
 .tsmailto{align-self:center;color:#2563eb}
+
+.qpill.ip{background:var(--q-comp);margin-left:6px;font-size:11px;padding:1px 6px;vertical-align:1px}.qpill.ip.sm{font-size:10px;padding:0 5px}.qpill.ip.onbar{box-shadow:0 0 0 1px #fff;margin-left:6px}
+.mob-sub .qpill.ip{margin-left:0}

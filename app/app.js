@@ -140,6 +140,7 @@ function taskLines(desc) {
 }
 const mixedKinds = j => [...new Set(taskLines(j.description).map(x => x.k).filter(Boolean))];
 const isMixed = j => mixedKinds(j).length > 1;
+const ipPill = (j, cls = "") => j.status === "In progress" ? ` <span class="qpill ip ${cls}">In progress</span>` : "";
 const mixedBadge = j => isMixed(j) ? ` <span class="qpill mixed" title="${esc(mixedKinds(j).map(k => TYPES[k] || k).join(" + "))} on one job - split it">Mixed work</span>` : "";
 function jobRow(j) {
   const q = queueOf(j), names = namesOf(j).map(label).join(", ");
@@ -148,7 +149,7 @@ function jobRow(j) {
     <td>${esc(firstLine(j.description))}${mixedBadge(j)}<div class="sub">${esc(TYPES[j.type] || "")}${j.po ? " · PO " + esc(j.po) : ""}</div></td>
     <td>${esc(shortDate(j.date))}<div class="sub">${esc(j.time || "")}${j.durationHrs ? " · " + esc(j.durationHrs) + "h" : ""}</div></td>
     <td>${names ? esc(names) : `<span class="unal">Unallocated</span>`}</td>
-    <td><span class="qpill ${QCLS[q]}">${q}</span>${j.status === "In progress" ? `<div class="sub inprog">In progress</div>` : ""}</td></tr>`;
+    <td><span class="qpill ${QCLS[q]}">${q}</span>${ipPill(j)}</td></tr>`;
 }
 // Job-list search: every typed word must appear somewhere in job no / address (lot, street) / client / PO /
 // description / staff. Case-insensitive; "#659" == "659".
@@ -223,7 +224,7 @@ function dispatchView(all) {
   const sched = all.filter(j => j.date && queueOf(j) !== "Unsuccessful");
   const rows = rowsFor(all);
   const chip = j => `<div class="dchip ${QCLS[queueOf(j)]} t-${j.type} ${j.status === "In progress" ? "inprog" : ""}" draggable="true" data-id="${j.id}" title="${esc(j.client)} – ${esc(j.description)}">
-      <b>${esc(j.time || "")}</b> ${esc((j.address || "").split(",")[0])}<div class="sub">${esc(TYPES[j.type] || "")} · #${esc(jobNo(j))}</div></div>`;
+      <b>${esc(j.time || "")}</b> ${esc((j.address || "").split(",")[0])}<div class="sub">${esc(TYPES[j.type] || "")} · #${esc(jobNo(j))}${ipPill(j, "sm")}</div></div>`;
   let grid;
   if (ui.dview === "week") {
     grid = `<div class="dgrid" style="grid-template-columns:150px repeat(7,minmax(0,1fr))"><div class="dh"></div>${days.map(d => `<div class="dh ${d === t0 ? "today" : ""}">${shortDate(d)}</div>`).join("")}
@@ -662,7 +663,7 @@ function editJob(j) {
   const SL = { "Scheduled": "Work Order – scheduled", "In progress": "Work Order – in progress", "Done": "Completed", "Cancelled": "Unsuccessful" };
   d.className = "jobcard"; d.onclose = () => renderAdmin();
   d.innerHTML = `<form method="dialog" id="jf" class="jc">
-    <div class="jc-top ${QCLS[qq]}"><div><div class="jc-no">${n ? "New Job" : "Job #" + esc(jobNo(j))}</div><div class="jc-q">${qq}${j.sm8Status === "Quote" ? " (quote in ServiceM8)" : ""}</div></div>
+    <div class="jc-top ${QCLS[qq]}"><div><div class="jc-no">${n ? "New Job" : "Job #" + esc(jobNo(j))}</div><div class="jc-q">${qq}${j.sm8Status === "Quote" ? " (quote in ServiceM8)" : ""}${n ? "" : ipPill(j, "onbar")}</div></div>
       <label class="jc-st">Job Status<select name="status">${STATUSES.map(s => `<option value="${s}" ${j.status === s ? "selected" : ""}>${SL[s]}</option>`).join("")}</select></label>
       <button value="cancel" formnovalidate class="jc-x" title="Close">✕</button></div>
     <div class="jc-body"><div class="jc-col">
@@ -1056,7 +1057,7 @@ function renderOperator() {
     ${js.map(j => `<div class="mrow" data-id="${j.id}"><div class="mtime">${g === "Today" ? "" : `<small>${esc(dayLabel(j.date).split(" ")[0].slice(0, 3))}</small>`}<b>${esc(j.time || "--")}</b><small>${j.durationHrs ? esc(j.durationHrs) + "h" : ""}</small></div>
       <div class="mbody"><div class="mcl"><span class="qdot ${QCLS[queueOf(j)]}"></span>${esc(j.client || "")}</div><div class="maddr">${esc(j.address || "-")}</div>
         <div class="mdesc">${esc(firstLine(j.description))}</div>
-        <div class="mst ${j.status === "In progress" ? "inprog" : j.status === "Done" ? "done" : ""}">${j.status === "Done" ? "✔ Completed" : j.status === "In progress" ? "● In progress" : "Scheduled"} · #${esc(jobNo(j))}</div></div>
+        <div class="mst ${j.status === "In progress" ? "inprog" : j.status === "Done" ? "done" : ""}">${j.status === "Done" ? "✔ Completed" : j.status === "In progress" ? "" : "Scheduled · "}${j.status === "Done" ? " · " : ""}#${esc(jobNo(j))}${ipPill(j, "sm")}</div></div>
       <div class="chev">›</div></div>`).join("") || `<p class="muted pad">Nothing booked.</p>`}`).join("") || `<p class="muted pad">${ui.opTab === "done" ? "No completed jobs in the last 30 days." : "Nothing booked this week."}</p>`}</div>`;
   if ($("#toadmin")) $("#toadmin").onclick = () => { ui.myJobs = false; ui.opSel = null; renderAdmin(); };
   $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; renderOperator(); });
@@ -1065,7 +1066,7 @@ function renderOperator() {
 function renderOpDetail(j) {
   const q = queueOf(j), done = j.status === "Done", started = j.status === "In progress";
   $("#app").innerHTML = `<div class="mob"><div class="mob-bar det ${QCLS[q]}"><button class="mback" id="back">‹ Jobs</button><div class="mob-title">Job #${esc(jobNo(j))}</div>
-      <div class="mob-sub">${done ? "Completed" : started ? "In progress" : "Work Order"}</div></div>
+      <div class="mob-sub">${done ? "Completed" : started ? '<span class="qpill ip onbar">In progress</span>' : "Work Order"}</div></div>
     <div class="mcard"><div class="mlbl">Client</div><div class="mval">${esc(j.client || "")}</div></div>
     <a class="mcard link" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener"><div class="mlbl">Job Address</div><div class="mval big">📍 ${esc(j.address || "-")}</div><div class="chev">›</div></a>
     <div class="mcard"><div class="mlbl">Scheduled</div><div class="mval">${esc(dayLabel(j.date))} · ${esc(j.time || "")}${j.durationHrs ? " · " + esc(j.durationHrs) + "h" : ""}</div></div>
@@ -1251,7 +1252,7 @@ function mobileDispatch(all) {
       <div class="mdc-cl">${esc(j.client || "")}</div>
       <a class="mdc-addr" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener">📍 ${esc(j.address || "-")}</a>
       <div class="mdc-desc">${esc(firstLine(j.description))}</div>
-      <div class="mdc-foot"><span class="sub">${j.po ? "PO " + esc(j.po) : "No PO"}${j.durationHrs ? " · " + esc(j.durationHrs) + "h" : ""}${j.status === "In progress" ? ' · <b class="inprog">In progress</b>' : ""}</span>
+      <div class="mdc-foot"><span class="sub">${j.po ? "PO " + esc(j.po) : "No PO"}${j.durationHrs ? " · " + esc(j.durationHrs) + "h" : ""}</span>${ipPill(j, "sm")}
         <span><button type="button" class="sm-btn mdc-unsch" data-unsch="${j.id}" title="Remove from dispatch board (back to Unscheduled)">✕ Off board</button> <button type="button" class="sm-btn mdc-move" data-move="${j.id}">⇄ Move</button></span></div></div>`;
   const groups = rowsFor(all).map(r => [r, dayJobs.filter(r.has)]);
   return `<div class="mdisp" id="mdisp"><div class="mdh">
