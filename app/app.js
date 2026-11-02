@@ -71,12 +71,15 @@ onAuthStateChanged(auth, async user => {
     const u1 = onSnapshot(q, s => { jobs = s.docs.map(d => ({ id: d.id, ...d.data() })); addNameOnlyStaff(jobs); renderAdmin(); });
     // Invoicing: every Done job (any date), admin only.
     const u2 = onSnapshot(query(collection(db, "jobs"), where("status", "==", "Done")), s => { ui.done = s.docs.map(d => ({ id: d.id, ...d.data() })); donePill(); if (ui.view === "invoices" || ui.view === "completed") renderAdmin(); });
-    unsub = () => { u1(); u2(); };
+    const u3 = onSnapshot(collection(db, "incidents"), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); if (ui.view === "safety" || ui.view === "home") renderAdmin(); incRefresh(); }, e => console.warn("incidents", e.code));
+    unsub = () => { u1(); u2(); u3(); };
     getDocs(query(collection(db, "jobs"), where("date", "==", ""))).then(s => { ui.undated = s.docs.map(d => ({ id: d.id, ...d.data() })); addNameOnlyStaff(ui.undated); renderAdmin(); });
   } else {
     // Operators may only list jobs assigned to them (enforced by firestore.rules).
     const q = query(collection(db, "jobs"), where("assigned", "array-contains", user.uid));
-    unsub = onSnapshot(q, s => { jobs = s.docs.map(d => ({ id: d.id, ...d.data() })); renderOperator(); });
+    const u1 = onSnapshot(q, s => { jobs = s.docs.map(d => ({ id: d.id, ...d.data() })); renderOperator(); });
+    const u3 = onSnapshot(query(collection(db, "incidents"), where("reportedBy", "==", user.uid)), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); if (!ui.opSel && ui.opTab === "home") renderOperator(); incRefresh(); }, e => console.warn("incidents", e.code));
+    unsub = () => { u1(); u3(); };
   }
 });
 
@@ -118,7 +121,7 @@ function queueOf(j) {
 const jobNo = j => j.sm8JobNo ? j.sm8JobNo : "HW-" + String(j.id || "").slice(-4).toUpperCase();
 const firstLine = s => String(s || "").split(/\n|\. /)[0];
 const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Unscheduled";
-const NAV = [["home", "⌂", "Home"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["completed", "✔", "Completed"], ["clients", "👤", "Clients", 1], ["inbox", "✉", "Inbox", 1],
+const NAV = [["home", "⌂", "Home"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["completed", "✔", "Completed"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients", 1], ["inbox", "✉", "Inbox", 1],
   ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["reimb", "💵", "Reimbursements", 0, 1], ["settings", "⚙", "Settings", 1]];
 ui.view = "home"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
 const PHONE = matchMedia("(max-width:760px)");
@@ -562,8 +565,8 @@ function homeBody(all, admin, btns) {
     ${js.map(homeRow).join("") || `<p class="muted pad">Nothing booked.</p>`}</div>`;
   return `<div class="home"><div class="hhead"><h1>${greet()}, ${esc(String(me.name || "").split(" ")[0])}</h1><div class="muted">${esc(dayLabel(t0))}</div></div>
     <div class="hstats">${stat(today.length, "Today", "q-wo")}${stat(ip, "In progress", "ip", admin ? "q-ip" : "")}${admin ? stat(ready, "Ready to invoice", "q-comp", "invoices") + stat(unal, "Unallocated", "q-uns", "dispatch") : stat(tomorrow.length, "Tomorrow", "q-quote")}</div>
-    <div class="hbtns">${btns.map(([go, ic, n]) => `<button class="hbtn" data-go="${go}"><span class="ic">${ic}</span>${n}</button>`).join("")}</div>
-    ${sec("Today", t0, today)}${sec("Tomorrow", t1, tomorrow)}</div>`;
+    <div class="hbtns"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button>${btns.map(([go, ic, n]) => `<button class="hbtn" data-go="${go}"><span class="ic">${ic}</span>${n}</button>`).join("")}</div>
+    ${sec("Today", t0, today)}${sec("Tomorrow", t1, tomorrow)}${admin ? "" : myIncidentsHtml()}</div>`;
 }
 function homeView(all) {
   return homeBody(all, true, NAV.filter(x => x[0] !== "home" && !x[3] && (!x[4] || isOwner())).map(([k, ic, n]) => [k, ic, n]));
@@ -577,7 +580,7 @@ function renderAdmin() {
   document.body.className = "admin";
   const fj = filtered(), und = (ui.undated || []).filter(j => (!ui.typeF || j.type === ui.typeF));
   const all = [...fj, ...und.filter(u => !fj.some(j => j.id === u.id))];
-  $("#app").innerHTML = shell(ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : jobsView(all));
+  $("#app").innerHTML = shell(ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : jobsView(all));
   const A = $("#app");
   if (ui.view === "invoices") bindInvoices(A);
   if (ui.view === "reimb") bindReimb(A);
@@ -740,7 +743,7 @@ function editJob(j) {
       <div class="diary">${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("")}
         ${hist.map(([w, t]) => `<div class="de sys"><span class="av">i</span><div><small>${esc(w)}</small><div>${esc(t)}</div></div></div>`).join("")}
         ${!(j.log || []).length && !hist.length ? `<p class="muted sub">No diary entries yet. Site notes from staff appear here.</p>` : ""}</div>
-      ${!n ? `<h4>Photos</h4><button type="button" class="sm-btn" id="emailph">📧 Email photos</button> <span class="sub muted">Photos go to ${OFFICE_EMAIL} by email</span>${jobPhotosLink(j)}${jobReceiptsHtml(j)}` : ""}
+      ${!n ? `<h4>Photos</h4><button type="button" class="sm-btn" id="emailph">📧 Email photos</button> <span class="sub muted">Photos go to ${OFFICE_EMAIL} by email</span>${jobPhotosLink(j)} <button type="button" class="sm-btn incbtn" data-inc="${j.id}">⚠ Report incident</button> <button type="button" class="sm-btn" data-swms>📋 View SWMS</button>${jobReceiptsHtml(j)}` : ""}
     </div></div>
     <p id="ferr" class="err"></p>
     <div class="btns jc-foot"><button value="cancel" formnovalidate class="sm-btn">Close</button><button value="save" class="sm-btn primary">Save Job</button></div></form>`;
@@ -1081,11 +1084,11 @@ function renderOperator() {
   ui.opTab = ui.opTab || "home";
   if (ui.opTab === "home") {
     $("#app").innerHTML = `<div class="mob">${me.role === "admin" ? `<button class="mback adminback" id="toadmin">‹ Admin view</button>` : ""}
-      <div class="mob-tabs">${opTabs("home")}</div><div class="pad">${homeBody(jobs, false, [["today", "☀", "Today"], ["week", "▦", "Schedule"], ["done", "✔", "Completed"], ["hours", "⏱", "Hours"]])}</div></div>`;
+      <div class="mob-tabs">${opTabs("home")}</div><div class="pad">${homeBody(jobs, false, [["today", "☀", "Today"], ["week", "▦", "Schedule"], ["done", "✔", "Completed"], ["hours", "⏱", "Hours"], ["swms", "📋", "SWMS"]])}</div></div>`;
     if ($("#toadmin")) $("#toadmin").onclick = () => { ui.myJobs = false; ui.opSel = null; renderAdmin(); };
     $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; renderOperator(); });
-    $("#app").querySelectorAll("[data-go]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.go; renderOperator(); window.scrollTo(0, 0); });
-    $("#app").querySelectorAll(".hrow").forEach(r => r.onclick = () => { ui.opSel = r.dataset.id; renderOperator(); window.scrollTo(0, 0); });
+    $("#app").querySelectorAll("[data-go]").forEach(b => b.onclick = () => { if (b.dataset.go === "swms") return swmsOverlay(); ui.opTab = b.dataset.go; renderOperator(); window.scrollTo(0, 0); });
+    $("#app").querySelectorAll(".hrow[data-id]").forEach(r => r.onclick = () => { ui.opSel = r.dataset.id; renderOperator(); window.scrollTo(0, 0); });
     return;
   }
   if (ui.opTab === "hours" && ui.tsDirty && $("#tsf") && !ui.opSel) return;
@@ -1126,7 +1129,7 @@ function renderOpDetail(j) {
       ${(j.assignedNames || []).length ? `<div class="mlbl" style="margin-top:8px">Staff</div><div class="mval">${esc(j.assignedNames.join(", "))}</div>` : ""}</div>
     <div class="mcard"><div class="mlbl">Diary</div>${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("") || `<div class="muted sub">No notes yet</div>`}
       <button class="mnote" data-act="note">＋ Add Note</button></div>
-    <div class="mcard"><div class="mlbl">Photos</div><button type="button" class="mnote" id="emailph">📧 Email photos</button>${jobPhotosLink(j)}
+    <div class="mcard"><div class="mlbl">Photos</div><button type="button" class="mnote" id="emailph">📧 Email photos</button>${jobPhotosLink(j)}<button type="button" class="mnote incbtn" data-inc="${j.id}">⚠ Report incident</button><button type="button" class="mnote" data-swms>📋 View SWMS</button>
       <div class="muted sub">Send site photos to Alex by email</div></div>
     <div class="mcard">${jobReceiptsHtml(j)}</div>
     <div class="mactions">${done ? `<div class="donebar">✔ Completed${j.loads ? ` · ${j.loads} loads` : ""}</div>` :
@@ -1239,7 +1242,7 @@ async function stampPhoto(f, j, info, max) {
     return b ? new File([b], `job${jobNo(j)}_${f.name.replace(/\.[^.]+$/, "")}.jpg`, { type: "image/jpeg" }) : f;
   } catch { return f; }       // a format the browser can't decode: send the original unstamped
 }
-function emailPhotos(j) {
+function emailPhotos(j, o = {}) {
   const inp = document.createElement("input"); inp.type = "file"; inp.accept = "image/*"; inp.multiple = true;
   inp.style.cssText = "position:fixed;left:-9999px;opacity:0"; document.body.appendChild(inp);
   inp.onchange = async () => {
@@ -1252,21 +1255,22 @@ function emailPhotos(j) {
     const infos = picked.map((f, i) => ({ name: f.name, time: takenAt(f, exifs[i]).label,
       gps: exifs[i].lat != null ? { lat: exifs[i].lat, lng: exifs[i].lng, src: "photo" } : here && { ...here, src: "phone" } }));
     const files = await Promise.all(picked.map((f, i) => stampPhoto(f, j, infos[i], keep ? 0 : 2560)));
-    emailDialog(j, files, infos);
+    emailDialog(j, files, infos, o);
   };
   inp.click();
 }
-function emailDialog(j, files, infos) {
-  // Record on the job that photos were emailed, so it shows a "Photos" link to the Gmail search. Best effort.
-  updateDoc(doc(db, "jobs", j.id), { photosEmailedAt: new Date().toISOString(), photosEmailedCount: (j.photosEmailedCount || 0) + files.length, updatedAt: serverTimestamp(), updatedBy: me.uid })
+function emailDialog(j, files, infos, o = {}) {
+  const subj = o.subject || emailSubject(j), body = o.body || emailBody;
+  // Record on the job (or incident) that photos were emailed, so it shows a "Photos" link to the Gmail search. Best effort.
+  updateDoc(doc(db, o.coll || "jobs", j.id), { photosEmailedAt: new Date().toISOString(), photosEmailedCount: (j.photosEmailedCount || 0) + files.length, updatedAt: serverTimestamp(), updatedBy: me.uid })
     .catch(e => console.warn("photosEmailed flag not saved", e.code || e.message));
   const mb = files.reduce((a, f) => a + f.size, 0) / 1e6, n = files.length;
   const canShare = !!(navigator.canShare && navigator.canShare({ files }));
-  const mailto = `mailto:${OFFICE_EMAIL}?subject=${encodeURIComponent(emailSubject(j))}&body=${encodeURIComponent(emailBody(j, infos, false))}`;
+  const mailto = `mailto:${OFFICE_EMAIL}?subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(body(j, infos, false))}`;
   const v = document.createElement("div"); v.className = "emdlg";
   v.innerHTML = `<div class="embox"><h3>📧 Email ${n} photo${n > 1 ? "s" : ""}</h3>
     <div class="emthumbs">${files.map(f => `<img src="${URL.createObjectURL(f)}" alt="">`).join("")}</div>
-    <p class="sub muted">Job #${esc(jobNo(j))} · ${esc(j.address || "")} · ${mb.toFixed(1)} MB${mb > 24 ? " — may be too big for one email, send fewer at a time" : ""}</p>
+    <p class="sub muted">${o.coll ? esc(j.reportNo) : "Job #" + esc(jobNo(j))} · ${esc(j.address || "")} · ${mb.toFixed(1)} MB${mb > 24 ? " — may be too big for one email, send fewer at a time" : ""}</p>
     ${canShare ? `<button type="button" class="mbtn complete" data-a="share">Send via email app</button>
       <p class="sub muted">Choose Mail or Gmail, then put <b>${OFFICE_EMAIL}</b> in the To box (the subject and job details are filled in).</p>`
     : `<p class="sub">This browser can't attach photos automatically. Tap below to open an email to ${OFFICE_EMAIL}, then attach the photos yourself.</p>
@@ -1276,7 +1280,7 @@ function emailDialog(j, files, infos) {
   (document.querySelector("dialog[open]") || document.body).appendChild(v);
   const close = () => v.remove();
   v.querySelector('[data-a="x"]').onclick = close;
-  const logIt = async () => {
+  const logIt = o.log ? () => o.log(n) : async () => {
     const ref = doc(db, "jobs", j.id);
     try { await updateDoc(ref, { log: arrayUnion(logEntry(`Photos emailed (${n}) by ${me.name}: ` + infos.map(x => `${x.time} @ ${fmtLL(x.gps)}`).join("; "))), updatedAt: serverTimestamp(), updatedBy: me.uid }); toast("Noted in the diary"); }
     catch (e) { toast("Diary not updated: " + (e.code || e.message)); }
@@ -1284,7 +1288,7 @@ function emailDialog(j, files, infos) {
   const sh = v.querySelector('[data-a="share"]');
   if (sh) sh.onclick = async () => {
     try {
-      await navigator.share({ files, title: emailSubject(j), text: `To: ${OFFICE_EMAIL}\nSubject: ${emailSubject(j)}\n\n${emailBody(j, infos, true)}` });
+      await navigator.share({ files, title: subj, text: `To: ${OFFICE_EMAIL}\nSubject: ${subj}\n\n${body(j, infos, true)}` });
       close(); logIt();
     } catch (e) { if (e.name !== "AbortError") toast("Share failed: " + e.message); }
   };
@@ -1353,3 +1357,169 @@ function moveSheet(j) {
     v.remove(); ui.mday = u.date; toast(`Moved to ${shortDate(u.date)} ${u.time} · ${u.assignedNames.join(", ") || "Unallocated"}`); renderAdmin();
   };
 }
+
+// ------------------------------------------------------------------ Safety / incident reports (ISO 45001-friendly records)
+// incidents/{INC-0001}: sequential report no from incidentCounter/main (transaction). Reporter can't edit after submit;
+// admins add root cause + corrective actions and close. Every change is appended to `history` (audit trail). No deletes.
+const INC_TYPES = ["Incident", "Near miss", "Hazard", "Injury", "Property damage"];
+const incPad = n => "INC-" + String(n).padStart(4, "0");
+const nowLocal = () => new Intl.DateTimeFormat("sv-SE", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date()).replace(" ", "T");
+const stamp = () => new Date().toLocaleString("en-AU", { timeZone: TZ, dateStyle: "short", timeStyle: "short" });
+const fmtDT = s => s ? new Date(s + ":00Z").toLocaleString("en-AU", { timeZone: "UTC", weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" }) : "-";
+const incPhotosUrl = r => GM + "#search/" + encodeURIComponent(`subject:"[Incident Photos] ${r.reportNo}"`);
+const incCls = r => r.status === "Closed" ? "q-comp" : "q-uns";
+const isAdm = () => me && me.role === "admin";
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-inc]"); if (!b) return; e.preventDefault(); e.stopPropagation();
+  const j = b.dataset.inc && [...jobs, ...(ui.undated || []), ...(ui.done || [])].find(x => x.id === b.dataset.inc);
+  incidentForm(j || null);
+}, true);
+document.addEventListener("click", e => {
+  const r = e.target.closest("[data-incid]"); if (!r || e.target.closest("a")) return;
+  const inc = (ui.incidents || []).find(x => x.id === r.dataset.incid); if (inc) incidentDetail(inc);
+});
+function incOverlay(html) {
+  document.querySelectorAll(".incdlg").forEach(x => x.remove());
+  const v = document.createElement("div"); v.className = "emdlg incdlg"; v.innerHTML = `<div class="embox incbox">${html}</div>`;
+  (document.querySelector("dialog[open]") || document.body).appendChild(v); return v;
+}
+function incidentForm(j) {
+  const v = incOverlay(`<h3>⚠ Report incident</h3>
+    <form id="incf" class="incform">
+      <label>Type<select name="type" required>${INC_TYPES.map(t => `<option>${t}</option>`).join("")}</select></label>
+      <label>Date / time<input type="datetime-local" name="occurredAt" value="${nowLocal()}" required></label>
+      <label>Job (optional)<input name="jobNo" value="${j ? esc(jobNo(j)) : ""}" placeholder="Job #"></label>
+      <label>Location / address<input name="location" value="${esc(j ? j.address || "" : "")}" required></label>
+      <label>People involved<input name="people" placeholder="Names, incl. visitors / subbies"></label>
+      <label>What happened<textarea name="what" rows="4" required></textarea></label>
+      <label class="injf hidden">Injury details (body part, nature, treatment)<textarea name="injury" rows="3"></textarea></label>
+      <label>Immediate action taken<textarea name="action" rows="3" required></textarea></label>
+      <p class="sub muted">Reported by <b>${esc(me.name)}</b> · saved as a numbered record (can't be edited after submit). Add photos on the next screen.</p>
+      <div class="btns"><button type="button" class="mbtn ghost" data-x>Cancel</button><button class="mbtn complete">Submit report</button></div>
+    </form>`);
+  const f = v.querySelector("#incf"), inj = v.querySelector(".injf");
+  f.type.onchange = () => { inj.classList.toggle("hidden", f.type.value !== "Injury"); f.injury.required = f.type.value === "Injury"; };
+  v.querySelector("[data-x]").onclick = () => v.remove();
+  f.onsubmit = async ev => {
+    ev.preventDefault(); const btn = f.querySelector(".complete"); btn.disabled = true;
+    const data = { type: f.type.value, occurredAt: f.occurredAt.value, jobId: j ? j.id : "", jobNo: f.jobNo.value.trim(), location: f.location.value.trim(),
+      people: f.people.value.trim(), what: f.what.value.trim(), injury: f.type.value === "Injury" ? f.injury.value.trim() : "", action: f.action.value.trim(),
+      reportedBy: me.uid, reportedByName: me.name, reportedAt: new Date().toISOString(), createdAt: serverTimestamp(), status: "Open",
+      rootCause: "", actions: [], history: [{ at: stamp(), by: me.name, text: "Reported" }] };
+    try {
+      const no = await runTransaction(db, async tx => {
+        const cref = doc(db, "incidentCounter", "main"), c = await tx.get(cref);
+        const n = (c.exists() ? c.data().n : 0) + 1, reportNo = incPad(n);
+        tx.set(cref, { n }); tx.set(doc(db, "incidents", reportNo), { ...data, seq: n, reportNo }); return reportNo;
+      });
+      toast(`${no} saved`); v.remove();
+      incidentDetail({ id: no, reportNo: no, seq: 0, ...data });
+    } catch (e) { btn.disabled = false; toast("Not saved: " + (e.code || e.message)); }
+  };
+}
+function incRefresh() {   // keep an open detail view in sync with Firestore
+  const d = document.querySelector(".incdlg[data-open]"); if (!d) return;
+  const r = (ui.incidents || []).find(x => x.id === d.dataset.open); if (r && !d.querySelector(".dirty")) incidentDetail(r);
+}
+function incidentDetail(r) {
+  const adm = isAdm(), open = r.status !== "Closed", acts = r.actions || [];
+  const row = (k, v) => v ? `<div class="incrow"><div class="mlbl">${k}</div><div>${esc(v).replace(/\n/g, "<br>")}</div></div>` : "";
+  const v = incOverlay(`<div class="inchead"><h3>${esc(r.reportNo)} · ${esc(r.type)}</h3><span class="qpill ${incCls(r)}">${esc(r.status)}</span></div>
+    ${row("Date / time", fmtDT(r.occurredAt))}${row("Job", r.jobNo ? "#" + r.jobNo : "")}${row("Location", r.location)}${row("People involved", r.people)}
+    ${row("What happened", r.what)}${row("Injury details", r.injury)}${row("Immediate action taken", r.action)}
+    ${row("Reported by", `${r.reportedByName || "?"} · ${r.reportedAt ? new Date(r.reportedAt).toLocaleString("en-AU", { timeZone: TZ, dateStyle: "medium", timeStyle: "short" }) : ""}`)}
+    <div class="incrow"><div class="mlbl">Photos</div><button type="button" class="sm-btn" id="incph">📧 Email photos</button>
+      ${r.photosEmailedCount ? ` <a class="phlink" href="${incPhotosUrl(r)}" target="_blank" rel="noopener">📷 Photos (${r.photosEmailedCount} sent)</a>` : ""}</div>
+    <h4>Investigation</h4>
+    ${adm && open ? `<label>Root cause<textarea id="incrc" rows="3">${esc(r.rootCause || "")}</textarea></label>` : row("Root cause", r.rootCause || (open ? "Not yet investigated" : "-"))}
+    <div class="mlbl">Corrective actions</div>
+    <table class="jt incacts"><thead><tr><th>Action</th><th>Owner</th><th>Due</th><th>Done</th></tr></thead><tbody>
+      ${acts.map((a, i) => `<tr><td>${esc(a.text)}</td><td>${esc(a.owner)}</td><td>${esc(a.due ? dmy(a.due) : "")}</td>
+        <td>${adm && open ? `<input type="checkbox" data-ad="${i}" ${a.done ? "checked" : ""}>` : a.done ? "✔ " + esc(a.doneAt || "") : ""}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">None yet</td></tr>`}</tbody></table>
+    ${adm && open ? `<div class="incadd"><input id="iat" placeholder="New corrective action"><select id="iao">${staff.map(s => `<option>${esc(s.name)}</option>`).join("")}</select><input id="iad" type="date"><button type="button" class="sm-btn" id="iaadd">+ Add</button></div>` : ""}
+    ${!open ? row("Closed", `${r.closedByName || "?"} · ${r.closedAt || ""}`) : ""}
+    <details class="inchist"><summary>History (${(r.history || []).length})</summary>${(r.history || []).map(h => `<div class="sub">${esc(h.at)} · ${esc(h.by)} · ${esc(h.text)}</div>`).join("")}</details>
+    <div class="btns">${adm && open ? `<button type="button" class="mbtn" id="incsave">Save</button><button type="button" class="mbtn complete" id="incclose">Close report</button>` : ""}<button type="button" class="mbtn ghost" data-x>Back</button></div>`);
+  v.dataset.open = r.id;
+  v.querySelector("[data-x]").onclick = () => v.remove();
+  v.querySelector("#incph").onclick = () => emailPhotos({ id: r.id, reportNo: r.reportNo, sm8JobNo: r.reportNo, address: r.location, photosEmailedCount: r.photosEmailedCount }, {
+    coll: "incidents", subject: `[Incident Photos] ${r.reportNo}`,
+    body: (x, infos, att) => [`Incident report ${r.reportNo} (${r.type})`, `When: ${fmtDT(r.occurredAt)}`, `Location: ${r.location || "-"}`, r.jobNo ? `Job #${r.jobNo}` : "", "",
+      att ? `${infos.length} photo(s) attached:` : `Please attach ${infos.length} photo(s) to this email:`, ...infos.map((y, i) => `${i + 1}. ${y.time} (Brisbane) · ${fmtLL(y.gps)}`), "", `From ${me.name}`].filter(x => x !== null).join("\n"),
+    log: () => toast("Photos noted on " + r.reportNo) });
+  if (!(adm && open)) return;
+  v.querySelectorAll("textarea,input").forEach(x => x.oninput = () => x.classList.add("dirty"));
+  const ref = doc(db, "incidents", r.id);
+  const save = async (extra = {}, note) => {
+    const rc = v.querySelector("#incrc").value.trim(), hist = [...(r.history || [])];
+    if (rc !== (r.rootCause || "")) hist.push({ at: stamp(), by: me.name, text: "Root cause updated" });
+    if (note) hist.push({ at: stamp(), by: me.name, text: note });
+    const u = { rootCause: rc, history: hist, updatedAt: serverTimestamp(), updatedBy: me.uid, ...extra };
+    try { await updateDoc(ref, u); Object.assign(r, u); toast("Saved"); incidentDetail(r); } catch (e) { toast("Not saved: " + (e.code || e.message)); }
+  };
+  v.querySelector("#iaadd").onclick = () => { const t = v.querySelector("#iat").value.trim(); if (!t) return toast("Type the action first");
+    const a = { text: t, owner: v.querySelector("#iao").value, due: v.querySelector("#iad").value, done: false };
+    save({ actions: [...acts, a] }, `Action added: ${t} (${a.owner}${a.due ? ", due " + dmy(a.due) : ""})`); };
+  v.querySelectorAll("[data-ad]").forEach(cb => cb.onchange = () => { const i = +cb.dataset.ad, na = acts.map((a, k) => k === i ? { ...a, done: cb.checked, doneAt: cb.checked ? stamp() : "" } : a);
+    save({ actions: na }, `Action ${cb.checked ? "done" : "re-opened"}: ${acts[i].text}`); });
+  v.querySelector("#incsave").onclick = () => save();
+  v.querySelector("#incclose").onclick = () => {
+    if (!v.querySelector("#incrc").value.trim()) return toast("Add the root cause before closing");
+    if (acts.some(a => !a.done) && !confirm("Some corrective actions aren't done. Close anyway?")) return;
+    save({ status: "Closed", closedBy: me.uid, closedByName: me.name, closedAt: stamp() }, "Closed");
+  };
+}
+function safetyView() {
+  ui.incS = ui.incS || "Open"; ui.incT = ui.incT || "";
+  const all = (ui.incidents || []).slice().sort((a, b) => (b.seq || 0) - (a.seq || 0));
+  const list = all.filter(r => (ui.incS === "All" || r.status === ui.incS) && (!ui.incT || r.type === ui.incT));
+  const cnt = st => all.filter(r => st === "All" || r.status === st).length;
+  setTimeout(() => {
+    document.querySelectorAll("[data-incs]").forEach(b => b.onclick = () => { ui.incS = b.dataset.incs; renderAdmin(); });
+    const t = $("#inct"); if (t) t.onchange = () => { ui.incT = t.value; renderAdmin(); };
+  });
+  return `<div class="sm-head"><h1>Safety</h1><span class="headbtns"><button class="sm-btn" data-view="swms">📋 SWMS</button><button class="sm-btn primary" data-inc="">⚠ Report incident</button></span></div>
+    <div class="qtabs">${["Open", "Closed", "All"].map(k => `<button data-incs="${k}" class="${ui.incS === k ? "on" : ""}">${k} <span>${cnt(k)}</span></button>`).join("")}</div>
+    <div class="filters"><select id="inct"><option value="">All types</option>${INC_TYPES.map(t => `<option ${ui.incT === t ? "selected" : ""}>${t}</option>`).join("")}</select></div>
+    <table class="jt"><thead><tr><th>Report</th><th>Type</th><th>When</th><th>Location / job</th><th>What happened</th><th>Reported by</th><th>Actions</th><th>Status</th></tr></thead><tbody>
+    ${list.map(r => `<tr class="jr" data-incid="${esc(r.id)}"><td class="jn">${esc(r.reportNo)}${r.photosEmailedCount ? ` <a class="phicon" href="${incPhotosUrl(r)}" target="_blank" rel="noopener">📷</a>` : ""}</td><td>${esc(r.type)}</td><td>${esc(fmtDT(r.occurredAt))}</td>
+      <td>${esc(r.location || "-")}<div class="sub">${r.jobNo ? "Job #" + esc(r.jobNo) : ""}</div></td><td>${esc(firstLine(r.what))}</td><td>${esc(r.reportedByName || "")}</td>
+      <td>${(r.actions || []).filter(a => a.done).length}/${(r.actions || []).length}</td><td><span class="qpill ${incCls(r)}">${esc(r.status)}</span></td></tr>`).join("") || `<tr><td colspan="8" class="muted pad">No reports.</td></tr>`}</tbody></table>`;
+}
+function myIncidentsHtml() {
+  const L = (ui.incidents || []).filter(r => r.reportedBy === me.uid).sort((a, b) => (b.seq || 0) - (a.seq || 0));
+  if (!L.length) return "";
+  return `<div class="hsec"><div class="hsec-h">My safety reports <span class="cnt">${L.length}</span></div>${L.map(r => `<div class="hrow" data-incid="${esc(r.id)}"><div class="htime"><b>${esc(r.reportNo.slice(4))}</b><small>INC</small></div>
+    <div class="hbody"><div class="hcl">${esc(r.type)}</div><div class="sub">${esc(fmtDT(r.occurredAt))} · ${esc(r.location || "")}</div></div><span class="qpill ${incCls(r)}">${esc(r.status)}</span></div>`).join("")}</div>`;
+}
+
+// ------------------------------------------------------------------ SWMS (Safe Work Method Statements, Jul 2026)
+// The PDFs are NOT in the public site: they live in Firestore (swmsChunks, ~700 KB base64 pieces, login required by
+// firestore.rules), uploaded by tools/upload_swms.py. Tapping one reassembles it into a PDF blob and opens it in a new tab.
+const SWMS = [["working-near-roads", "Working near roads", "Traffic, plant near live lanes"], ["mobile-plant", "Mobile plant", "Excavators, loaders, tippers"],
+  ["working-with-silica", "Working with silica", "Dust from cutting, digging, concrete"], ["hazardous-substances", "Hazardous substances", "Fuels, oils, chemicals"],
+  ["electrical", "Electrical & underground services", "Energised installations, services strikes"]];
+const swmsCache = {};
+const swmsList = () => `<div class="swlist">${SWMS.map(([id, t, d]) => `<button type="button" class="switem" data-swmsf="${id}"><span class="swic">📄</span><span><b>${t}</b><small>${d}</small></span><span class="chev">›</span></button>`).join("")}</div>
+  <p class="sub muted">Company SWMS · current version July 2026 · opens as a PDF in a new tab.</p>`;
+function swmsView() { return `<div class="sm-head"><h1>SWMS</h1></div>${swmsList()}`; }
+function swmsOverlay() { const v = incOverlay(`<h3>📋 SWMS</h3>${swmsList()}<div class="btns"><button type="button" class="mbtn ghost" data-x>Back</button></div>`); v.querySelector("[data-x]").onclick = () => v.remove(); }
+async function openSwms(id) {
+  const w = window.open("", "_blank");            // open now (inside the tap) so phones don't block the popup
+  if (w) w.document.write("<p style='font:16px sans-serif;padding:20px'>Loading SWMS…</p>");
+  try {
+    if (!swmsCache[id]) {
+      const s = await getDocs(query(collection(db, "swmsChunks"), where("file", "==", id)));
+      const parts = s.docs.map(d => d.data()).sort((a, b) => a.k - b.k);
+      if (!parts.length) throw new Error("not uploaded yet");
+      const bin = atob(parts.map(p => p.data).join("")), u8 = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+      swmsCache[id] = URL.createObjectURL(new Blob([u8], { type: "application/pdf" }));
+    }
+    if (w) w.location.href = swmsCache[id]; else location.href = swmsCache[id];
+  } catch (e) { if (w) w.close(); toast("SWMS not available: " + (e.code || e.message)); }
+}
+document.addEventListener("click", e => {
+  const a = e.target.closest("[data-swms]"); if (a) { e.preventDefault(); e.stopPropagation(); return swmsOverlay(); }
+  const f = e.target.closest("[data-swmsf]"); if (f) { e.preventDefault(); openSwms(f.dataset.swmsf); }
+}, true);

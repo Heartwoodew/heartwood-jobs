@@ -359,3 +359,12 @@ tr.mhead td{background:#eef2f7;font-size:13px;padding:6px 8px}
 .phicon{text-decoration:none;font-size:13px;margin-left:4px}
 .phicon{text-decoration:none;font-size:13px;margin-left:4px}
 .mob-tabs{grid-template-columns:none;grid-auto-flow:column;grid-auto-columns:1fr}.mob-tabs button{padding:12px 2px;font-size:14px;white-space:nowrap;min-width:0}
+/* ---- Safety / incidents / SWMS */
+.hbtn.inc{background:var(--q-uns)}.incbtn{color:var(--q-uns);font-weight:600}
+.incbox{max-width:640px;width:100%;max-height:90vh;overflow:auto;text-align:left}
+.incform{display:grid;gap:10px}.incrow{padding:6px 0;border-bottom:1px solid var(--sm-line)}.incrow .mlbl{font-size:12px;color:var(--sm-mut);text-transform:uppercase}
+.inchead{display:flex;align-items:center;gap:10px}.inchead h3{margin:0}.incacts{margin:6px 0}.incadd{display:grid;grid-template-columns:1fr 110px 140px auto;gap:6px;margin:6px 0}
+.inchist{margin:10px 0}.inchist summary{cursor:pointer;color:var(--sm-blue)}
+.swlist{display:grid;gap:8px;max-width:640px}.switem{display:grid;grid-template-columns:32px 1fr 20px;align-items:center;gap:10px;text-align:left;background:#fff;border:1px solid var(--sm-line);border-radius:6px;padding:14px}
+.switem b{display:block;font-size:16px}.switem small{color:var(--sm-mut)}.swic{font-size:22px}
+@media (max-width:760px){.incadd{grid-template-columns:1fr 1fr}}
