@@ -368,3 +368,17 @@ tr.mhead td{background:#eef2f7;font-size:13px;padding:6px 8px}
 .swlist{display:grid;gap:8px;max-width:640px}.switem{display:grid;grid-template-columns:32px 1fr 20px;align-items:center;gap:10px;text-align:left;background:#fff;border:1px solid var(--sm-line);border-radius:6px;padding:14px}
 .switem b{display:block;font-size:16px}.switem small{color:var(--sm-mut)}.swic{font-size:22px}
 @media (max-width:760px){.incadd{grid-template-columns:1fr 1fr}}
+/* Clients screen + job Supervisor card */
+.clgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;padding:0 16px 24px}
+.clcard{background:#fff;border:1px solid var(--sm-line);border-radius:10px;padding:12px 14px}
+.cl-h{display:flex;justify-content:space-between;align-items:center;gap:8px}.cl-h h3{margin:0;font-size:17px}
+.cl-off{margin:4px 0 6px}.cl-off a{color:var(--sm-blue);text-decoration:none}
+.cl-k{font-size:11px;text-transform:uppercase;font-weight:700;color:var(--sm-mut);margin:10px 0 2px;letter-spacing:.04em}
+.ct{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 0;border-top:1px solid #eef1f5}
+.ct-who{min-width:0}.ct-who .sub{word-break:break-word}.ct-src{font-size:11px}
+.ct-btns,.sup-btns{display:flex;gap:6px;flex-shrink:0}.ct-btns a,.sup-btns a{text-decoration:none}
+.supcard:empty{display:none}
+.sup{display:flex;justify-content:space-between;align-items:center;gap:10px;background:#f1f6ff;border:1px solid #cfe0ff;border-radius:8px;padding:8px 10px;margin:6px 0 8px}
+.sup-who{display:flex;flex-direction:column}.sup-who b{font-size:15px}.sup.none{background:#f8fafc;border-color:#e3e8ef;display:block}
+.mcard .sup{margin:8px 0 0}.mcard .sup-btns a{padding:10px 14px;font-size:15px}
+@media (max-width:760px){.clgrid{grid-template-columns:1fr;padding:0 10px 20px}.ct-btns a,.ct-btns button{padding:9px 12px}}

@@ -121,7 +121,7 @@ function queueOf(j) {
 const jobNo = j => j.sm8JobNo ? j.sm8JobNo : "HW-" + String(j.id || "").slice(-4).toUpperCase();
 const firstLine = s => String(s || "").split(/\n|\. /)[0];
 const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Unscheduled";
-const NAV = [["home", "⌂", "Home"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["completed", "✔", "Completed"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients", 1], ["inbox", "✉", "Inbox", 1],
+const NAV = [["home", "⌂", "Home"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["completed", "✔", "Completed"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["inbox", "✉", "Inbox", 1],
   ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["reimb", "💵", "Reimbursements", 0, 1], ["settings", "⚙", "Settings", 1]];
 ui.view = "home"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
 const PHONE = matchMedia("(max-width:760px)");
@@ -580,9 +580,10 @@ function renderAdmin() {
   document.body.className = "admin";
   const fj = filtered(), und = (ui.undated || []).filter(j => (!ui.typeF || j.type === ui.typeF));
   const all = [...fj, ...und.filter(u => !fj.some(j => j.id === u.id))];
-  $("#app").innerHTML = shell(ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : jobsView(all));
+  $("#app").innerHTML = shell(ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : jobsView(all));
   const A = $("#app");
   if (ui.view === "invoices") bindInvoices(A);
+  if (ui.view === "clients") bindClients(A);
   if (ui.view === "reimb") bindReimb(A);
   if (ui.view === "timesheet") bindTs(A, renderAdmin);
   A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.navOpen = false;
@@ -713,6 +714,7 @@ function editJob(j) {
     <div class="jc-body"><div class="jc-col">
       <h4>Client &amp; Site</h4>
       <label>Client<input name="client" list="clients" value="${esc(j.client)}" required><datalist id="clients">${CLIENTS.map(c => `<option value="${esc(c)}">`).join("")}</datalist></label>
+      ${n ? "" : `<div class="supcard" data-sup="${esc(j.id)}"></div>`}
       <label>Job (site) address<input name="address" value="${esc(j.address)}" required></label>
       ${j.address ? `<a class="sub" href="${mapsUrl(j.address)}" target="_blank" rel="noopener">📍 Open in Maps</a>` : ""}
       <h4>Job Description</h4>
@@ -749,7 +751,7 @@ function editJob(j) {
     <div class="btns jc-foot"><button value="cancel" formnovalidate class="sm-btn">Close</button><button value="save" class="sm-btn primary">Save Job</button></div></form>`;
   d.showModal();
   if (!n) $("#emailph").onclick = () => emailPhotos(j);
-  if (!n) { wireFindPo(j); supervisors(); wireJobReceipts(j); }
+  if (!n) { wireFindPo(j); supervisors(); wireJobReceipts(j); fillSupCard(j); }
   if (!n && $("#unschbtn")) $("#unschbtn").onclick = ev => { if (!armBtn(ev.currentTarget, "✕ Remove from dispatch board", "Tap again to remove from the board")) return;
     d.close(); unscheduleJob(j).catch(e => toast("Not removed: " + (e.code || e.message))); };
   if (!n) $("#emailsupj").onclick = () => emailSupervisor({ ...j, po: $("#jf").po.value.trim() || j.po, poAmount: $("#jf").poAmount.value === "" ? j.poAmount : +$("#jf").poAmount.value }, invAmountDefault(j)).catch(e => toast(e.message));
@@ -860,6 +862,81 @@ async function supervisorFor(j) {
   if (j.supervisorEmail) return { email: j.supervisorEmail, name: j.supervisorName || "" };
   const m = await supervisors(), base = String(j.po || "").split("/")[0].replace(/\D/g, "");
   return (base && m.byPo?.[base]) || m.byClient?.[j.client] || m.remembered?.[(j.client || "").replace(/[.\/]/g, "_")] || null;
+}
+// ---- Clients (clients/{id}: name, office{address,phone}, contacts[{kind,name,role,mobile,phone,email,source,default}]).
+// Workers read, admins edit. Contacts come from builders' emails (see data/clients_contacts.json).
+let CLI = null, CLI_ERR = "";
+async function loadClients(force) {
+  if (!CLI || force) { try { CLI = (await getDocs(collection(db, "clients"))).docs.map(d => ({ id: d.id, ...d.data() })); CLI_ERR = ""; } catch (e) { CLI = []; CLI_ERR = e.code || e.message; } }
+  return CLI;
+}
+const normCo = s => String(s || "").toLowerCase().replace(/\(.*?\)|pty|ltd|homes?|built|[^a-z]/g, "");
+const clientOf = name => (CLI || []).find(c => normCo(c.name) && normCo(c.name) === normCo(name)) || null;
+const telHref = m => "tel:" + String(m || "").replace(/[^\d+]/g, "");
+// Job supervisor: job fields / meta (admins) first, then the client's contact list (adds the mobile); a client with
+// one supervisor (or one marked default) is used when nothing else matches.
+async function jobSupervisor(j) {
+  await loadClients();
+  const s = await supervisorFor(j).catch(() => null), c = clientOf(j.client), sups = (c?.contacts || []).filter(x => x.kind === "supervisor");
+  const hit = s && sups.find(x => (s.email && x.email && x.email.toLowerCase() === s.email.toLowerCase()) || (s.name && x.name.toLowerCase().startsWith(s.name.toLowerCase())));
+  if (s) return { ...s, ...(hit || {}), email: s.email || hit?.email, name: hit?.name || s.name };
+  const base = String(j.po || "").split("/")[0].replace(/\D/g, ""), byPo = base && sups.find(x => (x.pos || []).includes(base));
+  if (byPo) return byPo;
+  if (sups.length === 1) return sups[0];
+  return sups.find(x => x.default) || null;
+}
+async function fillSupCard(j) {
+  const box = document.querySelector(`.supcard[data-sup="${CSS.escape(j.id)}"]`); if (!box) return;
+  const s = await jobSupervisor(j).catch(() => null);
+  box.innerHTML = s ? `<div class="sup"><div class="sup-who"><span class="mlbl">Supervisor</span><b>${esc(s.name || s.email)}</b>${s.mobile ? `<span class="sub">${esc(s.mobile)}</span>` : ""}</div>
+    <span class="sup-btns">${s.mobile ? `<a class="sm-btn primary" href="${telHref(s.mobile)}">📞 Call</a>` : ""}${s.email ? `<a class="sm-btn" href="mailto:${esc(s.email)}?subject=${encodeURIComponent((j.address || "") + (j.po ? " PO " + j.po : ""))}">✉ Email</a>` : ""}</span></div>`
+    : `<div class="sup none"><span class="mlbl">Supervisor</span> <span class="sub muted">Not known for this job${isAdm() ? " - add one in Clients" : ""}</span></div>`;
+}
+const KIND = { supervisor: "Supervisors", accounts: "Accounts", admin: "Admin / ordering" };
+function contactRow(c, x, i) {
+  return `<div class="ct"><div class="ct-who"><b>${esc(x.name)}</b> <span class="sub">${esc(x.role || "")}</span>
+    <div class="sub">${[x.mobile, x.phone, x.email].filter(Boolean).map(esc).join(" · ")}</div>${x.source ? `<div class="sub muted ct-src">${esc(x.source)}</div>` : ""}</div>
+    <span class="ct-btns">${x.mobile || x.phone ? `<a class="sm-btn primary" href="${telHref(x.mobile || x.phone)}" title="Call">📞</a>` : ""}${x.email ? `<a class="sm-btn" href="mailto:${esc(x.email)}" title="Email">✉</a>` : ""}${isAdm() ? `<button class="sm-btn" data-ced="${esc(c.id)}:${i}" title="Edit">✎</button>` : ""}</span></div>`;
+}
+function clientsView() {
+  if (!CLI) { loadClients().then(() => ui.view === "clients" && renderAdmin()); return `<div class="sm-head"><h1>Clients</h1></div><p class="pad muted">Loading…</p>`; }
+  const q = (ui.cq2 || "").toLowerCase();
+  const list = CLI.filter(c => !q || JSON.stringify(c).toLowerCase().includes(q)).sort((a, b) => (b.contacts || []).length - (a.contacts || []).length || a.name.localeCompare(b.name));
+  return `<div class="sm-head"><h1>Clients</h1>${isAdm() ? `<span class="headbtns"><button class="sm-btn primary" data-cnew>＋ Add client</button></span>` : ""}</div>
+    ${CLI_ERR ? `<p class="err pad">Clients not available: ${esc(CLI_ERR)}</p>` : ""}
+    <div class="sbar"><span class="sbar-ic">🔍</span><input id="cq2" type="search" placeholder="Search client, name, phone…" value="${esc(ui.cq2 || "")}"></div>
+    <div class="clgrid">${list.map(c => `<div class="clcard"><div class="cl-h"><h3>${esc(c.name)}</h3>${isAdm() ? `<button class="sm-btn" data-ced="${esc(c.id)}:new">＋ Contact</button>` : ""}</div>
+      ${c.office?.phone || c.office?.address ? `<div class="sub cl-off">${c.office.phone ? `<a href="${telHref(c.office.phone)}">☎ ${esc(c.office.phone)}</a> · ` : ""}${esc(c.office.address || "")}</div>` : ""}
+      ${Object.entries(KIND).map(([k, t]) => { const xs = (c.contacts || []).map((x, i) => [x, i]).filter(([x]) => (x.kind || "admin") === k);
+        return xs.length ? `<div class="cl-k">${t}</div>` + xs.map(([x, i]) => contactRow(c, x, i)).join("") : ""; }).join("") || `<p class="sub muted">No contacts yet</p>`}</div>`).join("") || `<p class="pad muted">No clients yet</p>`}</div>`;
+}
+function bindClients(A) {
+  const qi = A.querySelector("#cq2"); if (qi) qi.oninput = () => { ui.cq2 = qi.value; const p = qi.selectionStart; renderAdmin(); const n = $("#cq2"); n.focus(); n.setSelectionRange(p, p); };
+  A.querySelectorAll("[data-ced]").forEach(b => b.onclick = () => { const [id, i] = b.dataset.ced.split(":"); editContact(CLI.find(c => c.id === id), i === "new" ? -1 : +i); });
+  const nb = A.querySelector("[data-cnew]"); if (nb) nb.onclick = async () => {
+    const name = (prompt("Client (company) name:") || "").trim(); if (!name) return;
+    const id = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "client";
+    try { await setDoc(doc(db, "clients", id), { name, office: {}, contacts: [], updatedAt: serverTimestamp() }, { merge: true }); await loadClients(true); renderAdmin(); } catch (e) { toast("Not saved: " + (e.code || e.message)); }
+  };
+}
+function editContact(c, i) {
+  const x = i >= 0 ? c.contacts[i] : { kind: "supervisor" }, d = $("#dlg"); d.className = ""; d.onclose = null;
+  d.innerHTML = `<form method="dialog" id="cf" class="jf"><h2>${i >= 0 ? "Edit" : "Add"} contact · ${esc(c.name)}</h2>
+    <label>Type<select name="kind">${Object.entries(KIND).map(([k, t]) => `<option value="${k}" ${x.kind === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+    <label>Name<input name="name" value="${esc(x.name)}" required></label><label>Role<input name="role" value="${esc(x.role)}"></label>
+    <label>Mobile<input name="mobile" type="tel" value="${esc(x.mobile)}"></label><label>Email<input name="email" type="email" value="${esc(x.email)}"></label>
+    <label>Source / note<input name="source" value="${esc(x.source)}"></label>
+    <div class="btns">${i >= 0 ? `<button value="del" formnovalidate class="ghost big" id="cdel">Remove</button>` : ""}<button value="cancel" formnovalidate class="ghost big">Cancel</button><button value="ok" class="primary big">Save</button></div></form>`;
+  d.showModal();
+  $("#cf").onsubmit = async ev => {
+    const v = ev.submitter?.value; if (v === "cancel") return; ev.preventDefault();
+    if (v === "del" && !confirm(`Remove ${x.name}?`)) return;
+    const f = ev.target, cs = [...(c.contacts || [])];
+    const nx = { ...x, kind: f.kind.value, name: f.name.value.trim(), role: f.role.value.trim(), mobile: f.mobile.value.trim(), email: f.email.value.trim(), source: f.source.value.trim() };
+    if (v === "del") cs.splice(i, 1); else if (i >= 0) cs[i] = nx; else cs.push(nx);
+    try { await updateDoc(doc(db, "clients", c.id), { contacts: cs, updatedAt: serverTimestamp(), updatedBy: me.uid }); d.close(); await loadClients(true); renderAdmin(); toast("Saved"); }
+    catch (e) { toast("Not saved: " + (e.code || e.message)); }
+  };
 }
 async function emailSupervisor(j, amt) {
   let s = await supervisorFor(j);
@@ -1121,7 +1198,7 @@ function renderOpDetail(j) {
   const q = queueOf(j), done = j.status === "Done", started = j.status === "In progress";
   $("#app").innerHTML = `<div class="mob"><div class="mob-bar det ${QCLS[q]}"><button class="mback" id="back">‹ Jobs</button><div class="mob-title">Job #${esc(jobNo(j))}</div>
       ${started ? ipTop(j, "onbar") : ""}<div class="mob-sub">${done ? "Completed" : started ? "Work Order – in progress" : "Work Order"}</div></div>
-    <div class="mcard"><div class="mlbl">Client</div><div class="mval">${esc(j.client || "")}</div></div>
+    <div class="mcard"><div class="mlbl">Client</div><div class="mval">${esc(j.client || "")}</div><div class="supcard" data-sup="${esc(j.id)}"></div></div>
     <a class="mcard link" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener"><div class="mlbl">Job Address</div><div class="mval big">📍 ${esc(j.address || "-")}</div><div class="chev">›</div></a>
     <div class="mcard"><div class="mlbl">Scheduled</div><div class="mval">${esc(dayLabel(j.date))} · ${esc(j.time || "")}${j.durationHrs ? " · " + esc(j.durationHrs) + "h" : ""}</div></div>
     <div class="mcard"><div class="mlbl">Job Description</div><div class="mval">${esc(j.description || "")}</div>
@@ -1135,7 +1212,7 @@ function renderOpDetail(j) {
     <div class="mactions">${done ? `<div class="donebar">✔ Completed${j.loads ? ` · ${j.loads} loads` : ""}</div>` :
       `<button class="mbtn start" data-act="start" ${started ? "disabled" : ""}>${started ? "Started" : "▶ Start Job"}</button>
        <button class="mbtn complete" data-act="done">✔ Complete</button>`}</div></div>`;
-  $("#emailph").onclick = () => emailPhotos(j); wireJobReceipts(j);
+  $("#emailph").onclick = () => emailPhotos(j); wireJobReceipts(j); fillSupCard(j);
   $("#back").onclick = () => { ui.opSel = null; renderOperator(); };
   $("#app").querySelectorAll("[data-act]").forEach(b => b.onclick = () => opAction(j, b.dataset.act));
 }
