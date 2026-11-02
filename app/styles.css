@@ -340,3 +340,22 @@ tr.mhead td{background:#eef2f7;font-size:13px;padding:6px 8px}
 .ptop{display:flex;justify-content:flex-end;margin-bottom:3px}.jc-top .ptop,.mob-bar .ptop{justify-content:flex-start;margin:3px 0}
 @media (max-width:760px){.jt tr.jr .pstack{align-items:flex-end}}
 .ptop .qpill.ip.sm{padding:1px 6px;font-size:11px}
+/* ---- Home screen */
+.home{max-width:980px}.hhead h1{font-size:22px;margin:0;font-weight:600}.hhead{margin-bottom:12px}
+.hstats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}
+.hstat{display:grid;text-align:left;background:#fff;border:1px solid var(--sm-line);border-left:5px solid var(--q-wo);border-radius:6px;padding:10px 12px}
+.hstat b{font-size:26px;line-height:1.1}.hstat span{font-size:13px;color:var(--sm-mut)}
+.hstat.ip{border-left-color:var(--q-comp)}.hstat.q-comp{border-left-color:var(--q-comp)}.hstat.q-uns{border-left-color:var(--q-uns)}.hstat.q-quote{border-left-color:var(--q-quote)}
+.hbtns{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:16px}
+.hbtn{display:flex;align-items:center;gap:10px;background:var(--sm-blue);border:none;color:#fff;font-weight:600;font-size:16px;border-radius:6px;padding:16px 14px;min-height:56px}
+.hbtn .ic{font-size:20px;width:22px;text-align:center}
+.hsec{background:#fff;border:1px solid var(--sm-line);border-radius:6px;margin-bottom:12px}
+.hsec-h{font-weight:700;padding:10px 12px;border-bottom:1px solid var(--sm-line);background:#f7f9fb}.hsec-h small{font-weight:400;color:var(--sm-mut);margin-left:4px}
+.hrow{display:grid;grid-template-columns:58px 1fr auto;gap:10px;padding:10px 12px;border-top:1px solid var(--sm-line);cursor:pointer;align-items:start}.hrow:first-of-type{border-top:none}
+.hrow:hover{background:#f4f8fc}.htime{display:grid}.htime small{color:var(--sm-mut);font-size:12px}.hcl{font-weight:700}.hcl .jn{font-weight:400;color:var(--sm-blue);font-size:13px}
+.home .pstack{align-items:flex-end}
+@media (max-width:760px){.hstats{grid-template-columns:repeat(2,1fr)}.hbtns{grid-template-columns:repeat(2,1fr)}.hrow{grid-template-columns:48px 1fr auto}}
+.phlink{font-size:13px;color:var(--sm-blue);margin-left:8px;white-space:nowrap}
+.phicon{text-decoration:none;font-size:13px;margin-left:4px}
+.phicon{text-decoration:none;font-size:13px;margin-left:4px}
+.mob-tabs{grid-template-columns:none;grid-auto-flow:column;grid-auto-columns:1fr}.mob-tabs button{padding:12px 2px;font-size:14px;white-space:nowrap;min-width:0}

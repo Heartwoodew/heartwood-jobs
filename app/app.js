@@ -118,9 +118,9 @@ function queueOf(j) {
 const jobNo = j => j.sm8JobNo ? j.sm8JobNo : "HW-" + String(j.id || "").slice(-4).toUpperCase();
 const firstLine = s => String(s || "").split(/\n|\. /)[0];
 const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Unscheduled";
-const NAV = [["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["completed", "✔", "Completed"], ["clients", "👤", "Clients", 1], ["inbox", "✉", "Inbox", 1],
+const NAV = [["home", "⌂", "Home"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["completed", "✔", "Completed"], ["clients", "👤", "Clients", 1], ["inbox", "✉", "Inbox", 1],
   ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["reimb", "💵", "Reimbursements", 0, 1], ["settings", "⚙", "Settings", 1]];
-ui.view = "jobs"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
+ui.view = "home"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
 const PHONE = matchMedia("(max-width:760px)");
 PHONE.addEventListener?.("change", () => { if (me && me.role === "admin") renderAdmin(); });
 function shell(inner) {
@@ -146,7 +146,7 @@ const mixedBadge = j => isMixed(j) ? ` <span class="qpill mixed" title="${esc(mi
 function jobRow(j) {
   const q = queueOf(j), names = namesOf(j).map(label).join(", ");
   return `<tr class="jr" data-id="${j.id}" draggable="true"><td><span class="qdot ${QCLS[q]}" title="${q}"></span></td>
-    <td class="jn">#${esc(jobNo(j))}</td><td><b>${esc(j.client || "")}</b><div class="sub">${esc(j.address || "-")}</div></td>
+    <td class="jn">#${esc(jobNo(j))}${jobPhotosIcon(j)}</td><td><b>${esc(j.client || "")}</b><div class="sub">${esc(j.address || "-")}</div></td>
     <td>${esc(firstLine(j.description))}${mixedBadge(j)}<div class="sub">${esc(TYPES[j.type] || "")}${j.po ? " · PO " + esc(j.po) : ""}</div></td>
     <td>${esc(shortDate(j.date))}<div class="sub">${esc(j.time || "")}${j.durationHrs ? " · " + esc(j.durationHrs) + "h" : ""}</div></td>
     <td>${names ? esc(names) : `<span class="unal">Unallocated</span>`}</td>
@@ -193,7 +193,7 @@ function unscheduledView(all) {
   return `<div class="sm-head"><h1>Unscheduled jobs <span class="cnt">${list.length}</span></h1><button id="new" class="sm-btn primary">+ New Job</button></div>${searchBar()}
     <p class="sub muted">Open jobs with no booking date, newest first. Jobs created in ServiceM8 more than 3 months ago are not shown.</p>
     <table class="jt"><thead><tr><th></th><th>Job #</th><th>Client / Site</th><th>Description</th><th>PO</th><th>Created</th><th></th></tr></thead>
-    <tbody>${list.map(j => `<tr class="jr" data-id="${j.id}"><td><span class="qdot ${QCLS[queueOf(j)]}"></span></td><td class="jn">#${esc(jobNo(j))}</td>
+    <tbody>${list.map(j => `<tr class="jr" data-id="${j.id}"><td><span class="qdot ${QCLS[queueOf(j)]}"></span></td><td class="jn">#${esc(jobNo(j))}${jobPhotosIcon(j)}</td>
       <td><b>${esc(j.client || "")}</b><div class="sub">${esc(j.address || "-")}</div></td><td>${esc(firstLine(j.description))}<div class="sub">${esc(TYPES[j.type] || "")}</div></td>
       <td>${esc(j.po || "—")}</td><td>${createdOf(j) ? esc(shortDate(createdOf(j))) : "—"}</td>
       <td><button type="button" class="sm-btn primary" data-sched="${j.id}">Schedule</button></td></tr>`).join("") || `<tr><td colspan="7" class="muted pad">Nothing unscheduled – nice.</td></tr>`}</tbody></table>`;
@@ -531,6 +531,43 @@ function reimbPill() {
     const j = (r.jobId && all.find(x => x.id === r.jobId)) || (r.jobNo && all.find(x => String(jobNo(x)) === String(r.jobNo)));
     if (j) editJob(j); else { ui.view = "reimb"; renderAdmin(); } });
 }
+// ---- Home: first screen after login. Today + tomorrow, quick counts, big buttons to the other screens.
+const GM = "https://mail.google.com/mail/u/?authuser=alex@heartwoodew.com";
+const jobPhotosUrl = j => GM + "#search/" + encodeURIComponent(`subject:"[Job Photos]" "${jobNo(j)}"`);
+const hasPhotos = j => !!(j.photosEmailedAt || j.photosEmailedCount);
+const jobPhotosIcon = j => hasPhotos(j) ? ` <a class="phicon" href="${jobPhotosUrl(j)}" target="_blank" rel="noopener" title="Photos in Gmail" onclick="event.stopPropagation()">📷</a>` : "";
+const jobPhotosLink = j => !hasPhotos(j) ? "" : ` <a class="phlink" href="${jobPhotosUrl(j)}" target="_blank" rel="noopener">📷 Photos (${j.photosEmailedCount || 1} sent)</a>`;
+const greet = () => { const h = +new Intl.DateTimeFormat("en-AU", { hour: "numeric", hourCycle: "h23", timeZone: TZ }).format(new Date()); return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening"; };
+function homeRow(j) {
+  const q = queueOf(j), names = namesOf(j);
+  return `<div class="hrow" data-id="${j.id}"><div class="htime"><b>${esc(j.time || "--")}</b><small>${j.durationHrs ? esc(j.durationHrs) + "h" : ""}</small></div>
+    <div class="hbody"><div class="hcl"><span class="qdot ${QCLS[q]}"></span>${esc(j.client || "")} <span class="jn">#${esc(jobNo(j))}</span>${jobPhotosIcon(j)}</div>
+    <div class="sub">${esc(j.address || "-")}</div><div class="sub">${esc(firstLine(j.description))}</div>
+    <div class="sub">${names.length ? esc(names.map(label).join(", ")) : `<span class="unal">Unallocated</span>`}</div></div>
+    <span class="pstack">${ipPill(j)}<span class="qpill ${QCLS[q]}">${j.status === "Done" ? "Work completed" : q}</span></span></div>`;
+}
+function homeLists(all, admin) {
+  const t0 = todayStr(), t1 = addDays(t0, 1);
+  const live = all.filter(j => j.status !== "Cancelled" && queueOf(j) !== "Unsuccessful" && (admin || (j.assigned || []).includes(me.uid)));
+  const by = d => live.filter(j => j.date === d || (d === t0 && j.date && j.date < t0 && j.status === "In progress")).sort((a, b) => (a.time || "99").localeCompare(b.time || "99"));
+  return { live, today: by(t0), tomorrow: by(t1), t0, t1 };
+}
+function homeBody(all, admin, btns) {
+  const { live, today, tomorrow, t0, t1 } = homeLists(all, admin);
+  const ip = live.filter(j => j.status === "In progress").length;
+  const unal = live.filter(j => j.date >= t0 && j.status !== "Done" && !namesOf(j).length).length;
+  const ready = (ui.done || []).filter(j => !j.invoiceNo && j.invoiceExcluded !== true && !j.doNotInvoice).length;
+  const stat = (n, l, cls, go) => `<button class="hstat ${cls}" ${go ? `data-go="${go}"` : ""}><b>${n}</b><span>${l}</span></button>`;
+  const sec = (title, d, js) => `<div class="hsec"><div class="hsec-h">${title} <small>${esc(dayLabel(d))}</small> <span class="cnt">${js.length}</span></div>
+    ${js.map(homeRow).join("") || `<p class="muted pad">Nothing booked.</p>`}</div>`;
+  return `<div class="home"><div class="hhead"><h1>${greet()}, ${esc(String(me.name || "").split(" ")[0])}</h1><div class="muted">${esc(dayLabel(t0))}</div></div>
+    <div class="hstats">${stat(today.length, "Today", "q-wo")}${stat(ip, "In progress", "ip", admin ? "q-ip" : "")}${admin ? stat(ready, "Ready to invoice", "q-comp", "invoices") + stat(unal, "Unallocated", "q-uns", "dispatch") : stat(tomorrow.length, "Tomorrow", "q-quote")}</div>
+    <div class="hbtns">${btns.map(([go, ic, n]) => `<button class="hbtn" data-go="${go}"><span class="ic">${ic}</span>${n}</button>`).join("")}</div>
+    ${sec("Today", t0, today)}${sec("Tomorrow", t1, tomorrow)}</div>`;
+}
+function homeView(all) {
+  return homeBody(all, true, NAV.filter(x => x[0] !== "home" && !x[3] && (!x[4] || isOwner())).map(([k, ic, n]) => [k, ic, n]));
+}
 function renderAdmin() {
   donePill(); reimbPill();
   if (!me || me.role !== "admin") return;
@@ -540,7 +577,7 @@ function renderAdmin() {
   document.body.className = "admin";
   const fj = filtered(), und = (ui.undated || []).filter(j => (!ui.typeF || j.type === ui.typeF));
   const all = [...fj, ...und.filter(u => !fj.some(j => j.id === u.id))];
-  $("#app").innerHTML = shell(ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : jobsView(all));
+  $("#app").innerHTML = shell(ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : jobsView(all));
   const A = $("#app");
   if (ui.view === "invoices") bindInvoices(A);
   if (ui.view === "reimb") bindReimb(A);
@@ -570,6 +607,9 @@ function renderAdmin() {
   A.querySelectorAll("[data-sched]").forEach(b => b.onclick = ev => { ev.stopPropagation();
     const j = [...jobs, ...(ui.undated || [])].find(x => x.id === b.dataset.sched); if (!j) return;
     editJob(j); const f = $("#jf"); if (f) { f.date.value = todayStr(); f.date.focus(); f.date.showPicker?.(); } });
+  A.querySelectorAll("[data-go]").forEach(b => b.onclick = () => { const v = b.dataset.go;
+    if (v === "myjobs") { ui.myJobs = true; ui.opSel = null; window.scrollTo(0, 0); return renderAdmin(); }
+    if (v === "q-ip") { ui.view = "jobs"; ui.queue = "All"; } else ui.view = v; window.scrollTo(0, 0); renderAdmin(); });
   const pool = [...jobs, ...(ui.undated || [])];
   A.querySelectorAll("[data-id]").forEach(el => {
     el.onclick = ev => { if (ev.target.closest("input,button,label,textarea")) return; editJob(pool.find(j => j.id === el.dataset.id) || (ui.done || []).find(j => j.id === el.dataset.id)); };
@@ -700,7 +740,7 @@ function editJob(j) {
       <div class="diary">${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("")}
         ${hist.map(([w, t]) => `<div class="de sys"><span class="av">i</span><div><small>${esc(w)}</small><div>${esc(t)}</div></div></div>`).join("")}
         ${!(j.log || []).length && !hist.length ? `<p class="muted sub">No diary entries yet. Site notes from staff appear here.</p>` : ""}</div>
-      ${!n ? `<h4>Photos</h4><button type="button" class="sm-btn" id="emailph">📧 Email photos</button> <span class="sub muted">Photos go to ${OFFICE_EMAIL} by email</span>${jobReceiptsHtml(j)}` : ""}
+      ${!n ? `<h4>Photos</h4><button type="button" class="sm-btn" id="emailph">📧 Email photos</button> <span class="sub muted">Photos go to ${OFFICE_EMAIL} by email</span>${jobPhotosLink(j)}${jobReceiptsHtml(j)}` : ""}
     </div></div>
     <p id="ferr" class="err"></p>
     <div class="btns jc-foot"><button value="cancel" formnovalidate class="sm-btn">Close</button><button value="save" class="sm-btn primary">Save Job</button></div></form>`;
@@ -1031,17 +1071,27 @@ async function markInvoiced(list) {
 
 // ------------------------------------------------------------------ operator
 // ServiceM8 mobile-app style: blue header, today's list -> job detail -> Start / Complete.
+const opTabs = on => [["home", "Home"], ["today", "Today"], ["week", "Schedule"], ["done", "Completed"], ["hours", "Hours"]].map(([k, n]) => `<button data-tab="${k}" class="${on === k ? "on" : ""}">${n}</button>`).join("");
 function renderOperator() {
   document.body.className = "operator";
   const t0 = todayStr(), t1 = addDays(t0, 1), wkEnd = addDays(t0, 7);
   const mine = jobs.filter(j => j.status !== "Cancelled" && (me.role !== "admin" || (j.assigned || []).includes(me.uid))).sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
   const sel = ui.opSel && mine.find(j => j.id === ui.opSel);
   if (sel) return renderOpDetail(sel);
-  ui.opTab = ui.opTab || "today";
+  ui.opTab = ui.opTab || "home";
+  if (ui.opTab === "home") {
+    $("#app").innerHTML = `<div class="mob">${me.role === "admin" ? `<button class="mback adminback" id="toadmin">‹ Admin view</button>` : ""}
+      <div class="mob-tabs">${opTabs("home")}</div><div class="pad">${homeBody(jobs, false, [["today", "☀", "Today"], ["week", "▦", "Schedule"], ["done", "✔", "Completed"], ["hours", "⏱", "Hours"]])}</div></div>`;
+    if ($("#toadmin")) $("#toadmin").onclick = () => { ui.myJobs = false; ui.opSel = null; renderAdmin(); };
+    $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; renderOperator(); });
+    $("#app").querySelectorAll("[data-go]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.go; renderOperator(); window.scrollTo(0, 0); });
+    $("#app").querySelectorAll(".hrow").forEach(r => r.onclick = () => { ui.opSel = r.dataset.id; renderOperator(); window.scrollTo(0, 0); });
+    return;
+  }
   if (ui.opTab === "hours" && ui.tsDirty && $("#tsf") && !ui.opSel) return;
   if (ui.opTab === "hours" && !ui.opSel) {
     $("#app").innerHTML = `<div class="mob">${me.role === "admin" ? `<button class="mback adminback" id="toadmin">‹ Admin view</button>` : ""}<div class="mob-bar"><div class="mob-title">My hours</div><div class="mob-sub">Timesheet</div></div>
-      <div class="mob-tabs"><button data-tab="today">Today</button><button data-tab="week">Schedule</button><button data-tab="done">Completed</button><button data-tab="hours" class="on">Hours</button></div>
+      <div class="mob-tabs"><button data-tab="home">Home</button><button data-tab="today">Today</button><button data-tab="week">Schedule</button><button data-tab="done">Completed</button><button data-tab="hours" class="on">Hours</button></div>
       <div class="pad">${tsEditor()}</div></div>`;
     if ($("#toadmin")) $("#toadmin").onclick = () => { ui.myJobs = false; ui.opSel = null; renderAdmin(); };
     $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; renderOperator(); });
@@ -1053,10 +1103,10 @@ function renderOperator() {
     : ui.opTab === "done" ? groupByDate(doneL).map(([d, js]) => [d === t0 ? "Today · " + dayLabel(d) : dayLabel(d), js])
     : groupByDate(open.filter(j => j.date >= t1 && j.date <= wkEnd)).map(([d, js]) => [(d === t1 ? "Tomorrow · " : "") + dayLabel(d), js]);
   $("#app").innerHTML = `<div class="mob">${me.role === "admin" ? `<button class="mback adminback" id="toadmin">‹ Admin view</button>` : ""}<div class="mob-bar"><div class="mob-title">${ui.opTab === "today" ? "Today" : ui.opTab === "done" ? "Completed" : "My Schedule"}</div><div class="mob-sub">${dayLabel(t0)}</div></div>
-    <div class="mob-tabs"><button data-tab="today" class="${ui.opTab === "today" ? "on" : ""}">Today</button><button data-tab="week" class="${ui.opTab === "week" ? "on" : ""}">Schedule</button><button data-tab="done" class="${ui.opTab === "done" ? "on" : ""}">Completed</button><button data-tab="hours" class="${ui.opTab === "hours" ? "on" : ""}">Hours</button></div>
+    <div class="mob-tabs"><button data-tab="home">Home</button><button data-tab="today" class="${ui.opTab === "today" ? "on" : ""}">Today</button><button data-tab="week" class="${ui.opTab === "week" ? "on" : ""}">Schedule</button><button data-tab="done" class="${ui.opTab === "done" ? "on" : ""}">Completed</button><button data-tab="hours" class="${ui.opTab === "hours" ? "on" : ""}">Hours</button></div>
     ${groups.map(([g, js]) => `<div class="mob-sec mday">${g} <span>${js.length}</span></div>
     ${js.map(j => `<div class="mrow" data-id="${j.id}"><div class="mtime">${g === "Today" ? "" : `<small>${esc(dayLabel(j.date).split(" ")[0].slice(0, 3))}</small>`}<b>${esc(j.time || "--")}</b><small>${j.durationHrs ? esc(j.durationHrs) + "h" : ""}</small></div>
-      <div class="mbody">${ipTop(j, "sm")}<div class="mcl"><span class="qdot ${QCLS[queueOf(j)]}"></span>${esc(j.client || "")}</div><div class="maddr">${esc(j.address || "-")}</div>
+      <div class="mbody">${ipTop(j, "sm")}<div class="mcl"><span class="qdot ${QCLS[queueOf(j)]}"></span>${esc(j.client || "")}${jobPhotosIcon(j)}</div><div class="maddr">${esc(j.address || "-")}</div>
         <div class="mdesc">${esc(firstLine(j.description))}</div>
         <div class="mst ${j.status === "In progress" ? "inprog" : j.status === "Done" ? "done" : ""}">${j.status === "Done" ? "✔ Completed" : j.status === "In progress" ? "" : "Scheduled · "}${j.status === "Done" ? " · " : ""}#${esc(jobNo(j))}</div></div>
       <div class="chev">›</div></div>`).join("") || `<p class="muted pad">Nothing booked.</p>`}`).join("") || `<p class="muted pad">${ui.opTab === "done" ? "No completed jobs in the last 30 days." : "Nothing booked this week."}</p>`}</div>`;
@@ -1076,7 +1126,7 @@ function renderOpDetail(j) {
       ${(j.assignedNames || []).length ? `<div class="mlbl" style="margin-top:8px">Staff</div><div class="mval">${esc(j.assignedNames.join(", "))}</div>` : ""}</div>
     <div class="mcard"><div class="mlbl">Diary</div>${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("") || `<div class="muted sub">No notes yet</div>`}
       <button class="mnote" data-act="note">＋ Add Note</button></div>
-    <div class="mcard"><div class="mlbl">Photos</div><button type="button" class="mnote" id="emailph">📧 Email photos</button>
+    <div class="mcard"><div class="mlbl">Photos</div><button type="button" class="mnote" id="emailph">📧 Email photos</button>${jobPhotosLink(j)}
       <div class="muted sub">Send site photos to Alex by email</div></div>
     <div class="mcard">${jobReceiptsHtml(j)}</div>
     <div class="mactions">${done ? `<div class="donebar">✔ Completed${j.loads ? ` · ${j.loads} loads` : ""}</div>` :
@@ -1207,6 +1257,9 @@ function emailPhotos(j) {
   inp.click();
 }
 function emailDialog(j, files, infos) {
+  // Record on the job that photos were emailed, so it shows a "Photos" link to the Gmail search. Best effort.
+  updateDoc(doc(db, "jobs", j.id), { photosEmailedAt: new Date().toISOString(), photosEmailedCount: (j.photosEmailedCount || 0) + files.length, updatedAt: serverTimestamp(), updatedBy: me.uid })
+    .catch(e => console.warn("photosEmailed flag not saved", e.code || e.message));
   const mb = files.reduce((a, f) => a + f.size, 0) / 1e6, n = files.length;
   const canShare = !!(navigator.canShare && navigator.canShare({ files }));
   const mailto = `mailto:${OFFICE_EMAIL}?subject=${encodeURIComponent(emailSubject(j))}&body=${encodeURIComponent(emailBody(j, infos, false))}`;
