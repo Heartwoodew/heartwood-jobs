@@ -382,3 +382,20 @@ tr.mhead td{background:#eef2f7;font-size:13px;padding:6px 8px}
 .sup-who{display:flex;flex-direction:column}.sup-who b{font-size:15px}.sup.none{background:#f8fafc;border-color:#e3e8ef;display:block}
 .mcard .sup{margin:8px 0 0}.mcard .sup-btns a{padding:10px 14px;font-size:15px}
 @media (max-width:760px){.clgrid{grid-template-columns:1fr;padding:0 10px 20px}.ct-btns a,.ct-btns button{padding:9px 12px}}
+/* Inbox (owner only) */
+.nbadge{display:inline-block;min-width:18px;padding:0 5px;border-radius:9px;background:#dc2626;color:#fff;font-size:11px;font-weight:700;line-height:18px;text-align:center;margin-left:auto}
+.ibar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:0 16px 8px}
+.qtab{background:#fff;border:1px solid var(--sm-line);border-radius:16px;padding:5px 12px;display:inline-flex;gap:6px;align-items:center;cursor:pointer}
+.qtab.on{background:var(--sm-blue);color:#fff;border-color:var(--sm-blue)}
+.ibun{margin-left:8px;font-size:13px}
+.ilist{padding:0 16px 24px}
+.irow{display:flex;gap:10px;align-items:flex-start;background:#fff;border:1px solid var(--sm-line);border-radius:8px;margin-bottom:6px;padding:9px 12px}
+.irow.unread{border-left:4px solid var(--sm-blue)}.irow.unread .isubj,.irow.unread .ifrom{font-weight:800}
+.imain{flex:1;min-width:0;color:inherit;text-decoration:none}
+.itop{display:flex;gap:8px;align-items:center}.ifrom{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.idate{margin-left:auto;font-size:12px;color:var(--sm-mut);white-space:nowrap}
+.isubj{margin-top:2px;font-weight:500}.isnip{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.iatt{font-size:12px}
+.ibld{font-size:10px;font-weight:800;text-transform:uppercase;padding:2px 6px;border-radius:4px;background:#e5e7eb;color:#374151}
+.ibld.b-orbit{background:#dbeafe;color:#1e40af}.ibld.b-torsion{background:#fee2e2;color:#991b1b}.ibld.b-silkwood{background:#dcfce7;color:#166534}
+.iside{display:flex;flex-direction:column;gap:4px;align-items:flex-end;flex-shrink:0}.ijob{font-size:12px;padding:4px 8px}
+.hstat.q-inbox b{color:#dc2626}
+@media (max-width:760px){.ilist,.ibar{padding-left:8px;padding-right:8px}.irow{flex-direction:column}.iside{flex-direction:row;align-self:stretch;justify-content:flex-end}}

@@ -121,7 +121,7 @@ function queueOf(j) {
 const jobNo = j => j.sm8JobNo ? j.sm8JobNo : "HW-" + String(j.id || "").slice(-4).toUpperCase();
 const firstLine = s => String(s || "").split(/\n|\. /)[0];
 const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Unscheduled";
-const NAV = [["home", "⌂", "Home"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["completed", "✔", "Completed"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["inbox", "✉", "Inbox", 1],
+const NAV = [["home", "⌂", "Home"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["completed", "✔", "Completed"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["inbox", "✉", "Inbox", 0, 1],
   ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["reimb", "💵", "Reimbursements", 0, 1], ["settings", "⚙", "Settings", 1]];
 ui.view = "home"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
 const PHONE = matchMedia("(max-width:760px)");
@@ -564,7 +564,7 @@ function homeBody(all, admin, btns) {
   const sec = (title, d, js) => `<div class="hsec"><div class="hsec-h">${title} <small>${esc(dayLabel(d))}</small> <span class="cnt">${js.length}</span></div>
     ${js.map(homeRow).join("") || `<p class="muted pad">Nothing booked.</p>`}</div>`;
   return `<div class="home"><div class="hhead"><h1>${greet()}, ${esc(String(me.name || "").split(" ")[0])}</h1><div class="muted">${esc(dayLabel(t0))}</div></div>
-    <div class="hstats">${stat(today.length, "Today", "q-wo")}${stat(ip, "In progress", "ip", admin ? "q-ip" : "")}${admin ? stat(ready, "Ready to invoice", "q-comp", "invoices") + stat(unal, "Unallocated", "q-uns", "dispatch") : stat(tomorrow.length, "Tomorrow", "q-quote")}</div>
+    <div class="hstats">${stat(today.length, "Today", "q-wo")}${stat(ip, "In progress", "ip", admin ? "q-ip" : "")}${admin ? stat(ready, "Ready to invoice", "q-comp", "invoices") + stat(unal, "Unallocated", "q-uns", "dispatch") + (isOwner() && ui.inbox ? stat(inboxUnread(), "Unread builder emails", "q-inbox", "inbox") : "") : stat(tomorrow.length, "Tomorrow", "q-quote")}</div>
     <div class="hbtns"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button>${btns.map(([go, ic, n]) => `<button class="hbtn" data-go="${go}"><span class="ic">${ic}</span>${n}</button>`).join("")}</div>
     ${sec("Today", t0, today)}${sec("Tomorrow", t1, tomorrow)}${admin ? "" : myIncidentsHtml()}</div>`;
 }
@@ -572,7 +572,7 @@ function homeView(all) {
   return homeBody(all, true, NAV.filter(x => x[0] !== "home" && !x[3] && (!x[4] || isOwner())).map(([k, ic, n]) => [k, ic, n]));
 }
 function renderAdmin() {
-  donePill(); reimbPill();
+  donePill(); reimbPill(); inboxSub();
   if (!me || me.role !== "admin") return;
   if (ui.myJobs) return renderOperator();
   if ($("#dlg").open) return;          // don't redraw under an open job card
@@ -580,10 +580,11 @@ function renderAdmin() {
   document.body.className = "admin";
   const fj = filtered(), und = (ui.undated || []).filter(j => (!ui.typeF || j.type === ui.typeF));
   const all = [...fj, ...und.filter(u => !fj.some(j => j.id === u.id))];
-  $("#app").innerHTML = shell(ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : jobsView(all));
-  const A = $("#app");
+  $("#app").innerHTML = shell(ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : jobsView(all));
+  const A = $("#app"); inboxBadge();
   if (ui.view === "invoices") bindInvoices(A);
   if (ui.view === "clients") bindClients(A);
+  if (ui.view === "inbox") bindInbox(A);
   if (ui.view === "reimb") bindReimb(A);
   if (ui.view === "timesheet") bindTs(A, renderAdmin);
   A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.navOpen = false;
@@ -862,6 +863,50 @@ async function supervisorFor(j) {
   if (j.supervisorEmail) return { email: j.supervisorEmail, name: j.supervisorName || "" };
   const m = await supervisors(), base = String(j.po || "").split("/")[0].replace(/\D/g, "");
   return (base && m.byPo?.[base]) || m.byClient?.[j.client] || m.remembered?.[(j.client || "").replace(/[.\/]/g, "_")] || null;
+}
+// ---- Inbox (owner only): inbox/{gmailMessageId} written by tools/sync_inbox.py. Tap opens the Gmail thread; 'read' is app-side.
+function inboxSub() {
+  if (!isOwner() || ui.inboxSub) return;
+  ui.inboxSub = onSnapshot(collection(db, "inbox"), s => { ui.inbox = s.docs.map(d => ({ id: d.id, ...d.data() })); ui.inboxErr = "";
+    if (ui.view === "inbox" || ui.view === "home") renderAdmin(); else inboxBadge(); },
+    e => { ui.inbox = []; ui.inboxErr = e.code || e.message; if (ui.view === "inbox") renderAdmin(); });
+}
+const inboxUnread = () => (ui.inbox || []).filter(m => !m.read).length;
+function inboxBadge() { document.querySelectorAll('.sm-nav[data-view="inbox"]').forEach(b => { let x = b.querySelector(".nbadge"); const n = inboxUnread();
+  if (!n) return x && x.remove(); if (!x) { x = document.createElement("span"); x.className = "nbadge"; b.appendChild(x); } x.textContent = n; }); }
+const BLD = ["All", "Orbit", "Torsion", "Silkwood"];
+const mailDate = s => { const d = new Date(s); return isNaN(d) ? "" : d.toLocaleString("en-AU", { timeZone: TZ, day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }); };
+function inboxView(all) {
+  if (!isOwner()) return `<div class="sm-head"><h1>Inbox</h1></div><p class="muted pad">Owner only.</p>`;
+  const b = ui.ib || "All", w = (ui.iq || "").toLowerCase().split(/\s+/).filter(Boolean), unreadOnly = ui.ibUnread;
+  const L = (ui.inbox || []).filter(m => (b === "All" || m.builder === b) && (!unreadOnly || !m.read)
+      && w.every(x => [m.subject, m.fromName, m.fromEmail, m.snippet, m.matchKey, m.jobLabel, (m.attachments || []).join(" ")].join(" ").toLowerCase().includes(x)))
+    .sort((x, y) => String(y.date).localeCompare(String(x.date)));
+  const cnt = k => (ui.inbox || []).filter(m => (k === "All" || m.builder === k) && !m.read).length;
+  const jobsById = new Map(all.map(j => [j.id, j]));
+  return `<div class="sm-head"><h1>Inbox</h1><span class="sub">Builder emails · last 30 days · ${ui.inbox ? ui.inbox.length : "…"} emails</span></div>
+    ${ui.inboxErr ? `<p class="err pad">Inbox not available: ${esc(ui.inboxErr)}</p>` : ""}
+    <div class="ibar">${BLD.map(k => `<button class="qtab ${b === k ? "on" : ""}" data-ib="${k}">${k}${cnt(k) ? ` <span class="nbadge">${cnt(k)}</span>` : ""}</button>`).join("")}
+      <label class="ck ibun"><input type="checkbox" id="ibun" ${unreadOnly ? "checked" : ""}> Unread only</label></div>
+    <div class="sbar"><span class="sbar-ic">🔍</span><input id="iq" type="search" placeholder="Search subject, sender, job, lot, attachment…" value="${esc(ui.iq || "")}"></div>
+    <div class="ilist">${L.map(m => { const js = (m.jobIds || []).map(i => jobsById.get(i)).filter(Boolean);
+      return `<div class="irow ${m.read ? "" : "unread"}"><a class="imain" href="${esc(m.link)}" target="_blank" rel="noopener" data-imsg="${esc(m.id)}">
+        <div class="itop"><span class="ibld b-${esc((m.builder || "").toLowerCase())}">${esc(m.builder)}</span><b class="ifrom">${esc(m.fromName || m.fromEmail)}</b><span class="idate">${esc(mailDate(m.date))}</span></div>
+        <div class="isubj">${esc(m.subject)}</div><div class="isnip sub">${esc(m.snippet)}</div>
+        ${(m.attachments || []).length ? `<div class="sub iatt">📎 ${esc(m.attachments.join(", "))}</div>` : ""}</a>
+        <div class="iside">${js.length ? js.map(j => `<button class="sm-btn ijob" data-ijob="${esc(j.id)}">Job #${esc(jobNo(j))}</button>`).join("") : m.matchKey ? `<span class="sub muted">${esc(m.matchKey)} · no job</span>` : ""}
+          <button class="sm-btn iread" data-iread="${esc(m.id)}" title="${m.read ? "Mark unread" : "Mark read"}">${m.read ? "●" : "✓"}</button></div></div>`; }).join("")
+      || `<p class="pad muted">${ui.inbox ? "No emails" : "Loading…"}</p>`}</div>`;
+}
+function bindInbox(A) {
+  const all = [...jobs, ...(ui.undated || []), ...(ui.done || [])];
+  A.querySelectorAll("[data-ib]").forEach(x => x.onclick = () => { ui.ib = x.dataset.ib; renderAdmin(); });
+  const u = A.querySelector("#ibun"); if (u) u.onchange = () => { ui.ibUnread = u.checked; renderAdmin(); };
+  const qi = A.querySelector("#iq"); if (qi) qi.oninput = () => { ui.iq = qi.value; const p = qi.selectionStart; renderAdmin(); const n = $("#iq"); n.focus(); n.setSelectionRange(p, p); };
+  const setRead = (id, v) => updateDoc(doc(db, "inbox", id), { read: v, readAt: serverTimestamp() }).catch(e => toast("Not saved: " + (e.code || e.message)));
+  A.querySelectorAll("[data-imsg]").forEach(x => x.addEventListener("click", () => { const m = (ui.inbox || []).find(y => y.id === x.dataset.imsg); if (m && !m.read) setRead(m.id, true); }));
+  A.querySelectorAll("[data-iread]").forEach(x => x.onclick = () => { const m = (ui.inbox || []).find(y => y.id === x.dataset.iread); if (m) setRead(m.id, !m.read); });
+  A.querySelectorAll("[data-ijob]").forEach(x => x.onclick = () => { const j = all.find(y => y.id === x.dataset.ijob); j ? editJob(j) : toast("Job not loaded"); });
 }
 // ---- Clients (clients/{id}: name, office{address,phone}, contacts[{kind,name,role,mobile,phone,email,source,default}]).
 // Workers read, admins edit. Contacts come from builders' emails (see data/clients_contacts.json).
