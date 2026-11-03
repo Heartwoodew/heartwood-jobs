@@ -1,6 +1,6 @@
 // App-shell cache. Bump VERSION on every deploy so phones pick up the new files.
-const VERSION = "hw-shell-v40";
-const SHELL = ["./", "index.html", "styles.css", "app.js", "firebase-config.js", "manifest.webmanifest",
+const VERSION = "hw-shell-v41";
+const SHELL = ["./", "index.html", "styles.css", "app.js", "firebase-config.js", "manifest.webmanifest", "icons/apple-touch-icon-180.png",
   "icons/icon-192.png", "icons/icon-512.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL))); self.skipWaiting(); });
 self.addEventListener("activate", e => {

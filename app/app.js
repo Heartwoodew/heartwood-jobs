@@ -125,6 +125,7 @@ const NAV = [["home", "⌂", "Home"], ["dispatch", "▦", "Dispatch Board"], ["j
   ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["reimb", "💵", "Reimbursements", 0, 1], ["settings", "⚙", "Settings", 1]];
 ui.view = "home"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
 const PHONE = matchMedia("(max-width:760px)");
+const TOUCH = matchMedia("(pointer:coarse)");
 PHONE.addEventListener?.("change", () => { if (me && me.role === "admin") renderAdmin(); });
 function shell(inner) {
   const cur = NAV.find(n => n[0] === ui.view);
@@ -245,7 +246,7 @@ function dispatchView(all) {
       <button class="sm-btn" data-wk="-1">‹</button><button class="sm-btn" data-wk="0">Today</button><button class="sm-btn" data-wk="1">›</button>
       <span class="drange">${ui.dview === "week" ? shortDate(days[0]) + " – " + shortDate(days[6]) : dayLabel(dayD)}</span>
       <button id="new" class="sm-btn primary">+ New Job</button></div>
-    <div class="dwrap"><div class="dboard">${grid}<p class="sub muted">Drag a job to another day or staff member to reschedule (saved in the app, sent to ServiceM8 by the next sync).</p></div>
+    <div class="dwrap"><div class="dboard"><p class="touchhint">Tap a job to open it. Press and hold a job to move it to another day or staff member.</p><div class="dgrid-scroll">${grid}</div><p class="sub muted">Drag a job to another day or staff member to reschedule (saved in the app, sent to ServiceM8 by the next sync).</p></div>
       </div>`;
 }
 // Floating "Done today" card (dispatch board + job list). Today = Brisbane date of completedAt (fallback: job date when
@@ -620,6 +621,15 @@ function renderAdmin() {
     el.onclick = ev => { if (ev.target.closest("input,button,label,textarea")) return; editJob(pool.find(j => j.id === el.dataset.id) || (ui.done || []).find(j => j.id === el.dataset.id)); };
     el.ondragstart = ev => { ev.dataTransfer.setData("text/plain", el.dataset.id + "|" + (el.closest("[data-staff]")?.dataset.staff || "")); el.classList.add("dragging"); };
     el.ondragend = () => el.classList.remove("dragging");
+  });
+  // iPad / touch: HTML5 drag is unreliable, so press-and-hold a board chip or unscheduled card to open the Move sheet; tap still opens the job.
+  if (TOUCH.matches && !PHONE.matches) A.querySelectorAll(".dchip[data-id],.uj[data-id]").forEach(el => {
+    el.draggable = false; el.ondragstart = null; let t = null, held = false;
+    const clear = () => { clearTimeout(t); t = null; };
+    el.addEventListener("touchstart", () => { held = false; clear(); t = setTimeout(() => { held = true; const j = pool.find(x => x.id === el.dataset.id); if (j) moveSheet(j); }, 500); }, { passive: true });
+    el.addEventListener("touchmove", clear, { passive: true }); el.addEventListener("touchend", clear); el.addEventListener("touchcancel", clear);
+    el.addEventListener("contextmenu", e => e.preventDefault());
+    el.addEventListener("click", e => { if (held) { e.stopImmediatePropagation(); e.preventDefault(); held = false; } }, true);
   });
   A.querySelectorAll(".drop").forEach(z => {
     z.ondragover = ev => { ev.preventDefault(); z.classList.add("over"); };

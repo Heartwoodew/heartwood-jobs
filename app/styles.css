@@ -399,3 +399,60 @@ tr.mhead td{background:#eef2f7;font-size:13px;padding:6px 8px}
 .iside{display:flex;flex-direction:column;gap:4px;align-items:flex-end;flex-shrink:0}.ijob{font-size:12px;padding:4px 8px}
 .hstat.q-inbox b{color:#dc2626}
 @media (max-width:760px){.ilist,.ibar{padding-left:8px;padding-right:8px}.irow{flex-direction:column}.iside{flex-direction:row;align-self:stretch;justify-content:flex-end}}
+
+/* ===== iPad / tablet (3/11/2026). Phone (<=760px) and desktop mouse layouts unchanged except where noted. ===== */
+/* Safe areas (notch / home bar / Add-to-Home-Screen with black-translucent status bar) */
+.top{padding-top:calc(10px + env(safe-area-inset-top));padding-left:calc(16px + env(safe-area-inset-left));padding-right:calc(16px + env(safe-area-inset-right))}
+.sm-main{min-width:0;padding-right:calc(18px + env(safe-area-inset-right));padding-bottom:calc(14px + env(safe-area-inset-bottom))}
+.sm-side{padding-left:env(safe-area-inset-left);padding-bottom:env(safe-area-inset-bottom)}
+.mactions{padding-bottom:calc(30px + env(safe-area-inset-bottom))}
+html{-webkit-text-size-adjust:100%}
+/* Touch devices (iPad, phones): 44px targets, 16px inputs so iOS doesn't zoom, no sticky hover tint */
+@media (pointer:coarse){
+  input:not([type=checkbox]):not([type=radio]),select,textarea{font-size:16px!important}
+  input:not([type=checkbox]):not([type=radio]),select{min-height:44px}
+  .sm-btn,.qtab,.mnote,.mbtn,.hbtn,.hstat,.sm-nav,.jc-x,.mback,.sbar-x,.top button,dialog .btns button,.mob-tabs button,.dlg-btn{min-height:44px}
+  .sm-btn,a.sm-btn{display:inline-flex;align-items:center;justify-content:center;padding:8px 14px}
+  .ct-btns .sm-btn,.ct-btns a,.sup-btns a,.iside .sm-btn{min-width:44px}
+  input[type=checkbox],input[type=radio]{width:22px;height:22px}
+  label.ck{min-height:44px;display:flex;align-items:center;gap:8px}
+  .jr td{padding-top:12px;padding-bottom:12px}
+  .dchip{padding:6px 6px;min-height:36px}
+  .sm-nav:hover:not(.soon),.jr:hover,.hrow:hover,.uj:hover,.dp-row:hover{background:inherit}
+  .sm-nav.on:hover{background:#2a313b}
+  .touchhint{display:block}
+}
+.touchhint{display:none;font-size:12px;color:var(--sm-mut);margin:6px 0}
+/* Tablet portrait (iPad 768/810/820/834): side menu becomes an icon rail with short labels; content gets the room */
+@media (min-width:761px) and (max-width:1023px){
+  .sm-layout{grid-template-columns:84px 1fr}
+  .sm-side{position:sticky;top:0;align-self:start;max-height:100dvh;overflow-y:auto}
+  .sm-nav{flex-direction:column;gap:2px;padding:8px 4px;font-size:11px;line-height:1.15;text-align:center;justify-content:center;position:relative;border-left-width:3px}
+  .sm-nav .ic{width:auto;font-size:19px}
+  .sm-nav .nbadge{position:absolute;top:4px;right:8px;margin:0;min-width:16px;line-height:16px;font-size:10px}
+  .sm-main{padding-left:14px}
+  .sm-head{flex-wrap:wrap}
+  .jt{font-size:14px}
+  .clgrid{grid-template-columns:1fr 1fr}
+  dialog.jobcard{width:calc(100vw - 24px);max-width:calc(100vw - 24px)}
+}
+/* All tablets: dialogs fit the screen and scroll inside; operator (Patrick) view uses the extra width */
+@media (min-width:761px) and (max-width:1400px) and (pointer:coarse){
+  dialog,dialog.jobcard{max-height:calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));overflow:auto;overscroll-behavior:contain}
+  dialog.jobcard .jc-foot{position:sticky;bottom:0;background:#fff;z-index:2;padding-bottom:calc(10px + env(safe-area-inset-bottom))}
+  body.operator main{max-width:760px;margin:0 auto}
+  .dgrid .dname{font-size:14px}
+}
+/* Dispatch week grid: never squash day columns below a readable width; scroll sideways inside the board instead */
+@media (min-width:761px) and (max-width:1180px){
+  .dwrap{min-width:0}
+  .dgrid-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .dgrid-scroll>.dgrid{min-width:820px}
+}
+.dwrap{grid-template-columns:minmax(0,1fr)}.dboard{min-width:0}
+@media (pointer:coarse){
+  .seg button,dialog .btn,.rb-done,.dp-head{min-height:44px}
+  .rb-done{min-width:44px}
+  a.phicon,a.phlink,.ct-card a,.sup a{display:inline-flex;align-items:center;min-height:44px;padding:0 6px}
+}
+@media (pointer:coarse){.touchhint{display:block}}
