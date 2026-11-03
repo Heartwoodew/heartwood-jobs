@@ -947,6 +947,9 @@ function jobTabs(d, j) {
   if (!P.hist.children.length) P.hist.innerHTML = `<p class="muted sub">No history yet.</p>`;
   body.innerHTML = ""; body.classList.add("tabbed"); Object.values(P).forEach(x => body.appendChild(x));
   const show = k => { ui.jtab = k; f.querySelectorAll("[data-jt]").forEach(b => b.classList.toggle("on", b.dataset.jt === k)); Object.entries(P).forEach(([kk, x]) => x.hidden = kk !== k); };
+  // v47: facts + tabs + panes share ONE scroll area (phones); display:contents elsewhere so iPad/desktop are unchanged
+  if (!f.querySelector(".jc-scroll")) { const sc = document.createElement("div"); sc.className = "jc-scroll";
+    f.insertBefore(sc, f.querySelector(".jc-facts")); sc.append(f.querySelector(".jc-facts"), f.querySelector(".jc-tabs"), body); }
   f.querySelectorAll("[data-jt]").forEach(b => b.onclick = () => show(b.dataset.jt));
   if (canXero()) bindXc(f, [j]);
   show("details");
