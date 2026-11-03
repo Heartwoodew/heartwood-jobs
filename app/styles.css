@@ -557,3 +557,45 @@ html{-webkit-text-size-adjust:100%}
 .rv-ghost{fill:none;stroke-width:1.8;stroke-dasharray:5 4;opacity:.45}.rv-ghost.net{stroke:#6b7c8c}.rv-ghost.inc{stroke:#5b7a99}.rv-ghost.exp{stroke:#d9a066}
 .rv-gdot{fill:#9aa6b2;opacity:.6}.rv-gdot.income{fill:#5b7a99}.rv-gdot.expenses{fill:#d9a066}
 .rv-key .ln{display:inline-block;width:18px;border-top:2.5px solid #6b7c8c;margin:0 4px 0 10px;vertical-align:3px}.rv-key .ln.gh{border-top:2px dashed #6b7c8c;opacity:.5}
+
+/* ---- SWMS online signing (preview) */
+.swh{margin:18px 0 8px;font-size:17px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.switem.swsign{grid-template-columns:1fr;gap:10px;padding:12px 14px}
+.swopen{display:grid;grid-template-columns:32px 1fr;gap:10px;align-items:center;text-align:left;background:none;border:0;padding:4px 0;min-height:48px;font:inherit;color:inherit}
+.swopen b{display:block;font-size:16px}.swopen small{color:var(--sm-mut)}
+.swst{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.swpill{display:inline-block;padding:5px 10px;border-radius:999px;font-size:13px;font-weight:700;background:#eef1f5;color:#44505f;white-space:nowrap}
+.swpill.sw-ok{background:#e3f5e8;color:#16723a}.swpill.sw-due{background:#fff1d6;color:#8a5300}.swpill.sw-exp{background:#fde4e4;color:#a61b1b}
+.swpill[data-swsig]{cursor:pointer}
+.swbtn{min-height:48px;padding:10px 18px;border-radius:8px;border:1px solid var(--sm-line);background:#fff;font:inherit;font-weight:700;font-size:16px;color:inherit}
+.swbtn.primary{background:var(--sm-blue);border-color:var(--sm-blue);color:#fff}.swbtn.wide{display:block;width:100%;margin-top:8px;text-align:left}
+.swremind{display:grid;grid-template-columns:36px 1fr 20px;gap:10px;align-items:center;width:100%;text-align:left;border-radius:8px;padding:14px;margin:10px 0;border:2px solid;font:inherit;min-height:64px}
+.swremind .ic{font-size:24px;text-align:center}.swremind b{display:block;font-size:16px}.swremind small{display:block;opacity:.85}
+.swremind.sw-exp{background:#fde4e4;border-color:#e7a3a3;color:#7d1313}.swremind.sw-due{background:#fff1d6;border-color:#f0c470;color:#6b4100}
+.swsignov .embox{max-width:560px}
+.swsh{display:flex;flex-direction:column;padding:10px 12px;background:#f4f6f9;border-radius:8px}.swsh b{font-size:17px}.swsh small{color:var(--sm-mut)}
+.swstep{display:grid;grid-template-columns:30px 1fr;gap:10px;align-items:start}.swstep .n{width:28px;height:28px;border-radius:50%;background:var(--sm-blue);color:#fff;display:grid;place-items:center;font-weight:700}
+.swck{display:flex;gap:12px;align-items:center;padding:12px;border:1px solid var(--sm-line);border-radius:8px;background:#fff;min-height:56px;font-size:15px}
+.swck input{width:28px;height:28px;flex:none}
+.swsel{width:100%;min-height:48px;font-size:16px;margin-top:6px;border-radius:8px;border:1px solid var(--sm-line);padding:0 10px;background:#fff}
+.sigpad{position:relative;margin-top:8px;border:2px dashed #9aa7b8;border-radius:10px;background:#fff;height:190px}
+.sigpad canvas{width:100%;height:100%;display:block;touch-action:none;border-radius:10px}
+.sigline{position:absolute;left:16px;right:16px;bottom:38px;border-bottom:1px solid #c5ccd6;color:#9aa7b8;font-size:14px;pointer-events:none;padding-bottom:2px}
+.inked .sigline{color:transparent}
+.sigclr{position:absolute;top:8px;right:8px;min-height:40px;padding:6px 14px;border-radius:8px;border:1px solid var(--sm-line);background:#fff;font-weight:700}
+.swname{display:flex;flex-direction:column;gap:4px;margin-top:10px;font-weight:700;font-size:14px}.swname input{min-height:48px;font-size:17px;padding:0 12px;border-radius:8px;border:1px solid var(--sm-line)}
+.swfoot{display:grid!important;grid-template-columns:1fr 2fr;gap:10px}.swfoot .mbtn{min-height:56px}.swfoot .mbtn:disabled{opacity:.45}
+.swtablewrap{overflow-x:auto;background:#fff;border:1px solid var(--sm-line);border-radius:6px;max-width:100%}
+.swtable{border-collapse:collapse;width:100%;font-size:14px}.swtable th,.swtable td{padding:10px;border-bottom:1px solid var(--sm-line);text-align:left;vertical-align:middle}
+.swtable th{background:#f4f6f9;font-size:13px;white-space:nowrap}.swtable tr.superseded{opacity:.55}.swlog .swbtn{min-height:44px;font-size:14px;padding:8px 12px;white-space:nowrap}
+.sigimg{background:#fff;border:1px solid var(--sm-line);border-radius:8px;padding:10px;text-align:center}.sigimg img{max-width:100%;height:auto}
+.sigdl{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:0}.sigdl dt{color:var(--sm-mut)}.sigdl dd{margin:0;font-weight:600}
+/* SWMS signed downloads (admin) */
+.swdl { display: grid; gap: 8px; margin-bottom: 14px; }
+.swdlrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 12px; border: 1px solid #dde2ea; border-radius: 10px; background: #fff; }
+.swdlt { flex: 1 1 180px; display: flex; flex-direction: column; }
+.swdljob { flex: 1 1 200px; max-width: 340px; min-height: 40px; font-size: 15px; border-radius: 8px; border: 1px solid #c9d0db; padding: 0 8px; }
+.swdlrow .swbtn { min-height: 40px; }
+.swacts { white-space: nowrap; } .swacts .swbtn + .swbtn { margin-left: 6px; }
+.swdlbtns { flex-wrap: wrap; gap: 8px; } .swdlbtns a.mbtn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
+@media (max-width: 600px) { .swdljob, .swdlrow .swbtn { flex: 1 1 100%; max-width: none; } .swacts { white-space: normal; } .swacts .swbtn { display: block; margin: 4px 0 0 !important; } }
