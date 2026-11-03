@@ -70,7 +70,7 @@ onAuthStateChanged(auth, async user => {
     const q = query(collection(db, "jobs"), where("date", ">=", addDays(todayStr(), -14)), where("date", "<=", addDays(todayStr(), 28)), orderBy("date"));
     const u1 = onSnapshot(q, s => { jobs = s.docs.map(d => ({ id: d.id, ...d.data() })); addNameOnlyStaff(jobs); renderAdmin(); });
     // Invoicing: every Done job (any date), admin only.
-    const u2 = onSnapshot(query(collection(db, "jobs"), where("status", "==", "Done")), s => { ui.done = s.docs.map(d => ({ id: d.id, ...d.data() })); donePill(); if (ui.view === "invoices" || ui.view === "completed") renderAdmin(); });
+    const u2 = onSnapshot(query(collection(db, "jobs"), where("status", "==", "Done")), s => { ui.done = s.docs.map(d => ({ id: d.id, ...d.data() })); donePill(); if (ui.view === "invoices" || ui.view === "completed" || ui.view === "home") renderAdmin(); });
     const u3 = onSnapshot(collection(db, "incidents"), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); if (ui.view === "safety" || ui.view === "home") renderAdmin(); incRefresh(); }, e => console.warn("incidents", e.code));
     unsub = () => { u1(); u2(); u3(); };
     getDocs(query(collection(db, "jobs"), where("date", "==", ""))).then(s => { ui.undated = s.docs.map(d => ({ id: d.id, ...d.data() })); addNameOnlyStaff(ui.undated); renderAdmin(); });
@@ -276,6 +276,10 @@ function doneToday() {
 // records personally-paid ones in reimbursements/ (owner only) and notifies Alex. Workers only see their own Queued/Filed.
 const OWNER_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";
 const isOwner = () => me && me.uid === OWNER_UID;
+// Who sees anything Xero (profit chart, Send to Xero, Xero labels/wording). Explicit list, NOT the admin role, so future
+// staff (even admins) see no Xero unless added here AND in firestore.rules xeroUser(). Alex, Patrick.
+const XERO_UIDS = [OWNER_UID, "R7t41e54Ykcdk9WPdVZnDd697iI2"];
+const canXero = () => !!me && XERO_UIDS.includes(me.uid);
 async function shrinkImage(file, max = 1600, q = 0.72) {
   const bmp = await createImageBitmap(file).catch(() => null);
   if (!bmp) throw new Error("Can't read that image - try a JPEG/PNG photo");
@@ -565,6 +569,54 @@ function homeLists(all, admin) {
   const by = d => live.filter(j => j.date === d || (d === t0 && j.date && j.date < t0 && j.status === "In progress")).sort((a, b) => (a.time || "99").localeCompare(b.time || "99"));
   return { live, today: by(t0), tomorrow: by(t1), t0, t1 };
 }
+// ---- Monthly PROFIT chart (Alex only). Figures are Xero's Profit and Loss (cash basis, ex GST), copied by a box script
+// (tools/xero_profit_sync.py) into meta/profitHistory, because the app can't call Xero itself. Nothing here is estimated.
+function profHistLoad() { if (ui.profReq || !canXero()) return; ui.profReq = true;
+  getDoc(doc(db, "meta", "profitHistory")).then(s => { ui.profHist = s && s.exists() ? s.data() : null; if (ui.view === "home") renderAdmin(); }).catch(() => { ui.profHist = null; }); }
+function profitChartHtml() {
+  if (!canXero()) return "";
+  profHistLoad(); const sm = v => (v < 0 ? "−" : "") + $$(Math.abs(v));
+  const t0 = todayStr().slice(0, 7), N = ui.revN || 12, mode = ui.profMode || "net", months = [];
+  for (let i = N - 1; i >= 0; i--) { const d = new Date(t0 + "-01T00:00:00Z"); d.setUTCMonth(d.getUTCMonth() - i); months.push(d.toISOString().slice(0, 7)); }
+  const H = (ui.profHist && ui.profHist.months) || {}, rows = months.map(m => ({ m, d: H[m] || null }));
+  setTimeout(() => { document.querySelectorAll("[data-revn]").forEach(b => b.onclick = () => { ui.revN = +b.dataset.revn; renderAdmin(); });
+    document.querySelectorAll("[data-pmode]").forEach(b => b.onclick = () => { ui.profMode = b.dataset.pmode; renderAdmin(); }); });
+  const seg = `<span class="seg rv-seg">${[["net", "Profit"], ["ie", "Income vs costs"]].map(([k, l]) => `<button type="button" data-pmode="${k}" class="${mode === k ? "on" : ""}">${l}</button>`).join("")}</span>
+    <span class="seg rv-seg">${[6, 12].map(n => `<button type="button" data-revn="${n}" class="${N === n ? "on" : ""}">${n} mo</button>`).join("")}</span>`;
+  const head = `<div class="hsec-h rv-h">Profit by month <small>net profit from Xero, ex GST</small><span class="rv-ctl">${seg}</span></div>`;
+  if (!ui.profHist) return `<div class="hsec revsec">${head}<p class="sub rv-note">${ui.profReq && ui.profHist === undefined ? "Loading…" : "No Xero figures saved yet."}</p></div>`;
+  const nice = v => (v < 0 ? "−" : "") + (Math.abs(v) >= 1000 ? "$" + (Math.abs(v) / 1000).toFixed(Math.abs(v) >= 100000 ? 0 : 1) + "k" : "$" + Math.round(Math.abs(v)));
+  const ml = m => new Date(m + "-01T00:00:00Z").toLocaleDateString("en-AU", { month: "short", timeZone: "UTC" }) + (m.endsWith("-01") ? " " + m.slice(2, 4) : "");
+  const W = 640, T = 22, B = 200, pad = 40, bw = (W - pad) / rows.length;
+  const PY = m => { const d = new Date(m + "-01T00:00:00Z"); d.setUTCFullYear(d.getUTCFullYear() - 1); return H[d.toISOString().slice(0, 7)] || null; };
+  const vals = rows.flatMap(r => [r.d, PY(r.m)].filter(Boolean).flatMap(d => mode === "net" ? [d.netProfit] : [d.income, d.expenses]));
+  const hi = Math.max(1, ...vals), lo = Math.min(0, ...vals), y = v => T + (hi - v) / (hi - lo) * (B - 16 - T), y0 = y(0);
+  const ticks = [hi, 0, ...(lo < 0 ? [lo] : [])];
+  const grid = ticks.map(v => `<line x1="${pad}" x2="${W}" y1="${y(v)}" y2="${y(v)}" class="rv-g${v === 0 ? " zero" : ""}"/><text x="${pad - 4}" y="${y(v) + 4}" class="rv-y">${nice(v)}</text>`).join("");
+  const py = m => { const d = new Date(m + "-01T00:00:00Z"); d.setUTCFullYear(d.getUTCFullYear() - 1); return H[d.toISOString().slice(0, 7)] || null; };
+  const ghost = k => { let d = "", on = false; rows.forEach((r, i) => { const g = py(r.m); if (!g) { on = false; return; } d += `${on ? "L" : "M"}${X(i).toFixed(1)},${y(g[k]).toFixed(1)} `; on = true; }); return d; };
+  const gdots = k => rows.map((r, i) => { const g = py(r.m); return g ? `<circle cx="${X(i)}" cy="${y(g[k])}" r="3" class="rv-gdot ${k}"><title>${esc(ml(r.m) + " last year: " + sm(g[k]))}</title></circle>` : ""; }).join("");
+  const X = i => pad + i * bw + bw / 2, pts = rows.map((r, i) => ({ r, i, cx: X(i), cur: r.m === t0 }));
+  const labs = pts.map(p => `<text x="${p.cx}" y="${B + 16}" class="rv-x">${ml(p.r.m)}${p.cur ? "*" : ""}</text>`).join("");
+  const path = k => { let d = "", on = false; pts.forEach(p => { if (!p.r.d) { on = false; return; } d += `${on ? "L" : "M"}${p.cx.toFixed(1)},${y(p.r.d[k]).toFixed(1)} `; on = true; }); return d; };
+  const tipOf = p => `${ml(p.r.m)}${p.cur ? " (part month)" : ""}: income ${sm(p.r.d.income)} · costs ${sm(p.r.d.expenses)} (cost of sales ${sm(p.r.d.costOfSales)}, operating ${sm(p.r.d.operatingExpenses)}) · net profit ${sm(p.r.d.netProfit)}`;
+  const none = pts.filter(p => !p.r.d).map(p => `<g class="rv-b none"><title>${ml(p.r.m)}: no Xero figures</title><text x="${p.cx}" y="${y0 - 4}" class="rv-v muted">–</text></g>`).join("");
+  let bars;
+  const anyPy = rows.some(r => py(r.m));
+  if (mode === "net") bars = `<path d="${ghost("netProfit")}" class="rv-ghost net"/>${gdots("netProfit")}<path d="${path("netProfit")}" class="rv-line net"/>` + pts.filter(p => p.r.d).map(p => { const v = p.r.d.netProfit, yy = y(v);
+      return `<g class="rv-b ${v < 0 ? "neg" : "pos"} ${p.cur ? "cur" : ""}"><title>${esc(tipOf(p))}</title><circle cx="${p.cx}" cy="${yy}" r="${p.cur ? 4 : 5}" class="rv-dot"/>
+        <text x="${p.cx}" y="${v < 0 ? yy + 16 : yy - 9}" class="rv-v${v < 0 ? " negt" : ""}">${nice(v)}</text></g>`; }).join("");
+  else bars = `<path d="${ghost("income")}" class="rv-ghost inc"/><path d="${ghost("expenses")}" class="rv-ghost exp"/>${gdots("income")}${gdots("expenses")}<path d="${path("income")}" class="rv-line inc"/><path d="${path("expenses")}" class="rv-line exp"/>` + pts.filter(p => p.r.d).map(p =>
+      `<g class="rv-b ${p.cur ? "cur" : ""}"><title>${esc(tipOf(p))}</title><circle cx="${p.cx}" cy="${y(p.r.d.income)}" r="4" class="rv-dot inc"/><circle cx="${p.cx}" cy="${y(p.r.d.expenses)}" r="4" class="rv-dot exp"/></g>`).join("");
+  bars = labs + none + bars;
+  const full = rows.filter(r => r.d && r.m !== t0), tot = full.reduce((a, r) => a + r.d.netProfit, 0), loss = full.filter(r => r.d.netProfit < 0).length;
+  const upd = ui.profHist.updatedAt ? new Date(ui.profHist.updatedAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : "";
+  return `<div class="hsec revsec">${head}
+    <div class="rv-wrap"><svg viewBox="0 0 ${W} ${B + 22}" class="rv-svg" role="img" aria-label="Profit by month">${grid}${bars}</svg></div>
+    <p class="sub rv-key">${mode === "ie" ? `<i class="k inc"></i>Income <i class="k exp"></i>Costs (cost of sales + operating expenses) ` : ""}<i class="ln"></i>This year <i class="ln gh"></i>Last year${anyPy ? "" : " (no Xero figures for those months yet)"}${anyPy && rows.some(r => !py(r.m)) ? " · gaps = no Xero figures" : ""}</p>
+    <p class="sub rv-note">From Xero Profit and Loss (cash basis, ex GST). Net profit over the ${full.length} full months shown: <b class="${tot < 0 ? "negt" : ""}">${sm(tot)}</b>${loss ? `, ${loss} month${loss === 1 ? "" : "s"} at a loss` : ""}.
+      * ${ml(t0)} is part month so far.${upd ? ` Updated from Xero ${esc(upd)}.` : ""}</p></div>`;
+}
 // "Needs attention": each line is a count you can open to see (and tap) the jobs behind it. Admin only.
 function attentionHtml(all) {
   const t0 = todayStr(), seen = new Set(), pool = [...all, ...(ui.done || [])].filter(j => !seen.has(j.id) && seen.add(j.id));
@@ -596,7 +648,7 @@ function homeBody(all, admin, btns) {
   const sec = (title, d, js) => `<div class="hsec"><div class="hsec-h">${title} <small>${esc(dayLabel(d))}</small> <span class="cnt">${js.length}</span></div>
     ${js.map(homeRow).join("") || `<p class="muted pad">Nothing booked.</p>`}</div>`;
   return `<div class="home"><div class="hhead"><h1>${greet()}, ${esc(String(me.name || "").split(" ")[0])}</h1><div class="muted">${esc(dayLabel(t0))}</div></div>
-    ${admin ? attentionHtml(all) : `<div class="hbtns opbtns"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button><button class="hbtn" data-go="swms"><span class="ic">📋</span>SWMS</button></div>`}
+    ${admin ? attentionHtml(all) + (canXero() ? profitChartHtml() : "") : `<div class="hbtns opbtns"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button><button class="hbtn" data-go="swms"><span class="ic">📋</span>SWMS</button></div>`}
     <div class="hstats hidden">${stat(today.length, "Today", "q-wo")}${stat(ip, "In progress", "ip", admin ? "q-ip" : "")}${admin ? stat(ready, "Ready to invoice", "q-comp", "invoices") + stat(unal, "Unallocated", "q-uns", "dispatch") + (isOwner() && ui.inbox ? stat(inboxUnread(), "Unread builder emails", "q-inbox", "inbox") : "") : stat(tomorrow.length, "Tomorrow", "q-quote")}</div>
     <div class="hbtns hidden"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button>${btns.map(([go, ic, n]) => `<button class="hbtn" data-go="${go}"><span class="ic">${ic}</span>${n}</button>`).join("")}</div>
     ${sec("Today", t0, today)}${sec("Tomorrow", t1, tomorrow)}${admin ? "" : myIncidentsHtml()}</div>`;
@@ -1098,6 +1150,26 @@ Heartwood Earthworx
 }
 const xd = s => { const [y, m, d] = s.split("-"); return `${+d}/${m}/${y}`; };     // d/mm/yyyy like hwdata.d_fmt
 const csvCell = v => { v = String(v ?? ""); return /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; };
+// ---- Send to Xero (admin only). The app can't hold Xero keys, so it QUEUES a request in xeroQueue; the box worker
+// (tools/xero_queue.py + the Xero connector) creates a DRAFT invoice (never approved or emailed): contact = builder,
+// reference = PO, line = invoice description, amount ex GST, account 200, tax OUTPUT (GST on Income), as on invoices 5442/5445.
+// The worker then writes xeroInvoiceId / xeroStatus back to the job and marks it invoiced.
+function xeroPill(j) { const s = j.xeroStatus; if (!s || !canXero()) return "";
+  return `<div class="sub"><span class="qpill ${s === "draft" ? "q-comp" : s === "error" ? "q-alert" : "q-wo"}" title="${esc(j.xeroError || "")}">${s === "draft" ? "Draft in Xero" + (j.xeroInvoiceNo ? " #" + esc(j.xeroInvoiceNo) : "") : s === "error" ? "Xero error" : "Queued for Xero"}</span></div>`; }
+async function sendToXero(list) {
+  if (!canXero()) return;
+  const bad = list.filter(j => !j.invoiceNo || !(+j.invoiceAmount > 0)), ok = list.filter(j => !bad.includes(j) && !["queued", "draft"].includes(j.xeroStatus));
+  if (!ok.length) { toast(bad.length ? "Those jobs need an invoice number and a price first." : "Already sent to Xero."); return; }
+  if (!confirm(`Create ${ok.length} DRAFT invoice${ok.length === 1 ? "" : "s"} in Xero?\n\nThey are not approved or emailed. Check and approve them in Xero.`)) return;
+  for (const j of ok) {
+    const req = { jobId: j.id, invoiceNo: String(j.invoiceNo), contact: invContact(j), reference: isRealPo(j.po) ? j.po : "", description: j.invoiceDescription || invDescDefault(j),
+      amountEx: +j.invoiceAmount, date: j.invoiceDate || j.date || todayStr(), accountCode: "200", taxType: "OUTPUT", status: "queued", by: auth.currentUser.uid, at: serverTimestamp() };
+    try { await addDoc(collection(db, "xeroQueue"), req); await updateDoc(doc(db, "jobs", j.id), { xeroStatus: "queued", xeroQueuedAt: serverTimestamp() }); }
+    catch (e) { if (e && e.code === "permission-denied") { alert("Send to Xero isn't switched on yet: the Firestore rules for Xero haven't been updated. Nothing was sent. Use Download Xero CSV for now."); return; }
+      toast("Couldn't queue #" + j.invoiceNo + ": " + (e.code || e.message)); return; }
+  }
+  toast(`Queued ${ok.length} for Xero as draft${bad.length ? `; ${bad.length} skipped (no number or price)` : ""}.`); renderAdmin();
+}
 function xeroCsv(list) {
   const rows = list.map(j => { const d = j.invoiceDate || j.date;
     return [invContact(j), "", "", j.invoiceNo, isRealPo(j.po) ? j.po : "", xd(d), xd(addDays(d, 7)), "",
@@ -1106,7 +1178,7 @@ function xeroCsv(list) {
 }
 function downloadCsv(list) {
   const ns = list.map(j => +j.invoiceNo).filter(Boolean).sort((a, b) => a - b);
-  const name = `xero import ${ns.length > 1 ? ns[0] + "-" + ns[ns.length - 1] : ns[0]}.csv`;
+  const name = `${canXero() ? "xero" : "invoice"} import ${ns.length > 1 ? ns[0] + "-" + ns[ns.length - 1] : ns[0]}.csv`;
   const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([xeroCsv(list)], { type: "text/csv" })); a.download = name;
   document.body.appendChild(a); a.click(); a.remove(); window.HW_LAST_CSV = { name, text: xeroCsv(list) };
   toast("Downloaded " + name);
@@ -1155,7 +1227,7 @@ function invoicesView() {
     : ui.inv === "ready"
     ? `<tr class="jr" data-id="${j.id}"><td><input type="checkbox" class="isel" ${ui.invSel.has(j.id) ? "checked" : ""}></td>
         <td>${esc(shortDate(j.date))}<div class="sub">#${esc(jobNo(j))}</div></td>
-        <td><b>${esc(invContact(j))}</b>${STD_CLIENTS.includes(invContact(j)) || / \(private\)$/.test(invContact(j)) ? "" : ` <span class="warnt" title="Not one of the standard Xero contact names">⚠</span>`}<div class="sub">${esc(j.address || "")}</div>
+        <td><b>${esc(invContact(j))}</b>${STD_CLIENTS.includes(invContact(j)) || / \(private\)$/.test(invContact(j)) ? "" : ` <span class="warnt" title="Not one of the standard ${canXero() ? "Xero " : ""}contact names">⚠</span>`}<div class="sub">${esc(j.address || "")}</div>
           <div class="sub">${esc(j.description || "")}${mixedBadge(j)}${j.loads ? ` · <b>${esc(j.loads)} loads</b>` : ""}${j.completedByName ? " · " + esc(j.completedByName) : ""}</div></td>
         <td>${isRealPo(j.po) ? esc(j.po) : `<span class="unal">${j.po ? esc(j.po) + " (not a PO)" : "no PO"}</span>`}${j.poAmount != null ? `<div class="sub" title="${esc(j.poAmountBasis || "")}">PO value $${esc(Number(j.poAmount).toFixed(2))} ex GST</div>` : ""}</td>
         <td><input class="idesc" value="${esc(j.invoiceDescription || invDescDefault(j))}"></td>
@@ -1163,17 +1235,17 @@ function invoicesView() {
         <td><button type="button" class="sm-btn iremove" title="Take off the to-invoice list (job is kept)">✕ Remove</button></td></tr>`
     : `<tr class="jr" data-id="${j.id}"><td>${ui.inv === "numbered" ? `<input type="checkbox" class="isel" ${ui.invSel.has(j.id) ? "checked" : ""}>` : `<input type="checkbox" class="isel" ${ui.invSel.has(j.id) ? "checked" : ""}>`}</td>
         <td class="jn">${esc(j.invoiceNo)}</td><td>${esc(xd(j.invoiceDate || j.date))}</td><td>${esc(invContact(j))}</td><td>${esc(isRealPo(j.po) ? j.po : "")}</td>
-        <td>${esc(j.invoiceDescription || invDescDefault(j))}</td><td>${money(j.invoiceAmount)}<div class="opo">${overPoHtml(j)}</div></td>${ui.inv === "recent" ? `<td><span class="qpill q-comp">Invoiced</span></td>` : ""}</tr>`;
+        <td>${esc(j.invoiceDescription || invDescDefault(j))}</td><td>${money(j.invoiceAmount)}<div class="opo">${overPoHtml(j)}</div>${xeroPill(j)}</td>${ui.inv === "recent" ? `<td><span class="qpill q-comp">Invoiced</span></td>` : ""}</tr>`;
   const acts = ui.inv === "removed" ? `<span class="sub">Removed jobs are kept but never invoiced or exported. Restore puts a job back on Ready to invoice.</span>` : ui.inv === "ready"
-    ? `<button id="inum" class="sm-btn primary" ${sel.length ? "" : "disabled"}>Assign invoice numbers &amp; download Xero CSV (${sel.length})</button>`
-    : `<button id="icsv" class="sm-btn" ${sel.length ? "" : "disabled"}>Download Xero CSV (${sel.length})</button>
-       ${ui.inv === "numbered" ? `<button id="imark" class="sm-btn primary" ${sel.length ? "" : "disabled"}>Mark invoiced (${sel.length})</button>` : ""}`;
+    ? `<button id="inum" class="sm-btn primary" ${sel.length ? "" : "disabled"}>Assign invoice numbers &amp; download ${canXero() ? "Xero" : "invoice"} CSV (${sel.length})</button>`
+    : `<button id="icsv" class="sm-btn" ${sel.length ? "" : "disabled"}>Download ${canXero() ? "Xero" : "invoice"} CSV (${sel.length})</button>
+       ${ui.inv === "numbered" ? `<button id="imark" class="sm-btn primary" ${sel.length ? "" : "disabled"}>Mark invoiced (${sel.length})</button>${canXero() ? ` <button id="ixero" class="sm-btn xero" title="Creates DRAFT invoices in Xero (not approved, not emailed). The box sends them within a few minutes." ${sel.length ? "" : "disabled"}>Send to Xero as draft (${sel.length})</button>` : ""}` : ""}`;
   return `<div class="sm-head"><h1>Invoices</h1><button id="findall" class="sm-btn" title="Run Find PO on every open and not-yet-invoiced job">🔎 Find all POs</button><span class="sub">Next invoice number: <b id="inext">${nextInvoiceGuess()}</b></span></div>
     ${searchBar()}${strip}
-    <div class="qtabs">${tab("ready", "Ready to invoice", ready)}${tab("numbered", "Invoiced (numbered, import into Xero)", numbered)}${tab("recent", "Recent (last 30 days)", recent)}${tab("removed", "Removed", removed)}</div>
+    <div class="qtabs">${tab("ready", "Ready to invoice", ready)}${tab("numbered", canXero() ? "Invoiced (numbered, import into Xero)" : "Invoiced (numbered)", numbered)}${tab("recent", "Recent (last 30 days)", recent)}${tab("removed", "Removed", removed)}</div>
     <div class="filters">${acts}<label class="ck sub"><input type="checkbox" id="iall"> select all</label>
       <span class="sub">Selected total ${money(tot(sel)) || "$0.00"} ex GST</span>
-      <span class="sub muted" style="margin-left:auto">${ui.inv === "ready" ? "Completed jobs with no invoice number. Price and description save as you type. Invoice date = job date, due +7 days." : ui.inv === "numbered" ? "Import the CSV into Xero, then Mark invoiced." : ""}</span></div>
+      <span class="sub muted" style="margin-left:auto">${ui.inv === "ready" ? "Completed jobs with no invoice number. Price and description save as you type. Invoice date = job date, due +7 days." : ui.inv === "numbered" ? (canXero() ? "Import the CSV into Xero, then Mark invoiced." : "Import the CSV, then Mark invoiced.") : ""}</span></div>
     <table class="jt inv"><thead><tr>${head}</tr></thead><tbody>${(ui.inv === "numbered" || ui.inv === "recent" ? list.map((j, i) => (i === 0 || monthOf(list[i - 1]) !== monthOf(j) ? `<tr class="mhead"><td colspan="8"><b>${esc(mName(monthOf(j) || "?"))}</b> · ${mStr(monthOf(j) || "?")}${ui.inv === "recent" ? " (whole month)" : ""}</td></tr>` : "") + row(j)) : list.map(row)).join("") || `<tr><td colspan="8" class="muted pad">Nothing here.</td></tr>`}</tbody></table>`;
 }
 function nextInvoiceGuess() {
@@ -1232,6 +1304,7 @@ function bindInvoices(A) {
   if ($("#inum")) $("#inum").onclick = () => assignNumbers([...ui.invSel].map(byId).filter(Boolean));
   if ($("#icsv")) $("#icsv").onclick = () => downloadCsv([...ui.invSel].map(byId).filter(Boolean));
   if ($("#imark")) $("#imark").onclick = () => markInvoiced([...ui.invSel].map(byId).filter(Boolean));
+  if (canXero() && $("#ixero")) $("#ixero").onclick = () => sendToXero([...ui.invSel].map(byId).filter(Boolean));
 }
 async function assignNumbers(list) {
   // read the current inputs (in case onchange hasn't fired yet)
@@ -1265,7 +1338,7 @@ async function assignNumbers(list) {
   ui.invMeta = null; ui.invSel.clear(); downloadCsv(out); ui.inv = "numbered"; renderAdmin();
 }
 async function markInvoiced(list) {
-  if (!confirm(`Mark ${list.length} invoice(s) as invoiced (imported into Xero)?`)) return;
+  if (!confirm(`Mark ${list.length} invoice(s) as invoiced${canXero() ? " (imported into Xero)" : ""}?`)) return;
   try { await Promise.all(list.map(j => updateDoc(doc(db, "jobs", j.id), { invoiced: true, invoicedAt: serverTimestamp(), invoicedBy: me.uid, updatedAt: serverTimestamp(), updatedBy: me.uid }))); }
   catch (e) { return toast("Not saved: " + (e.code || e.message)); }
   ui.invSel.clear(); toast(`Marked ${list.length} invoiced`); ui.inv = "recent"; renderAdmin();

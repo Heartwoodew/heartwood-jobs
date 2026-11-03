@@ -534,3 +534,26 @@ html{-webkit-text-size-adjust:100%}
 .top{z-index:45}#logout{white-space:nowrap}
 .qpill:not([class*="q-"]):not(.ip){background:#8a96a3;color:#fff}
 .gr-done{justify-self:start;font-size:11px;font-weight:600;color:#fff;background:var(--q-comp);border-radius:3px;padding:1px 6px;margin-top:2px}
+/* revenue chart (home, Alex only) */
+.revsec .hsec-h{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.rv-seg{margin-left:auto}.rv-seg button{padding:4px 10px;font-size:12px}
+.rv-wrap{padding:12px 12px 0}.rv-svg{width:100%;height:auto;display:block;max-height:280px}
+.rv-g{stroke:var(--sm-line);stroke-width:1}.rv-y{font-size:10px;fill:var(--sm-mut);text-anchor:end}
+.rv-x{font-size:11px;fill:var(--sm-mut);text-anchor:middle}.rv-v{font-size:10px;fill:var(--sm-ink);text-anchor:middle;font-weight:600}
+.rv-b rect{fill:#5b7a99}.rv-b.sheet rect{fill:#a9bccf}.rv-b.cur rect{fill:#5b7a99;opacity:.55}
+.rv-note{padding:6px 12px 12px;margin:0;line-height:1.45}
+/* profit chart */
+.rv-h{flex-wrap:wrap;gap:6px}.rv-ctl{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}.rv-ctl .rv-seg{margin-left:0}
+.rv-b.pos rect{fill:#3f7d58}.rv-b.neg rect{fill:#c0504d}.rv-b.cur rect{opacity:.45}
+.rv-b rect.inc{fill:#5b7a99}.rv-b rect.exp{fill:#d9a066}.rv-g.zero{stroke:#888;stroke-width:1.2}
+.rv-v.negt,.negt{fill:#b03a37;color:#b03a37}.rv-key .k{display:inline-block;width:10px;height:10px;border-radius:2px;margin:0 4px 0 10px;vertical-align:-1px}
+.rv-key .k.inc{background:#5b7a99}.rv-key .k.exp{background:#d9a066}
+.sm-btn.xero{background:#13b5ea;color:#fff;border-color:#0e9ccb}
+/* profit line chart */
+.rv-line{fill:none;stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round}.rv-line.net{stroke:#6b7c8c}
+.rv-line.inc{stroke:#5b7a99}.rv-line.exp{stroke:#d9a066}
+.rv-b.pos .rv-dot{fill:#3f7d58}.rv-b.neg .rv-dot{fill:#c0504d}.rv-dot{stroke:#fff;stroke-width:1.5}
+.rv-dot.inc{fill:#5b7a99}.rv-dot.exp{fill:#d9a066}.rv-b.cur .rv-dot{opacity:.55}
+.rv-g.zero{stroke:#555;stroke-width:1.6}
+.rv-ghost{fill:none;stroke-width:1.8;stroke-dasharray:5 4;opacity:.45}.rv-ghost.net{stroke:#6b7c8c}.rv-ghost.inc{stroke:#5b7a99}.rv-ghost.exp{stroke:#d9a066}
+.rv-gdot{fill:#9aa6b2;opacity:.6}.rv-gdot.income{fill:#5b7a99}.rv-gdot.expenses{fill:#d9a066}
+.rv-key .ln{display:inline-block;width:18px;border-top:2.5px solid #6b7c8c;margin:0 4px 0 10px;vertical-align:3px}.rv-key .ln.gh{border-top:2px dashed #6b7c8c;opacity:.5}
