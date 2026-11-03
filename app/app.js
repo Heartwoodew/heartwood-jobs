@@ -211,6 +211,37 @@ function unscheduledView(all) {
       <td>${esc(j.po || "—")}</td><td>${createdOf(j) ? esc(shortDate(createdOf(j))) : "—"}</td>
       <td><button type="button" class="sm-btn primary" data-sched="${j.id}">Schedule</button></td></tr>`).join("") || `<tr><td colspan="7" class="muted pad">Nothing unscheduled – nice.</td></tr>`}</tbody></table>`;
 }
+// ---- Check Xero (Xero users only). Read-only: QUEUES {type:'check'} in xeroQueue; the box worker (tools/xero_queue.py,
+// every 5 min 6am-8pm, or by hand) searches Xero invoices with GET only and writes jobs/{id}.xeroCheck
+// {checkedAt, status: invoiced/draft/not found/multiple, matches:[{invoiceNumber,status,totalEx,date,amountDue}]}.
+const xcAgo = t => { const ms = Date.now() - new Date(t).getTime(); if (!(ms >= 0)) return ""; const m = Math.round(ms / 60000);
+  return m < 1 ? "checked just now" : m < 60 ? `checked ${m} min ago` : m < 1440 ? `checked ${Math.round(m / 60)} h ago` : `checked ${Math.round(m / 1440)} d ago`; };
+const XC_ST = { PAID: "Paid", AUTHORISED: "Awaiting payment", DRAFT: "Draft", SUBMITTED: "Awaiting approval" };
+function xcLabel(j) {
+  if (j.xeroCheckPending) return `<span class="qpill xc-wait">Checking…</span>`;
+  const x = j.xeroCheck; if (!x) return "";
+  const m = x.matches || [], n0 = m[0] || {};
+  const lab = x.status === "invoiced" ? `Invoiced ${esc(n0.invoiceNumber || "")} · ${esc(XC_ST[n0.status] || n0.status || "")}` : x.status === "draft" ? `Draft in Xero${n0.invoiceNumber ? " " + esc(n0.invoiceNumber) : ""}`
+    : x.status === "multiple" ? `${m.length} matches in Xero` : x.status === "error" ? "Xero check failed" : "Not found in Xero";
+  const cls = x.status === "invoiced" ? "xc-ok" : x.status === "draft" ? "xc-draft" : x.status === "multiple" ? "xc-multi" : x.status === "error" ? "q-alert" : "xc-none";
+  const tip = m.map(i => `${i.invoiceNumber} ${i.status} $${(+i.totalEx || 0).toFixed(2)} ex GST ${i.date || ""} due $${(+i.amountDue || 0).toFixed(2)}`).join("\n") || x.error || x.note || "";
+  return `<span class="qpill ${cls}" title="${esc(tip)}">${lab}</span> <span class="sub muted xc-ago">${esc(xcAgo(x.checkedAt))}</span>`;
+}
+function xcCell(j) { if (!canXero() || queueOf(j) !== "Completed") return "";
+  return `<div class="xc">${xcLabel(j)} <button type="button" class="sm-btn xero xc-btn" data-xc="${j.id}" ${j.xeroCheckPending ? "disabled" : ""}>${j.xeroCheck ? "Re-check" : "Check Xero"}</button></div>`; }
+async function checkXero(list) {
+  if (!canXero()) return; list = list.filter(j => queueOf(j) === "Completed" && !j.xeroCheckPending);
+  if (!list.length) { toast("Already checking."); return; }
+  for (const j of list) {
+    try { await addDoc(collection(db, "xeroQueue"), { type: "check", jobId: j.id, status: "queued", by: auth.currentUser.uid, at: serverTimestamp() });
+      await updateDoc(doc(db, "jobs", j.id), { xeroCheckPending: true, xeroCheckQueuedAt: serverTimestamp() }); }
+    catch (e) { if (e && e.code === "permission-denied") { alert("Check Xero isn't switched on yet (Firestore rules). Nothing was queued."); return; }
+      toast("Couldn't queue the Xero check: " + (e.code || e.message)); return; }
+  }
+  toast(`Checking ${list.length} job${list.length === 1 ? "" : "s"} in Xero – the box checks every 5 min (6am–8pm).`); renderAdmin();
+}
+function bindXc(root, pool) { root.querySelectorAll("[data-xc]").forEach(b => b.onclick = e => { e.stopPropagation(); e.preventDefault();
+  const j = (pool || []).find(x => x.id === b.dataset.xc) || (ui.done || []).find(x => x.id === b.dataset.xc); if (j) checkXero([j]); }); }
 // Completed screen: Completed (default) or Unsuccessful, newest first, grouped by day. Uses the 6-week window plus
 // every Done job (ui.done, any date) so older completions are still listed.
 function completedView(all) {
@@ -219,10 +250,11 @@ function completedView(all) {
   const pool = [...m.values()].filter(j => (!ui.typeF || j.type === ui.typeF) && matchQ(j));
   const cnt = k => pool.filter(j => queueOf(j) === k).length;
   const list = pool.filter(j => queueOf(j) === kind).sort((a, b) => ((b.date || "") + (b.time || "")).localeCompare((a.date || "") + (a.time || "")));
-  return `<div class="sm-head"><h1>${kind} jobs</h1></div>${searchBar()}
+  const xc = canXero() && kind === "Completed"; ui.xcList = xc ? list : [];
+  return `<div class="sm-head"><h1>${kind} jobs</h1>${xc && list.length ? `<button id="xcall" class="sm-btn xero" title="Read-only: looks each job up in Xero. Nothing is created or changed in Xero.">Check all in Xero (${list.length})</button>` : ""}</div>${searchBar()}
     <div class="qtabs">${["Completed", "Unsuccessful"].map(k => `<button data-cq="${k}" class="${QCLS[k]} ${kind === k ? "on" : ""}"><span class="qdot ${QCLS[k]}"></span>${k} <span>${cnt(k)}</span></button>`).join("")}</div>
-    <table class="jt"><thead><tr><th></th><th>Job #</th><th>Client / Site</th><th>Description</th><th>Scheduled</th><th>Staff</th><th>Status</th></tr></thead>
-    <tbody>${groupByDate(list).map(([d, js]) => `<tr class="dayhdr"><td colspan="7">${esc(d ? dayLabel(d) : "No date")} <span class="cnt">${js.length}</span></td></tr>${js.map(jobRow).join("")}`).join("") || `<tr><td colspan="7" class="muted pad">No ${kind.toLowerCase()} jobs</td></tr>`}</tbody></table>`;
+    <table class="jt"><thead><tr><th></th><th>Job #</th><th>Client / Site</th><th>Description</th><th>Scheduled</th><th>Staff</th><th>Status</th>${xc ? "<th>Xero</th>" : ""}</tr></thead>
+    <tbody>${groupByDate(list).map(([d, js]) => `<tr class="dayhdr"><td colspan="${xc ? 8 : 7}">${esc(d ? dayLabel(d) : "No date")} <span class="cnt">${js.length}</span></td></tr>${js.map(j => xc ? jobRow(j).replace(/<\/tr>$/, `<td>${xcCell(j)}</td></tr>`) : jobRow(j)).join("")}`).join("") || `<tr><td colspan="7" class="muted pad">No ${kind.toLowerCase()} jobs</td></tr>`}</tbody></table>`;
 }
 function rowsFor(all) {
   const rows = staff.map(s => ({ key: skey(s), name: label(s.name), raw: s.name }));
@@ -680,6 +712,8 @@ function renderAdmin() {
     ui.navCol[g] = !ui.navCol[g]; try { localStorage.setItem("hwNavCol", JSON.stringify(ui.navCol)); } catch {} renderAdmin(); });
   if (ui.view === "dispatch" && PHONE.matches) bindMobileDispatch(A, [...jobs, ...(ui.undated || [])]);
   A.querySelectorAll("[data-cq]").forEach(b => b.onclick = () => { ui.cq = b.dataset.cq; renderAdmin(); });
+  if (ui.view === "completed" && canXero()) { bindXc(A, ui.xcList); if ($("#xcall")) $("#xcall").onclick = () => { const l = ui.xcList.filter(j => !j.xeroCheckPending);
+    if (l.length && confirm(`Check ${l.length} completed job${l.length === 1 ? "" : "s"} in Xero?\n\nRead-only: nothing is created or changed in Xero.`)) checkXero(l); }; }
   A.querySelectorAll("[data-q]").forEach(b => b.onclick = () => { ui.queue = b.dataset.q; renderAdmin(); });
   A.querySelectorAll("[data-dv]").forEach(b => b.onclick = () => { ui.dview = b.dataset.dv; ui.wk = 0; renderAdmin(); });
   A.querySelectorAll("[data-wk]").forEach(b => b.onclick = () => { ui.wk = +b.dataset.wk === 0 ? 0 : ui.wk + +b.dataset.wk; renderAdmin(); });
@@ -893,7 +927,7 @@ function jobTabs(d, j) {
     <div class="kf"><small>When</small><b>${j.date ? esc(shortDate(j.date)) : "Unscheduled"}</b><span class="sub">${esc(j.time || "")}${j.durationHrs ? " · " + esc(j.durationHrs) + "h" : ""}</span></div>
     <div class="kf"><small>Staff</small><b>${names.length ? esc(names.map(label).join(", ")) : `<span class="unal">Unallocated</span>`}</b></div>
     <div class="kf"><small>PO</small><b>${j.po ? esc(j.po) : `<span class="nopo">No PO</span>`}</b></div>
-    <div class="kf"><small>Status</small><b class="pstack">${st}</b></div></div>
+    <div class="kf"><small>Status</small><b class="pstack">${st}</b></div>${canXero() && q === "Completed" ? `<div class="kf kf-xero"><small>Xero</small><b>${xcCell(j)}</b></div>` : ""}</div>
     <div class="jc-tabs" role="tablist">${[["details", "Details"], ["photos", "Photos"], ["sup", "Supervisor"], ["safety", "Safety"], ["hist", "History"]].map(([k, l]) => `<button type="button" role="tab" data-jt="${k}">${l}</button>`).join("")}</div>`);
   const pane = k => { const x = document.createElement("div"); x.className = "jc-pane"; x.dataset.pane = k; return x; };
   const P = { details: pane("details"), photos: pane("photos"), sup: pane("sup"), safety: pane("safety"), hist: pane("hist") };
@@ -914,6 +948,7 @@ function jobTabs(d, j) {
   body.innerHTML = ""; body.classList.add("tabbed"); Object.values(P).forEach(x => body.appendChild(x));
   const show = k => { ui.jtab = k; f.querySelectorAll("[data-jt]").forEach(b => b.classList.toggle("on", b.dataset.jt === k)); Object.entries(P).forEach(([kk, x]) => x.hidden = kk !== k); };
   f.querySelectorAll("[data-jt]").forEach(b => b.onclick = () => show(b.dataset.jt));
+  if (canXero()) bindXc(f, [j]);
   show("details");
 }
 // ------------------------------------------------------------------ invoicing (admin only)

@@ -599,3 +599,8 @@ html{-webkit-text-size-adjust:100%}
 .swacts { white-space: nowrap; } .swacts .swbtn + .swbtn { margin-left: 6px; }
 .swdlbtns { flex-wrap: wrap; gap: 8px; } .swdlbtns a.mbtn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
 @media (max-width: 600px) { .swdljob, .swdlrow .swbtn { flex: 1 1 100%; max-width: none; } .swacts { white-space: normal; } .swacts .swbtn { display: block; margin: 4px 0 0 !important; } }
+
+/* Check Xero */
+.xc{display:flex;flex-wrap:wrap;align-items:center;gap:4px}.xc .xc-btn{padding:2px 8px;font-size:12px}
+.qpill.xc-ok,.jt .qpill.xc-ok,.kf .qpill.xc-ok{background:#16a34a!important}.qpill.xc-draft,.jt .qpill.xc-draft,.kf .qpill.xc-draft{background:#d97706!important}.qpill.xc-none,.jt .qpill.xc-none{background:#6b7280!important}.qpill.xc-multi,.jt .qpill.xc-multi,.kf .qpill.xc-multi{background:#7c3aed!important}.qpill.xc-wait,.jt .qpill.xc-wait,.kf .qpill.xc-wait{background:#0ea5e9!important}
+.xc-ago{font-size:11px}
