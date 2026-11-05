@@ -547,7 +547,10 @@ html{-webkit-text-size-adjust:100%}
 .rv-b rect.inc{fill:#5b7a99}.rv-b rect.exp{fill:#d9a066}.rv-g.zero{stroke:#888;stroke-width:1.2}
 .rv-v.negt,.negt{fill:#b03a37;color:#b03a37}.rv-key .k{display:inline-block;width:10px;height:10px;border-radius:2px;margin:0 4px 0 10px;vertical-align:-1px}
 .rv-key .k.inc{background:#5b7a99}.rv-key .k.exp{background:#d9a066}
-.sm-btn.xero{background:#13b5ea;color:#fff;border-color:#0e9ccb}
+/* Xero actions (#inum Send to Xero on ready tab, #ixero on numbered tab, Check Xero): brand blue */
+.sm-btn.xero,.sm-btn.primary.xero{background:#13B5EA;color:#fff;border-color:#0e9ccb}
+.sm-btn.xero:hover:not(:disabled),.sm-btn.primary.xero:hover:not(:disabled){background:#0e9ccb;border-color:#0c87b0;color:#fff}
+.sm-btn.xero:disabled,.sm-btn.primary.xero:disabled{opacity:.5;cursor:default}
 /* profit line chart */
 .rv-line{fill:none;stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round}.rv-line.net{stroke:#6b7c8c}
 .rv-line.inc{stroke:#5b7a99}.rv-line.exp{stroke:#d9a066}

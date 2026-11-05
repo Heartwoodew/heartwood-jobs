@@ -1194,11 +1194,11 @@ const csvCell = v => { v = String(v ?? ""); return /[",\r\n]/.test(v) ? `"${v.re
 // The worker then writes xeroInvoiceId / xeroStatus back to the job and marks it invoiced.
 function xeroPill(j) { const s = j.xeroStatus; if (!s || !canXero()) return "";
   return `<div class="sub"><span class="qpill ${s === "draft" ? "q-comp" : s === "error" ? "q-alert" : "q-wo"}" title="${esc(j.xeroError || "")}">${s === "draft" ? "Draft in Xero" + (j.xeroInvoiceNo ? " #" + esc(j.xeroInvoiceNo) : "") : s === "error" ? "Xero error" : "Queued for Xero"}</span></div>`; }
-async function sendToXero(list) {
+async function sendToXero(list, opts = {}) {
   if (!canXero()) return;
   const bad = list.filter(j => !j.invoiceNo || !(+j.invoiceAmount > 0)), ok = list.filter(j => !bad.includes(j) && !["queued", "draft"].includes(j.xeroStatus));
   if (!ok.length) { toast(bad.length ? "Those jobs need an invoice number and a price first." : "Already sent to Xero."); return; }
-  if (!confirm(`Create ${ok.length} DRAFT invoice${ok.length === 1 ? "" : "s"} in Xero?\n\nThey are not approved or emailed. Check and approve them in Xero.`)) return;
+  if (!opts.skipConfirm && !confirm(`Create ${ok.length} DRAFT invoice${ok.length === 1 ? "" : "s"} in Xero?\n\nThey are not approved or emailed. Check and approve them in Xero.`)) return;
   for (const j of ok) {
     const req = { jobId: j.id, invoiceNo: String(j.invoiceNo), contact: invContact(j), reference: isRealPo(j.po) ? j.po : "", description: j.invoiceDescription || invDescDefault(j),
       amountEx: +j.invoiceAmount, date: j.invoiceDate || j.date || todayStr(), accountCode: "200", taxType: "OUTPUT", status: "queued", by: auth.currentUser.uid, at: serverTimestamp() };
@@ -1275,7 +1275,7 @@ function invoicesView() {
         <td class="jn">${esc(j.invoiceNo)}</td><td>${esc(xd(j.invoiceDate || j.date))}</td><td>${esc(invContact(j))}</td><td>${esc(isRealPo(j.po) ? j.po : "")}</td>
         <td>${esc(j.invoiceDescription || invDescDefault(j))}</td><td>${money(j.invoiceAmount)}<div class="opo">${overPoHtml(j)}</div>${xeroPill(j)}</td>${ui.inv === "recent" ? `<td><span class="qpill q-comp">Invoiced</span></td>` : ""}</tr>`;
   const acts = ui.inv === "removed" ? `<span class="sub">Removed jobs are kept but never invoiced or exported. Restore puts a job back on Ready to invoice.</span>` : ui.inv === "ready"
-    ? `<button id="inum" class="sm-btn primary" ${sel.length ? "" : "disabled"}>Assign invoice numbers &amp; download ${canXero() ? "Xero" : "invoice"} CSV (${sel.length})</button>`
+    ? `<button id="inum" class="sm-btn primary${canXero() ? " xero" : ""}" ${sel.length ? "" : "disabled"}">${canXero() ? `Send to Xero (${sel.length})` : `Assign invoice numbers &amp; download invoice CSV (${sel.length})`}</button>`
     : `<button id="icsv" class="sm-btn" ${sel.length ? "" : "disabled"}>Download ${canXero() ? "Xero" : "invoice"} CSV (${sel.length})</button>
        ${ui.inv === "numbered" ? `<button id="imark" class="sm-btn primary" ${sel.length ? "" : "disabled"}>Mark invoiced (${sel.length})</button>${canXero() ? ` <button id="ixero" class="sm-btn xero" title="Creates DRAFT invoices in Xero (not approved, not emailed). The box sends them within a few minutes." ${sel.length ? "" : "disabled"}>Send to Xero as draft (${sel.length})</button>` : ""}` : ""}`;
   return `<div class="sm-head"><h1>Invoices</h1><button id="findall" class="sm-btn" title="Run Find PO on every open and not-yet-invoiced job">🔎 Find all POs</button><span class="sub">Next invoice number: <b id="inext">${nextInvoiceGuess()}</b></span></div>
@@ -1283,7 +1283,7 @@ function invoicesView() {
     <div class="qtabs">${tab("ready", "Ready to invoice", ready)}${tab("numbered", canXero() ? "Invoiced (numbered, import into Xero)" : "Invoiced (numbered)", numbered)}${tab("recent", "Recent (last 30 days)", recent)}${tab("removed", "Removed", removed)}</div>
     <div class="filters">${acts}<label class="ck sub"><input type="checkbox" id="iall"> select all</label>
       <span class="sub">Selected total ${money(tot(sel)) || "$0.00"} ex GST</span>
-      <span class="sub muted" style="margin-left:auto">${ui.inv === "ready" ? "Completed jobs with no invoice number. Price and description save as you type. Invoice date = job date, due +7 days." : ui.inv === "numbered" ? (canXero() ? "Import the CSV into Xero, then Mark invoiced." : "Import the CSV, then Mark invoiced.") : ""}</span></div>
+      <span class="sub muted" style="margin-left:auto">${ui.inv === "ready" ? (canXero() ? "Completed jobs with no invoice number. Price and description save as you type. Send to Xero assigns numbers and queues DRAFT invoices (not approved or emailed). Invoice date = job date, due +7 days." : "Completed jobs with no invoice number. Price and description save as you type. Invoice date = job date, due +7 days.") : ui.inv === "numbered" ? (canXero() ? "Import the CSV into Xero, then Mark invoiced." : "Import the CSV, then Mark invoiced.") : ""}</span></div>
     <table class="jt inv"><thead><tr>${head}</tr></thead><tbody>${(ui.inv === "numbered" || ui.inv === "recent" ? list.map((j, i) => (i === 0 || monthOf(list[i - 1]) !== monthOf(j) ? `<tr class="mhead"><td colspan="8"><b>${esc(mName(monthOf(j) || "?"))}</b> · ${mStr(monthOf(j) || "?")}${ui.inv === "recent" ? " (whole month)" : ""}</td></tr>` : "") + row(j)) : list.map(row)).join("") || `<tr><td colspan="8" class="muted pad">Nothing here.</td></tr>`}</tbody></table>`;
 }
 function nextInvoiceGuess() {
@@ -1355,6 +1355,8 @@ async function assignNumbers(list) {
   if (nopo.length && !confirm(`${nopo.length} job(s) have no PO (Reference will be blank):\n` + nopo.map(j => "• " + j.address).join("\n") + "\n\nContinue?")) return;
   const over = list.filter(j => overBy(j));      // review note only; the price is used exactly as typed
   if (over.length && !confirm(`Over PO (note only, prices are kept as entered):\n` + over.map(j => `• ${j.address} PO ${j.po}: ${$$(j.invoiceAmount)} vs PO ${$$(j.poAmount)} - Over PO by ${$$(overBy(j))}`).join("\n") + "\n\nContinue?")) return;
+  // Xero users: one click assigns numbers then queues drafts (no CSV). Same confirm wording as #ixero, plus assign.
+  if (canXero() && !confirm(`Assign invoice numbers and create ${list.length} DRAFT invoice${list.length === 1 ? "" : "s"} in Xero?\n\nThey are not approved or emailed. Check and approve them in Xero.`)) return;
   list.sort((a, b) => (a.date || "").localeCompare(b.date || "") || a.id.localeCompare(b.id));   // date order, like hwdata
   let out;
   try {
@@ -1373,7 +1375,9 @@ async function assignNumbers(list) {
       return res;
     });
   } catch (e) { return alert("Numbers NOT assigned: " + (e.code || e.message)); }
-  ui.invMeta = null; ui.invSel.clear(); downloadCsv(out); ui.inv = "numbered"; renderAdmin();
+  ui.invMeta = null; ui.invSel.clear();
+  if (canXero()) { ui.inv = "numbered"; await sendToXero(out, { skipConfirm: true }); }  // queues xeroQueue + xeroStatus queued; no CSV
+  else { downloadCsv(out); ui.inv = "numbered"; renderAdmin(); }
 }
 async function markInvoiced(list) {
   if (!confirm(`Mark ${list.length} invoice(s) as invoiced${canXero() ? " (imported into Xero)" : ""}?`)) return;
