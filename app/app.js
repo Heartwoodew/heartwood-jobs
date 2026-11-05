@@ -54,8 +54,8 @@ onAuthStateChanged(auth, async user => {
   if (unsub) { unsub(); unsub = null; }
   if (!user) { me = null; $("#who").textContent = ""; $("#logout").classList.add("hidden"); return renderLogin(); }
   // Admin = UID listed in firestore.rules (Alex, sync, Patrick): detected by being ALLOWED to list users - so if the
-  // rules don't (yet) make someone admin they simply fall back to the operator view. Operator = users/{uid} role "operator".
-  // Patrick is both: admin in the rules and still an "operator" profile so he is staff (bookable, on the board).
+  // rules don't (yet) make someone admin they simply fall back to the operator view.
+  // users/{uid}.role: "operator" (staff, no $) | "supervisor" (staff shell + canSeeMoney). Patrick is rules-admin with an operator profile (bookable).
   const snap = await getDoc(doc(db, "users", user.uid)).catch(() => null);
   const prof = snap && snap.exists() ? snap.data() : null;
   let users = null;
@@ -64,7 +64,7 @@ onAuthStateChanged(auth, async user => {
   me = users ? { uid: user.uid, name: (prof && prof.name) || "Alex", role: "admin", staffRole: prof && prof.role } : { uid: user.uid, ...prof };
   $("#who").textContent = `${me.name} · ${me.role}`; $("#logout").classList.remove("hidden");
   if (me.role === "admin") {
-    const logins = users.docs.map(d => ({ uid: d.id, ...d.data() })).filter(u => u.role === "operator");
+    const logins = users.docs.map(d => ({ uid: d.id, ...d.data() })).filter(u => u.role === "operator" || u.role === "supervisor");
     staff = [{ uid: ALEX_UID, name: "Alex" }, ...logins.filter(u => u.uid !== ALEX_UID)];
     // two weeks back (catch overdue work) to 4 weeks ahead, plus anything undated
     const q = query(collection(db, "jobs"), where("date", ">=", addDays(todayStr(), -14)), where("date", "<=", addDays(todayStr(), 28)), orderBy("date"));
@@ -134,7 +134,7 @@ const NAV_LBL = { safety: "Incidents" };
 ui.navCol = (() => { try { return JSON.parse(localStorage.getItem("hwNavCol") || "{}"); } catch { return {}; } })();
 function shell(inner) {
   const cur = NAV.find(n => n[0] === ui.view);
-  const item = k => { const x = NAV.find(n => n[0] === k); if (!x || x[3] || (x[4] && !isOwner())) return "";
+  const item = k => { const x = NAV.find(n => n[0] === k); if (!x || x[3] || (x[4] && !isOwner()) || (k === "invoices" && (!me || me.role !== "admin"))) return "";
     return `<button class="sm-nav ${ui.view === k ? "on" : ""}" data-view="${k}" title="${esc(NAV_LBL[k] || x[2])}"><span class="ic">${x[1]}</span><span class="lbl">${esc(NAV_LBL[k] || x[2])}</span></button>`; };
   const grp = ([g, ic, n, ks]) => { const has = ks.includes(ui.view), open = has || !ui.navCol[g];
     return `<div class="sm-grp ${open ? "open" : ""} ${has ? "has" : ""}"><button class="sm-gh" data-grp="${g}" aria-expanded="${open}"><span class="ic">${ic}</span><span class="lbl">${n}</span><span class="car">${open ? "▾" : "▸"}</span></button>
@@ -224,7 +224,7 @@ function xcLabel(j) {
   const lab = x.status === "invoiced" ? `Invoiced ${esc(n0.invoiceNumber || "")} · ${esc(XC_ST[n0.status] || n0.status || "")}` : x.status === "draft" ? `Draft in Xero${n0.invoiceNumber ? " " + esc(n0.invoiceNumber) : ""}`
     : x.status === "multiple" ? `${m.length} matches in Xero` : x.status === "error" ? "Xero check failed" : "Not found in Xero";
   const cls = x.status === "invoiced" ? "xc-ok" : x.status === "draft" ? "xc-draft" : x.status === "multiple" ? "xc-multi" : x.status === "error" ? "q-alert" : "xc-none";
-  const tip = m.map(i => `${i.invoiceNumber} ${i.status} $${(+i.totalEx || 0).toFixed(2)} ex GST ${i.date || ""} due $${(+i.amountDue || 0).toFixed(2)}`).join("\n") || x.error || x.note || "";
+  const tip = m.map(i => `${i.invoiceNumber} ${i.status}${canSeeMoney() ? ` $${(+i.totalEx || 0).toFixed(2)} ex GST` : ""} ${i.date || ""}${canSeeMoney() ? ` due $${(+i.amountDue || 0).toFixed(2)}` : ""}`).join("\n") || x.error || x.note || "";
   return `<span class="qpill ${cls}" title="${esc(tip)}">${lab}</span> <span class="sub muted xc-ago">${esc(xcAgo(x.checkedAt))}</span>`;
 }
 function xcCell(j) { if (!canXero() || queueOf(j) !== "Completed") return "";
@@ -312,6 +312,9 @@ const isOwner = () => me && me.uid === OWNER_UID;
 // staff (even admins) see no Xero unless added here AND in firestore.rules xeroUser(). Alex, Patrick.
 const XERO_UIDS = [OWNER_UID, "R7t41e54Ykcdk9WPdVZnDd697iI2"];
 const canXero = () => !!me && XERO_UIDS.includes(me.uid);
+// Money ($ PO/invoice/receipt/profit amounts): admins + users/{uid}.role "supervisor". Operators (staff) see none in the UI.
+// App roles on users/{uid}: "operator" (staff) | "supervisor" (sees money, still operator shell unless also Firebase-admin).
+const canSeeMoney = () => !!me && (me.role === "admin" || me.role === "supervisor" || me.staffRole === "supervisor");
 async function shrinkImage(file, max = 1600, q = 0.72) {
   const bmp = await createImageBitmap(file).catch(() => null);
   if (!bmp) throw new Error("Can't read that image - try a JPEG/PNG photo");
@@ -411,11 +414,11 @@ function donePill() {
   const tot = known.reduce((t, j) => t + +amt(j), 0);
   const who = j => j.completedByName || (namesOf(j).join(", ") || "—");
   el.className = "donepill" + (open ? " open" : "");
-  el.innerHTML = `<button type="button" class="dp-head" aria-expanded="${open}"><span class="dp-tick">✓</span> <b>${L.length}</b> done today${known.length ? ` · ${$$(tot)}` : ""}<span class="dp-car">${open ? "▾" : "▴"}</span></button>
+  el.innerHTML = `<button type="button" class="dp-head" aria-expanded="${open}"><span class="dp-tick">✓</span> <b>${L.length}</b> done today${canSeeMoney() && known.length ? ` · ${$$(tot)}` : ""}<span class="dp-car">${open ? "▾" : "▴"}</span></button>
     ${open ? `<div class="dp-body">${L.map(j => `<button type="button" class="dp-row" data-dp="${esc(j.id)}"><span class="dp-no">#${esc(jobNo(j))}</span>
       <span class="dp-main"><b>${esc(tidyAddress(j.address || "").split(",")[0])}</b> · ${esc(TYPES[j.type] || firstLine(j.description || ""))}<small>${esc(who(j))}</small></span>
-      <span class="dp-amt">${amt(j) != null ? $$(amt(j)) : "–"}</span></button>`).join("") || `<p class="sub pad">Nothing completed yet today.</p>`}
-      <div class="dp-foot sub">Total ex GST ${$$(tot)}${known.length < L.length ? ` (${L.length - known.length} without a PO/invoice amount)` : ""}</div></div>` : ""}`;
+      <span class="dp-amt">${canSeeMoney() && amt(j) != null ? $$(amt(j)) : ""}</span></button>`).join("") || `<p class="sub pad">Nothing completed yet today.</p>`}
+      ${canSeeMoney() ? `<div class="dp-foot sub">Total ex GST ${$$(tot)}${known.length < L.length ? ` (${L.length - known.length} without a PO/invoice amount)` : ""}</div>` : ""}</div>` : ""}`;
   el.querySelector(".dp-head").onclick = () => { localStorage.setItem("hwDonePill", open ? "closed" : "open"); donePill(); };
   el.querySelectorAll("[data-dp]").forEach(b => b.onclick = () => { const j = L.find(x => x.id === b.dataset.dp); if (j) editJob(j); });
 }
@@ -691,6 +694,7 @@ function homeView(all) {
 function renderAdmin() {
   donePill(); reimbPill(); inboxSub();
   if (!me || me.role !== "admin") return;
+  if (ui.view === "invoices" && me.role !== "admin") ui.view = "home";
   if (ui.myJobs) return renderOperator();
   if ($("#dlg").open) return;          // don't redraw under an open job card
   if (ui.view === "timesheet" && ui.tsDirty && $("#tsf")) return;   // don't wipe unsaved hours
@@ -706,7 +710,7 @@ function renderAdmin() {
   if (ui.view === "timesheet") bindTs(A, renderAdmin);
   A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.navOpen = false;
     if (b.dataset.view === "myjobs") { ui.myJobs = true; ui.opSel = null; window.scrollTo(0, 0); return renderAdmin(); }
-    ui.view = b.dataset.view; renderAdmin(); });
+    ui.view = b.dataset.view; if (ui.view === "invoices" && me.role !== "admin") ui.view = "home"; renderAdmin(); });
   if ($("#burger")) $("#burger").onclick = () => { ui.navOpen = !ui.navOpen; renderAdmin(); };
   A.querySelectorAll("[data-grp]").forEach(b => b.onclick = () => { const g = b.dataset.grp; if (NAV_GROUPS.find(x => x[0] === g)[3].includes(ui.view)) return;
     ui.navCol[g] = !ui.navCol[g]; try { localStorage.setItem("hwNavCol", JSON.stringify(ui.navCol)); } catch {} renderAdmin(); });
@@ -735,7 +739,9 @@ function renderAdmin() {
     editJob(j); const f = $("#jf"); if (f) { f.date.value = todayStr(); f.date.focus(); f.date.showPicker?.(); } });
   A.querySelectorAll("[data-go]").forEach(b => b.onclick = () => { const v = b.dataset.go;
     if (v === "myjobs") { ui.myJobs = true; ui.opSel = null; window.scrollTo(0, 0); return renderAdmin(); }
-    if (v === "q-ip") { ui.view = "jobs"; ui.queue = "All"; } else ui.view = v; ui.navOpen = false; window.scrollTo(0, 0); renderAdmin(); });
+    if (v === "q-ip") { ui.view = "jobs"; ui.queue = "All"; } else ui.view = v;
+    if (ui.view === "invoices" && me.role !== "admin") ui.view = "home";
+    ui.navOpen = false; window.scrollTo(0, 0); renderAdmin(); });
   const pool = [...jobs, ...(ui.undated || [])];
   A.querySelectorAll("[data-id]").forEach(el => {
     el.onclick = ev => { if (ev.target.closest("input,button,label,textarea")) return; editJob(pool.find(j => j.id === el.dataset.id) || (ui.done || []).find(j => j.id === el.dataset.id)); };
@@ -858,10 +864,10 @@ function editJob(j) {
       <div class="row"><label>Category<select name="type">${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${j.type === k ? "selected" : ""}>${v}</option>`).join("")}</select></label>
         <label>Purchase Order #<input name="po" value="${esc(j.po)}"></label>
         <label>Loads<input type="number" min="0" name="loads" value="${esc(j.loads ?? "")}"></label></div>
-      <div class="row"><label>PO value $ (ex GST)<input type="number" step="0.01" min="0" name="poAmount" value="${esc(j.poAmount ?? "")}" placeholder="from the PO"></label></div>
+      ${canSeeMoney() ? `<div class="row"><label>PO value $ (ex GST)<input type="number" step="0.01" min="0" name="poAmount" value="${esc(j.poAmount ?? "")}" placeholder="from the PO"></label></div>
       ${j.poAmount != null ? `<p class="hint">PO value $${esc(Number(j.poAmount).toFixed(2))} ex GST${j.poAmountBasis ? " · " + esc(j.poAmountBasis) : ""}${j.poAmountSource ? " · " + esc(j.poAmountSource) : ""}</p>` : ""}
       ${!n && overBy(j, invAmountDefault(j)) ? `<p class="hint"><span class="overpo">Over PO by ${$$(overBy(j, invAmountDefault(j)))}</span> (charged ${$$(invAmountDefault(j))} ex GST)</p>` : ""}
-      ${n ? "" : `<div class="row"><button type="button" id="emailsupj" class="btn" title="Opens your email app (nothing is sent automatically)">✉ Email supervisor (PO exceeded)</button></div>`}
+      ${n ? "" : `<div class="row"><button type="button" id="emailsupj" class="btn" title="Opens your email app (nothing is sent automatically)">✉ Email supervisor (PO exceeded)</button></div>`}` : `<input type="hidden" name="poAmount" value="${esc(j.poAmount ?? "")}">`}
       ${n ? "" : `<div class="row"><button type="button" id="findpo" class="btn">🔎 Find PO</button><span id="polk" class="sub">${poLookupHtml(j)}</span></div>`}
     </div><div class="jc-col">
       <h4>Staff Allocation &amp; Schedule</h4>
@@ -993,7 +999,7 @@ function invDescDefault(j) {        // hwdata.xero_description: "<Task> - <tidy 
 const PO_ST = { "orbit login needed": "🔒 Orbit login needed", pending: "⏳ queued", searching: "🔍 searching", found: "✅ found", choose: "☝️ pick one", "not found": "❌ not found", "needs portal": "🌐 needs Orbit portal" };
 function poLookupHtml(j) {
   if (!j.poLookupStatus) return "";
-  const cands = (j.poLookupCandidates || []).map((c, i) => `<div class="pocand">${esc(c.po)}${c.kind ? " · " + esc(c.kind) : ""}${c.amount != null ? ` · $${esc(Number(c.amount).toFixed(2))} ex GST` : " · no amount"}${c.confidence ? ` <span class="conf conf-${esc(c.confidence)}">${esc(c.confidence)}</span>` : ""}<div class="sub">Source: ${esc(c.source || "?")}</div>
+  const cands = (j.poLookupCandidates || []).map((c, i) => `<div class="pocand">${esc(c.po)}${c.kind ? " · " + esc(c.kind) : ""}${canSeeMoney() && c.amount != null ? ` · $${esc(Number(c.amount).toFixed(2))} ex GST` : (c.amount != null ? "" : " · no amount")}${c.confidence ? ` <span class="conf conf-${esc(c.confidence)}">${esc(c.confidence)}</span>` : ""}<div class="sub">Source: ${esc(c.source || "?")}</div>
       ${j.po === c.po && j.poAmount === c.amount ? "" : `<button type="button" class="btn usepo" data-i="${i}">Use this</button>`}</div>`).join("");
   return `<b>${PO_ST[j.poLookupStatus] || esc(j.poLookupStatus)}</b> ${esc(j.poLookupMsg || "")}${j.poLookupAt ? ` <span class="sub">(${esc(String(j.poLookupAt).slice(0, 16).replace("T", " "))})</span>` : ""}${cands}`;
 }
@@ -1021,8 +1027,8 @@ function wireFindPo(j) {
 const invAmountDefault = j => (j.invoiceAmount ?? j.poAmount ?? null);
 // Over PO: the price is always free to edit; the PO value is only the pre-fill. This is a note, never a block or a correction.
 const overBy = (j, amt = j.invoiceAmount) => (amt == null || amt === "" || j.poAmount == null || !(+amt > +j.poAmount + 0.005)) ? 0 : Math.round((+amt - +j.poAmount) * 100) / 100;
-const $$ = v => "$" + Number(v).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const overPoHtml = (j, amt) => { const o = overBy(j, amt); return o ? `<span class="overpo">Over PO by ${$$(o)}</span> <button type="button" class="sm-btn emailsup" title="Opens your email app with a message to the supervisor (nothing is sent automatically)">✉ Email supervisor</button>` : ""; };
+const $$ = v => canSeeMoney() ? ("$" + Number(v).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })) : "";
+const overPoHtml = (j, amt) => { if (!canSeeMoney()) return ""; const o = overBy(j, amt); return o ? `<span class="overpo">Over PO by ${$$(o)}</span> <button type="button" class="sm-btn emailsup" title="Opens your email app with a message to the supervisor (nothing is sent automatically)">✉ Email supervisor</button>` : ""; };
 // Supervisor email: job field, then meta/supervisors (Orbit Call Forward / Torsion PO sender, by PO), then Torsion default, then remembered per client.
 let SUPS = null;
 async function supervisors() { if (!SUPS) { try { SUPS = (await getDoc(doc(db, "meta", "supervisors"))).data() || {}; } catch { SUPS = {}; } } return SUPS; }
@@ -1223,6 +1229,7 @@ function downloadCsv(list) {
 }
 ui.inv = "ready"; ui.invSel = new Set();
 function invoicesView() {
+  if (!me || me.role !== "admin") { ui.view = "home"; return `<p class="pad muted">Invoices are admin only.</p>`; }
   const done = (ui.done || []).filter(j => j.status === "Done" && matchQ(j));
   const excl = j => j.invoiceExcluded === true;          // "Remove" on the Invoices screen (job kept, never invoiced)
   const removed = done.filter(j => excl(j) && !j.invoiceNo).sort((a, b) => (b.invoiceExcludedAt || "").localeCompare(a.invoiceExcludedAt || ""));
@@ -1233,7 +1240,7 @@ function invoicesView() {
   const list = { ready, numbered, recent, removed }[ui.inv];
   const sel = list.filter(j => ui.invSel.has(j.id));
   const tot = a => a.reduce((t, j) => t + (+j.invoiceAmount || 0), 0);
-  const money = v => v == null || v === "" ? "" : "$" + Number(v).toLocaleString("en-AU", { minimumFractionDigits: 2 });
+  const money = v => (!canSeeMoney() || v == null || v === "") ? "" : "$" + Number(v).toLocaleString("en-AU", { minimumFractionDigits: 2 });
   // Monthly totals: all invoiced (numbered) jobs, by invoice month (fallback: job/completed date). Removed / do-not-invoice excluded.
   const monthOf = j => String(j.invoiceDate || j.date || "").slice(0, 7);
   const allInv = done.filter(j => j.invoiceNo && !excl(j) && !j.doNotInvoice);
@@ -1267,9 +1274,9 @@ function invoicesView() {
         <td>${esc(shortDate(j.date))}<div class="sub">#${esc(jobNo(j))}</div></td>
         <td><b>${esc(invContact(j))}</b>${STD_CLIENTS.includes(invContact(j)) || / \(private\)$/.test(invContact(j)) ? "" : ` <span class="warnt" title="Not one of the standard ${canXero() ? "Xero " : ""}contact names">⚠</span>`}<div class="sub">${esc(j.address || "")}</div>
           <div class="sub">${esc(j.description || "")}${mixedBadge(j)}${j.loads ? ` · <b>${esc(j.loads)} loads</b>` : ""}${j.completedByName ? " · " + esc(j.completedByName) : ""}</div></td>
-        <td>${isRealPo(j.po) ? esc(j.po) : `<span class="unal">${j.po ? esc(j.po) + " (not a PO)" : "no PO"}</span>`}${j.poAmount != null ? `<div class="sub" title="${esc(j.poAmountBasis || "")}">PO value $${esc(Number(j.poAmount).toFixed(2))} ex GST</div>` : ""}</td>
+        <td>${isRealPo(j.po) ? esc(j.po) : `<span class="unal">${j.po ? esc(j.po) + " (not a PO)" : "no PO"}</span>`}${canSeeMoney() && j.poAmount != null ? `<div class="sub" title="${esc(j.poAmountBasis || "")}">PO value $${esc(Number(j.poAmount).toFixed(2))} ex GST</div>` : ""}</td>
         <td><input class="idesc" value="${esc(j.invoiceDescription || invDescDefault(j))}"></td>
-        <td><input class="iamt" type="number" step="0.01" min="0" placeholder="price" value="${esc(invAmountDefault(j) ?? "")}"><div class="opo">${overPoHtml(j, invAmountDefault(j))}</div></td>
+        <td>${canSeeMoney() ? `<input class="iamt" type="number" step="0.01" min="0" placeholder="price" value="${esc(invAmountDefault(j) ?? "")}"><div class="opo">${overPoHtml(j, invAmountDefault(j))}</div>` : ""}</td>
         <td><button type="button" class="sm-btn iremove" title="Take off the to-invoice list (job is kept)">✕ Remove</button></td></tr>`
     : `<tr class="jr" data-id="${j.id}"><td>${ui.inv === "numbered" ? `<input type="checkbox" class="isel" ${ui.invSel.has(j.id) ? "checked" : ""}>` : `<input type="checkbox" class="isel" ${ui.invSel.has(j.id) ? "checked" : ""}>`}</td>
         <td class="jn">${esc(j.invoiceNo)}</td><td>${esc(xd(j.invoiceDate || j.date))}</td><td>${esc(invContact(j))}</td><td>${esc(isRealPo(j.po) ? j.po : "")}</td>
@@ -1282,7 +1289,7 @@ function invoicesView() {
     ${searchBar()}${strip}
     <div class="qtabs">${tab("ready", "Ready to invoice", ready)}${tab("numbered", canXero() ? "Invoiced (numbered, import into Xero)" : "Invoiced (numbered)", numbered)}${tab("recent", "Recent (last 30 days)", recent)}${tab("removed", "Removed", removed)}</div>
     <div class="filters">${acts}<label class="ck sub"><input type="checkbox" id="iall"> select all</label>
-      <span class="sub">Selected total ${money(tot(sel)) || "$0.00"} ex GST</span>
+      <span class="sub">${canSeeMoney() ? `Selected total ${money(tot(sel)) || "$0.00"} ex GST` : ""}</span>
       <span class="sub muted" style="margin-left:auto">${ui.inv === "ready" ? (canXero() ? "Completed jobs with no invoice number. Price and description save as you type. Send to Xero assigns numbers and queues DRAFT invoices (not approved or emailed). Invoice date = job date, due +7 days." : "Completed jobs with no invoice number. Price and description save as you type. Invoice date = job date, due +7 days.") : ui.inv === "numbered" ? (canXero() ? "Import the CSV into Xero, then Mark invoiced." : "Import the CSV, then Mark invoiced.") : ""}</span></div>
     <table class="jt inv"><thead><tr>${head}</tr></thead><tbody>${(ui.inv === "numbered" || ui.inv === "recent" ? list.map((j, i) => (i === 0 || monthOf(list[i - 1]) !== monthOf(j) ? `<tr class="mhead"><td colspan="8"><b>${esc(mName(monthOf(j) || "?"))}</b> · ${mStr(monthOf(j) || "?")}${ui.inv === "recent" ? " (whole month)" : ""}</td></tr>` : "") + row(j)) : list.map(row)).join("") || `<tr><td colspan="8" class="muted pad">Nothing here.</td></tr>`}</tbody></table>`;
 }
