@@ -317,7 +317,7 @@ export function quotesViewHtml(ui, esc, $$, helpers = {}) {
   return `<div class="sm-head"><h1>Quotes</h1>
     <div class="row gap"><button type="button" class="sm-btn primary" id="newquote">＋ New quote</button>
     ${editRates ? `<button type="button" class="sm-btn" id="editrates">Quote rates &amp; depot</button>` : `<span class="sub pad">Rates are set by an admin · depot ${esc(rates.yardAddress || DEFAULT_DEPOT.yardAddress)}</span>`}</div></div>
-    <p class="pad sub">Guided quote: site → equipment (+ operator) → optional labourer → travel → duration → materials → rubbish → price (ex GST). Accepting creates an unscheduled job. Admins and supervisors only.</p>
+    <p class="pad sub">Three steps: job details, setup (machine and optional labourer), then review. Travel, materials and rubbish sit on the review. Accepting creates an unscheduled job. Admins and supervisors only. Prices stay ex GST and are never invented.</p>
     <p class="pad sub">Depot (travel start): <b>${esc(rates.yardAddress || DEFAULT_DEPOT.yardAddress)}</b>
       · <a href="${esc(rates.yardMapsUrl || DEFAULT_DEPOT.yardMapsUrl)}" target="_blank" rel="noopener">Maps</a></p>
     ${rateWarn ? `<p class="pad warnt">Set plant (incl. operator), labourer, travel, materials and tip rates before accepting — nothing is invented for you.</p>` : ""}
@@ -426,28 +426,35 @@ function openQuoteWizard(existing, opts = {}) {
     }, existing || {});
     state.machines = normalizeMachineIds(state.machines || []);
     state.presetId = resolvePresetId(state.machines);
-    // Steps: Site, Equipment, Travel, Duration, Materials, Rubbish, Price
-    let step = opts.jumpToPrice ? 6 : 0;
-    const steps = ["Site", "Equipment", "Travel", "Duration", "Materials", "Rubbish", "Price"];
+    // Shown as three steps (job / setup / review). Travel, materials, rubbish and the total stay on review.
+    // calcQuote, rate checks and the accept payload are unchanged.
+    let step = opts.jumpToPrice ? 2 : 0;
+    const phases = ["Job", "Setup", "Review"];
+    const titles = ["New quote", "Choose equipment", "Review"];
+    const subs = ["What needs doing?", "Step 2 of 3", "Step 3 of 3"];
+    let holdErr = "";
     const d = $("#dlg"); d.className = "jobcard"; d.onclose = () => renderAdmin();
     const paint = () => {
       const draft = { ...state, machines: normalizeMachineIds(state.machines) };
       const calc = calcQuote(draft, rates);
       const already = !!(existing?.jobId && (existing.quoteStatus === "Accepted" || state.quoteStatus === "Accepted"));
       const canAccept = !already && calc.complete && calc.totalEx != null && !!(draft.client && draft.address);
-      d.innerHTML = `<form method="dialog" id="qwf" class="jc qw"><div class="jc-top q-quote"><div><div class="jc-no">${existing ? "Edit quote" : "New quote"}</div>
-        <div class="jc-q">Step ${step + 1} of ${steps.length}: ${esc(steps[step])}</div></div>
-        <button value="cancel" formnovalidate class="jc-x">✕</button></div>
-        <div class="jc-body qw-body"><div class="qw-steps">${steps.map((s, i) => `<span class="qw-dot ${i === step ? "on" : i < step ? "done" : ""}">${i + 1}</span>`).join("<span class=\"qw-line\"></span>")}</div>
+      const shownErr = holdErr; holdErr = "";
+      d.innerHTML = `<form method="dialog" id="qwf" class="jc qw"><div class="jc-top q-quote"><div><div class="jc-no">${existing && step !== 0 ? "Edit quote" : esc(titles[step] || "Quote")}</div>
+        <div class="jc-q">${esc(subs[step] || "")}</div></div>
+        <button value="cancel" formnovalidate class="jc-x" aria-label="Close">✕</button></div>
+        <div class="jc-body qw-body"><div class="qw-steps" aria-label="Quote steps">${phases.map((s, i) => `<span class="qw-phase ${i === step ? "on" : i < step ? "done" : ""}"><b>${i + 1}</b> ${s}</span>`).join("")}</div>
+        <div class="qw-bar" aria-hidden="true"><span style="width:${Math.round(((step + 1) / phases.length) * 100)}%"></span></div>
         ${stepHtml(step, draft, calc, rates, esc, TYPES, CLIENTS, canSeeMoney, $$)}
-        ${step === 6 && !calc.complete ? `<p class="warnt pad">Missing rates for: ${esc(calc.missingRates.join(", "))}. Save as draft, or ask an admin to set rates. Total is not shown as valid until every used line has a rate.</p>` : ""}
+        ${step === 2 && !calc.complete ? `<p class="warnt pad">Missing rates for: ${esc(calc.missingRates.join(", "))}. Save as draft, or ask an admin to set rates. Total is not shown as valid until every used line has a rate.</p>` : ""}
         ${already ? `<p class="pad sub">Already accepted → job <b>${esc(existing.jobId)}</b>. Accept will not create another job.</p>` : ""}
         </div>
-        <p id="qerr" class="err"></p>
+        <p id="qerr" class="err">${esc(shownErr)}</p>
         <div class="btns jc-foot">
           <button type="button" class="sm-btn" id="qwback" ${step === 0 ? "disabled" : ""}>Back</button>
-          ${step < 6 ? `<button type="button" class="sm-btn primary" id="qwnext">Next</button>` :
-            `<button type="button" class="sm-btn" id="qwsave">Save draft</button>
+          ${step < 2 ? `<button type="button" class="sm-btn primary" id="qwnext">${step === 0 ? "Choose equipment" : "Continue"}</button>
+             <button type="button" class="sm-btn qw-later" id="qwsave">Save &amp; finish later</button>` :
+            `<button type="button" class="sm-btn qw-later" id="qwsave">Save draft</button>
              <button type="button" class="sm-btn primary" id="qwaccept" ${canAccept ? "" : "disabled"} title="${canAccept ? "" : already ? "Already accepted" : "Complete site + rates first"}">Accept → create job</button>`}
         </div></form>`;
       d.showModal();
@@ -483,6 +490,17 @@ function openQuoteWizard(existing, opts = {}) {
       d.querySelector("#qlabourer")?.addEventListener("change", () => {
         state.includeLabourer = !!d.querySelector("#qlabourer")?.checked;
         paint();
+      });
+      d.querySelectorAll("[data-type]").forEach(b => b.onclick = () => {
+        syncFormToState();
+        state.type = b.dataset.type;
+        paint();
+      });
+      d.querySelectorAll("[data-lab]").forEach(b => b.onclick = () => {
+        const lab = d.querySelector("#qlabourer");
+        if (!lab) return;
+        lab.checked = b.dataset.lab === "yes";
+        lab.dispatchEvent(new Event("change"));
       });
     };
     const syncFormToState = () => {
@@ -552,8 +570,8 @@ function openQuoteWizard(existing, opts = {}) {
         const needH = (calc.machines || []).some(id => machineRateOf(rates, id).unit === "hour")
           || (calc.includeLabourer && rates.labourerUnit !== "day");
         if (needH && !(+data.hoursOnSite > 0)) {
-          $("#qerr").textContent = "Enter hours on site for hourly plant / labourer.";
-          step = 3; paint(); return;
+          holdErr = "Enter hours on site for hourly plant / labourer.";
+          step = 0; paint(); return;
         }
       }
       if (accept && existing?.jobId && existing?.quoteStatus === "Accepted") {
@@ -608,66 +626,48 @@ function stepHtml(step, d, calc, rates, esc, TYPES, CLIENTS, canSeeMoney, $$) {
   const depot = rates.yardAddress || DEFAULT_DEPOT.yardAddress;
   const maps = rates.yardMapsUrl || DEFAULT_DEPOT.yardMapsUrl;
   const rateTxt = (v, suffix) => (v != null && canSeeMoney()) ? `${$$(v)}${suffix} ex GST` : "not set yet";
-  if (step === 0) return `<div class="qw-pane"><h4>Who and where</h4>
-    <label>Client<input name="client" list="qclients" value="${esc(d.client || "")}" required><datalist id="qclients">${CLIENTS.map(c => `<option value="${esc(c)}">`).join("")}</datalist></label>
-    <label>Site address<input name="address" value="${esc(d.address || "")}" required></label>
-    <label>Category<select name="type">${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${d.type === k ? "selected" : ""}>${v}</option>`).join("")}</select></label>
-    <p class="sub">One category per job (mixed work is split later). Equipment is chosen on the next step.</p>
-    <label>Scope / notes<textarea name="description" rows="3">${esc(d.description || "")}</textarea></label></div>`;
+  if (step === 0) return `<div class="qw-pane">
+    <label>Client<input name="client" list="qclients" value="${esc(d.client || "")}" required autocomplete="organization"><datalist id="qclients">${CLIENTS.map(c => `<option value="${esc(c)}">`).join("")}</datalist></label>
+    <label>Job address<input name="address" value="${esc(d.address || "")}" required autocomplete="street-address" placeholder="Lot and street"></label>
+    <label class="qw-hours">Hours on site<input name="hoursOnSite" type="number" min="0" step="0.25" value="${esc(d.hoursOnSite)}" inputmode="decimal"></label>
+    <label class="qw-native">Category<select name="type">${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${d.type === k ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></label>
+    <div class="qw-types" role="group" aria-label="Job type">${Object.entries(TYPES).map(([k, v]) => `<button type="button" class="qw-type ${d.type === k ? "on" : ""}" data-type="${esc(k)}" aria-pressed="${d.type === k ? "true" : "false"}"><span class="qw-tick" aria-hidden="true"></span><span>${esc(v)}</span></button>`).join("")}</div>
+    <p class="sub">One category per job. Mixed work is still split later, from the job.</p>
+    <label>Scope / notes<textarea name="description" rows="2">${esc(d.description || "")}</textarea></label>
+  </div>`;
   if (step === 1) {
     const sel = new Set(normalizeMachineIds(d.machines || []));
     const preset = d.presetId || resolvePresetId([...sel]);
-    const presets = EQUIPMENT_PRESETS.map(p => `<label class="ck qw-preset"><input type="radio" name="preset" value="${esc(p.id)}" ${preset === p.id ? "checked" : ""}> ${esc(p.label)}</label>`).join("");
-    // and/or builder mirrors preset: truck + optional skid + optional excavator
-    const builder = `<div class="qw-builder">
-      <p class="sub">Or tick and/or (same machines — truck counted once):</p>
+    const presets = EQUIPMENT_PRESETS.map(p => {
+      const blurb = p.machines.map(id => `${fleetName(id)} and operator`).join(" · ");
+      return `<label class="ck qw-preset ${preset === p.id ? "on" : ""}"><input type="radio" name="preset" value="${esc(p.id)}" ${preset === p.id ? "checked" : ""}><span><b>${esc(p.label)}</b><small>${esc(blurb)}</small></span></label>`;
+    }).join("");
+    // and/or builder mirrors preset: truck + optional skid + optional excavator. Same ids, truck once.
+    const builder = `<details class="qw-builder"><summary>Adjust machines</summary>
+      <p class="sub">Same machines as the list above. Truck is counted once.</p>
       <label class="ck"><input type="checkbox" data-mach="truck" ${sel.has("truck") ? "checked" : ""}> Truck</label>
       <label class="ck"><input type="checkbox" data-mach="skid" ${sel.has("skid") ? "checked" : ""}> Skid steer (Bobcat)</label>
       <label class="ck"><input type="checkbox" data-mach="excavator" ${sel.has("excavator") ? "checked" : ""}> Excavator (JCB)</label>
-    </div>`;
-    const plantBits = [...sel].map(id => {
+    </details>`;
+    const plantBits = canSeeMoney() ? [...sel].map(id => {
       const { rate, unit } = machineRateOf(rates, id);
       return `<div class="sub">${esc(fleetName(id))} + operator: ${rateTxt(rate, unit === "day" ? "/day" : "/h")}</div>`;
-    }).join("");
-    return `<div class="qw-pane"><h4>Equipment (operator included)</h4>
-      <p class="sub">Each plant rate includes the operator. Choosing Truck + excavator charges truck once and excavator once — never twice for the truck.</p>
+    }).join("") : "";
+    return `<div class="qw-pane"><h4>Machine setup</h4>
+      <p class="sub">Each machine is included once, with its operator.</p>
       <div class="qw-presets">${presets}</div>
       ${builder}
-      <label class="ck" style="margin-top:12px"><input type="checkbox" id="qlabourer" ${d.includeLabourer ? "checked" : ""}> Include labourer (separate rate)</label>
-      <p class="sub">Labourer: ${rateTxt(rates.labourerRate, rates.labourerUnit === "day" ? "/day" : "/h")}</p>
-      ${plantBits || `<p class="warnt">Select a preset.</p>`}
+      <h4 class="qw-labh">Need a labourer?</h4>
+      <div class="qw-yn" role="group" aria-label="Need a labourer?">
+        <button type="button" class="qw-ynbtn ${d.includeLabourer ? "on" : ""}" data-lab="yes">Yes</button>
+        <button type="button" class="qw-ynbtn ${d.includeLabourer ? "" : "on"}" data-lab="no">No</button>
+      </div>
+      <input type="checkbox" id="qlabourer" class="sr" ${d.includeLabourer ? "checked" : ""}>
+      ${canSeeMoney() ? `<p class="sub">Labourer (separate rate): ${rateTxt(rates.labourerRate, rates.labourerUnit === "day" ? "/day" : "/h")}</p>${plantBits}` : `<p class="sub">A labourer is optional and priced separately from the machine.</p>`}
     </div>`;
   }
-  if (step === 2) return `<div class="qw-pane"><h4>Travel distance</h4>
-    <p class="sub">Depot (start): <b>${esc(depot)}</b> · <a href="${esc(maps)}" target="_blank" rel="noopener">Maps link</a></p>
-    <p class="sub">Use <b>Calculate travel</b> for a <b>road</b> distance (OSRM) depot → site. Straight-line is never filled in as travel km. Choose one-way or return (return = 2 × one-way). You can still type kilometres yourself.</p>
-    <div class="row gap" style="margin:8px 0">
-      <label class="ck"><input type="radio" name="travelMode" value="oneway" ${d.travelMode !== "return" ? "checked" : ""}> One-way</label>
-      <label class="ck"><input type="radio" name="travelMode" value="return" ${d.travelMode === "return" ? "checked" : ""}> Return (×2)</label>
-      <button type="button" class="sm-btn" id="qwcalc">Calculate travel</button>
-    </div>
-    <p id="qwtravelst" class="sub">${esc(d.travelNote || "")}</p>
-    <label>Kilometres (billable)<input name="travelKm" type="number" min="0" step="0.1" value="${esc(d.travelKm)}" inputmode="decimal"></label>
-    <p class="sub">Rate: ${rateTxt(rates.travelPerKm, "/km")}</p></div>`;
-  if (step === 3) {
-    const anyDay = (d.machines || []).some(id => machineRateOf(rates, id).unit === "day")
-      || (d.includeLabourer && rates.labourerUnit === "day");
-    const anyHour = (d.machines || []).some(id => machineRateOf(rates, id).unit === "hour")
-      || (d.includeLabourer && rates.labourerUnit !== "day")
-      || !(d.machines || []).length;
-    return `<div class="qw-pane"><h4>Duration on site</h4>
-      <p class="sub">Hours drive <b>hourly</b> plant+operator (and labourer) lines. <b>Day</b> rates use days below — not multiplied by hours (avoids overcharging).</p>
-      ${anyHour ? `<label>Hours on site<input name="hoursOnSite" type="number" min="0" step="0.25" value="${esc(d.hoursOnSite)}" inputmode="decimal"></label>` : ""}
-      ${anyDay ? `<label>Days (for day-rate plant / labourer)<input name="machineDays" type="number" min="1" step="1" value="${esc(d.machineDays || 1)}" inputmode="numeric"></label>` : `<input type="hidden" name="machineDays" value="${esc(d.machineDays || 1)}">`}
-      ${!anyHour ? `<input type="hidden" name="hoursOnSite" value="${esc(d.hoursOnSite || 0)}">` : ""}
-    </div>`;
-  }
-  if (step === 4) return `<div class="qw-pane"><h4>Materials used</h4>
-    <label>Quantity (${esc(rates.materialUnitLabel || "unit")})<input name="materialQty" type="number" min="0" step="0.1" value="${esc(d.materialQty)}" inputmode="decimal"></label>
-    <p class="sub">Rate: ${rateTxt(rates.materialPerUnit, " each")}</p></div>`;
-  if (step === 5) return `<div class="qw-pane"><h4>Material / rubbish removed</h4>
-    <label>Loads removed<input name="tipLoads" type="number" min="0" step="1" value="${esc(d.tipLoads)}" inputmode="numeric"></label>
-    <p class="sub">Tip / disposal rate: ${rateTxt(rates.tipPerLoad, " / load")}</p></div>`;
+  const anyDay = (d.machines || []).some(id => machineRateOf(rates, id).unit === "day")
+    || (d.includeLabourer && rates.labourerUnit === "day");
   const lines = calc.lines.map(l => {
     let amt = "—";
     if (l.qty > 0 && l.rate == null) amt = `<span class="unal">rate missing</span>`;
@@ -680,8 +680,25 @@ function stepHtml(step, d, calc, rates, esc, TYPES, CLIENTS, canSeeMoney, $$) {
     : (canSeeMoney() ? esc($$(calc.totalEx)) : "—");
   const presetLab = EQUIPMENT_PRESETS.find(p => p.id === calc.presetId)?.label
     || (calc.machines || []).map(fleetName).join(" + ") || "—";
-  return `<div class="qw-pane"><h4>Calculated quote</h4>
+  return `<div class="qw-pane"><h4>Review</h4>
     <p class="sub">Equipment: <b>${esc(presetLab)}</b>${calc.includeLabourer ? " + labourer" : ""} · one job category only</p>
+    <details class="qw-extra"><summary>Travel, materials and rubbish</summary>
+      <p class="sub">Depot (start): <b>${esc(depot)}</b> · <a href="${esc(maps)}" target="_blank" rel="noopener">Maps link</a>. Calculate travel uses a road distance (OSRM). Straight-line is never filled in as travel km.</p>
+      <div class="row gap">
+        <label class="ck"><input type="radio" name="travelMode" value="oneway" ${d.travelMode !== "return" ? "checked" : ""}> One-way</label>
+        <label class="ck"><input type="radio" name="travelMode" value="return" ${d.travelMode === "return" ? "checked" : ""}> Return (×2)</label>
+        <button type="button" class="sm-btn" id="qwcalc">Calculate travel</button>
+      </div>
+      <p id="qwtravelst" class="sub">${esc(d.travelNote || "")}</p>
+      <label>Kilometres (billable)<input name="travelKm" type="number" min="0" step="0.1" value="${esc(d.travelKm)}" inputmode="decimal"></label>
+      ${canSeeMoney() ? `<p class="sub">Travel rate: ${rateTxt(rates.travelPerKm, "/km")}</p>` : ""}
+      <label>Materials (${esc(rates.materialUnitLabel || "unit")})<input name="materialQty" type="number" min="0" step="0.1" value="${esc(d.materialQty)}" inputmode="decimal"></label>
+      ${canSeeMoney() ? `<p class="sub">Materials rate: ${rateTxt(rates.materialPerUnit, " each")}</p>` : ""}
+      <label>Rubbish loads<input name="tipLoads" type="number" min="0" step="1" value="${esc(d.tipLoads)}" inputmode="numeric"></label>
+      ${canSeeMoney() ? `<p class="sub">Tip rate: ${rateTxt(rates.tipPerLoad, " / load")}</p>` : ""}
+      ${anyDay ? `<label>Days (day-rate plant or labourer)<input name="machineDays" type="number" min="1" step="1" value="${esc(d.machineDays || 1)}" inputmode="numeric"></label>
+        <p class="sub">Day rates use days, not hours.</p>` : `<input type="hidden" name="machineDays" value="${esc(d.machineDays || 1)}">`}
+    </details>
     ${d.travelNote ? `<p class="sub">${esc(d.travelNote)}</p>` : ""}
     <div class="qw-sum">${lines}
     <div class="qw-total"><span>Total ex GST</span><b>${total}</b></div></div>
