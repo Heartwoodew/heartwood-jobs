@@ -341,7 +341,8 @@ async function mirrorJobPhotos(j, files) {
   await putPlanned(plan, target => uploadBytes(storageRef(storage, target.path), files[target.sourceIndex], {
     contentType: target.contentType, customMetadata: target.metadata,
   }));
-  // Not a retention anchor. It only tells other open phones to list Storage again.
+  // Not a retention anchor, including on a completed job. Listing still uses the
+  // job's completion or existing activity date. This only asks other open phones to list again.
   updateDoc(doc(db, "jobs", j.id), { cloudPhotosAt: at.toISOString() }).catch(e => console.warn("cloud photo stamp not saved", e.code || e.message));
   await ensurePhotoList(j, true);
   if (ui.galleryJob === j.id) await paintGallery(findJob(j.id) || j);

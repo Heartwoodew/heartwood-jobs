@@ -116,9 +116,9 @@ export function jobPhotoPrefix(membership, job) {
 
 /**
  * One object returned by a storage list. Receipt objects stay hidden.
- * Missing purpose is still a job photo when the path and type agree, so an
- * older mirror without cloud-read metadata can be shown. A receipt purpose
- * or receipt id is never accepted, even on this prefix.
+ * An older mirror with no purpose still shows when its content type is an
+ * accepted image. An absent or unknown content type is not shown.
+ * A receipt purpose or receipt id is never accepted, even on this prefix.
  */
 export function listedJobPhoto({ membership, job, path, contentType, customMetadata, size, readable } = {}) {
   if (readable === false) return deny("not-allowed");
@@ -131,8 +131,8 @@ export function listedJobPhoto({ membership, job, path, contentType, customMetad
   const name = full.slice(prefix.prefix.length + 1);
   if (!name || name.includes("/")) return deny("not-allowed");
   if (meta.purpose && meta.purpose !== "job-photo") return deny("not-allowed");
-  const type = String(contentType || "").toLowerCase();
-  if (type && !JOB_PHOTO_MIMES.includes(type)) return deny("mime-not-allowed");
+  const type = String(contentType ?? "").trim().toLowerCase();
+  if (!JOB_PHOTO_MIMES.includes(type)) return deny("mime-not-allowed");
   if (size === 0) return deny("empty-file");
   const storedExpiry = typeof meta.expiresAfter === "string" && /^\d{4}-\d{2}-\d{2}$/.test(meta.expiresAfter) ? meta.expiresAfter : null;
   return {

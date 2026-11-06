@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { planJobPhotoMirrors, resolveMembership, canReadObject } from "../../app/features/cloud-storage.js";
+import { planJobPhotoMirrors, resolveMembership, canReadObject, listedJobPhoto, JOB_PHOTO_MIMES } from "../../app/features/cloud-storage.js";
 import { SCHEDULING_APPROVED, operationalExpiresAfter } from "../../app/features/cloud-retention.js";
 import { buildOperationalExport } from "../../app/features/cloud-retention.js";
 import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, galleryHtml } from "../../app/features/photo-gallery.js";
@@ -58,6 +58,15 @@ test("viewing uses the job anchor and does not move expiresAfter", () => {
   assert.equal(open.photosEmailedAt, "2026-02-01T00:00:00.000Z");
   const pinged = operationalExpiresAfter({ ...open, cloudPhotosAt: "2026-11-06T02:00:00.000Z" }, new Date("2026-11-06T02:00:00.000Z"));
   assert.equal(pinged.expiresAfter, "2026-05-01");
+  const completedPing = operationalExpiresAfter({
+    ...completed,
+    cloudPhotosAt: "2026-12-01T00:00:00.000Z",
+    photosEmailedAt: "2026-12-01T00:00:00.000Z",
+  }, new Date("2026-12-01T02:00:00.000Z"));
+  assert.equal(completedPing.expiresAfter, "2026-11-06");
+  assert.equal(completedPing.anchorKind, "completion");
+  assert.equal(completedPing.schedulingApproved, false);
+  assert.equal(completedPing.deletionPerformed, false);
 });
 
 test("gallery lists persisted job photos and hides receipts", () => {
@@ -118,6 +127,47 @@ test("upload stamp follows completion or the email activity, not a later view", 
   const openStamp = stampExpiresAfter(openPlan, open, new Date("2026-02-01T00:00:00.000Z"));
   assert.equal(openStamp.uploads[0].metadata.expiresAfter, "2026-05-01");
   assert.equal(open.photosEmailedAt, undefined);
+});
+
+test("gallery requires an explicit accepted image type", () => {
+  const job = {
+    id: "job1", status: "Scheduled", date: "2026-11-06",
+    client: "Orbit Homes (Qld) Pty Ltd", assigned: ["op1"],
+  };
+  const path = name => `tenants/heartwood/jobs/job1/photos/${name}`;
+  const item = (name, contentType, customMetadata = { purpose: "job-photo" }) => ({
+    path: path(name), contentType, size: 100, customMetadata, timeCreated: "2026-08-06T01:00:00.000Z",
+  });
+  for (const type of JOB_PHOTO_MIMES) {
+    const one = listedJobPhoto({ membership: staff, job, ...item("pok", type) });
+    assert.equal(one.ok, true, type);
+    assert.equal(one.contentType, type);
+  }
+  const older = listedJobPhoto({ membership: staff, job, ...item("pold", "image/jpeg", {}) });
+  assert.equal(older.ok, true);
+  assert.equal(older.contentType, "image/jpeg");
+  const absent = [undefined, null, "", "   ", "application/octet-stream", "image/bmp", "image/*"];
+  for (const contentType of absent) {
+    const denied = listedJobPhoto({ membership: staff, job, ...item("pno", contentType) });
+    assert.equal(denied.ok, false, String(contentType));
+    assert.equal(denied.reason, "mime-not-allowed");
+  }
+  const gallery = buildJobGallery({
+    membership: staff, job, now: new Date("2026-08-07T02:00:00.000Z"),
+    listing: [
+      item("pjpeg", "image/jpeg"),
+      item("ppng", "Image/PNG"),
+      item("pold", "image/jpeg", {}),
+      item("pempty", ""),
+      item("pmissing", undefined),
+      item("punknown", "application/octet-stream"),
+    ],
+  });
+  assert.deepEqual(gallery.photos.map(p => p.name).sort(), ["pjpeg", "pold", "ppng"]);
+  assert.deepEqual(
+    gallery.hidden.filter(h => h.reason === "mime-not-allowed").map(h => h.path.split("/").pop()).sort(),
+    ["pempty", "pmissing", "punknown"],
+  );
 });
 
 test("the photos action is absent until a cloud photo exists", () => {
