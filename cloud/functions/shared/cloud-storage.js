@@ -202,6 +202,68 @@ export function canReadObject({ membership, path, job, receipt } = {}) {
   return deny("not-allowed");
 }
 
+/**
+ * Job-photo capture. Each file is planned on its own so one rejected file
+ * does not block the rest. At most JOB_PHOTO_MAX_COUNT files are stored.
+ * Email still sends every picked file; this plan is only the Storage mirror.
+ */
+export function planJobPhotoMirrors({ membership, job, files } = {}) {
+  const list = Array.isArray(files) ? files : [];
+  const uploads = [];
+  const skipped = [];
+  list.forEach((file, sourceIndex) => {
+    if (uploads.length >= JOB_PHOTO_MAX_COUNT) {
+      skipped.push({ sourceIndex, name: file && file.name, reason: "too-many-files" });
+      return;
+    }
+    const one = planJobPhotoBatch({ membership, job, files: [file] });
+    if (!one.ok) skipped.push({ sourceIndex, name: file && file.name, reason: one.reason });
+    else uploads.push({ ...one.uploads[0], sourceIndex });
+  });
+  return { ok: uploads.length > 0, uploads, skipped, order: ["prepare-files", "storage-each-accepted-file", "email-flag-unchanged"] };
+}
+
+/**
+ * Receipt capture order required by the deployed Storage rules.
+ * The receipts document must already exist, owned by the signed-in staff user,
+ * and its jobId must be the open job when the upload started from a job.
+ * Storage is last. receiptChunks stay the email/Hubdoc fallback and are not replaced.
+ */
+export function planStaffReceiptCapture({ membership, job, receiptId, file, receiptDoc } = {}) {
+  if (!membership?.ok) return deny(membership?.reason || "no-membership");
+  if (!receiptDoc) return deny("receipt-not-written");
+  if (!receiptId || receiptDoc.id !== receiptId) return deny("receipt-not-written");
+  if (receiptDoc.uid !== membership.uid) return deny("not-allowed");
+  const jobId = job && job.id ? job.id : null;
+  if (jobId && receiptDoc.jobId !== jobId) return deny("job-mismatch");
+  if (!jobId && receiptDoc.jobId) return deny("job-mismatch");
+  const storage = planReceiptUpload({
+    membership,
+    receipt: { id: receiptDoc.id, uid: receiptDoc.uid, tenantId: jobTenantOf(receiptDoc) },
+    file,
+  });
+  if (!storage.ok) return storage;
+  return {
+    ok: true,
+    order: ["receiptChunks", "receiptDoc", "storage"],
+    receiptDocFirst: true,
+    receipt: { id: receiptDoc.id, uid: receiptDoc.uid, jobId: receiptDoc.jobId || null, status: receiptDoc.status || "queued" },
+    storage,
+  };
+}
+
+/** Named stub of the deployed receipt create rule. A missing receipt doc is denied. */
+export function stubReceiptStorageDecision({ receiptDoc, authUid, path, metadata, job } = {}) {
+  if (!receiptDoc) return deny("receipt-not-written");
+  if (!authUid || receiptDoc.uid !== authUid) return deny("not-allowed");
+  if (typeof path !== "string" || !path.endsWith(`/receipts/${receiptDoc.id}/original`)) return deny("path-not-authoritative");
+  if (!metadata || metadata.purpose !== "receipt" || metadata.receiptId !== receiptDoc.id || metadata.uploaderUid !== authUid) {
+    return deny("not-allowed");
+  }
+  if (job && job.id && receiptDoc.jobId !== job.id) return deny("job-mismatch");
+  return { ok: true, purpose: "receipt" };
+}
+
 export async function putPlanned(plan, upload) {
   if (!plan?.ok) {
     const err = new Error(plan?.reason || "not-allowed");

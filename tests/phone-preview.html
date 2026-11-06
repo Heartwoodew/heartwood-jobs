@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Heartwood preview</title>
+<script type="importmap">
+{
+  "imports": {
+    "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js": "./firebase-stub.js",
+    "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js": "./firebase-stub.js",
+    "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js": "./firebase-stub.js",
+    "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js": "./firebase-stub.js"
+  }
+}
+</script>
+<link rel="stylesheet" href="../app/styles.css">
+<style>#probe{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><g fill="#e7c59a"><rect x="13" y="2" width="6" height="12" rx="3"/><rect x="13" y="18" width="6" height="12" rx="3"/><rect x="2" y="13" width="12" height="6" rx="3"/><rect x="18" y="13" width="12" height="6" rx="3"/></g></svg>Heartwood <span>Jobs</span></div>
+  <div class="gsearch hidden" id="gsw"><input id="gq" type="search" placeholder="Search lot, street, PO or job #" autocomplete="off" aria-label="Search jobs"><div id="gres" class="gres hidden"></div></div>
+  <div id="who" class="who"></div>
+  <button id="logout" class="ghost hidden">Sign out</button>
+</header>
+<main id="app"><p class="muted pad">Loading…</p></main>
+<dialog id="dlg"></dialog>
+<div id="toast" class="toast hidden"></div>
+<script>
+  const q = new URLSearchParams(location.search);
+  window.HW_TODAY = "2026-11-06";
+  window.HW_PREVIEW_ROLE = q.get("role") || "operator";
+  window.HW_PREVIEW_RATES = q.get("rates") || "";
+  window.__errs = [];
+  window.addEventListener("error", e => window.__errs.push(String(e.message || e.error)));
+  window.addEventListener("unhandledrejection", e => window.__errs.push(String(e.reason && (e.reason.stack || e.reason.message || e.reason))));
+  const origClick = HTMLInputElement.prototype.click;
+  HTMLInputElement.prototype.click = function () {
+    if (this.type === "file") { window.__photoClicks = (window.__photoClicks || 0) + 1; return; }
+    return origClick.apply(this, arguments);
+  };
+</script>
+<script type="module" src="../app/app.js"></script>
+<script type="module">
+const q = new URLSearchParams(location.search);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function waitFor(sel, ms = 4000) {
+  const t0 = performance.now();
+  while (performance.now() - t0 < ms) {
+    if (document.querySelector(sel)) return document.querySelector(sel);
+    await sleep(30);
+  }
+  return null;
+}
+await waitFor(".mob, .sm-layout, #login");
+await sleep(80);
+if (q.get("open") === "detail") document.querySelector('.mrow[data-id="j2"], .hrow[data-id="j2"]')?.click();
+if (q.get("open") === "jobs") document.querySelector('[data-tab="week"]')?.click();
+if (q.get("open") === "photos") document.querySelector('[data-tab="photos"]')?.click();
+if (q.get("open") === "more") document.querySelector('[data-tab="more"]')?.click();
+if (q.get("open") === "myjobs") document.querySelector('[data-view="myjobs"]')?.click();
+if (q.get("open") === "quotes") {
+  document.querySelector('[data-tab="more"]')?.click();
+  await sleep(40);
+  document.querySelector('[data-go="quotes"]')?.click();
+  await waitFor("#newquote");
+}
+if (q.get("open") === "wizard") {
+  document.querySelector('[data-tab="more"]')?.click();
+  await sleep(30);
+  document.querySelector('[data-go="quotes"]')?.click();
+  await waitFor("#newquote");
+  document.querySelector("#newquote")?.click();
+  await waitFor("#qwf", 4000);
+}
+if (q.get("check") === "1") {
+  const fails = [];
+  const ok = (cond, msg) => { if (!cond) fails.push(msg); };
+  const text = () => document.body.innerText;
+  const role = window.HW_PREVIEW_ROLE;
+  if (role === "operator") {
+    ok(!!document.querySelector(".mob"), "operator shell");
+    const labels = [...document.querySelectorAll(".mob-tabs button")].map(b => b.textContent.replace(/\s+/g, " ").trim());
+    ok(labels.join("|") === "Today|Jobs|Photos|More" || labels.join(" ").includes("Today") && labels.join(" ").includes("Jobs") && labels.join(" ").includes("Photos") && labels.join(" ").includes("More"), "tabs " + labels.join(","));
+    ok(!document.querySelector('[data-go="quotes"]') && !text().includes("Quote rates"), "operator has no quotes");
+    ok(!/\$\s?\d/.test(text()), "operator has no dollar amounts: " + text().slice(0, 240));
+    document.querySelector('[data-tab="week"]')?.click();
+    await sleep(40);
+    ok(document.querySelector(".mob-tabs button.on")?.textContent.includes("Jobs"), "jobs tab");
+    ok(!/\$\s?\d/.test(text()), "jobs tab dollars");
+    document.querySelector('[data-tab="photos"]')?.click();
+    await sleep(40);
+    ok(!!document.querySelector("[data-photo], .op-photo"), "photos action");
+    document.querySelector("[data-photo]")?.click();
+    await sleep(20);
+    ok((window.__photoClicks || 0) >= 1, "add photos calls existing email picker");
+    document.querySelector('[data-tab="more"]')?.click();
+    await sleep(40);
+    ok(!!document.querySelector('[data-go="hours"]'), "hours");
+    ok(!!document.querySelector('[data-go="done"]'), "completed");
+    ok(!!document.querySelector('[data-go="swms"]'), "swms");
+    ok(!!document.querySelector('[data-inc]'), "incident");
+    ok(!document.querySelector('[data-go="quotes"]'), "more hides quotes");
+    ok(!/\$\s?\d/.test(text()), "more dollars");
+    document.querySelector('[data-tab="today"]')?.click();
+    await sleep(40);
+    const card = document.querySelector('.mrow[data-id="j2"]');
+    ok(!!card, "today card");
+    card?.click();
+    await sleep(40);
+    ok(!!document.querySelector("#back"), "back");
+    ok(!!document.querySelector('#emailph'), "emailph");
+    ok(!!document.querySelector('[data-act="start"]'), "start");
+    ok(!!document.querySelector('[data-act="done"]'), "complete");
+    ok(!!document.querySelector('[data-act="note"]'), "note");
+    const dir = document.querySelector('a[href*="maps"]');
+    ok(!!dir && /Brightvale/.test(decodeURIComponent(dir.getAttribute("href"))), "directions");
+    ok(!/\$\s?\d/.test(text()), "detail dollars");
+    document.querySelector('[data-act="start"]')?.click();
+    await sleep(30);
+    ok((window.__fbCalls || []).some(c => c.op === "updateDoc" && c.status === "In progress"), "start uses updateDoc");
+    document.querySelector('[data-act="note"]')?.click();
+    await sleep(20);
+    ok(!!document.querySelector("#of textarea[name=note]"), "note dialog");
+    document.querySelector("#dlg")?.close();
+    const before = window.__photoClicks || 0;
+    document.querySelector("#emailph")?.click();
+    await sleep(20);
+    ok((window.__photoClicks || 0) > before, "detail add photos");
+    document.querySelector("#back")?.click();
+    await sleep(30);
+    ok(!!document.querySelector('.mrow[data-id="j2"]'), "back to list");
+  }
+  if (role === "admin") {
+    ok(!!document.querySelector('[data-view="quotes"]'), "admin quotes nav");
+    ok(!document.querySelector(".mob-tabs"), "admin home is not the phone shell");
+    document.querySelector('[data-view="quotes"]')?.click();
+    await waitFor("#editrates");
+    ok(!!document.querySelector("#editrates"), "only admin edits rates");
+    ok(!!document.querySelector("#newquote"), "admin new quote");
+    document.querySelector('[data-view="myjobs"]')?.click();
+    await sleep(50);
+    ok(!!document.querySelector("#toadmin"), "back to admin");
+    document.querySelector('[data-tab="more"]')?.click();
+    await sleep(30);
+    ok(!document.querySelector('[data-go="quotes"]'), "admin quotes stay on the admin screen");
+  }
+  if (role === "supervisor" && window.HW_PREVIEW_RATES === "blank") {
+    document.querySelector('[data-tab="more"]')?.click();
+    await sleep(30);
+    document.querySelector('[data-go="quotes"]')?.click();
+    await waitFor("#newquote");
+    document.querySelector("#newquote").click();
+    await waitFor("#qwf");
+    const addr = document.querySelector("[name=address]");
+    if (addr) addr.value = "1 Test Street, Chuwar QLD 4306";
+    const hours = document.querySelector("[name=hoursOnSite]");
+    if (hours) hours.value = "2";
+    document.querySelector("#qwnext")?.click();
+    await sleep(40);
+    const preset = document.querySelector('[name=preset][value=truck]');
+    if (preset) { preset.checked = true; preset.dispatchEvent(new Event("change")); }
+    await sleep(30);
+    document.querySelector("#qwnext")?.click();
+    await sleep(40);
+    const accept = document.querySelector("#qwaccept");
+    const review = document.querySelector("#qwf")?.innerText || "";
+    ok(accept && accept.disabled, "missing rates block accept");
+    ok(/Missing rates|rate missing|Incomplete/i.test(review), "missing rate is visible");
+    ok(/Incomplete/.test(review), "blank rates are not turned into a total");
+  }
+  if (role === "supervisor" && window.HW_PREVIEW_RATES !== "blank") {
+    document.querySelector('[data-tab="more"]')?.click();
+    await sleep(30);
+    ok(!!document.querySelector('[data-go="quotes"]'), "supervisor quotes");
+    ok(!document.querySelector("#editrates"), "supervisor cannot edit rates from more");
+    document.querySelector('[data-go="quotes"]')?.click();
+    await waitFor("#newquote");
+    ok(!!document.querySelector("#newquote"), "new quote");
+    ok(!document.querySelector("#editrates"), "no rate editor");
+    document.querySelector("#newquote").click();
+    await waitFor("#qwf");
+    const wiz = document.querySelector("#qwf")?.innerText || "";
+    ok(/Job/.test(wiz) && /Setup/.test(wiz) && /Review/.test(wiz), "three steps");
+    ok(!/Step 4/.test(wiz), "not seven steps");
+    document.querySelector("[data-type=backslab]")?.click();
+    await sleep(30);
+    const hours = document.querySelector("[name=hoursOnSite]");
+    if (hours) { hours.value = "4"; hours.dispatchEvent(new Event("input")); }
+    const addr = document.querySelector("[name=address]");
+    if (addr && !addr.value) addr.value = "Lot 88 · 14 Brightvale Street, Redbank Plains QLD 4301";
+    document.querySelector("#qwnext")?.click();
+    await sleep(40);
+    const preset = document.querySelector('[name=preset][value=truck_skid]');
+    ok(!!preset, "truck+skid preset");
+    if (preset) { preset.checked = true; preset.dispatchEvent(new Event("change")); }
+    await sleep(40);
+    ok(document.querySelector("#qlabourer"), "labourer control");
+    document.querySelector('[data-lab="no"]')?.click();
+    await sleep(30);
+    document.querySelector("#qwnext")?.click();
+    await sleep(40);
+    const review = document.querySelector("#qwf")?.innerText || "";
+    const truckLines = (review.match(/Truck \+ operator/g) || []).length;
+    ok(truckLines === 1, "truck billed once, got " + truckLines + " :: " + review.slice(0, 500));
+    ok(/Skid steer/.test(review), "skid line");
+    ok(/\$/.test(review), "supervisor sees totals");
+    ok(document.querySelector("#qwaccept") && !document.querySelector("#qwaccept").disabled, "accept enabled when rates exist");
+  }
+  document.body.dataset.check = fails.length ? "fail" : "pass";
+  document.body.dataset.fails = fails.join(" | ");
+}
+document.body.dataset.ready = "1";
+const pre = document.createElement("pre");
+pre.id = "probe";
+pre.textContent = JSON.stringify({ ready: true, role: window.HW_PREVIEW_ROLE, errs: window.__errs, check: document.body.dataset.check || "", fails: document.body.dataset.fails || "" });
+document.body.appendChild(pre);
+</script>
+</body>
+</html>

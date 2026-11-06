@@ -9,7 +9,7 @@ import { getStorage, ref as storageRef, uploadBytes, connectStorageEmulator }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
 import { firebaseConfig, useEmulator } from "./firebase-config.js";
 import { installQuotes, adminViewRouter } from "./features/quotes.js";
-import { planJobPhotoBatch, planReceiptUpload, resolveMembership, putPlanned } from "./features/cloud-storage.js";
+import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPlanned } from "./features/cloud-storage.js";
 import { buildOperationalExport, retentionAdminText, retentionView } from "./features/cloud-retention.js";
 
 const cfg = useEmulator ? { ...firebaseConfig, apiKey: "demo-key", projectId: "demo-heartwood" } : firebaseConfig;
@@ -327,25 +327,28 @@ function b64ToBlob(b64, type) {
   return new Blob([bytes], { type });
 }
 async function mirrorJobPhotos(j, files) {
-  const specs = files.map((f, i) => ({
-    name: f.name, type: f.type || "image/jpeg", size: f.size,
-    photoId: (`p${Date.now().toString(36)}${i}`).slice(0, 41),
-  }));
-  const plan = planJobPhotoBatch({ membership: cloudMembership(), job: j, files: specs });
-  if (!plan.ok) { console.warn("cloud photo mirror skipped", plan.reason); return; }
-  await putPlanned(plan, target => uploadBytes(storageRef(storage, target.path), files[plan.uploads.indexOf(target)], {
+  const plan = planJobPhotoMirrors({
+    membership: cloudMembership(), job: j,
+    files: files.map((f, i) => ({
+      name: f.name, type: f.type || "image/jpeg", size: f.size || 1,
+      photoId: (`p${i}${Math.random().toString(36).slice(2, 10)}`).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 41),
+    })),
+  });
+  if (!plan.ok) { console.warn("cloud photo mirror skipped", (plan.skipped || []).map(s => s.reason).join(",") || "none"); return; }
+  await putPlanned(plan, target => uploadBytes(storageRef(storage, target.path), files[target.sourceIndex], {
     contentType: target.contentType, customMetadata: target.metadata,
   }));
 }
-function mirrorReceipt(receiptId, b64) {
+function mirrorReceipt(receiptId, b64, job, written) {
   const blob = b64ToBlob(b64, "image/jpeg");
-  const plan = planReceiptUpload({
-    membership: cloudMembership(),
-    receipt: { id: receiptId, uid: me.uid },
-    file: { type: "image/jpeg", size: blob.size, name: "original.jpg" },
+  const plan = planStaffReceiptCapture({
+    membership: cloudMembership(), job, receiptId, receiptDoc: written,
+    file: { type: "image/jpeg", size: blob.size || 1, name: "original.jpg" },
   });
   if (!plan.ok) { console.warn("cloud receipt mirror skipped", plan.reason); return Promise.resolve(); }
-  return uploadBytes(storageRef(storage, plan.path), blob, { contentType: plan.contentType, customMetadata: plan.metadata });
+  return uploadBytes(storageRef(storage, plan.storage.path), blob, {
+    contentType: plan.storage.contentType, customMetadata: plan.storage.metadata,
+  });
 }
 function cloudRetentionHtml(j) {
   if (!me || me.role !== "admin") return "";
@@ -427,11 +430,12 @@ function receiptDialog(j) {
       const b64 = await shrinkImage(file), CH = 700000, n = Math.ceil(b64.length / CH);
       const ref = doc(collection(db, "receipts"));
       for (let i = 0; i < n; i++) await setDoc(doc(db, "receiptChunks", `${ref.id}_${i}`), { rid: ref.id, i, uid: me.uid, data: b64.slice(i * CH, (i + 1) * CH) });
+      const written = { id: ref.id, uid: me.uid, jobId: j ? j.id : null, status: "queued" };
       await setDoc(ref, { uid: me.uid, workerName: me.name, amountInc: amt, supplier: f.sup.value.trim(), paidPersonally: f.mine.checked,
-        jobNo: f.job.value.trim().replace(/^#/, "") || null, jobId: j ? j.id : null, address: j ? (j.address || null) : null, chunks: n, mime: "image/jpeg", bytes: Math.round(b64.length * 0.75),
+        jobNo: f.job.value.trim().replace(/^#/, "") || null, jobId: written.jobId, address: j ? (j.address || null) : null, chunks: n, mime: "image/jpeg", bytes: Math.round(b64.length * 0.75),
         status: "queued", createdAt: serverTimestamp(), createdAtIso: new Date().toISOString() });
       d.close(); toast("Receipt uploaded - queued for Hubdoc"); if (j) loadJobReceipts(j);
-      mirrorReceipt(ref.id, b64).catch(e => console.warn("cloud receipt mirror", e && (e.code || e.message) || e));
+      mirrorReceipt(ref.id, b64, j || null, written).catch(e => console.warn("cloud receipt mirror", e && (e.code || e.message) || e));
     } catch (e) { $("#rerr").textContent = "Not uploaded: " + (e.code || e.message); $("#rsend").disabled = false; $("#rsend").textContent = "Upload"; }
   };
 }
@@ -1476,81 +1480,181 @@ async function markInvoiced(list) {
 }
 
 // ------------------------------------------------------------------ operator
-// ServiceM8 mobile-app style: blue header, today's list -> job detail -> Start / Complete.
-const opTabs = on => {
-  const tabs = [["today", "Today"], ["week", "Schedule"], ["hours", "Hours"]];
-  if (canQuote() && me.role !== "admin") tabs.push(["quotes", "Quotes"]);
-  return tabs.map(([k, n]) => `<button data-tab="${k}" class="${on === k ? "on" : ""}">${n}</button>`).join("");
+// Phone shell: cream page, coffee header, bottom tabs. Ids and data-act values stay wired to the same handlers.
+const ICO = {
+  today: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>`,
+  jobs: `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="3.5" width="15" height="17" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 8h8M8 12h8M8 16h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`,
+  photos: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3.2l1.4-2h6.8l1.4 2H20a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="12" cy="13" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>`,
+  more: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`,
+  back: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6 8.5 12l6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  play: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>`,
+  pin: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-6.1 7-11a7 7 0 1 0-14 0c0 4.9 7 11 7 11z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="10" r="2.1" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>`
 };
+const phoneTime = t => {
+  const m = /^(\d{1,2}):(\d{2})\s*(am|pm)?/i.exec(String(t || "").trim());
+  if (!m) return t || "—";
+  if (m[3]) return `${+m[1]}:${m[2]} ${m[3].toUpperCase()}`;
+  let h = +m[1]; const ap = h >= 12 ? "PM" : "AM"; h = h % 12 || 12;
+  return `${h}:${m[2]} ${ap}`;
+};
+const phonePlace = addr => {
+  const raw = String(addr || "").trim();
+  if (!raw) return { head: "Job", street: "", line: "", place: "", locality: "", full: "" };
+  const bits = raw.split(",").map(s => s.trim()).filter(Boolean);
+  const first = bits[0] || raw;
+  const dot = first.split("·").map(s => s.trim()).filter(Boolean);
+  const place = bits.slice(1).join(", ");
+  const locality = place.replace(/\b(QLD|NSW|VIC|SA|WA|TAS|NT|ACT)\b.*$/i, "").replace(/[,\s]+$/, "").trim();
+  return { head: dot[0] || first, street: dot.slice(1).join(" · "), line: first, place, locality: locality || place, full: raw };
+};
+const longDate = s => {
+  if (!s) return "";
+  const d = new Date(s + "T00:00:00Z");
+  const w = d.toLocaleDateString("en-AU", { weekday: "long", timeZone: "UTC" });
+  const day = d.toLocaleDateString("en-AU", { day: "numeric", timeZone: "UTC" });
+  const month = d.toLocaleDateString("en-AU", { month: "long", timeZone: "UTC" });
+  return `${w}, ${day} ${month}`;
+};
+const opTabKey = t => t === "week" ? "week" : t === "photos" ? "photos" : t === "today" ? "today" : "more";
+const opTabs = on => {
+  const key = opTabKey(on);
+  const tabs = [["today", "Today", ICO.today], ["week", "Jobs", ICO.jobs], ["photos", "Photos", ICO.photos], ["more", "More", ICO.more]];
+  return `<nav class="mob-tabs" aria-label="Sections">${tabs.map(([k, n, ic]) => `<button type="button" data-tab="${k}" class="${key === k ? "on" : ""}"${key === k ? ` aria-current="page"` : ""}><span class="mic">${ic}</span><span>${n}</span></button>`).join("")}</nav>`;
+};
+const adminBack = () => me.role === "admin" ? `<button class="mback adminback" id="toadmin" type="button">Admin view</button>` : "";
+const opSeg = on => `<div class="seg mob-seg" role="group" aria-label="When">${[["today", "Today"], ["week", "Upcoming"]].map(([k, n]) => `<button type="button" data-tab="${k}" class="${on === k ? "on" : ""}">${n}</button>`).join("")}</div>`;
+function opCard(j) {
+  const p = phonePlace(j.address);
+  const crew = namesOf(j);
+  const type = TYPES[j.type] || j.client || "Job";
+  const st = j.status === "In progress" ? "inprog" : j.status === "Done" ? "done" : "";
+  return `<div class="mrow opj t-${esc(j.type || "other")}" data-id="${esc(j.id)}" role="button" tabindex="0" aria-label="${esc(type + " " + (p.line || p.full) + " " + phoneTime(j.time))}">
+    <div class="mtime"><b>${esc(phoneTime(j.time))}</b>${j.durationHrs ? `<small>${esc(j.durationHrs)}h</small>` : ""}</div>
+    <div class="mbody">${ipTop(j, "sm")}<div class="mcl"><span class="qdot ${QCLS[queueOf(j)]}"></span>${esc(type)}${jobPhotosIcon(j)}</div>
+      <div class="maddr">${esc(p.line || p.full || "-")}</div>
+      <div class="mdesc">${esc(p.locality || j.client || "")}</div>
+      <div class="mst ${st}">${esc(crew.length ? crew.join(", ") : "Unallocated")}<span class="sub"> · #${esc(jobNo(j))}</span></div></div>
+    <div class="chev" aria-hidden="true"></div></div>`;
+}
+function bindOp(mine) {
+  if ($("#toadmin")) $("#toadmin").onclick = () => { ui.myJobs = false; ui.opSel = null; renderAdmin(); };
+  $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; renderOperator(); window.scrollTo(0, 0); });
+  $("#app").querySelectorAll("[data-go]").forEach(b => b.onclick = () => { if (b.dataset.go === "swms") return swmsOverlay(); ui.opTab = b.dataset.go; renderOperator(); window.scrollTo(0, 0); });
+  const openJob = id => { ui.opSel = id; renderOperator(); window.scrollTo(0, 0); };
+  $("#app").querySelectorAll(".mrow").forEach(r => {
+    r.onclick = e => { if (e.target.closest("a, button")) return; openJob(r.dataset.id); };
+    r.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openJob(r.dataset.id); } };
+  });
+  $("#app").querySelectorAll(".hrow[data-id]").forEach(r => r.onclick = () => openJob(r.dataset.id));
+  $("#app").querySelectorAll("[data-photo]").forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const j = (mine || []).find(x => x.id === b.dataset.photo);
+    if (j) emailPhotos(j);
+  });
+}
 function renderOperator() {
   document.body.className = "operator";
   const t0 = todayStr(), t1 = addDays(t0, 1), wkEnd = addDays(t0, 7);
   const mine = jobs.filter(j => j.status !== "Cancelled" && (me.role !== "admin" || (j.assigned || []).includes(me.uid))).sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
   const sel = ui.opSel && mine.find(j => j.id === ui.opSel);
   if (sel) return renderOpDetail(sel);
-  if (!ui.opTab || ui.opTab === "home" || ui.opTab === "done") ui.opTab = "today";
-  if (ui.opTab === "quotes" && canQuote() && me.role !== "admin") {
+  if (!ui.opTab || ui.opTab === "home") ui.opTab = "today";
+  if (ui.opTab === "quotes" && !(canQuote() && me.role !== "admin")) ui.opTab = "more";
+  if (ui.opTab === "quotes") {
     const qhtml = adminViewRouter("quotes", ui, { esc, $$, staff, jobs: mine, todayStr, rerender: () => renderOperator(), canEditQuoteRates });
-    $("#app").innerHTML = `<div class="mob"><div class="mob-bar"><div class="mob-title">Quotes</div><div class="mob-sub">Guided pricing · ex GST</div></div>
-      <div class="mob-tabs">${opTabs("quotes")}</div><div class="pad">${qhtml || ""}</div></div>`;
-    $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; renderOperator(); });
+    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Quotes</div><div class="mob-sub">Guided pricing · ex GST</div></div>
+      <div class="pad">${qhtml || ""}</div>${opTabs("quotes")}</div>`;
+    bindOp(mine);
     QG.bindAdmin({ ui: { ...ui, view: "quotes" }, A: $("#app") });
-    return;
-  }
-  if (ui.opTab === "today") {
-    $("#app").innerHTML = `<div class="mob">${me.role === "admin" ? `<button class="mback adminback" id="toadmin">‹ Admin view</button>` : ""}
-      <div class="mob-tabs">${opTabs("today")}</div><div class="pad">${homeBody(jobs, false, [["today", "☀", "Today"], ["week", "▦", "Schedule"], ["done", "✔", "Completed"], ["hours", "⏱", "Hours"], ...(canQuote() ? [["quotes", "✎", "Quotes"]] : []), ["swms", "📋", "SWMS"]])}</div></div>`;
-    if ($("#toadmin")) $("#toadmin").onclick = () => { ui.myJobs = false; ui.opSel = null; renderAdmin(); };
-    $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; renderOperator(); });
-    $("#app").querySelectorAll("[data-go]").forEach(b => b.onclick = () => { if (b.dataset.go === "swms") return swmsOverlay(); ui.opTab = b.dataset.go; renderOperator(); window.scrollTo(0, 0); });
-    $("#app").querySelectorAll(".hrow[data-id]").forEach(r => r.onclick = () => { ui.opSel = r.dataset.id; renderOperator(); window.scrollTo(0, 0); });
     return;
   }
   if (ui.opTab === "hours" && ui.tsDirty && $("#tsf") && !ui.opSel) return;
   if (ui.opTab === "hours" && !ui.opSel) {
-    $("#app").innerHTML = `<div class="mob">${me.role === "admin" ? `<button class="mback adminback" id="toadmin">‹ Admin view</button>` : ""}<div class="mob-bar"><div class="mob-title">My hours</div><div class="mob-sub">Timesheet</div></div>
-      <div class="mob-tabs">${opTabs("hours")}</div>
-      <div class="pad">${tsEditor()}</div></div>`;
-    if ($("#toadmin")) $("#toadmin").onclick = () => { ui.myJobs = false; ui.opSel = null; renderAdmin(); };
-    $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; renderOperator(); });
-    bindTs($("#app"), renderOperator); return;
+    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">My hours</div><div class="mob-sub">Timesheet</div></div>
+      <div class="pad">${tsEditor()}</div>${opTabs("hours")}</div>`;
+    bindOp(mine); bindTs($("#app"), renderOperator); return;
+  }
+  if (ui.opTab === "more") {
+    const quoteBtn = canQuote() && me.role !== "admin" ? `<button type="button" class="mob-more" data-go="quotes"><b>Quotes</b><small>Guided pricing for supervisors</small></button>` : "";
+    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">More</div><div class="mob-sub">${esc(me.name || "")}</div></div>
+      <div class="mob-menu">
+        <button type="button" class="mob-more" data-go="hours"><b>Hours</b><small>Timesheet</small></button>
+        <button type="button" class="mob-more" data-go="done"><b>Completed</b><small>Finished in the last 30 days</small></button>
+        <button type="button" class="mob-more" data-go="swms"><b>SWMS</b><small>Read and sign</small></button>
+        <button type="button" class="mob-more incbtn" data-inc=""><b>Report incident</b><small>Safety report</small></button>
+        ${quoteBtn}
+      </div>
+      ${myIncidentsHtml()}
+      ${opTabs("more")}</div>`;
+    bindOp(mine); return;
+  }
+  if (ui.opTab === "photos") {
+    const list = mine.filter(j => j.status !== "Cancelled");
+    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Photos</div><div class="mob-sub">Email site photos to the office</div></div>
+      <p class="muted pad">Choose a job to add photos. They are emailed to the office, and a private cloud copy is saved when storage accepts them.</p>
+      <div class="mob-list">${list.map(j => `${opCard(j)}<button type="button" class="mnote op-photo" data-photo="${esc(j.id)}">${ICO.photos}<span>Add photos</span></button>${jobPhotosLink(j) ? `<div class="pad">${jobPhotosLink(j)}</div>` : ""}`).join("") || `<p class="muted pad">No jobs to photograph.</p>`}</div>
+      ${opTabs("photos")}</div>`;
+    bindOp(mine); return;
   }
   const isDone = j => queueOf(j) === "Completed" || queueOf(j) === "Unsuccessful";
-  const open = mine.filter(j => !isDone(j)), doneL = mine.filter(j => queueOf(j) === "Completed" && j.date >= addDays(t0, -30) && j.date <= t0).reverse();
-  const groups = ui.opTab === "today" ? [["Today", open.filter(j => j.date === t0 || (j.date < t0 && j.status === "In progress"))]]
-    : ui.opTab === "done" ? groupByDate(doneL).map(([d, js]) => [d === t0 ? "Today · " + dayLabel(d) : dayLabel(d), js])
+  const open = mine.filter(j => !isDone(j));
+  const doneL = mine.filter(j => queueOf(j) === "Completed" && j.date >= addDays(t0, -30) && j.date <= t0).reverse();
+  const first = esc(String(me.name || "").split(" ")[0]);
+  if (ui.opTab === "today") {
+    const todayJobs = open.filter(j => j.date === t0 || (j.date < t0 && j.status === "In progress"));
+    const n = todayJobs.length;
+    $("#app").innerHTML = `<div class="mob">${adminBack()}
+      <div class="mob-intro"><div class="mob-kicker">Today</div><div class="mob-date">${esc(longDate(t0))}</div>
+        <h1 class="mob-hello">${esc(greet())}, ${first}</h1><p class="mob-count">${n} job${n === 1 ? "" : "s"} today</p>${opSeg("today")}</div>
+      ${swmsReminderHtml()}
+      <div class="mob-list">${todayJobs.map(opCard).join("") || `<p class="muted pad">Nothing booked.</p>`}</div>
+      ${opTabs("today")}</div>`;
+    bindOp(mine); return;
+  }
+  const groups = ui.opTab === "done" ? groupByDate(doneL).map(([d, js]) => [d === t0 ? "Today · " + dayLabel(d) : dayLabel(d), js])
     : groupByDate(open.filter(j => j.date >= t1 && j.date <= wkEnd)).map(([d, js]) => [(d === t1 ? "Tomorrow · " : "") + dayLabel(d), js]);
-  $("#app").innerHTML = `<div class="mob">${me.role === "admin" ? `<button class="mback adminback" id="toadmin">‹ Admin view</button>` : ""}<div class="mob-bar"><div class="mob-title">${ui.opTab === "today" ? "Today" : ui.opTab === "done" ? "Completed" : "My Schedule"}</div><div class="mob-sub">${dayLabel(t0)}</div></div>
-    <div class="mob-tabs">${opTabs(ui.opTab)}</div>
-    ${groups.map(([g, js]) => `<div class="mob-sec mday">${g} <span>${js.length}</span></div>
-    ${js.map(j => `<div class="mrow" data-id="${j.id}"><div class="mtime">${g === "Today" ? "" : `<small>${esc(dayLabel(j.date).split(" ")[0].slice(0, 3))}</small>`}<b>${esc(j.time || "--")}</b><small>${j.durationHrs ? esc(j.durationHrs) + "h" : ""}</small></div>
-      <div class="mbody">${ipTop(j, "sm")}<div class="mcl"><span class="qdot ${QCLS[queueOf(j)]}"></span>${esc(j.client || "")}${jobPhotosIcon(j)}</div><div class="maddr">${esc(j.address || "-")}</div>
-        <div class="mdesc">${esc(firstLine(j.description))}</div>
-        <div class="mst ${j.status === "In progress" ? "inprog" : j.status === "Done" ? "done" : ""}">${j.status === "Done" ? "✔ Completed" : j.status === "In progress" ? "" : "Scheduled · "}${j.status === "Done" ? " · " : ""}#${esc(jobNo(j))}</div></div>
-      <div class="chev">›</div></div>`).join("") || `<p class="muted pad">Nothing booked.</p>`}`).join("") || `<p class="muted pad">${ui.opTab === "done" ? "No completed jobs in the last 30 days." : "Nothing booked this week."}</p>`}</div>`;
-  if ($("#toadmin")) $("#toadmin").onclick = () => { ui.myJobs = false; ui.opSel = null; renderAdmin(); };
-  $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; renderOperator(); });
-  $("#app").querySelectorAll(".mrow").forEach(r => r.onclick = () => { ui.opSel = r.dataset.id; renderOperator(); window.scrollTo(0, 0); });
+  const upcomingN = groups.reduce((n, [, js]) => n + js.length, 0);
+  const head = ui.opTab === "done"
+    ? `<div class="mob-bar"><div class="mob-title">Completed</div><div class="mob-sub">Last 30 days</div></div>`
+    : `<div class="mob-intro"><div class="mob-kicker">Jobs</div><div class="mob-date">Upcoming</div>
+        <h1 class="mob-hello">This week</h1><p class="mob-count">${upcomingN} job${upcomingN === 1 ? "" : "s"}</p>${opSeg("week")}</div>`;
+  $("#app").innerHTML = `<div class="mob">${adminBack()}${head}
+    ${groups.map(([g, js]) => `<div class="mob-sec mday">${esc(g)} <span>${js.length}</span></div>
+      ${js.map(opCard).join("") || `<p class="muted pad">Nothing booked.</p>`}`).join("") || `<p class="muted pad">${ui.opTab === "done" ? "No completed jobs in the last 30 days." : "Nothing booked this week."}</p>`}
+    ${opTabs(ui.opTab)}</div>`;
+  bindOp(mine);
 }
 function renderOpDetail(j) {
   const q = queueOf(j), done = j.status === "Done", started = j.status === "In progress";
-  $("#app").innerHTML = `<div class="mob"><div class="mob-bar det ${QCLS[q]}"><button class="mback" id="back">‹ Jobs</button><div class="mob-title">Job #${esc(jobNo(j))}</div>
-      ${started ? ipTop(j, "onbar") : ""}<div class="mob-sub">${done ? "Completed" : started ? "Work Order – in progress" : "Work Order"}</div></div>
-    <div class="mcard"><div class="mlbl">Client</div><div class="mval">${esc(j.client || "")}</div><div class="supcard" data-sup="${esc(j.id)}"></div></div>
-    <a class="mcard link" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener"><div class="mlbl">Job Address</div><div class="mval big">📍 ${esc(j.address || "-")}</div><div class="chev">›</div></a>
-    <div class="mcard"><div class="mlbl">Scheduled</div><div class="mval">${esc(dayLabel(j.date))} · ${esc(j.time || "")}${j.durationHrs ? " · " + esc(j.durationHrs) + "h" : ""}</div></div>
-    <div class="mcard"><div class="mlbl">Job Description</div><div class="mval">${esc(j.description || "")}</div>
-      <div class="mlbl" style="margin-top:8px">Purchase Order</div><div class="mval"><b>${esc(j.po || "—")}</b></div>
-      ${(j.assignedNames || []).length ? `<div class="mlbl" style="margin-top:8px">Staff</div><div class="mval">${esc(j.assignedNames.join(", "))}</div>` : ""}</div>
-    <div class="mcard"><div class="mlbl">Diary</div>${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("") || `<div class="muted sub">No notes yet</div>`}
-      <button class="mnote" data-act="note">＋ Add Note</button></div>
-    <div class="mcard"><div class="mlbl">Photos</div><button type="button" class="mnote" id="emailph">📧 Email photos</button>${jobPhotosLink(j)}
-      <div class="muted sub">Send site photos to Alex by email</div></div>
-    <div class="mcard safecard"><div class="mlbl">Safety</div><button type="button" class="mnote" data-swms="${j.id}">📋 View SWMS</button><button type="button" class="mnote incbtn" data-inc="${j.id}">⚠ Report incident</button></div>
-    <div class="mcard">${jobReceiptsHtml(j)}</div>
-    <div class="mactions">${done ? `<div class="donebar">✔ Completed${j.loads ? ` · ${j.loads} loads` : ""}</div>` :
-      `<button class="mbtn start" data-act="start" ${started ? "disabled" : ""}>${started ? "Started" : "▶ Start Job"}</button>
-       <button class="mbtn complete" data-act="done">✔ Complete</button>`}</div></div>`;
+  const p = phonePlace(j.address);
+  const crew = namesOf(j);
+  const type = TYPES[j.type] || "Job";
+  const addrLine = [p.street, p.place].filter(Boolean).join(", ") || p.full || j.address || "";
+  $("#app").innerHTML = `<div class="mob"><div class="mob-bar det ${QCLS[q]}"><button class="mback" id="back" type="button">${ICO.back}<span class="sr">Jobs</span></button>
+      <div class="mob-bar-txt"><div class="mob-title">Job details</div>${started ? ipTop(j, "onbar") : ""}<div class="mob-sub">${done ? "Completed" : started ? "In progress" : "Scheduled"} · #${esc(jobNo(j))}</div></div></div>
+    <div class="det-body">
+      <div class="typepill">${esc(type)}</div>
+      <h1 class="det-lot">${esc(p.head || "Job")}</h1>
+      <p class="det-addr">${esc(addrLine || "-")}</p>
+      <div class="mcard"><div class="mlbl">Client</div><div class="mval">${esc(j.client || "—")}</div><div class="supcard" data-sup="${esc(j.id)}"></div></div>
+      <dl class="det-facts">
+        <div><dt>Scheduled</dt><dd>${esc(j.date ? longDate(j.date) : "Unscheduled")}${j.time ? " · " + esc(phoneTime(j.time)) : ""}${j.durationHrs ? " · " + esc(j.durationHrs) + "h" : ""}</dd></div>
+        <div><dt>Crew</dt><dd>${esc(crew.length ? crew.join(", ") : "—")}</dd></div>
+        <div><dt>Purchase order</dt><dd><b>${esc(j.po || "—")}</b></dd></div>
+        <div class="scope"><dt>Scope</dt><dd>${esc(j.description || "—")}</dd></div>
+      </dl>
+      <div class="mcard"><div class="mlbl">Diary</div>${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("") || `<div class="muted sub">No notes yet</div>`}
+        <button class="mnote" type="button" data-act="note">Add note</button></div>
+      <div class="mcard"><div class="mlbl">Photos</div>${jobPhotosLink(j)}<div class="muted sub">Emailed to the office. A private cloud copy is saved when storage accepts it.</div></div>
+      <div class="mcard safecard"><div class="mlbl">Safety</div><button type="button" class="mnote" data-swms="${j.id}">View SWMS</button><button type="button" class="mnote incbtn" data-inc="${j.id}">Report incident</button></div>
+      <div class="mcard">${jobReceiptsHtml(j)}</div>
+    </div>
+    <div class="mactions">${done ? `<div class="donebar">Completed${j.loads ? ` · ${esc(j.loads)} loads` : ""}</div>` :
+      `<button class="mbtn start" type="button" data-act="start" ${started ? "disabled" : ""}>${ICO.play}<span>${started ? "Started" : "Start job"}</span></button>
+       <button class="mbtn complete" type="button" data-act="done">Complete job</button>`}
+      <button type="button" class="mbtn mnote op-photo" id="emailph">${ICO.photos}<span>Add photos</span></button>
+      <a class="mcard link mbtn outline" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener">${ICO.pin}<span>Get directions</span></a>
+    </div></div>`;
   $("#emailph").onclick = () => emailPhotos(j); wireJobReceipts(j); fillSupCard(j);
   $("#back").onclick = () => { ui.opSel = null; renderOperator(); };
   $("#app").querySelectorAll("[data-act]").forEach(b => b.onclick = () => opAction(j, b.dataset.act));
