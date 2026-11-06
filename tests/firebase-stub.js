@@ -19,7 +19,8 @@ const JOBS = [
     address: "Lot 88 · 14 Brightvale Street, Redbank Plains QLD 4301",
     date: "2026-11-06", time: "08:30", durationHrs: 4, status: "Scheduled",
     description: "Slab clean, backblade and road base", po: "110565/900/01",
-    assigned: ["patrick"], assignedNames: ["Patrick"], log: [] },
+    assigned: ["patrick", "admin-preview"], assignedNames: ["Patrick"], log: [],
+    photosEmailedAt: "2026-11-06T01:00:00.000Z", photosEmailedCount: 4 },
   { id: "j3", sm8JobNo: "2403", client: "Torsion Built Pty Ltd", type: "spoil",
     address: "Lot 12 · 4 Cedar Court, Redbank Plains QLD 4301",
     date: "2026-11-06", time: "19:00", durationHrs: 2, status: "Scheduled",
@@ -29,7 +30,14 @@ const JOBS = [
     address: "Lot 3 · 9 River Road, Chuwar QLD 4306",
     date: "2026-11-07", time: "07:30", durationHrs: 3, status: "Scheduled",
     description: "Site clean", po: "440011",
-    assigned: ["patrick"], assignedNames: ["Patrick"], log: [] }
+    assigned: ["patrick"], assignedNames: ["Patrick"], log: [] },
+  { id: "sm8_01a0e504-b690-794e-a99e-374ec5ab19ab_202611060900", sm8JobNo: "674",
+    client: "Orbit Homes (Qld) Pty Ltd", type: "backslab",
+    address: "Lot 88 · 14 Brightvale Street, Redbank Plains QLD 4301",
+    date: "2026-11-06", time: "09:00", durationHrs: 4, status: "Done",
+    description: "Slab clean, backblade and road base", po: "110565/900/01",
+    assigned: ["patrick", "admin-preview"], assignedNames: ["Patrick"], log: [],
+    photosEmailedAt: "2026-11-05T02:47:00.000Z", photosEmailedCount: 4 }
 ];
 
 const FILLED_RATES = {
@@ -128,10 +136,18 @@ export function getDocs(ref) {
 
 export function onSnapshot(ref, onNext) {
   const col = ref && ref._col;
-  record("onSnapshot", { col });
+  const id = ref && ref._id;
+  record("onSnapshot", { col, id });
   queueMicrotask(() => {
     try {
-      if (col === "jobs") onNext(snap(JOBS));
+      if (col === "jobs" && id && id !== "auto") {
+        const row = JOBS.find(j => j.id === id);
+        onNext({
+          id,
+          exists: () => !!row,
+          data: () => { if (!row) return undefined; const { id: _id, ...rest } = row; return rest; }
+        });
+      } else if (col === "jobs") onNext(snap(JOBS));
       else if (col === "swmsSignatures") {
         const uid = uidFor(role());
         onNext(snap(SWMS_IDS.map(id => ({

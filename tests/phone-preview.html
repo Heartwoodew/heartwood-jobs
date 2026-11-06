@@ -76,6 +76,36 @@ if (q.get("photos") !== "none" && q.get("photos") !== "error") {
     { path: "tenants/heartwood/receipts/r1/original", contentType: "image/jpeg", size: slip.length, bytes: slip, timeCreated: "2026-11-06T03:00:00.000Z", customMetadata: meta("receipt", { receiptId: "r1" }) }
   ];
 }
+const JOB674 = "sm8_01a0e504-b690-794e-a99e-374ec5ab19ab_202611060900";
+if (q.get("cloud") === "4") {
+  const jpeg = async (label, color) => {
+    const c = document.createElement("canvas");
+    c.width = 320; c.height = 240;
+    const g = c.getContext("2d");
+    g.fillStyle = color; g.fillRect(0, 0, 320, 240);
+    g.fillStyle = "#3b2a1a"; g.font = "bold 42px system-ui, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(label, 160, 120);
+    const blob = await new Promise(r => c.toBlob(r, "image/jpeg", 0.86));
+    return new Uint8Array(await blob.arrayBuffer());
+  };
+  const colors = ["#e7c59a", "#f6f1ea", "#efe6da", "#d8c3a5"];
+  const files = [];
+  for (let i = 1; i <= 4; i++) {
+    const bytes = await jpeg(String(i), colors[i - 1]);
+    files.push({
+      path: `tenants/heartwood/jobs/${JOB674}/photos/p${i}`,
+      contentType: "image/jpeg", size: bytes.length, bytes,
+      timeCreated: `2026-11-06T0${i}:00:00.000Z`,
+      customMetadata: { purpose: "job-photo", tenantId: "heartwood", jobId: JOB674, uploaderUid: "patrick", batchCount: "4", expiresAfter: "2027-02-06" }
+    });
+  }
+  const slip = await jpeg("Receipt", "#c4b4a4");
+  files.push({
+    path: "tenants/heartwood/receipts/r674/original",
+    contentType: "image/jpeg", size: slip.length, bytes: slip,
+    customMetadata: { purpose: "receipt", receiptId: "r674", tenantId: "heartwood" }
+  });
+  window.HW_STORAGE_OBJECTS = files;
+}
 await waitFor(".mob, .sm-layout, #login");
 await sleep(80);
 async function openJob(id) {
@@ -100,6 +130,33 @@ if (q.get("open") === "jobs") document.querySelector('[data-tab="week"]')?.click
 if (q.get("open") === "photos") {
   document.querySelector('[data-tab="photos"]')?.click();
   await waitFor('[data-photoslot][data-settled="1"]', 4000);
+}
+if (q.get("open") === "job" && q.get("photos") === "none") {
+  await waitFor("[data-viewphotos]");
+  document.querySelector("[data-viewphotos]")?.click();
+  await waitFor(".pgal [data-photos-state='empty']", 4000);
+}
+if (q.get("open") === "job674") {
+  await waitFor(`[data-id="${JOB674}"]`, 6000);
+  document.querySelector(`[data-id="${JOB674}"]`)?.click();
+  await waitFor("#emailph", 6000);
+  document.querySelector('[data-jt="photos"]')?.click();
+  await waitFor("[data-viewphotos]", 4000);
+  if (q.get("shot")) {
+    document.querySelector(`[data-photoslot="${JOB674}"] [data-viewphotos]`)?.click();
+    await waitFor(".pgal [data-photos-state], .pgal .pth img", 4000);
+  }
+}
+if (q.get("open") === "jobphotos") {
+  await waitFor("[data-id='j2']", 6000);
+  document.querySelector("[data-id='j2']")?.click();
+  await waitFor("#emailph", 6000);
+  document.querySelector('[data-jt="photos"]')?.click();
+  await waitFor("[data-viewphotos]", 4000);
+  if (q.get("shot") === "empty" || q.get("shot") === "gallery") {
+    document.querySelector("[data-viewphotos]")?.click();
+    await waitFor(".pgal [data-photos-state], .pgal .pth img", 4000);
+  }
 }
 if (q.get("open") === "more") document.querySelector('[data-tab="more"]')?.click();
 if (q.get("open") === "myjobs") document.querySelector('[data-view="myjobs"]')?.click();
@@ -162,7 +219,7 @@ if (q.get("check") === "1") {
     ok(!/\$\s?\d/.test(text()), "detail dollars");
     await waitFor('[data-photoslot][data-settled="1"]');
     const photosBtn = document.querySelector("[data-viewphotos]");
-    ok(!!photosBtn && /Photos/.test(photosBtn.textContent), "photos action when cloud photos exist");
+    ok(!!photosBtn && /View cloud photos/.test(photosBtn.textContent), "photos action when cloud photos exist");
     const writes = () => (window.__fbCalls || []).filter(c => c.op === "updateDoc" || c.op === "setDoc" || c.op === "uploadBytes");
     const beforeWrites = writes().length;
     const beforePicker = window.__photoClicks || 0;

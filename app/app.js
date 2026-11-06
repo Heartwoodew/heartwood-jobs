@@ -55,7 +55,7 @@ function guessType(text) {
 let me = null, staff = [], jobs = [], unsub = null;
 let QG = { bindAdmin() {} }; // Quotes module; filled after helpers load
 const ALEX_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";      // Alex has no users/{uid} profile doc; always staff
-const ui = { view: "list", staffF: "", typeF: "", photoLists: {}, photoUrls: {}, photoBlobs: {}, photoPaint: 0 };
+const ui = { view: "list", staffF: "", typeF: "", photoLists: {}, photoUrls: {}, photoBlobs: {}, photoJobs: {}, photoPaint: 0 };
 
 // ------------------------------------------------------------------ auth
 $("#logout").onclick = () => signOut(auth);
@@ -353,8 +353,9 @@ function galleryNow() {
   return new Date();
 }
 function photoMark(j) { return String(j && j.cloudPhotosAt || "") + "|" + String(j && j.photosEmailedAt || ""); }
+function rememberJob(j) { if (j && j.id) ui.photoJobs[j.id] = j; }
 function findJob(id) {
-  return [...(jobs || []), ...(ui.done || []), ...(ui.undated || [])].find(j => j.id === id) || null;
+  return [...(jobs || []), ...(ui.done || []), ...(ui.undated || [])].find(j => j.id === id) || ui.photoJobs[id] || null;
 }
 function jobSubtitle(j) { return "Job #" + jobNo(j) + (j.address ? " · " + j.address : ""); }
 function galleryRoot() {
@@ -424,6 +425,7 @@ function paintPhotoSlots() {
       role: el.dataset.photorole || "both", variant: el.dataset.photovariant === "sm" ? "sm" : "phone",
       iconHtml: el.dataset.photovariant === "sm" ? "" : ICO.photos,
       error: row?.error || "",
+      emailedCount: Number(findJob(id)?.photosEmailedCount) || 0,
     });
     el.dataset.settled = row && row.status && row.status !== "loading" ? "1" : "";
     el.querySelectorAll("[data-viewphotos]").forEach(b => b.onclick = ev => {
@@ -481,7 +483,7 @@ async function paintGallery(j) {
     photos.push({ path: p.path, src });
   }
   if (stale()) return;
-  root.innerHTML = galleryHtml({ ...common, status: "ready", retentionText: row.gallery.retentionText, canDownload: !!(me && me.role === "admin"), photos });
+  root.innerHTML = galleryHtml({ ...common, status: "ready", retentionText: row.gallery.retentionText, canDownload: !!(me && me.role === "admin"), photos, emailedCount: Number(j.photosEmailedCount) || 0 });
   wireGallery(j);
 }
 async function openPhotoGallery(j) {
@@ -858,6 +860,11 @@ const jobPhotosUrl = j => GM + "#search/" + encodeURIComponent(`subject:"[Job Ph
 const hasPhotos = j => !!(j.photosEmailedAt || j.photosEmailedCount);
 const jobPhotosIcon = j => hasPhotos(j) ? ` <a class="phicon" href="${jobPhotosUrl(j)}" target="_blank" rel="noopener" title="Photos in Gmail" onclick="event.stopPropagation()">📷</a>` : "";
 const jobPhotosLink = j => !hasPhotos(j) ? "" : ` <a class="phlink" href="${jobPhotosUrl(j)}" target="_blank" rel="noopener">📷 Photos (${j.photosEmailedCount || 1} sent)</a>`;
+const emailedPhotosNote = j => {
+  const n = Number(j && j.photosEmailedCount) || 0;
+  if (n < 1) return "";
+  return `<span class="sub emailed-note"><a class="phlink" href="${jobPhotosUrl(j)}" target="_blank" rel="noopener">Email history (${n} photo${n === 1 ? "" : "s"})</a></span>`;
+};
 const greet = () => { const h = +new Intl.DateTimeFormat("en-AU", { hour: "numeric", hourCycle: "h23", timeZone: TZ }).format(new Date()); return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening"; };
 function homeRow(j) {
   const q = queueOf(j), names = namesOf(j);
@@ -1154,13 +1161,13 @@ function editJob(j) {
       <div class="diary">${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("")}
         ${hist.map(([w, t]) => `<div class="de sys"><span class="av">i</span><div><small>${esc(w)}</small><div>${esc(t)}</div></div></div>`).join("")}
         ${!(j.log || []).length && !hist.length ? `<p class="muted sub">No diary entries yet. Site notes from staff appear here.</p>` : ""}</div>
-      ${!n ? `<h4>Photos</h4><button type="button" class="sm-btn" id="emailph">📧 Email photos</button> <span data-photoslot="${esc(j.id)}" data-photorole="both" data-photovariant="sm"></span> <span class="sub muted">Emailed to ${OFFICE_EMAIL}, and saved privately in cloud storage when the bucket accepts them</span>${jobPhotosLink(j)} <button type="button" class="sm-btn incbtn" data-inc="${j.id}">⚠ Report incident</button> <button type="button" class="sm-btn" data-swms="${j.id}">📋 View SWMS</button>${jobReceiptsHtml(j)}${cloudRetentionHtml(j)}` : ""}
+      ${!n ? `<h4>Photos</h4><button type="button" class="sm-btn" id="emailph">📧 Email photos</button> <span data-photoslot="${esc(j.id)}" data-photorole="cloud" data-photovariant="sm"></span> ${emailedPhotosNote(j)} <button type="button" class="sm-btn incbtn" data-inc="${j.id}">⚠ Report incident</button> <button type="button" class="sm-btn" data-swms="${j.id}">📋 View SWMS</button>${jobReceiptsHtml(j)}${cloudRetentionHtml(j)}` : ""}
     </div></div>
     <p id="ferr" class="err"></p>
     <div class="btns jc-foot"><button value="cancel" formnovalidate class="sm-btn">Close</button><button value="save" class="sm-btn primary">Save Job</button></div></form>`;
   d.showModal();
   if (!n) jobTabs(d, j);
-  if (!n) { $("#emailph").onclick = () => emailPhotos(j); watchJobPhotos(j); paintPhotoSlots(); }
+  if (!n) { rememberJob(j); $("#emailph").onclick = () => emailPhotos(j); watchJobPhotos(j); paintPhotoSlots(); }
   if (!n && $("#cloudexport")) $("#cloudexport").onclick = () => downloadCloudCopy(j).catch(e => toast(e.message || "Download failed"));
   if (!n) { wireFindPo(j); supervisors(); wireJobReceipts(j); fillSupCard(j); }
   if (!n && $("#unschbtn")) $("#unschbtn").onclick = ev => { if (!armBtn(ev.currentTarget, "✕ Remove from dispatch board", "Tap again to remove from the board")) return;
@@ -1779,9 +1786,9 @@ function renderOperator() {
     const list = mine.filter(j => j.status !== "Cancelled");
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Photos</div><div class="mob-sub">Email site photos to the office</div></div>
       <p class="muted pad">Choose a job to add photos. They are emailed to the office, and a private cloud copy is saved when storage accepts them.</p>
-      <div class="mob-list">${list.map(j => `${opCard(j)}<div data-photoslot="${esc(j.id)}" data-photorole="action"></div><button type="button" class="mnote op-photo" data-photo="${esc(j.id)}">${ICO.photos}<span>Add photos</span></button>${jobPhotosLink(j) ? `<div class="pad">${jobPhotosLink(j)}</div>` : ""}`).join("") || `<p class="muted pad">No jobs to photograph.</p>`}</div>
+      <div class="mob-list">${list.map(j => `${opCard(j)}<button type="button" class="mnote op-photo" data-photo="${esc(j.id)}">${ICO.photos}<span>Add photos</span></button><div data-photoslot="${esc(j.id)}" data-photorole="cloud"></div>${emailedPhotosNote(j) ? `<div class="pad">${emailedPhotosNote(j)}</div>` : ""}`).join("") || `<p class="muted pad">No jobs to photograph.</p>`}</div>
       ${opTabs("photos")}</div>`;
-    list.forEach(watchJobPhotos); paintPhotoSlots(); bindOp(mine); return;
+    list.forEach(j => { rememberJob(j); watchJobPhotos(j); }); paintPhotoSlots(); bindOp(mine); return;
   }
   const isDone = j => queueOf(j) === "Completed" || queueOf(j) === "Unsuccessful";
   const open = mine.filter(j => !isDone(j));
@@ -1832,18 +1839,18 @@ function renderOpDetail(j) {
       </dl>
       <div class="mcard"><div class="mlbl">Diary</div>${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("") || `<div class="muted sub">No notes yet</div>`}
         <button class="mnote" type="button" data-act="note">Add note</button></div>
-      <div class="mcard"><div class="mlbl">Photos</div><div data-photoslot="${esc(j.id)}" data-photorole="status"></div>${jobPhotosLink(j)}<div class="muted sub">Emailed to the office. A private cloud copy is saved when storage accepts it.</div></div>
+      <div class="mcard"><div class="mlbl">Photos</div><div data-photoslot="${esc(j.id)}" data-photorole="status"></div>${emailedPhotosNote(j)}<div class="muted sub">Cloud photos are the private copies stored for this job.</div></div>
       <div class="mcard safecard"><div class="mlbl">Safety</div><button type="button" class="mnote" data-swms="${j.id}">View SWMS</button><button type="button" class="mnote incbtn" data-inc="${j.id}">Report incident</button></div>
       <div class="mcard">${jobReceiptsHtml(j)}</div>
     </div>
     <div class="mactions">${done ? `<div class="donebar">Completed${j.loads ? ` · ${esc(j.loads)} loads` : ""}</div>` :
       `<button class="mbtn start" type="button" data-act="start" ${started ? "disabled" : ""}>${ICO.play}<span>${started ? "Started" : "Start job"}</span></button>
        <button class="mbtn complete" type="button" data-act="done">Complete job</button>`}
-      <div data-photoslot="${esc(j.id)}" data-photorole="action"></div>
       <button type="button" class="mbtn mnote op-photo" id="emailph">${ICO.photos}<span>Add photos</span></button>
+      <div data-photoslot="${esc(j.id)}" data-photorole="cloud"></div>
       <a class="mcard link mbtn outline" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener">${ICO.pin}<span>Get directions</span></a>
     </div></div>`;
-  $("#emailph").onclick = () => emailPhotos(j); wireJobReceipts(j); fillSupCard(j); watchJobPhotos(j); paintPhotoSlots();
+  rememberJob(j); $("#emailph").onclick = () => emailPhotos(j); wireJobReceipts(j); fillSupCard(j); watchJobPhotos(j); paintPhotoSlots();
   $("#back").onclick = () => { ui.opSel = null; renderOperator(); };
   $("#app").querySelectorAll("[data-act]").forEach(b => b.onclick = () => opAction(j, b.dataset.act));
 }
