@@ -66,7 +66,7 @@ test("phone shell, quote gate and handlers", async () => {
       }
       if (query.includes("photos=error")) {
         const state = await page.send("Runtime.evaluate", { expression: "document.querySelector('[data-photos-state]')?.textContent || ''", returnByValue: true });
-        assert.match(state.result.value, /Couldn't load photos/, name);
+        assert.match(state.result.value, /Couldn't load photos \(storage\/unauthorized\)/, name);
         const btn = await page.send("Runtime.evaluate", { expression: "!!document.querySelector('[data-viewphotos]')", returnByValue: true });
         assert.equal(btn.result.value, false, name);
       }
