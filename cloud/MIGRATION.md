@@ -90,13 +90,25 @@ Region, if these are ever deployed: `australia-southeast1`.
 
 ## Rules
 
-`cloud/emulator/storage.rules` is the proposed Storage ruleset. Storage is unused in production today, so this would be the first Storage rules file, not a patch of a live file. Still do not deploy it until the steps below.
+`cloud/emulator/storage.rules` and `cloud/production/storage.rules` are the same bytes. The production file is what a reviewed Storage deploy would publish. It has not been deployed.
 
-`cloud/emulator/firestore.rules` is an **emulator model only**. The live rules are not in this repository. Deploying this file would wipe jobs, quotes, receipts, and role rules. Do not deploy it.
+`cloud/production/firebase.json` has only a `storage` key. Its `rules` path is `storage.rules`, which Firebase resolves from that config's directory, so the file on disk is `cloud/production/storage.rules`. There is no `firestore`, `functions`, `hosting`, or `predeploy` entry. This checkout has no root `firebase.json` and no root `.firebaserc`. `--config cloud/production/firebase.json` sets the Firebase project directory to `cloud/production`, so a root `firebase.json` or a root `.firebaserc` that points at Heartwood is not read.
+
+`cloud/production/.firebaserc` defaults to `demo-heartwood`. Do not run `firebase use heartwood-9f37f` for this config. Pass `--project heartwood-9f37f` only on the reviewed command below.
+
+`cloud/emulator/firestore.rules` is an **emulator model only**. The live Firestore rules are not in this repository. Do not deploy that file, and do not deploy Functions.
 
 The sync admin UID mentioned in `app.js` is not in this repository. It is not guessed. Storage rules do not grant that account access. Add the real UID before a rules deploy if that account must read Storage.
 
-`cloud/.firebaserc` points at `demo-heartwood` so a mistaken deploy from `cloud/` is not the live project. `cloud/scripts/refuse-live-deploy.js` exits 1 and is the functions predeploy hook. `npm run deploy` in `cloud/` also exits 1.
+`cloud/.firebaserc` also points at `demo-heartwood`. `cloud/firebase.json` is the emulator and capture config. Its Storage and Functions `predeploy` hooks run `node scripts/refuse-live-deploy.js`, which exits 1. `npm run deploy` in `cloud/` also exits 1. Those guards stay. The production config is separate and has no hook, so the command below is the only prepared Storage path.
+
+Reviewed command, from the repository root, after the default bucket exists and a person has checked the rules. This branch has not run it:
+
+```
+firebase deploy --only storage --config cloud/production/firebase.json --project heartwood-9f37f --non-interactive
+```
+
+`--only storage` and `--config` are both required. `--dry-run` is not a substitute for review: the CLI says a dry run can still enable APIs on the target project. Checks in this branch use `--project demo-heartwood` only. They show Firestore and Functions do not match this config, and a Storage dry run against the demo project stops before any rules release. No app bootstrap is required for that parse.
 
 ## Secrets
 
@@ -114,32 +126,32 @@ Confirm figures in the Firebase console. They match the public pricing page as c
 
 | Item | Spark (current, if still Spark) | Blaze |
 | --- | --- | --- |
-| Cloud Storage | Not usable for this design. The app comment already says Storage needs Blaze. | No-cost up to 5 GB stored, 1 GB downloaded/day, 20K uploads/day, 50K downloads/day, then Cloud Storage rates. |
+| Cloud Storage | Not usable for this design. | Alex approved Blaze on `heartwood-9f37f` and billing is enabled. No-cost up to 5 GB stored, 1 GB downloaded/day, 20K uploads/day, 50K downloads/day, then Cloud Storage rates. The default private bucket was still being created when this note was written. |
 | Cloud Functions | Not available. | No-cost up to 2M invocations, 400K GB-seconds, 200K CPU-seconds, and 5 GB outbound networking a month, then usage rates. Cloud Build 120 min/day no-cost. |
 | Cloud Scheduler | Not created by this branch. | Not created until a later retention approval. A billing account includes 3 jobs free. Extra jobs are $0.10 each per month. How many jobs this billing account already has is **unknown**. |
 | Firestore | Existing usage, unchanged by this branch. | Same no-cost quotas (1 GiB, 20K writes/day, 50K reads/day) then usage. Extra queue documents are small. Current headroom is **unknown**. |
 | New project, new Google account, Gmail API, new Xero app | Not requested and not done. | Same. |
 
-Heartwood photo volume is likely inside the Storage no-cost quotas. That is an estimate, not a quote. Attaching Blaze is a billing-account change even when the month stays at $0. **Do not attach it until Alex confirms the billing account.**
+Heartwood photo volume is likely inside the Storage no-cost quotas. That is an estimate, not a quote. Blaze is already approved; this branch still does not deploy.
 
 ## Owner steps before anything goes live
 
 Do these in order. Stop if a step is not approved.
 
 1. Read the deletion table and the 5-year accounting warning above. Confirm Base still has no Xero.
-2. Approve Blaze on the **existing** project `heartwood-9f37f` only. No second Firebase project.
-3. Firebase console → Storage → get started, on the bucket already named in `app/firebase-config.js` (`heartwood-9f37f.firebasestorage.app`). Leave it private. Do not apply the lifecycle file. Do not upload old photos.
-4. Review `cloud/emulator/storage.rules`. Deploy **only** those Storage rules, from a machine that is allowed to, after removing the deploy guard in a reviewed change. Do this **before** the webpage from this branch is published, so the first uploads are checked rather than landing in an open bucket.
-5. Do not deploy `cloud/emulator/firestore.rules`.
-6. Publish this branch's webpage. Email and receipt chunks keep working. Storage errors are logged and ignored.
-7. Leave Functions undeployed until you want `photoInboxWorker`. Deploying it does not enable Gmail and does not delete data. It needs Blaze.
+2. Blaze on the existing project `heartwood-9f37f` is approved and billing is enabled. No second Firebase project.
+3. Wait until the default private bucket exists (`heartwood-9f37f.firebasestorage.app`, the name already in `app/firebase-config.js`). Do not apply the lifecycle file. Do not upload old photos.
+4. After that bucket exists, a person can run the reviewed Storage-only command in the Rules section. Do this before the webpage from this branch is published, so the first uploads are checked rather than landing in an open bucket. This agent has not run that command.
+5. Do not deploy Firestore rules or Functions. `cloud/emulator/firestore.rules` is not a production ruleset.
+6. Publish this branch's webpage only after Storage rules are live. Email and receipt chunks keep working. Storage errors are logged and ignored. The webpage in this branch is unchanged by the Storage deploy path.
+7. Leave Functions undeployed until you want `photoInboxWorker`. Deploying it does not enable Gmail and does not delete data.
 8. Retention scheduling, Heartwood historical purge, lifecycle, and Pro Xero are separate later approvals. They are not part of steps 1–7.
 
 ## Tests
 
 From `cloud/` after `npm install`:
 
-- `npm test` — membership, wrong-tenant refusal, receipt hiding, 3-month boundary, missing timestamps, Heartwood hold, cancel, restore, purge keeping invoice/Xero/reimbursement/rate-card rows, zip contents, signed URL refusal, Gmail and Xero stubs, deploy guard.
+- `npm test` — membership, wrong-tenant refusal, receipt hiding, 3-month boundary, missing timestamps, Heartwood hold, cancel, restore, purge keeping invoice/Xero/reimbursement/rate-card rows, zip contents, signed URL refusal, Gmail and Xero stubs, deploy guard, and the Storage-only config (Firestore and Functions do not match it; demo-project dry run does not release rules).
 - `npm run test:browser` — harness clicks with Firebase network stubbed; the jobs page still shows Sign in.
 - `npm run test:emulator` — Auth, Firestore, and Storage emulators on `demo-heartwood` only.
 

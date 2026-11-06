@@ -3,11 +3,12 @@
     "rules": "emulator/firestore.rules"
   },
   "storage": {
-    "rules": "emulator/storage.rules"
+    "rules": "emulator/storage.rules",
+    "predeploy": ["node scripts/refuse-live-deploy.js"]
   },
   "functions": {
     "source": "functions",
-    "predeploy": ["node ../scripts/refuse-live-deploy.js"]
+    "predeploy": ["node scripts/refuse-live-deploy.js"]
   },
   "emulators": {
     "auth": { "port": 9099 },
