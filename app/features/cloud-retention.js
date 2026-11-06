@@ -211,6 +211,26 @@ export function retentionAdminText(view) {
   return `${head}${soon} Deletion is not scheduled. Invoices, GST and Xero records are not deleted.`;
 }
 
+/**
+ * Operational expiry for a job photo. The date comes from the job's existing
+ * retention anchor (completion, or the whitelisted activity already stored).
+ * `now` only decides warning / due. It is not an anchor, so opening a photo
+ * does not move expiresAfter. SCHEDULING_APPROVED is unchanged.
+ */
+export function operationalExpiresAfter(job, now, extras) {
+  const view = retentionView(job, now || new Date(), extras || {});
+  return {
+    expiresAfter: view.expiresOn || null,
+    state: view.state,
+    warning: !!view.warning,
+    due: !!view.due,
+    anchorKind: view.anchorKind || null,
+    reason: view.reason || null,
+    schedulingApproved: SCHEDULING_APPROVED === true,
+    deletionPerformed: false,
+  };
+}
+
 function cloneRow(row) {
   return row ? { ...row, retention: row.retention ? { ...row.retention } : row.retention } : row;
 }

@@ -36,7 +36,7 @@ test("phone shell, quote gate and handlers", async () => {
         returnByValue: true
       });
       const data = JSON.parse(info.result.value);
-      const full = /detail|check-/.test(name);
+      const full = /detail|check-|empty/.test(name);
       const heightPx = full
         ? Math.min(2400, (await page.send("Runtime.evaluate", { expression: "Math.max(document.documentElement.scrollHeight, window.innerHeight)", returnByValue: true })).result.value)
         : height;
@@ -45,12 +45,41 @@ test("phone shell, quote gate and handlers", async () => {
       assert.deepEqual(errors, [], name + " exceptions");
       assert.deepEqual(data.errs, [], name + " page errors " + data.errs.join("\n"));
       if (query.includes("check=1")) assert.equal(data.check, "pass", data.fails);
+      if (query.includes("open=gallery")) {
+        const g = await page.send("Runtime.evaluate", { expression: "document.querySelector('.pgal')?.innerText || ''", returnByValue: true });
+        assert.match(g.result.value, /2027-02-06/, name);
+        assert.match(g.result.value, /not scheduled/i, name);
+        assert.doesNotMatch(g.result.value, /2099/, name);
+        if (query.includes("view=large")) {
+          const img = await page.send("Runtime.evaluate", { expression: "!!document.querySelector('.pview img')", returnByValue: true });
+          assert.equal(img.result.value, true, name);
+        } else {
+          const n = await page.send("Runtime.evaluate", { expression: "document.querySelectorAll('.pgal button.pth').length", returnByValue: true });
+          assert.equal(n.result.value, 2, name);
+        }
+      }
+      if (query.includes("photos=none")) {
+        const btn = await page.send("Runtime.evaluate", { expression: "!!document.querySelector('[data-viewphotos]')", returnByValue: true });
+        assert.equal(btn.result.value, false, name);
+        const state = await page.send("Runtime.evaluate", { expression: "document.querySelector('[data-photos-state]')?.getAttribute('data-photos-state') || ''", returnByValue: true });
+        assert.equal(state.result.value, "empty", name);
+      }
+      if (query.includes("photos=error")) {
+        const state = await page.send("Runtime.evaluate", { expression: "document.querySelector('[data-photos-state]')?.textContent || ''", returnByValue: true });
+        assert.match(state.result.value, /Couldn't load photos/, name);
+        const btn = await page.send("Runtime.evaluate", { expression: "!!document.querySelector('[data-viewphotos]')", returnByValue: true });
+        assert.equal(btn.result.value, false, name);
+      }
       return page;
     }
     await run("after-phone-today", "?role=operator", 390, 844);
     await run("after-phone-detail", "?role=operator&open=detail", 390, 844);
     await run("after-phone-jobs", "?role=operator&open=jobs", 390, 844);
     await run("after-phone-photos", "?role=operator&open=photos", 390, 844);
+    await run("after-phone-gallery", "?role=operator&open=gallery", 390, 844);
+    await run("after-phone-gallery-large", "?role=operator&open=gallery&view=large", 390, 844);
+    await run("after-phone-detail-empty", "?role=operator&open=job&job=j4&photos=none", 390, 844);
+    await run("after-phone-photos-error", "?role=operator&open=detail&photos=error", 390, 844);
     await run("after-phone-more", "?role=operator&open=more", 390, 844);
     await run("after-desktop-operator", "?role=operator", 1280, 800);
     await run("after-desktop-admin", "?role=admin", 1280, 800);

@@ -5,12 +5,13 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, conne
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator,
   collection, doc, getDoc, getDocs, query, where, orderBy, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, serverTimestamp, arrayUnion, runTransaction }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { getStorage, ref as storageRef, uploadBytes, connectStorageEmulator }
+import { getStorage, ref as storageRef, uploadBytes, connectStorageEmulator, listAll, getMetadata, getBlob }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
 import { firebaseConfig, useEmulator } from "./firebase-config.js";
 import { installQuotes, adminViewRouter } from "./features/quotes.js";
-import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPlanned } from "./features/cloud-storage.js";
+import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPlanned, jobPhotoPrefix } from "./features/cloud-storage.js";
 import { buildOperationalExport, retentionAdminText, retentionView } from "./features/cloud-retention.js";
+import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, galleryHtml, largePhotoHtml } from "./features/photo-gallery.js";
 
 const cfg = useEmulator ? { ...firebaseConfig, apiKey: "demo-key", projectId: "demo-heartwood" } : firebaseConfig;
 const fb = initializeApp(cfg);
@@ -54,7 +55,7 @@ function guessType(text) {
 let me = null, staff = [], jobs = [], unsub = null;
 let QG = { bindAdmin() {} }; // Quotes module; filled after helpers load
 const ALEX_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";      // Alex has no users/{uid} profile doc; always staff
-const ui = { view: "list", staffF: "", typeF: "" };
+const ui = { view: "list", staffF: "", typeF: "", photoLists: {}, photoUrls: {}, photoBlobs: {}, photoPaint: 0 };
 
 // ------------------------------------------------------------------ auth
 $("#logout").onclick = () => signOut(auth);
@@ -327,7 +328,8 @@ function b64ToBlob(b64, type) {
   return new Blob([bytes], { type });
 }
 async function mirrorJobPhotos(j, files) {
-  const plan = planJobPhotoMirrors({
+  const at = galleryNow();
+  let plan = planJobPhotoMirrors({
     membership: cloudMembership(), job: j,
     files: files.map((f, i) => ({
       name: f.name, type: f.type || "image/jpeg", size: f.size || 1,
@@ -335,9 +337,193 @@ async function mirrorJobPhotos(j, files) {
     })),
   });
   if (!plan.ok) { console.warn("cloud photo mirror skipped", (plan.skipped || []).map(s => s.reason).join(",") || "none"); return; }
+  plan = stampExpiresAfter(plan, j, at);
   await putPlanned(plan, target => uploadBytes(storageRef(storage, target.path), files[target.sourceIndex], {
     contentType: target.contentType, customMetadata: target.metadata,
   }));
+  // Not a retention anchor, including on a completed job. Listing still uses the
+  // job's completion or existing activity date. This only asks other open phones to list again.
+  updateDoc(doc(db, "jobs", j.id), { cloudPhotosAt: at.toISOString() }).catch(e => console.warn("cloud photo stamp not saved", e.code || e.message));
+  await ensurePhotoList(j, true);
+  if (ui.galleryJob === j.id) await paintGallery(findJob(j.id) || j);
+}
+function galleryNow() {
+  const pin = typeof window !== "undefined" ? window.HW_TODAY : "";
+  if (typeof pin === "string" && /^\d{4}-\d{2}-\d{2}$/.test(pin)) return new Date(pin + "T12:00:00+10:00");
+  return new Date();
+}
+function photoMark(j) { return String(j && j.cloudPhotosAt || "") + "|" + String(j && j.photosEmailedAt || ""); }
+function findJob(id) {
+  return [...(jobs || []), ...(ui.done || []), ...(ui.undated || [])].find(j => j.id === id) || null;
+}
+function jobSubtitle(j) { return "Job #" + jobNo(j) + (j.address ? " · " + j.address : ""); }
+function galleryRoot() {
+  let el = document.getElementById("pgal");
+  const host = document.querySelector("dialog[open]") || document.body;
+  if (!el) { el = document.createElement("div"); el.id = "pgal"; el.className = "pgal"; el.hidden = true; }
+  if (el.parentElement !== host) host.appendChild(el);
+  return el;
+}
+async function loadJobPhotoListing(j) {
+  const prefix = jobPhotoPrefix(cloudMembership(), j);
+  if (!prefix.ok) return { ok: false, reason: prefix.reason };
+  const listed = await listAll(storageRef(storage, prefix.prefix));
+  const items = [];
+  for (const itemRef of listed.items || []) {
+    const path = itemRef.fullPath || itemRef.path;
+    try {
+      const meta = await getMetadata(itemRef);
+      items.push({ path, contentType: meta.contentType || "", customMetadata: meta.customMetadata || {}, size: meta.size, timeCreated: meta.timeCreated || null });
+    } catch { items.push({ path, readable: false }); }
+  }
+  return { ok: true, items };
+}
+function ensurePhotoList(j, force) {
+  if (!j?.id) return Promise.resolve();
+  const mark = photoMark(j);
+  const row = ui.photoLists[j.id];
+  if (!force && row && row.mark === mark && row.status === "ready") return Promise.resolve(row);
+  if (!force && row && row.mark === mark && row.status === "loading" && row.pending) return row.pending;
+  const seq = (row?.seq || 0) + 1;
+  ui.photoLists[j.id] = { status: "loading", count: row?.count || 0, mark, seq, error: "" };
+  const pending = loadJobPhotoListing(j).then(res => {
+    if (ui.photoLists[j.id]?.seq !== seq) return;
+    const current = findJob(j.id) || j;
+    if (!res.ok) ui.photoLists[j.id] = { status: "error", count: 0, mark: photoMark(current), seq, error: res.reason || "error" };
+    else {
+      const gallery = buildJobGallery({ membership: cloudMembership(), job: current, listing: res.items, now: galleryNow() });
+      ui.photoLists[j.id] = {
+        status: gallery.ok ? "ready" : "error", count: gallery.ok ? gallery.photos.length : 0,
+        mark: photoMark(current), seq, gallery: gallery.ok ? gallery : null, error: gallery.ok ? "" : (gallery.reason || "error"),
+      };
+    }
+    paintPhotoSlots();
+  }).catch(e => {
+    if (ui.photoLists[j.id]?.seq !== seq) return;
+    ui.photoLists[j.id] = { status: "error", count: 0, mark, seq, error: e.code || e.message || "error" };
+    paintPhotoSlots();
+  });
+  ui.photoLists[j.id].pending = pending;
+  paintPhotoSlots();
+  return pending;
+}
+function watchJobPhotos(j) {
+  const before = ui.photoLists[j.id];
+  const same = !!(before && before.status === "ready" && before.mark === photoMark(j));
+  return ensurePhotoList(j).then(() => {
+    paintPhotoSlots();
+    if (ui.galleryJob === j.id && !same) return paintGallery(findJob(j.id) || j);
+  });
+}
+function paintPhotoSlots() {
+  document.querySelectorAll("[data-photoslot]").forEach(el => {
+    const id = el.dataset.photoslot;
+    const row = ui.photoLists[id];
+    el.innerHTML = photoSlotHtml({
+      jobId: id, status: row?.status || "loading", count: row?.count || 0,
+      role: el.dataset.photorole || "both", variant: el.dataset.photovariant === "sm" ? "sm" : "phone",
+      iconHtml: el.dataset.photovariant === "sm" ? "" : ICO.photos,
+    });
+    el.dataset.settled = row && row.status && row.status !== "loading" ? "1" : "";
+    el.querySelectorAll("[data-viewphotos]").forEach(b => b.onclick = ev => {
+      ev.preventDefault(); ev.stopPropagation();
+      const job = findJob(b.dataset.viewphotos); if (job) openPhotoGallery(job);
+    });
+    el.querySelectorAll("[data-photoretry]").forEach(b => b.onclick = ev => {
+      ev.preventDefault(); ev.stopPropagation();
+      const job = findJob(b.dataset.photoretry); if (job) ensurePhotoList(job, true).then(() => { paintPhotoSlots(); if (ui.galleryJob === job.id) paintGallery(job); });
+    });
+  });
+}
+function wireGallery(j) {
+  const root = galleryRoot();
+  const job = () => findJob(j.id) || j;
+  root.querySelector(".pgal-x")?.addEventListener("click", closePhotoGallery);
+  root.querySelectorAll("[data-photoretry]").forEach(b => b.onclick = ev => {
+    ev.preventDefault();
+    const current = job();
+    ensurePhotoList(current, true).then(() => paintGallery(current));
+  });
+  root.querySelectorAll("button.pth[data-photo-path]").forEach(b => b.onclick = () => openLargePhoto(job(), b.dataset.photoPath));
+  const dl = root.querySelector("[data-cloudexport]");
+  if (dl) dl.onclick = () => downloadGalleryCopy(job()).catch(e => toast(e.message || "Download failed"));
+}
+async function paintGallery(j) {
+  if (!j || ui.galleryJob !== j.id) return;
+  const token = ++ui.photoPaint;
+  const root = galleryRoot();
+  const row = ui.photoLists[j.id];
+  const common = { title: "Photos", subtitle: jobSubtitle(j), closeHtml: ICO.back, jobId: j.id };
+  const stale = () => token !== ui.photoPaint || ui.galleryJob !== j.id;
+  if (!row || row.status === "loading") {
+    if (stale()) return;
+    root.innerHTML = galleryHtml({ ...common, status: "loading", retentionText: "", photos: [] });
+    wireGallery(j); return;
+  }
+  if (row.status !== "ready" || !row.gallery) {
+    if (stale()) return;
+    root.innerHTML = galleryHtml({ ...common, status: "error", error: "Couldn't load photos.", retentionText: "" });
+    wireGallery(j); return;
+  }
+  const photos = [];
+  for (const p of row.gallery.photos) {
+    if (stale()) return;
+    let src = ui.photoUrls[p.path];
+    if (!src) {
+      try {
+        const blob = await getBlob(storageRef(storage, p.path));
+        ui.photoBlobs[p.path] = blob;
+        src = URL.createObjectURL(blob);
+        ui.photoUrls[p.path] = src;
+      } catch { photos.push({ path: p.path, failed: true }); continue; }
+    }
+    photos.push({ path: p.path, src });
+  }
+  if (stale()) return;
+  root.innerHTML = galleryHtml({ ...common, status: "ready", retentionText: row.gallery.retentionText, canDownload: !!(me && me.role === "admin"), photos });
+  wireGallery(j);
+}
+async function openPhotoGallery(j) {
+  ui.galleryJob = j.id;
+  const root = galleryRoot();
+  root.hidden = false;
+  root.innerHTML = galleryHtml({ status: "loading", title: "Photos", subtitle: jobSubtitle(j), closeHtml: ICO.back, jobId: j.id, retentionText: "", photos: [] });
+  wireGallery(j);
+  await ensurePhotoList(findJob(j.id) || j, true);
+  if (ui.galleryJob === j.id) await paintGallery(findJob(j.id) || j);
+}
+function closePhotoGallery() {
+  ui.galleryJob = null;
+  const root = document.getElementById("pgal");
+  if (!root) return;
+  root.hidden = true;
+  root.innerHTML = "";
+}
+function openLargePhoto(j, path) {
+  const src = ui.photoUrls[path];
+  if (!src) return;
+  const meta = ui.photoLists[j.id]?.gallery?.photos?.find(p => p.path === path);
+  let caption = "Job photo";
+  if (meta?.timeCreated) {
+    const d = new Date(meta.timeCreated);
+    if (!Number.isNaN(d.getTime())) caption = d.toLocaleString("en-AU", { timeZone: TZ, dateStyle: "medium", timeStyle: "short" });
+  }
+  const wrap = document.createElement("div");
+  wrap.innerHTML = largePhotoHtml({ src, caption, closeHtml: "×" });
+  const el = wrap.firstElementChild;
+  galleryRoot().appendChild(el);
+  el.querySelector(".px").onclick = () => el.remove();
+}
+async function downloadGalleryCopy(j) {
+  const gallery = ui.photoLists[j.id]?.gallery;
+  if (!gallery?.ok) return toast("Couldn't build the download.");
+  const blobs = {};
+  for (const p of gallery.photos) {
+    const blob = ui.photoBlobs[p.path];
+    if (!blob) continue;
+    blobs[p.path] = new Uint8Array(await blob.arrayBuffer());
+  }
+  return downloadCloudCopy(j, galleryExportPhotos(gallery, blobs, j));
 }
 function mirrorReceipt(receiptId, b64, job, written) {
   const blob = b64ToBlob(b64, "image/jpeg");
@@ -369,8 +555,8 @@ function cloudExpiryNotice(all) {
   if (!soon && !due) return "";
   return `<p class="sub cloudret">Cloud copies: ${soon ? soon + " expiring within 14 days. " : ""}${due ? due + " past the 3-month operational window. " : ""}Deletion is not scheduled. Invoices, GST and Xero records are not part of that deletion. Accounting records are normally kept 5 years.</p>`;
 }
-async function downloadCloudCopy(j) {
-  const built = buildOperationalExport({ membership: cloudMembership(), scope: "job", jobId: j.id, jobs: [j], now: new Date() });
+async function downloadCloudCopy(j, photos) {
+  const built = buildOperationalExport({ membership: cloudMembership(), scope: "job", jobId: j.id, jobs: [j], photos: photos || [], now: galleryNow() });
   if (!built.ok) return toast(built.reason === "not-authorised" ? "Only an admin can download the cloud copy." : "Couldn't build the download.");
   const blob = new Blob([built.zip], { type: "application/zip" });
   const url = URL.createObjectURL(blob);
@@ -967,13 +1153,13 @@ function editJob(j) {
       <div class="diary">${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("")}
         ${hist.map(([w, t]) => `<div class="de sys"><span class="av">i</span><div><small>${esc(w)}</small><div>${esc(t)}</div></div></div>`).join("")}
         ${!(j.log || []).length && !hist.length ? `<p class="muted sub">No diary entries yet. Site notes from staff appear here.</p>` : ""}</div>
-      ${!n ? `<h4>Photos</h4><button type="button" class="sm-btn" id="emailph">📧 Email photos</button> <span class="sub muted">Emailed to ${OFFICE_EMAIL}, and saved privately in cloud storage when the bucket accepts them</span>${jobPhotosLink(j)} <button type="button" class="sm-btn incbtn" data-inc="${j.id}">⚠ Report incident</button> <button type="button" class="sm-btn" data-swms="${j.id}">📋 View SWMS</button>${jobReceiptsHtml(j)}${cloudRetentionHtml(j)}` : ""}
+      ${!n ? `<h4>Photos</h4><button type="button" class="sm-btn" id="emailph">📧 Email photos</button> <span data-photoslot="${esc(j.id)}" data-photorole="both" data-photovariant="sm"></span> <span class="sub muted">Emailed to ${OFFICE_EMAIL}, and saved privately in cloud storage when the bucket accepts them</span>${jobPhotosLink(j)} <button type="button" class="sm-btn incbtn" data-inc="${j.id}">⚠ Report incident</button> <button type="button" class="sm-btn" data-swms="${j.id}">📋 View SWMS</button>${jobReceiptsHtml(j)}${cloudRetentionHtml(j)}` : ""}
     </div></div>
     <p id="ferr" class="err"></p>
     <div class="btns jc-foot"><button value="cancel" formnovalidate class="sm-btn">Close</button><button value="save" class="sm-btn primary">Save Job</button></div></form>`;
   d.showModal();
   if (!n) jobTabs(d, j);
-  if (!n) $("#emailph").onclick = () => emailPhotos(j);
+  if (!n) { $("#emailph").onclick = () => emailPhotos(j); watchJobPhotos(j); paintPhotoSlots(); }
   if (!n && $("#cloudexport")) $("#cloudexport").onclick = () => downloadCloudCopy(j).catch(e => toast(e.message || "Download failed"));
   if (!n) { wireFindPo(j); supervisors(); wireJobReceipts(j); fillSupCard(j); }
   if (!n && $("#unschbtn")) $("#unschbtn").onclick = ev => { if (!armBtn(ev.currentTarget, "✕ Remove from dispatch board", "Tap again to remove from the board")) return;
@@ -1592,9 +1778,9 @@ function renderOperator() {
     const list = mine.filter(j => j.status !== "Cancelled");
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Photos</div><div class="mob-sub">Email site photos to the office</div></div>
       <p class="muted pad">Choose a job to add photos. They are emailed to the office, and a private cloud copy is saved when storage accepts them.</p>
-      <div class="mob-list">${list.map(j => `${opCard(j)}<button type="button" class="mnote op-photo" data-photo="${esc(j.id)}">${ICO.photos}<span>Add photos</span></button>${jobPhotosLink(j) ? `<div class="pad">${jobPhotosLink(j)}</div>` : ""}`).join("") || `<p class="muted pad">No jobs to photograph.</p>`}</div>
+      <div class="mob-list">${list.map(j => `${opCard(j)}<div data-photoslot="${esc(j.id)}" data-photorole="action"></div><button type="button" class="mnote op-photo" data-photo="${esc(j.id)}">${ICO.photos}<span>Add photos</span></button>${jobPhotosLink(j) ? `<div class="pad">${jobPhotosLink(j)}</div>` : ""}`).join("") || `<p class="muted pad">No jobs to photograph.</p>`}</div>
       ${opTabs("photos")}</div>`;
-    bindOp(mine); return;
+    list.forEach(watchJobPhotos); paintPhotoSlots(); bindOp(mine); return;
   }
   const isDone = j => queueOf(j) === "Completed" || queueOf(j) === "Unsuccessful";
   const open = mine.filter(j => !isDone(j));
@@ -1645,17 +1831,18 @@ function renderOpDetail(j) {
       </dl>
       <div class="mcard"><div class="mlbl">Diary</div>${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("") || `<div class="muted sub">No notes yet</div>`}
         <button class="mnote" type="button" data-act="note">Add note</button></div>
-      <div class="mcard"><div class="mlbl">Photos</div>${jobPhotosLink(j)}<div class="muted sub">Emailed to the office. A private cloud copy is saved when storage accepts it.</div></div>
+      <div class="mcard"><div class="mlbl">Photos</div><div data-photoslot="${esc(j.id)}" data-photorole="status"></div>${jobPhotosLink(j)}<div class="muted sub">Emailed to the office. A private cloud copy is saved when storage accepts it.</div></div>
       <div class="mcard safecard"><div class="mlbl">Safety</div><button type="button" class="mnote" data-swms="${j.id}">View SWMS</button><button type="button" class="mnote incbtn" data-inc="${j.id}">Report incident</button></div>
       <div class="mcard">${jobReceiptsHtml(j)}</div>
     </div>
     <div class="mactions">${done ? `<div class="donebar">Completed${j.loads ? ` · ${esc(j.loads)} loads` : ""}</div>` :
       `<button class="mbtn start" type="button" data-act="start" ${started ? "disabled" : ""}>${ICO.play}<span>${started ? "Started" : "Start job"}</span></button>
        <button class="mbtn complete" type="button" data-act="done">Complete job</button>`}
+      <div data-photoslot="${esc(j.id)}" data-photorole="action"></div>
       <button type="button" class="mbtn mnote op-photo" id="emailph">${ICO.photos}<span>Add photos</span></button>
       <a class="mcard link mbtn outline" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener">${ICO.pin}<span>Get directions</span></a>
     </div></div>`;
-  $("#emailph").onclick = () => emailPhotos(j); wireJobReceipts(j); fillSupCard(j);
+  $("#emailph").onclick = () => emailPhotos(j); wireJobReceipts(j); fillSupCard(j); watchJobPhotos(j); paintPhotoSlots();
   $("#back").onclick = () => { ui.opSel = null; renderOperator(); };
   $("#app").querySelectorAll("[data-act]").forEach(b => b.onclick = () => opAction(j, b.dataset.act));
 }
@@ -1683,8 +1870,9 @@ async function opAction(j, act) {
   };
 }
 
-// ------------------------------------------------------------------ email photos (no Firebase Storage)
+// ------------------------------------------------------------------ email photos
 // Pick photos -> (downscale) -> share sheet (Mail / Gmail) with subject + body, or a mailto: fallback. Then a diary entry.
+// Accepted files are also mirrored to private Storage. The gallery reads those objects back and does not rewrite the job.
 // The share must be started by a fresh tap (browsers require a user gesture), so the picked photos are shown in a
 // small dialog with a "Send" button.
 const OFFICE_EMAIL = "alex@heartwoodew.com";
