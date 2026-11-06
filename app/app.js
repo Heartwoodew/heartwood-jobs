@@ -6,6 +6,7 @@ import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager
   collection, doc, getDoc, getDocs, query, where, orderBy, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, serverTimestamp, arrayUnion, runTransaction }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { firebaseConfig, useEmulator } from "./firebase-config.js";
+import { installQuotes, adminViewRouter } from "./features/quotes.js";
 
 const cfg = useEmulator ? { ...firebaseConfig, apiKey: "demo-key", projectId: "demo-heartwood" } : firebaseConfig;
 const fb = initializeApp(cfg);
@@ -45,6 +46,7 @@ function guessType(text) {
 }
 
 let me = null, staff = [], jobs = [], unsub = null;
+let QG = { bindAdmin() {} }; // Quotes module; filled after helpers load
 const ALEX_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";      // Alex has no users/{uid} profile doc; always staff
 const ui = { view: "list", staffF: "", typeF: "" };
 
@@ -115,13 +117,16 @@ const QCLS = { "Quote": "q-quote", "Work Order": "q-wo", "Unsuccessful": "q-uns"
 function queueOf(j) {
   if (j.status === "Cancelled" || j.sm8Status === "Unsuccessful") return "Unsuccessful";
   if (j.status === "Done" || j.sm8Status === "Completed") return "Completed";
+  // Explicit CallUp quoteStatus (Draft/Accepted) wins over legacy ServiceM8 sm8Status alone.
+  if (j.quoteStatus === "Draft") return "Quote";
+  if (j.quoteStatus === "Accepted") return "Work Order";
   if (j.sm8Status === "Quote") return "Quote";
   return "Work Order";
 }
 const jobNo = j => j.sm8JobNo ? j.sm8JobNo : "HW-" + String(j.id || "").slice(-4).toUpperCase();
 const firstLine = s => String(s || "").split(/\n|\. /)[0];
 const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Unscheduled";
-const NAV = [["home", "⌂", "Home"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["completed", "✔", "Completed"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["inbox", "✉", "Inbox", 0, 1],
+const NAV = [["home", "⌂", "Home"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["inbox", "✉", "Inbox", 0, 1],
   ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["reimb", "💵", "Reimbursements", 0, 1], ["settings", "⚙", "Settings", 1]];
 ui.view = "home"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
 const PHONE = matchMedia("(max-width:760px)");
@@ -129,12 +134,12 @@ const TOUCH = matchMedia("(pointer:coarse)");
 PHONE.addEventListener?.("change", () => { if (me && me.role === "admin") renderAdmin(); });
 // Grouped side menu: top items, then collapsible groups (open/closed remembered on this device; the group holding the current screen is always open).
 const NAV_TOP = ["home", "inbox", "clients"];
-const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "jobs", "unscheduled", "completed", "myjobs"]], ["money", "$", "Money", ["invoices", "reimb", "timesheet"]], ["safety", "⚠", "Safety", ["safety", "swms"]]];
+const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "jobs", "unscheduled", "quotes", "completed", "myjobs"]], ["money", "$", "Money", ["invoices", "reimb", "timesheet"]], ["safety", "⚠", "Safety", ["safety", "swms"]]];
 const NAV_LBL = { safety: "Incidents" };
 ui.navCol = (() => { try { return JSON.parse(localStorage.getItem("hwNavCol") || "{}"); } catch { return {}; } })();
 function shell(inner) {
   const cur = NAV.find(n => n[0] === ui.view);
-  const item = k => { const x = NAV.find(n => n[0] === k); if (!x || x[3] || (x[4] && !isOwner()) || (k === "invoices" && (!me || me.role !== "admin"))) return "";
+  const item = k => { const x = NAV.find(n => n[0] === k); if (!x || x[3] || (x[4] && !isOwner()) || (k === "invoices" && (!me || me.role !== "admin")) || (k === "quotes" && !canQuote())) return "";
     return `<button class="sm-nav ${ui.view === k ? "on" : ""}" data-view="${k}" title="${esc(NAV_LBL[k] || x[2])}"><span class="ic">${x[1]}</span><span class="lbl">${esc(NAV_LBL[k] || x[2])}</span></button>`; };
   const grp = ([g, ic, n, ks]) => { const has = ks.includes(ui.view), open = has || !ui.navCol[g];
     return `<div class="sm-grp ${open ? "open" : ""} ${has ? "has" : ""}"><button class="sm-gh" data-grp="${g}" aria-expanded="${open}"><span class="ic">${ic}</span><span class="lbl">${n}</span><span class="car">${open ? "▾" : "▸"}</span></button>
@@ -315,6 +320,10 @@ const canXero = () => !!me && XERO_UIDS.includes(me.uid);
 // Money ($ PO/invoice/receipt/profit amounts): admins + users/{uid}.role "supervisor". Operators (staff) see none in the UI.
 // App roles on users/{uid}: "operator" (staff) | "supervisor" (sees money, still operator shell unless also Firebase-admin).
 const canSeeMoney = () => !!me && (me.role === "admin" || me.role === "supervisor" || me.staffRole === "supervisor");
+// Quotes: same people who see money (admins + users.role/staffRole supervisor). Ordinary staff: no Quotes nav or dollars.
+const canQuote = () => canSeeMoney();
+// Business quote rates (meta/quoteRates): admin edit only — supervisors can read/use rates while quoting, not change them.
+const canEditQuoteRates = () => !!(me && me.role === "admin");
 async function shrinkImage(file, max = 1600, q = 0.72) {
   const bmp = await createImageBitmap(file).catch(() => null);
   if (!bmp) throw new Error("Can't read that image - try a JPEG/PNG photo");
@@ -701,13 +710,15 @@ function renderAdmin() {
   document.body.className = "admin";
   const fj = filtered(), und = (ui.undated || []).filter(j => (!ui.typeF || j.type === ui.typeF));
   const all = [...fj, ...und.filter(u => !fj.some(j => j.id === u.id))];
-  $("#app").innerHTML = shell(ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : jobsView(all));
+  const quotesHtml = ui.view === "quotes" ? adminViewRouter(ui.view, ui, { esc, $$, staff, jobs: all, todayStr, rerender: () => renderAdmin(), canEditQuoteRates }) : null;
+  $("#app").innerHTML = shell(ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : quotesHtml != null ? quotesHtml : jobsView(all));
   const A = $("#app"); inboxBadge();
   if (ui.view === "invoices") bindInvoices(A);
   if (ui.view === "clients") bindClients(A);
   if (ui.view === "inbox") bindInbox(A);
   if (ui.view === "reimb") bindReimb(A);
   if (ui.view === "timesheet") bindTs(A, renderAdmin);
+  if (ui.view === "quotes") QG.bindAdmin({ ui, A });
   A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.navOpen = false;
     if (b.dataset.view === "myjobs") { ui.myJobs = true; ui.opSel = null; window.scrollTo(0, 0); return renderAdmin(); }
     ui.view = b.dataset.view; if (ui.view === "invoices" && me.role !== "admin") ui.view = "home"; renderAdmin(); });
@@ -1395,7 +1406,11 @@ async function markInvoiced(list) {
 
 // ------------------------------------------------------------------ operator
 // ServiceM8 mobile-app style: blue header, today's list -> job detail -> Start / Complete.
-const opTabs = on => [["today", "Today"], ["week", "Schedule"], ["hours", "Hours"]].map(([k, n]) => `<button data-tab="${k}" class="${on === k ? "on" : ""}">${n}</button>`).join("");
+const opTabs = on => {
+  const tabs = [["today", "Today"], ["week", "Schedule"], ["hours", "Hours"]];
+  if (canQuote() && me.role !== "admin") tabs.push(["quotes", "Quotes"]);
+  return tabs.map(([k, n]) => `<button data-tab="${k}" class="${on === k ? "on" : ""}">${n}</button>`).join("");
+};
 function renderOperator() {
   document.body.className = "operator";
   const t0 = todayStr(), t1 = addDays(t0, 1), wkEnd = addDays(t0, 7);
@@ -1403,9 +1418,17 @@ function renderOperator() {
   const sel = ui.opSel && mine.find(j => j.id === ui.opSel);
   if (sel) return renderOpDetail(sel);
   if (!ui.opTab || ui.opTab === "home" || ui.opTab === "done") ui.opTab = "today";
+  if (ui.opTab === "quotes" && canQuote() && me.role !== "admin") {
+    const qhtml = adminViewRouter("quotes", ui, { esc, $$, staff, jobs: mine, todayStr, rerender: () => renderOperator(), canEditQuoteRates });
+    $("#app").innerHTML = `<div class="mob"><div class="mob-bar"><div class="mob-title">Quotes</div><div class="mob-sub">Guided pricing · ex GST</div></div>
+      <div class="mob-tabs">${opTabs("quotes")}</div><div class="pad">${qhtml || ""}</div></div>`;
+    $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; renderOperator(); });
+    QG.bindAdmin({ ui: { ...ui, view: "quotes" }, A: $("#app") });
+    return;
+  }
   if (ui.opTab === "today") {
     $("#app").innerHTML = `<div class="mob">${me.role === "admin" ? `<button class="mback adminback" id="toadmin">‹ Admin view</button>` : ""}
-      <div class="mob-tabs">${opTabs("today")}</div><div class="pad">${homeBody(jobs, false, [["today", "☀", "Today"], ["week", "▦", "Schedule"], ["done", "✔", "Completed"], ["hours", "⏱", "Hours"], ["swms", "📋", "SWMS"]])}</div></div>`;
+      <div class="mob-tabs">${opTabs("today")}</div><div class="pad">${homeBody(jobs, false, [["today", "☀", "Today"], ["week", "▦", "Schedule"], ["done", "✔", "Completed"], ["hours", "⏱", "Hours"], ...(canQuote() ? [["quotes", "✎", "Quotes"]] : []), ["swms", "📋", "SWMS"]])}</div></div>`;
     if ($("#toadmin")) $("#toadmin").onclick = () => { ui.myJobs = false; ui.opSel = null; renderAdmin(); };
     $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; renderOperator(); });
     $("#app").querySelectorAll("[data-go]").forEach(b => b.onclick = () => { if (b.dataset.go === "swms") return swmsOverlay(); ui.opTab = b.dataset.go; renderOperator(); window.scrollTo(0, 0); });
@@ -2106,3 +2129,14 @@ document.addEventListener("click", e => {
     if (me.role === "admin" && !ui.myJobs) editJob(j); else { ui.opSel = j.id; renderOperator(); window.scrollTo(0, 0); } });
   setInterval(() => box.classList.toggle("hidden", !me), 1000);
 })();
+
+// ---- Guided Quotes (CallUp, Nov 2026). Rates in meta/quoteRates — never invented. No GPS in this build.
+QG = installQuotes({
+  db, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, collection, query, where, onSnapshot, serverTimestamp, arrayUnion,
+  $, esc, toast, $$, CLIENTS, TYPES, canSeeMoney, canQuote, canEditQuoteRates, todayStr, jobNo,
+  getMe: () => me, getUi: () => ui,
+  isAdmin: () => !!(me && me.role === "admin"),
+  renderAdmin: () => (me && me.role === "admin" ? renderAdmin() : renderOperator()),
+  get staff() { return staff; }
+});
+window.HW_QUOTES = QG; // preview / tests

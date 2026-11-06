@@ -624,3 +624,14 @@ html{-webkit-text-size-adjust:100%}
   .kf-xero .xc{flex-wrap:wrap}
   .jc .kf-xero .sm-btn.xc-btn{width:auto;min-height:32px;padding:4px 10px;font-size:13px}
 }
+
+
+/* ---- Quotes wizard (Nov 2026) */
+.qw .qw-body{padding:12px 16px}.qw-steps{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.qw-dot{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;background:#eef1f5;color:#445}
+.qw-dot.on{background:var(--q-quote);color:#fff}.qw-dot.done{background:#3cb371;color:#fff}
+.qw-line{flex:1;height:2px;background:#dde2ea;min-width:12px;max-width:40px}
+.qw-pane label{display:block;margin:10px 0}.qw-sum{background:#fff8ef;border:1px solid #f0d9a8;border-radius:10px;padding:12px}
+.qw-line-row,.qw-total{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px dashed #f0d9a8}
+.qw-total{border-bottom:0;font-size:18px;margin-top:6px}
+.row.gap{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
