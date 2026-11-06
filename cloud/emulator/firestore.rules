@@ -1,0 +1,57 @@
+rules_version = '2';
+// EMULATOR MODEL ONLY. Do not deploy.
+// The live Firestore rules are not in this repository. Deploying this file
+// would replace jobs, quotes, photos-email and receipt rules.
+// These rules cover only the checks this branch adds: tenant fields cannot be
+// self-served, and Xero queue items stay on the existing Heartwood finance UIDs.
+// CallUp Base does not use xeroQueue. Heartwood's current app still does.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isAlex() { return signedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
+    function isPatrick() { return signedIn() && request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"; }
+    function isHeartwoodFinance() { return isAlex() || isPatrick(); }
+    function userPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function hasProfile() { return exists(userPath()); }
+    function profile() { return get(userPath()).data; }
+    function isAppAdmin() {
+      return isAlex() || isPatrick() || (hasProfile() && profile().role == "admin");
+    }
+
+    function same(key) {
+      return (!(key in request.resource.data) && !(key in resource.data))
+        || ((key in request.resource.data) && (key in resource.data) && request.resource.data[key] == resource.data[key]);
+    }
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAppAdmin());
+      allow create: if signedIn() && request.auth.uid == uid
+        && !request.resource.data.keys().hasAny(["tenantId", "role", "customerIds", "finance"]);
+      allow update: if signedIn() && request.auth.uid == uid
+        && same("tenantId") && same("role") && same("customerIds") && same("finance");
+      allow delete: if false;
+    }
+
+    match /xeroQueue/{id} {
+      allow read: if isHeartwoodFinance();
+      allow create: if isHeartwoodFinance()
+        && request.resource.data.status == "queued"
+        && request.resource.data.by == request.auth.uid
+        && (!("tenantId" in request.resource.data) || request.resource.data.tenantId == "heartwood");
+      allow update, delete: if false;
+    }
+
+    match /tenants/{id} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /jobs/{id} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+    match /receipts/{id} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+  }
+}

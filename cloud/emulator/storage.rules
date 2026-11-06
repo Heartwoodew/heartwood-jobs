@@ -1,0 +1,125 @@
+rules_version = '2';
+// EMULATOR AND PROPOSED STORAGE RULES.
+// Do not deploy until the owner completes cloud/MIGRATION.md.
+// This is a new ruleset (the jobs app does not use Storage today).
+// A matching path, file name, or client metadata tenantId is not enough.
+// The caller must be a member of that tenant via their profile (missing tenantId
+// means Heartwood, including existing staff). Job photos also require the job
+// record. Receipts require the receipt record. Finance files are not a Base
+// feature: on Heartwood they follow the existing Xero UID list (Alex, Patrick).
+// Any other tenant would need a server-written tenants/{id}.financeUids list,
+// which this branch does not create.
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() { return request.auth != null; }
+    function isAlex() { return signedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
+    function isPatrick() { return signedIn() && request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"; }
+    function userPath() { return /databases/(default)/documents/users/$(request.auth.uid); }
+    function hasProfile() { return signedIn() && firestore.exists(userPath()); }
+    function profile() { return firestore.get(userPath()).data; }
+    function explicitTenant() {
+      return hasProfile() && "tenantId" in profile() && profile().tenantId is string && profile().tenantId.size() > 0;
+    }
+    function callerTenant() {
+      return explicitTenant() ? profile().tenantId : ((hasProfile() || isAlex() || isPatrick()) ? "heartwood" : "");
+    }
+    function member(tenantId) {
+      return signedIn() && tenantId is string && tenantId.size() > 0 && callerTenant() == tenantId;
+    }
+    function rulesAdmin() {
+      return isAlex() || isPatrick() || (hasProfile() && "role" in profile() && profile().role == "admin");
+    }
+    function canSeeMoney() {
+      return rulesAdmin() || (hasProfile() && "role" in profile() && profile().role == "supervisor");
+    }
+    function jobPath(jobId) { return /databases/(default)/documents/jobs/$(jobId); }
+    function jobExists(jobId) { return firestore.exists(jobPath(jobId)); }
+    function jobData(jobId) { return firestore.get(jobPath(jobId)).data; }
+    function jobTenant(jobId) {
+      return jobExists(jobId) && "tenantId" in jobData(jobId) && jobData(jobId).tenantId is string && jobData(jobId).tenantId.size() > 0
+        ? jobData(jobId).tenantId : "heartwood";
+    }
+    function customerOk(jobId) {
+      return !(hasProfile() && "customerIds" in profile() && profile().customerIds is list && profile().customerIds.size() > 0)
+        || (jobExists(jobId) && "client" in jobData(jobId) && jobData(jobId).client is string && jobData(jobId).client in profile().customerIds);
+    }
+    function assigned(jobId) {
+      return jobExists(jobId) && "assigned" in jobData(jobId) && jobData(jobId).assigned is list && request.auth.uid in jobData(jobId).assigned;
+    }
+    function canSeeJob(tenantId, jobId) {
+      return member(tenantId) && jobExists(jobId) && jobTenant(jobId) == tenantId
+        && customerOk(jobId) && (rulesAdmin() || assigned(jobId));
+    }
+    function jobPhotoFile(tenantId, jobId) {
+      return request.resource.contentType.matches('image/(jpeg|png|webp|gif)')
+        && request.resource.size > 0
+        && request.resource.size <= 15 * 1024 * 1024
+        && request.resource.metadata.tenantId == tenantId
+        && request.resource.metadata.jobId == jobId
+        && request.resource.metadata.uploaderUid == request.auth.uid
+        && request.resource.metadata.purpose == "job-photo"
+        && request.resource.metadata.batchCount is string
+        && int(request.resource.metadata.batchCount) >= 1
+        && int(request.resource.metadata.batchCount) <= 10;
+    }
+
+    match /tenants/{tenantId}/jobs/{jobId}/photos/{file} {
+      allow read: if canSeeJob(tenantId, jobId);
+      allow create, update: if canSeeJob(tenantId, jobId) && jobPhotoFile(tenantId, jobId);
+      allow delete: if false;
+    }
+
+    function receiptPath(id) { return /databases/(default)/documents/receipts/$(id); }
+    function receiptExists(id) { return firestore.exists(receiptPath(id)); }
+    function receiptData(id) { return firestore.get(receiptPath(id)).data; }
+    function receiptTenant(id) {
+      return receiptExists(id) && "tenantId" in receiptData(id) && receiptData(id).tenantId is string && receiptData(id).tenantId.size() > 0
+        ? receiptData(id).tenantId : "heartwood";
+    }
+    function ownsReceipt(id) {
+      return receiptExists(id) && receiptData(id).uid == request.auth.uid;
+    }
+    function receiptFile(tenantId, receiptId) {
+      return request.resource.contentType.matches('image/(jpeg|png|webp)')
+        && request.resource.size > 0
+        && request.resource.size <= 8 * 1024 * 1024
+        && request.resource.metadata.tenantId == tenantId
+        && request.resource.metadata.receiptId == receiptId
+        && request.resource.metadata.uploaderUid == request.auth.uid
+        && request.resource.metadata.purpose == "receipt";
+    }
+    function canReadReceipt(tenantId, receiptId) {
+      return member(tenantId) && receiptExists(receiptId) && receiptTenant(receiptId) == tenantId && (
+        (isAlex() && callerTenant() == tenantId)
+        || (ownsReceipt(receiptId) && canSeeMoney())
+      );
+    }
+
+    match /tenants/{tenantId}/receipts/{receiptId}/original {
+      allow read: if canReadReceipt(tenantId, receiptId);
+      allow create, update: if member(tenantId) && ownsReceipt(receiptId) && receiptTenant(receiptId) == tenantId && receiptFile(tenantId, receiptId);
+      allow delete: if false;
+    }
+
+    function heartwoodFinance() { return isAlex() || isPatrick(); }
+    function listedFinance(tenantId) {
+      return firestore.exists(/databases/(default)/documents/tenants/$(tenantId))
+        && "financeUids" in firestore.get(/databases/(default)/documents/tenants/$(tenantId)).data
+        && firestore.get(/databases/(default)/documents/tenants/$(tenantId)).data.financeUids is list
+        && request.auth.uid in firestore.get(/databases/(default)/documents/tenants/$(tenantId)).data.financeUids;
+    }
+    function canReadFinance(tenantId) {
+      return member(tenantId) && (tenantId == "heartwood" ? heartwoodFinance() : listedFinance(tenantId));
+    }
+
+    match /tenants/{tenantId}/finance/{allPaths=**} {
+      allow read: if canReadFinance(tenantId);
+      allow write: if false;
+    }
+
+    match /tenants/{tenantId}/_exports/{allPaths=**} {
+      allow read: if member(tenantId) && rulesAdmin();
+      allow write: if false;
+    }
+  }
+}

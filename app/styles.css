@@ -768,3 +768,4 @@ dialog.jobcard:has(.qw){max-width:520px;background:#f6f1ea}
 .qw-builder{margin-top:10px;padding:8px;border:1px dashed #cfd8e3;border-radius:8px}
 .qw-machrate{border:1px solid var(--sm-line);border-radius:8px;padding:8px 10px;margin:8px 0}
 .qw-machrate legend{font-weight:600;padding:0 4px}
+.cloudret{margin:8px 16px;padding:8px 10px;border:1px solid var(--sm-line);border-radius:8px;background:#fff}

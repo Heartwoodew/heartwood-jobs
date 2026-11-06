@@ -160,6 +160,13 @@ export function addDoc(ref, data) {
   record("addDoc", { col: ref && ref._col });
   return Promise.resolve({ id: "new-" + (ref && ref._col || "x") });
 }
+export function getStorage() { record("getStorage", {}); return { stub: true }; }
+export function connectStorageEmulator() { record("connectStorageEmulator", {}); }
+export function ref(_storage, path) { return { path }; }
+export function uploadBytes(r, _body, meta) {
+  record("uploadBytes", { path: r && r.path, contentType: meta && meta.contentType, metadata: meta && meta.customMetadata });
+  return Promise.resolve({ ref: r });
+}
 export function deleteDoc() { return Promise.resolve(); }
 export function runTransaction(_db, fn) {
   record("runTransaction", {});

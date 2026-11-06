@@ -5,17 +5,23 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, conne
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator,
   collection, doc, getDoc, getDocs, query, where, orderBy, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, serverTimestamp, arrayUnion, runTransaction }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+import { getStorage, ref as storageRef, uploadBytes, connectStorageEmulator }
+  from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
 import { firebaseConfig, useEmulator } from "./firebase-config.js";
 import { installQuotes, adminViewRouter } from "./features/quotes.js";
+import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPlanned } from "./features/cloud-storage.js";
+import { buildOperationalExport, retentionAdminText, retentionView } from "./features/cloud-retention.js";
 
 const cfg = useEmulator ? { ...firebaseConfig, apiKey: "demo-key", projectId: "demo-heartwood" } : firebaseConfig;
 const fb = initializeApp(cfg);
 const auth = getAuth(fb);
 // Offline cache: jobs already loaded stay readable and writes queue until the phone is back online.
 const db = initializeFirestore(fb, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) });
+const storage = getStorage(fb);
 if (useEmulator) {
   connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
   connectFirestoreEmulator(db, "127.0.0.1", 8080);
+  connectStorageEmulator(storage, "127.0.0.1", 9199);
 }
 if ("serviceWorker" in navigator && !useEmulator) navigator.serviceWorker.register("sw.js", { scope: "./" });
 
@@ -64,6 +70,7 @@ onAuthStateChanged(auth, async user => {
   users = await getDocs(collection(db, "users")).catch(() => null);
   if (!prof && !users) { $("#app").innerHTML = `<p class="pad">No access for ${esc(user.email)}. Ask Alex to add you.</p>`; return; }
   me = users ? { uid: user.uid, name: (prof && prof.name) || "Alex", role: "admin", staffRole: prof && prof.role } : { uid: user.uid, ...prof };
+  me.cloudProfile = prof;
   $("#who").textContent = `${me.name} · ${me.role}`; $("#logout").classList.remove("hidden");
   if (me.role === "admin") {
     const logins = users.docs.map(d => ({ uid: d.id, ...d.data() })).filter(u => u.role === "operator" || u.role === "supervisor");
@@ -308,7 +315,71 @@ function doneToday() {
   const ms = j => j.completedAt?.toMillis?.() ?? (j.completedAt === null ? Date.now() : 0);
   return [...m.values()].sort((a, b) => ms(b) - ms(a));
 }
-// ---- Receipts: worker photo + amount -> receipts/{id} + receiptChunks (base64 JPEG, free Firestore, no Storage).
+// Parallel private Storage mirror. Email and receiptChunks stay until a reviewed cutover.
+// Failures here must not block the existing queue. Tenant comes from the profile, not the page.
+function cloudMembership() {
+  if (!me) return { ok: false, reason: "no-membership" };
+  return resolveMembership({ uid: me.uid, profile: me.cloudProfile || null });
+}
+function b64ToBlob(b64, type) {
+  const bin = atob(b64), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type });
+}
+async function mirrorJobPhotos(j, files) {
+  const plan = planJobPhotoMirrors({
+    membership: cloudMembership(), job: j,
+    files: files.map((f, i) => ({
+      name: f.name, type: f.type || "image/jpeg", size: f.size || 1,
+      photoId: (`p${i}${Math.random().toString(36).slice(2, 10)}`).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 41),
+    })),
+  });
+  if (!plan.ok) { console.warn("cloud photo mirror skipped", (plan.skipped || []).map(s => s.reason).join(",") || "none"); return; }
+  await putPlanned(plan, target => uploadBytes(storageRef(storage, target.path), files[target.sourceIndex], {
+    contentType: target.contentType, customMetadata: target.metadata,
+  }));
+}
+function mirrorReceipt(receiptId, b64, job, written) {
+  const blob = b64ToBlob(b64, "image/jpeg");
+  const plan = planStaffReceiptCapture({
+    membership: cloudMembership(), job, receiptId, receiptDoc: written,
+    file: { type: "image/jpeg", size: blob.size || 1, name: "original.jpg" },
+  });
+  if (!plan.ok) { console.warn("cloud receipt mirror skipped", plan.reason); return Promise.resolve(); }
+  return uploadBytes(storageRef(storage, plan.storage.path), blob, {
+    contentType: plan.storage.contentType, customMetadata: plan.storage.metadata,
+  });
+}
+function cloudRetentionHtml(j) {
+  if (!me || me.role !== "admin") return "";
+  const view = retentionView(j, new Date());
+  return `<p class="sub cloudret">${esc(retentionAdminText(view))} <button type="button" class="sm-btn" id="cloudexport">Download cloud copy</button></p>`;
+}
+function cloudExpiryNotice(all) {
+  if (!me || me.role !== "admin") return "";
+  const seen = new Set();
+  const pool = [...(all || []), ...(ui.done || [])].filter(j => j && j.id && !seen.has(j.id) && seen.add(j.id));
+  const now = new Date();
+  let soon = 0, due = 0;
+  for (const j of pool) {
+    const view = retentionView(j, now);
+    if (view.warning) soon += 1;
+    else if (view.due && view.state !== "held" && view.state !== "purged") due += 1;
+  }
+  if (!soon && !due) return "";
+  return `<p class="sub cloudret">Cloud copies: ${soon ? soon + " expiring within 14 days. " : ""}${due ? due + " past the 3-month operational window. " : ""}Deletion is not scheduled. Invoices, GST and Xero records are not part of that deletion. Accounting records are normally kept 5 years.</p>`;
+}
+async function downloadCloudCopy(j) {
+  const built = buildOperationalExport({ membership: cloudMembership(), scope: "job", jobId: j.id, jobs: [j], now: new Date() });
+  if (!built.ok) return toast(built.reason === "not-authorised" ? "Only an admin can download the cloud copy." : "Couldn't build the download.");
+  const blob = new Blob([built.zip], { type: "application/zip" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = built.filename; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  toast("Downloaded operational copy. Invoices and Xero records are not in the zip.");
+}
+// ---- Receipts: worker photo + amount -> receipts/{id} + receiptChunks (base64 JPEG, kept until cutover).
 // The box (tools/receipts_worker.py, cron every 2 min) emails it from Alex's account to his Hubdoc email-in address,
 // records personally-paid ones in reimbursements/ (owner only) and notifies Alex. Workers only see their own Queued/Filed.
 const OWNER_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";
@@ -359,10 +430,12 @@ function receiptDialog(j) {
       const b64 = await shrinkImage(file), CH = 700000, n = Math.ceil(b64.length / CH);
       const ref = doc(collection(db, "receipts"));
       for (let i = 0; i < n; i++) await setDoc(doc(db, "receiptChunks", `${ref.id}_${i}`), { rid: ref.id, i, uid: me.uid, data: b64.slice(i * CH, (i + 1) * CH) });
+      const written = { id: ref.id, uid: me.uid, jobId: j ? j.id : null, status: "queued" };
       await setDoc(ref, { uid: me.uid, workerName: me.name, amountInc: amt, supplier: f.sup.value.trim(), paidPersonally: f.mine.checked,
-        jobNo: f.job.value.trim().replace(/^#/, "") || null, jobId: j ? j.id : null, address: j ? (j.address || null) : null, chunks: n, mime: "image/jpeg", bytes: Math.round(b64.length * 0.75),
+        jobNo: f.job.value.trim().replace(/^#/, "") || null, jobId: written.jobId, address: j ? (j.address || null) : null, chunks: n, mime: "image/jpeg", bytes: Math.round(b64.length * 0.75),
         status: "queued", createdAt: serverTimestamp(), createdAtIso: new Date().toISOString() });
       d.close(); toast("Receipt uploaded - queued for Hubdoc"); if (j) loadJobReceipts(j);
+      mirrorReceipt(ref.id, b64, j || null, written).catch(e => console.warn("cloud receipt mirror", e && (e.code || e.message) || e));
     } catch (e) { $("#rerr").textContent = "Not uploaded: " + (e.code || e.message); $("#rsend").disabled = false; $("#rsend").textContent = "Upload"; }
   };
 }
@@ -692,6 +765,7 @@ function homeBody(all, admin, btns) {
   const sec = (title, d, js) => `<div class="hsec"><div class="hsec-h">${title} <small>${esc(dayLabel(d))}</small> <span class="cnt">${js.length}</span></div>
     ${js.map(homeRow).join("") || `<p class="muted pad">Nothing booked.</p>`}</div>`;
   return `<div class="home"><div class="hhead"><h1>${greet()}, ${esc(String(me.name || "").split(" ")[0])}</h1><div class="muted">${esc(dayLabel(t0))}</div></div>
+    ${admin ? cloudExpiryNotice(all) : ""}
     ${swmsReminderHtml()}${admin ? attentionHtml(all) + (canXero() ? profitChartHtml() : "") : `<div class="hbtns opbtns"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button><button class="hbtn" data-go="swms"><span class="ic">📋</span>SWMS</button></div>`}
     <div class="hstats hidden">${stat(today.length, "Today", "q-wo")}${stat(ip, "In progress", "ip", admin ? "q-ip" : "")}${admin ? stat(ready, "Ready to invoice", "q-comp", "invoices") + stat(unal, "Unallocated", "q-uns", "dispatch") + (isOwner() && ui.inbox ? stat(inboxUnread(), "Unread builder emails", "q-inbox", "inbox") : "") : stat(tomorrow.length, "Tomorrow", "q-quote")}</div>
     <div class="hbtns hidden"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button>${btns.map(([go, ic, n]) => `<button class="hbtn" data-go="${go}"><span class="ic">${ic}</span>${n}</button>`).join("")}</div>
@@ -893,13 +967,14 @@ function editJob(j) {
       <div class="diary">${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("")}
         ${hist.map(([w, t]) => `<div class="de sys"><span class="av">i</span><div><small>${esc(w)}</small><div>${esc(t)}</div></div></div>`).join("")}
         ${!(j.log || []).length && !hist.length ? `<p class="muted sub">No diary entries yet. Site notes from staff appear here.</p>` : ""}</div>
-      ${!n ? `<h4>Photos</h4><button type="button" class="sm-btn" id="emailph">📧 Email photos</button> <span class="sub muted">Photos go to ${OFFICE_EMAIL} by email</span>${jobPhotosLink(j)} <button type="button" class="sm-btn incbtn" data-inc="${j.id}">⚠ Report incident</button> <button type="button" class="sm-btn" data-swms="${j.id}">📋 View SWMS</button>${jobReceiptsHtml(j)}` : ""}
+      ${!n ? `<h4>Photos</h4><button type="button" class="sm-btn" id="emailph">📧 Email photos</button> <span class="sub muted">Emailed to ${OFFICE_EMAIL}, and saved privately in cloud storage when the bucket accepts them</span>${jobPhotosLink(j)} <button type="button" class="sm-btn incbtn" data-inc="${j.id}">⚠ Report incident</button> <button type="button" class="sm-btn" data-swms="${j.id}">📋 View SWMS</button>${jobReceiptsHtml(j)}${cloudRetentionHtml(j)}` : ""}
     </div></div>
     <p id="ferr" class="err"></p>
     <div class="btns jc-foot"><button value="cancel" formnovalidate class="sm-btn">Close</button><button value="save" class="sm-btn primary">Save Job</button></div></form>`;
   d.showModal();
   if (!n) jobTabs(d, j);
   if (!n) $("#emailph").onclick = () => emailPhotos(j);
+  if (!n && $("#cloudexport")) $("#cloudexport").onclick = () => downloadCloudCopy(j).catch(e => toast(e.message || "Download failed"));
   if (!n) { wireFindPo(j); supervisors(); wireJobReceipts(j); fillSupCard(j); }
   if (!n && $("#unschbtn")) $("#unschbtn").onclick = ev => { if (!armBtn(ev.currentTarget, "✕ Remove from dispatch board", "Tap again to remove from the board")) return;
     d.close(); unscheduleJob(j).catch(e => toast("Not removed: " + (e.code || e.message))); };
@@ -1516,7 +1591,7 @@ function renderOperator() {
   if (ui.opTab === "photos") {
     const list = mine.filter(j => j.status !== "Cancelled");
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Photos</div><div class="mob-sub">Email site photos to the office</div></div>
-      <p class="muted pad">Choose a job to add photos. Nothing is stored in the app — they go out by email, the same as before.</p>
+      <p class="muted pad">Choose a job to add photos. They are emailed to the office, and a private cloud copy is saved when storage accepts them.</p>
       <div class="mob-list">${list.map(j => `${opCard(j)}<button type="button" class="mnote op-photo" data-photo="${esc(j.id)}">${ICO.photos}<span>Add photos</span></button>${jobPhotosLink(j) ? `<div class="pad">${jobPhotosLink(j)}</div>` : ""}`).join("") || `<p class="muted pad">No jobs to photograph.</p>`}</div>
       ${opTabs("photos")}</div>`;
     bindOp(mine); return;
@@ -1570,7 +1645,7 @@ function renderOpDetail(j) {
       </dl>
       <div class="mcard"><div class="mlbl">Diary</div>${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("") || `<div class="muted sub">No notes yet</div>`}
         <button class="mnote" type="button" data-act="note">Add note</button></div>
-      <div class="mcard"><div class="mlbl">Photos</div>${jobPhotosLink(j)}<div class="muted sub">Send site photos to the office by email</div></div>
+      <div class="mcard"><div class="mlbl">Photos</div>${jobPhotosLink(j)}<div class="muted sub">Emailed to the office. A private cloud copy is saved when storage accepts it.</div></div>
       <div class="mcard safecard"><div class="mlbl">Safety</div><button type="button" class="mnote" data-swms="${j.id}">View SWMS</button><button type="button" class="mnote incbtn" data-inc="${j.id}">Report incident</button></div>
       <div class="mcard">${jobReceiptsHtml(j)}</div>
     </div>
@@ -1706,6 +1781,7 @@ function emailPhotos(j, o = {}) {
 }
 function emailDialog(j, files, infos, o = {}) {
   const subj = o.subject || emailSubject(j), body = o.body || emailBody;
+  if (!o.coll || o.coll === "jobs") mirrorJobPhotos(j, files).catch(e => console.warn("cloud photo mirror", e && (e.code || e.message) || e));
   // Record on the job (or incident) that photos were emailed, so it shows a "Photos" link to the Gmail search. Best effort.
   updateDoc(doc(db, o.coll || "jobs", j.id), { photosEmailedAt: new Date().toISOString(), photosEmailedCount: (j.photosEmailedCount || 0) + files.length, updatedAt: serverTimestamp(), updatedBy: me.uid })
     .catch(e => console.warn("photosEmailed flag not saved", e.code || e.message));

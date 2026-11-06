@@ -1,6 +1,6 @@
 // App-shell cache. Bump VERSION on every deploy so phones pick up the new files.
-const VERSION = "hw-shell-v51-phone-cream";
-const SHELL = ["./", "index.html", "styles.css", "app.js", "firebase-config.js", "features/quotes.js", "manifest.webmanifest", "icons/apple-touch-icon-180.png",
+const VERSION = "hw-shell-v52-cloud-cream";
+const SHELL = ["./", "index.html", "styles.css", "app.js", "firebase-config.js", "features/quotes.js", "features/cloud-storage.js", "features/cloud-retention.js", "manifest.webmanifest", "icons/apple-touch-icon-180.png",
   "icons/icon-192.png", "icons/icon-512.png", "vendor/pdf-lib.min.js"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL))); self.skipWaiting(); });
 self.addEventListener("activate", e => {
@@ -11,7 +11,7 @@ self.addEventListener("fetch", e => {
   const u = new URL(e.request.url);
   if (e.request.method !== "GET") return;
   // Firestore/Auth API traffic is never cached here (the SDK has its own offline cache).
-  if (u.hostname.endsWith("googleapis.com") || u.port === "8080" || u.port === "9099") return;
+  if (u.hostname.endsWith("googleapis.com") || u.port === "8080" || u.port === "9099" || u.port === "9199") return;
   const sameOrigin = u.origin === location.origin;
   const sdk = u.hostname === "www.gstatic.com" && u.pathname.startsWith("/firebasejs/");
   if (!sameOrigin && !sdk) return;

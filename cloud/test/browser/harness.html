@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<title>Cloud capture harness</title>
+</head>
+<body>
+<main>
+  <h1>Cloud capture harness</h1>
+  <p id="who"></p>
+  <input id="file" type="file" accept="image/*">
+  <button id="photo" type="button">Upload job photo</button>
+  <button id="wrong" type="button">Upload to other tenant</button>
+  <button id="receipt" type="button">Upload receipt</button>
+  <button id="read" type="button">Read receipt file</button>
+  <p id="amount"></p>
+  <pre id="out"></pre>
+</main>
+<script type="module">
+import { planJobPhotoBatch, planReceiptUpload, canReadObject, resolveMembership, putPlanned } from "/app/features/cloud-storage.js";
+
+const calls = [];
+const upload = async (target) => { calls.push(target.path); return { path: target.path }; };
+const operator = resolveMembership({ uid: "op1", profile: { role: "operator", name: "Sam" } });
+const job = { id: "job1", client: "Orbit Homes (Qld) Pty Ltd", assigned: ["op1"], address: "1 Creek Rd" };
+const log = [];
+const say = (row) => { log.push(row); document.querySelector("#out").textContent = JSON.stringify({ calls, log }, null, 2); };
+document.querySelector("#who").textContent = operator.tenantId + " · " + operator.role;
+
+function selected() {
+  const f = document.querySelector("#file").files[0];
+  return { photoId: "pphoto001", type: f ? (f.type || "image/jpeg") : "image/jpeg", size: f ? f.size : 1200, name: f ? f.name : "site.jpg" };
+}
+
+document.querySelector("#photo").onclick = async () => {
+  const plan = planJobPhotoBatch({ membership: operator, job, files: [selected()] });
+  if (!plan.ok) return say({ action: "photo", ok: false, reason: plan.reason });
+  await putPlanned(plan, upload);
+  say({ action: "photo", ok: true, path: plan.uploads[0].path });
+};
+document.querySelector("#wrong").onclick = async () => {
+  const before = calls.length;
+  const plan = planJobPhotoBatch({
+    membership: operator, job, files: [selected()],
+    requestedTenantId: "otherco",
+    clientPath: "tenants/otherco/jobs/job1/photos/pphoto001",
+  });
+  if (plan.ok) await putPlanned(plan, upload);
+  say({ action: "wrong-tenant", ok: plan.ok, reason: plan.reason, callsUnchanged: calls.length === before });
+};
+document.querySelector("#receipt").onclick = async () => {
+  const plan = planReceiptUpload({
+    membership: operator,
+    receipt: { id: "r1", uid: "op1", amountInc: 88.4 },
+    file: { type: "image/jpeg", size: 2000 },
+  });
+  if (plan.ok) await putPlanned(plan, upload);
+  const read = canReadObject({ membership: operator, path: plan.path, receipt: { id: "r1", uid: "op1", amountInc: 88.4 } });
+  document.querySelector("#amount").textContent = operator.canSeeMoney ? "$88.40" : "";
+  say({ action: "receipt", ok: plan.ok, path: plan.path, read: read.reason || "allowed", dollarsShown: document.querySelector("#amount").textContent });
+};
+document.querySelector("#read").onclick = () => {
+  const read = canReadObject({ membership: operator, path: "tenants/heartwood/receipts/r1/original", receipt: { id: "r1", uid: "op1" } });
+  const finance = canReadObject({ membership: operator, path: "tenants/heartwood/finance/xero/invoice.pdf" });
+  say({ action: "read", receipt: read.reason, finance: finance.reason });
+};
+</script>
+</body>
+</html>

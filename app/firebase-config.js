@@ -10,5 +10,7 @@ export const firebaseConfig = {
 };
 // Local testing: open the app with ?emu=1 (or on localhost) to use the Firebase Emulator Suite.
 export const useEmulator = location.hostname === "localhost" || location.hostname === "127.0.0.1" || new URLSearchParams(location.search).has("emu");
-// Firebase Storage photos are NOT used (needs Blaze); photos are emailed instead. Kept false; see dormant_storage/.
+// Email capture stays on. features/cloud-storage.js also mirrors new photos and receipts
+// into private Storage when the bucket accepts them. This flag stays false so the app
+// does not switch to Storage-only. See cloud/MIGRATION.md. Do not deploy rules from here.
 export const photosEnabled = false;
