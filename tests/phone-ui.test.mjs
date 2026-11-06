@@ -57,7 +57,9 @@ test("phone shell, quote gate and handlers", async () => {
     await run("after-quote-wizard", "?role=supervisor&open=wizard", 390, 844);
     await run("check-operator", "?role=operator&check=1", 390, 900);
     await run("check-supervisor", "?role=supervisor&check=1", 390, 900);
+    await run("check-supervisor-custom", "?role=supervisor&rates=custom&check=1", 390, 900);
     await run("check-supervisor-blank", "?role=supervisor&rates=blank&check=1", 390, 900);
+    await run("check-runsheet", "?role=operator&open=runsheet&check=1", 390, 900);
     await run("check-admin", "?role=admin&check=1", 1280, 800);
   } finally {
     chrome.proc.kill("SIGKILL");

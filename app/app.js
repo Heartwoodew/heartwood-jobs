@@ -867,6 +867,7 @@ function editJob(j) {
       ${j.address ? `<a class="sub" href="${mapsUrl(j.address)}" target="_blank" rel="noopener">📍 Open in Maps</a>` : ""}
       <h4>Job Description</h4>
       <textarea name="description" rows="4">${esc(j.description)}</textarea>
+      ${!n && j.setups ? `<div class="splitbox" data-plant="1"><b>Run sheet</b>${(QG.plantRunSheetLines ? QG.plantRunSheetLines(j) : []).map(t => `<div>${esc(t)}</div>`).join("") || `<div class="sub">No quoted plant.</div>`}</div>` : ""}
       ${!n && isMixed(j) ? `<div class="splitbox"><b>⚠ Mixed work:</b> ${esc(mixedKinds(j).map(k => TYPES[k] || k).join(" + "))}. Tick the lines to move to a new job:
         ${taskLines(j.description).map((x, i) => `<label class="ck"><input type="checkbox" class="spl" data-i="${i}" ${x.k && x.k !== (j.type || taskLines(j.description)[0].k) ? "checked" : ""}> ${esc(x.t)} <span class="sub">${esc(TYPES[x.k] || "?")}</span></label>`).join("")}
         <button type="button" id="splitbtn" class="btn">✂ Split into new job</button></div>` : ""}
@@ -1549,6 +1550,11 @@ function renderOperator() {
     ${opTabs(ui.opTab)}</div>`;
   bindOp(mine);
 }
+function quotedPlantHtml(j) {
+  const lines = QG.plantRunSheetLines ? QG.plantRunSheetLines(j) : [];
+  if (!lines.length) return "";
+  return `<div class="mcard" data-plant="1"><div class="mlbl">Plant and crew</div>${lines.map(t => `<p class="mval">${esc(t)}</p>`).join("")}</div>`;
+}
 function renderOpDetail(j) {
   const q = queueOf(j), done = j.status === "Done", started = j.status === "In progress";
   const p = phonePlace(j.address);
@@ -1564,10 +1570,11 @@ function renderOpDetail(j) {
       <div class="mcard"><div class="mlbl">Client</div><div class="mval">${esc(j.client || "—")}</div><div class="supcard" data-sup="${esc(j.id)}"></div></div>
       <dl class="det-facts">
         <div><dt>Scheduled</dt><dd>${esc(j.date ? longDate(j.date) : "Unscheduled")}${j.time ? " · " + esc(phoneTime(j.time)) : ""}${j.durationHrs ? " · " + esc(j.durationHrs) + "h" : ""}</dd></div>
-        <div><dt>Crew</dt><dd>${esc(crew.length ? crew.join(", ") : "—")}</dd></div>
+        <div><dt>Crew</dt><dd>${esc(crew.length ? crew.join(", ") : "—")}${j.secondOperator ? " · second operator required" : ""}</dd></div>
         <div><dt>Purchase order</dt><dd><b>${esc(j.po || "—")}</b></dd></div>
-        <div class="scope"><dt>Scope</dt><dd>${esc(j.description || "—")}</dd></div>
+        <div class="scope"><dt>Scope</dt><dd>${esc(j.scopeNotes != null ? j.scopeNotes : (j.description || "—"))}</dd></div>
       </dl>
+      ${quotedPlantHtml(j)}
       <div class="mcard"><div class="mlbl">Diary</div>${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("") || `<div class="muted sub">No notes yet</div>`}
         <button class="mnote" type="button" data-act="note">Add note</button></div>
       <div class="mcard"><div class="mlbl">Photos</div>${jobPhotosLink(j)}<div class="muted sub">Send site photos to the office by email</div></div>

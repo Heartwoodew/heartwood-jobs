@@ -1,4 +1,5 @@
 // Isolated Firebase stand-in for tests/phone-preview.html. No network, no live project.
+import { calcQuote, buildAcceptedJob } from "../app/features/quotes.js";
 const calls = [];
 function record(op, extra) {
   const row = { op, ...extra };
@@ -42,8 +43,40 @@ const FILLED_RATES = {
     skid: { rate: 90, unit: "hour" },
     excavator: { rate: 140, unit: "hour" }
   },
+  // Old labourer price is a trap. Quotes must use the $100 second-operator rate instead.
   labourerRate: 55, labourerUnit: "hour"
 };
+
+const RUN_RATES = {
+  ...FILLED_RATES,
+  machineRates: {
+    ...FILLED_RATES.machineRates,
+    truck: { rate: 120, unit: "hour", driver: "Patrick" },
+    excavator: { rate: 140, unit: "hour", primaryOperatorRate: 60 }
+  }
+};
+const runCalc = calcQuote({
+  hoursOnSite: 4, machines: ["skid", "excavator"], secondOperator: true,
+  travelKm: 0, materialQty: 0, tipLoads: 0, description: "Backslab",
+  client: "Orbit Homes (Qld) Pty Ltd", address: "Lot 7 · 2 Depot Road, Chuwar QLD 4306", type: "backslab"
+}, RUN_RATES);
+const runJob = buildAcceptedJob("q-acc", {
+  ...runCalc,
+  client: "Orbit Homes (Qld) Pty Ltd",
+  address: "Lot 7 · 2 Depot Road, Chuwar QLD 4306",
+  type: "backslab",
+  hoursOnSite: 4,
+  plant: runCalc.plant,
+  ratesSnapshot: RUN_RATES,
+  scopeNotes: "Backslab",
+  description: "Backslab"
+}, { uid: "sam" });
+runJob.id = "jq";
+runJob.date = "2026-11-06";
+runJob.time = "10:00";
+runJob.assigned = ["patrick"];
+runJob.assignedNames = ["Patrick"];
+JOBS.push(runJob);
 
 const SWMS_IDS = ["working-near-roads", "mobile-plant", "working-with-silica", "hazardous-substances", "electrical"];
 
@@ -58,7 +91,17 @@ function snap(rows) {
 }
 function ratesDoc() {
   if (typeof window !== "undefined" && window.HW_PREVIEW_RATES === "blank") {
-    return { travelPerKm: null, materialPerUnit: null, tipPerLoad: null, machineRates: {}, labourerRate: null, labourerUnit: "hour" };
+    return { travelPerKm: null, materialPerUnit: null, tipPerLoad: null, machineRates: {}, labourerRate: 55, labourerUnit: "hour" };
+  }
+  if (typeof window !== "undefined" && window.HW_PREVIEW_RATES === "custom") {
+    return {
+      ...FILLED_RATES,
+      customMachines: [{ id: "m_roller", name: "Roller", requiresTruck: false }],
+      machineRates: {
+        ...FILLED_RATES.machineRates,
+        m_roller: { rate: 70, unit: "hour", primaryOperatorRate: 25 }
+      }
+    };
   }
   return FILLED_RATES;
 }
@@ -153,11 +196,11 @@ export function updateDoc(ref, data) {
   return Promise.resolve();
 }
 export function setDoc(ref, data) {
-  record("setDoc", { col: ref && ref._col, id: ref && ref._id });
+  record("setDoc", { col: ref && ref._col, id: ref && ref._id, data });
   return Promise.resolve();
 }
 export function addDoc(ref, data) {
-  record("addDoc", { col: ref && ref._col });
+  record("addDoc", { col: ref && ref._col, data });
   return Promise.resolve({ id: "new-" + (ref && ref._col || "x") });
 }
 export function deleteDoc() { return Promise.resolve(); }
