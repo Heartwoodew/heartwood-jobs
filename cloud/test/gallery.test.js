@@ -172,6 +172,14 @@ test("gallery requires an explicit accepted image type", () => {
 
 test("the photos action is absent until a cloud photo exists", () => {
   assert.equal(photoSlotHtml({ jobId: "j2", status: "ready", count: 0, role: "action" }), "");
+  const cloudZero = photoSlotHtml({ jobId: "j4", status: "ready", count: 0, role: "cloud", variant: "sm" });
+  assert.match(cloudZero, /data-viewphotos="j4"/);
+  assert.match(cloudZero, /View cloud photos/);
+  assert.match(cloudZero, /data-photos-state="empty"/);
+  const cloudErr = photoSlotHtml({ jobId: "j4", status: "error", role: "cloud", error: "storage/unauthorized" });
+  assert.match(cloudErr, /View cloud photos/);
+  assert.match(cloudErr, /data-photoretry="j4"/);
+  assert.match(cloudErr, /storage\/unauthorized/);
   assert.match(photoSlotHtml({ jobId: "j2", status: "ready", count: 2, role: "action" }), /Photos \(2\)/);
   assert.match(photoSlotHtml({ jobId: "j2", status: "loading", role: "status" }), /Checking photos/);
   assert.match(photoSlotHtml({ jobId: "j2", status: "error", role: "status", error: "storage/unauthorized" }), /storage\/unauthorized/);

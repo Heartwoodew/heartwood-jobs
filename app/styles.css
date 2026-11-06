@@ -691,7 +691,7 @@ body.operator .op-photo{display:flex;align-items:center;justify-content:center;g
 body.operator button.viewphotos,button.viewphotos{display:flex;align-items:center;justify-content:center;gap:8px;min-height:52px;border-radius:14px;font-weight:750;background:#fffdf9;color:#3b2a1a;border:1px solid #8a5a2b}
 body.operator .mactions button.viewphotos{width:100%}
 body.operator .mob-list button.viewphotos{width:calc(100% - 32px);margin:0 16px 10px}
-button.sm-btn.viewphotos{min-height:44px}
+button.sm-btn.viewphotos{min-height:44px;width:auto;margin:0 8px 8px 0}
 button.viewphotos svg{width:22px;height:22px;display:block}
 .pgal{position:fixed;inset:0;z-index:80;background:#f6f1ea;color:#2b2118;display:flex;flex-direction:column;overflow:auto}
 .pgal[hidden]{display:none !important}

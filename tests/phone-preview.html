@@ -101,6 +101,22 @@ if (q.get("open") === "photos") {
   document.querySelector('[data-tab="photos"]')?.click();
   await waitFor('[data-photoslot][data-settled="1"]', 4000);
 }
+if (q.get("open") === "job" && q.get("photos") === "none") {
+  await waitFor("[data-viewphotos]");
+  document.querySelector("[data-viewphotos]")?.click();
+  await waitFor(".pgal [data-photos-state='empty']", 4000);
+}
+if (q.get("open") === "jobphotos") {
+  await waitFor("[data-id='j2']", 6000);
+  document.querySelector("[data-id='j2']")?.click();
+  await waitFor("#emailph", 6000);
+  document.querySelector('[data-jt="photos"]')?.click();
+  await waitFor("[data-viewphotos]", 4000);
+  if (q.get("shot") === "empty" || q.get("shot") === "gallery") {
+    document.querySelector("[data-viewphotos]")?.click();
+    await waitFor(".pgal [data-photos-state], .pgal .pth img", 4000);
+  }
+}
 if (q.get("open") === "more") document.querySelector('[data-tab="more"]')?.click();
 if (q.get("open") === "myjobs") document.querySelector('[data-view="myjobs"]')?.click();
 if (q.get("open") === "quotes") {
@@ -162,7 +178,7 @@ if (q.get("check") === "1") {
     ok(!/\$\s?\d/.test(text()), "detail dollars");
     await waitFor('[data-photoslot][data-settled="1"]');
     const photosBtn = document.querySelector("[data-viewphotos]");
-    ok(!!photosBtn && /Photos/.test(photosBtn.textContent), "photos action when cloud photos exist");
+    ok(!!photosBtn && /View cloud photos/.test(photosBtn.textContent), "photos action when cloud photos exist");
     const writes = () => (window.__fbCalls || []).filter(c => c.op === "updateDoc" || c.op === "setDoc" || c.op === "uploadBytes");
     const beforeWrites = writes().length;
     const beforePicker = window.__photoClicks || 0;

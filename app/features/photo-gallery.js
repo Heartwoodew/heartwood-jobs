@@ -95,15 +95,18 @@ function photoErrorText(error) {
 export function photoSlotHtml({ jobId, status, count, role = "both", variant, iconHtml, error } = {}) {
   const id = esc(jobId || "");
   const n = Number(count) || 0;
-  const button = status === "ready" && n > 0
-    ? `<button type="button" class="${variant === "sm" ? "sm-btn viewphotos" : "viewphotos"}" data-viewphotos="${id}" aria-label="Photos">${iconHtml || ""}<span>Photos (${n})</span></button>`
+  const cloud = role === "cloud";
+  const button = cloud || (status === "ready" && n > 0)
+    ? `<button type="button" class="${variant === "sm" ? "sm-btn viewphotos" : "viewphotos"}" data-viewphotos="${id}" aria-label="View cloud photos">${iconHtml || ""}<span>${cloud ? (n > 0 ? `View cloud photos (${n})` : "View cloud photos") : `Photos (${n})`}</span></button>`
     : "";
   if (role === "action") return button;
   let statusHtml = "";
   if (status === "error") {
     statusHtml = `<p class="err" data-photos-state="error">${esc(photoErrorText(error))} <button type="button" class="sm-btn" data-photoretry="${id}">Try again</button></p>`;
-  } else if (status === "loading" || !status) {
+  } else if (!cloud && (status === "loading" || !status)) {
     statusHtml = `<p class="muted sub" data-photos-state="loading">Checking photos…</p>`;
+  } else if (cloud && (status === "loading" || !status)) {
+    statusHtml = `<p class="muted sub" data-photos-state="loading">Checking cloud photos…</p>`;
   } else {
     statusHtml = `<span data-photos-state="${n > 0 ? "ready" : "empty"}" hidden></span>`;
   }

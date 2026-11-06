@@ -36,7 +36,7 @@ test("phone shell, quote gate and handlers", async () => {
         returnByValue: true
       });
       const data = JSON.parse(info.result.value);
-      const full = /detail|check-|empty/.test(name);
+      const full = /detail|check-|empty|job-photos/.test(name);
       const heightPx = full
         ? Math.min(2400, (await page.send("Runtime.evaluate", { expression: "Math.max(document.documentElement.scrollHeight, window.innerHeight)", returnByValue: true })).result.value)
         : height;
@@ -58,17 +58,29 @@ test("phone shell, quote gate and handlers", async () => {
           assert.equal(n.result.value, 2, name);
         }
       }
-      if (query.includes("photos=none")) {
-        const btn = await page.send("Runtime.evaluate", { expression: "!!document.querySelector('[data-viewphotos]')", returnByValue: true });
-        assert.equal(btn.result.value, false, name);
-        const state = await page.send("Runtime.evaluate", { expression: "document.querySelector('[data-photos-state]')?.getAttribute('data-photos-state') || ''", returnByValue: true });
-        assert.equal(state.result.value, "empty", name);
+      if (query.includes("photos=none") && query.includes("open=job&")) {
+        const text = await page.send("Runtime.evaluate", { expression: "document.querySelector('.pgal')?.innerText || ''", returnByValue: true });
+        assert.match(text.result.value, /No cloud photos/, name);
+        const view = await page.send("Runtime.evaluate", { expression: "!!document.querySelector('[data-viewphotos]')", returnByValue: true });
+        assert.equal(view.result.value, true, name);
+      }
+      if (query.includes("open=jobphotos")) {
+        const text = await page.send("Runtime.evaluate", { expression: "(document.querySelector('#jf')?.innerText || '') + '\\n' + (document.querySelector('.pgal')?.innerText || '')", returnByValue: true });
+        assert.match(text.result.value, /View cloud photos/, name);
+        assert.match(text.result.value, /Email photos/, name);
+        assert.doesNotMatch(text.result.value, /📷 Photos/, name);
+        if (query.includes("shot=empty")) assert.match(text.result.value, /No cloud photos/, name);
+        if (query.includes("shot=gallery")) {
+          const n = await page.send("Runtime.evaluate", { expression: "document.querySelectorAll('.pgal button.pth').length", returnByValue: true });
+          assert.ok(n.result.value >= 1, name);
+        }
       }
       if (query.includes("photos=error")) {
-        const state = await page.send("Runtime.evaluate", { expression: "document.querySelector('[data-photos-state]')?.textContent || ''", returnByValue: true });
+        const state = await page.send("Runtime.evaluate", { expression: "document.querySelector('[data-photos-state=\"error\"]')?.textContent || ''", returnByValue: true });
         assert.match(state.result.value, /Couldn't load photos \(storage\/unauthorized\)/, name);
+        assert.match(state.result.value, /Try again/, name);
         const btn = await page.send("Runtime.evaluate", { expression: "!!document.querySelector('[data-viewphotos]')", returnByValue: true });
-        assert.equal(btn.result.value, false, name);
+        assert.equal(btn.result.value, true, name);
       }
       return page;
     }
@@ -76,6 +88,9 @@ test("phone shell, quote gate and handlers", async () => {
     await run("after-phone-detail", "?role=operator&open=detail", 390, 844);
     await run("after-phone-jobs", "?role=operator&open=jobs", 390, 844);
     await run("after-phone-photos", "?role=operator&open=photos", 390, 844);
+    await run("after-admin-job-photos", "?role=admin&open=jobphotos&photos=none", 390, 844);
+    await run("after-admin-job-photos-empty", "?role=admin&open=jobphotos&photos=none&shot=empty", 390, 844);
+    await run("after-admin-job-photos-gallery", "?role=admin&open=jobphotos&shot=gallery", 390, 844);
     await run("after-phone-gallery", "?role=operator&open=gallery", 390, 844);
     await run("after-phone-gallery-large", "?role=operator&open=gallery&view=large", 390, 844);
     await run("after-phone-detail-empty", "?role=operator&open=job&job=j4&photos=none", 390, 844);
