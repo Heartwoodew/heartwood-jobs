@@ -395,7 +395,7 @@ export function describeQuote(plant) {
   return lines;
 }
 
-/** Staff / customer run sheet. Crew and plant only — no rates and no dollar amounts. */
+/** Staff run sheet. Required machines and operators only — no prices and no surcharge. */
 export function describeStaff(plant) {
   if (!plant || !plant.setups || !plant.setups.length) return [];
   const lines = [];
@@ -407,7 +407,7 @@ export function describeStaff(plant) {
   const truckUsers = plant.setups.filter(s => s.requiresTruck).length;
   if (truckUsers > 1) lines.push("One truck is shared by these machines, not a second truck.");
   else if (truckUsers === 1) lines.push("The truck is included once with this machine.");
-  if (plant.dualMachines) lines.push("Dual machines surcharge is on the quote, not a second truck.");
+  if (plant.dualMachines) lines.push("Both the skid steer and excavator are required.");
   lines.push(plant.secondOperator ? "Second operator required." : "Second operator not required.");
   return lines;
 }

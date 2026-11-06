@@ -261,16 +261,44 @@ test("accepted quote and job keep the priced snapshot when rates change", () => 
   assert.equal(job.quote.lines.find(l => l.key === "dual").amount, 50);
   assert.notEqual(later.totalInc, job.quote.totalInc);
   assert.equal(/\$/.test(job.description), false);
+  assert.equal(/surcharge/i.test(job.description), false);
   assert.equal(job.description.includes("Second operator required"), true);
+  assert.equal(job.description.includes("Both the skid steer and excavator are required."), true);
   assert.equal(job.description.includes("not a second truck"), true);
-  assert.equal(plantRunSheetLines(job).join("\n"), describeStaff(calc.plant).join("\n"));
-  assert.equal(/\$|\b50\b|\b100\b|\b60\b/.test(plantRunSheetLines(job).join(" ")), false);
+  const staffText = plantRunSheetLines(job).join("\n");
+  assert.equal(staffText, describeStaff(calc.plant).join("\n"));
+  assert.equal(/\$|\b50\b|\b100\b|\b60\b|surcharge/i.test(staffText), false);
   const html = quotePrintHtml(calc, { client: "Orbit", address: "1 Test St" });
   assert.match(html, /Subtotal ex GST/);
   assert.match(html, /GST 10%/);
   assert.match(html, /Total inc GST/);
   assert.match(html, /not a second truck/);
   assert.equal(html.includes("truck is not billed"), false);
+});
+
+test("staff run sheet for both machines has no dollars and no surcharge", () => {
+  const inputs = {
+    hoursOnSite: 2, machines: ["skid", "excavator"], secondOperator: false,
+    travelKm: 0, materialQty: 0, tipLoads: 0,
+    description: "Backslab", client: "Orbit", address: "1 Test St"
+  };
+  const calc = calcQuote(inputs, rates);
+  assert.equal(calc.dualMachines, true);
+  assert.equal(calc.lines.find(l => l.key === "dual").amount, 50);
+  const job = buildAcceptedJob("q-dual", { ...inputs, ...calc, plant: calc.plant }, { uid: "admin" });
+  const sheet = plantRunSheetLines(job).join("\n");
+  assert.equal(job.date, "");
+  assert.equal(job.quoteStatus, "Accepted");
+  assert.equal(job.quote.totalEx, calc.totalEx);
+  assert.equal(job.quote.gst, calc.gst);
+  assert.equal(job.quote.totalInc, calc.totalInc);
+  assert.equal(job.quote.lines.find(l => l.key === "dual").amount, 50);
+  assert.match(sheet, /Both the skid steer and excavator are required\./);
+  assert.equal(/\$/.test(sheet), false);
+  assert.equal(/surcharge/i.test(sheet), false);
+  assert.equal(/\$/.test(job.description), false);
+  assert.equal(/surcharge/i.test(job.description), false);
+  assert.match(job.description, /Both the skid steer and excavator are required\./);
 });
 
 test("presets and the shell stay in place", () => {
