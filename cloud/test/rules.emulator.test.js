@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { initializeTestEnvironment, assertFails, assertSucceeds } from "@firebase/rules-unit-testing";
 import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
-import { ref, uploadBytes, getBytes } from "firebase/storage";
+import { ref, uploadBytes, getBytes, listAll, getMetadata, deleteObject } from "firebase/storage";
 
 const ALEX = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";
 const PATRICK = "R7t41e54Ykcdk9WPdVZnDd697iI2";
@@ -22,6 +22,7 @@ test.before(async () => {
   await env.withSecurityRulesDisabled(async (ctx) => {
     const db = ctx.firestore();
     await setDoc(doc(db, "users/op1"), { role: "operator", name: "Sam" });
+    await setDoc(doc(db, "users/idle"), { role: "operator", name: "Idle" });
     await setDoc(doc(db, "users/op2"), { role: "operator", name: "Other", tenantId: "otherco" });
     await setDoc(doc(db, "users/sup1"), { role: "supervisor", name: "Sue" });
     await setDoc(doc(db, "users/scoped"), { role: "operator", name: "Scope", customerIds: ["Orbit Homes (Qld) Pty Ltd"] });
@@ -68,6 +69,39 @@ test("assigned Heartwood operator uploads a job photo and cannot use another ten
   await assertSucceeds(getBytes(ref(storage, "tenants/heartwood/jobs/job1/photos/p1.jpg")));
   await assertFails(uploadBytes(ref(storage, "tenants/otherco/jobs/other/photos/p1.jpg"), jpeg, photoMeta("op1", "other", "otherco")));
   await assertFails(getBytes(ref(storageOf("op2"), "tenants/heartwood/jobs/job1/photos/p1.jpg")));
+});
+
+test("job photo list follows job access and a private receipt stays unread", async () => {
+  const path = "tenants/heartwood/jobs/job1/photos/pgallery.jpg";
+  const meta = {
+    contentType: "image/jpeg",
+    customMetadata: { tenantId: "heartwood", jobId: "job1", uploaderUid: "op1", purpose: "job-photo", batchCount: "1", expiresAfter: "2026-11-06" },
+  };
+  await assertSucceeds(uploadBytes(ref(storageOf("op1"), path), jpeg, meta));
+  await assertSucceeds(listAll(ref(storageOf("op1"), "tenants/heartwood/jobs/job1/photos")));
+  await assertSucceeds(listAll(ref(storageOf(ALEX), "tenants/heartwood/jobs/job1/photos")));
+  await assertSucceeds(getBytes(ref(storageOf("sup1"), path)));
+  const readBack = await assertSucceeds(getMetadata(ref(storageOf(ALEX), path)));
+  assert.equal(readBack.customMetadata.expiresAfter, "2026-11-06");
+  assert.equal(readBack.customMetadata.purpose, "job-photo");
+  await assertSucceeds(getBytes(ref(storageOf(ALEX), path)));
+  const afterView = await assertSucceeds(getMetadata(ref(storageOf("op1"), path)));
+  assert.equal(afterView.customMetadata.expiresAfter, "2026-11-06");
+  await assertFails(listAll(ref(storageOf("idle"), "tenants/heartwood/jobs/job1/photos")));
+  await assertFails(getBytes(ref(storageOf("idle"), path)));
+  await assertFails(listAll(ref(storageOf("op2"), "tenants/heartwood/jobs/job1/photos")));
+  await assertFails(getBytes(ref(storageOf("op2"), path)));
+  const signedOut = env.unauthenticatedContext().storage();
+  await assertFails(listAll(ref(signedOut, "tenants/heartwood/jobs/job1/photos")));
+  await assertFails(getBytes(ref(signedOut, path)));
+  await assertFails(deleteObject(ref(storageOf("op1"), path)));
+  await assertFails(deleteObject(ref(storageOf(ALEX), path)));
+  const receiptMeta = { contentType: "image/jpeg", customMetadata: { tenantId: "heartwood", receiptId: "rOp", uploaderUid: "op1", purpose: "receipt" } };
+  await assertSucceeds(uploadBytes(ref(storageOf("op1"), "tenants/heartwood/receipts/rOp/original"), jpeg, receiptMeta));
+  await assertFails(getBytes(ref(storageOf("op1"), "tenants/heartwood/receipts/rOp/original")));
+  await assertFails(getMetadata(ref(storageOf("op1"), "tenants/heartwood/receipts/rOp/original")));
+  await assertFails(listAll(ref(storageOf("op1"), "tenants/heartwood/receipts")));
+  await assertFails(listAll(ref(storageOf(ALEX), "tenants/heartwood/receipts")));
 });
 
 test("customer scope, metadata and file type are enforced", async () => {

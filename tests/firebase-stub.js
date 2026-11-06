@@ -160,12 +160,47 @@ export function addDoc(ref, data) {
   record("addDoc", { col: ref && ref._col });
   return Promise.resolve({ id: "new-" + (ref && ref._col || "x") });
 }
+function storageObjects() {
+  return (typeof window !== "undefined" && window.HW_STORAGE_OBJECTS) || [];
+}
 export function getStorage() { record("getStorage", {}); return { stub: true }; }
 export function connectStorageEmulator() { record("connectStorageEmulator", {}); }
-export function ref(_storage, path) { return { path }; }
+export function ref(_storage, path) { return { path, fullPath: path }; }
 export function uploadBytes(r, _body, meta) {
-  record("uploadBytes", { path: r && r.path, contentType: meta && meta.contentType, metadata: meta && meta.customMetadata });
+  record("uploadBytes", { path: r && (r.fullPath || r.path), contentType: meta && meta.contentType, metadata: meta && meta.customMetadata });
   return Promise.resolve({ ref: r });
+}
+export function listAll(r) {
+  if (typeof window !== "undefined" && window.HW_STORAGE_LIST_ERROR) {
+    return Promise.reject(Object.assign(new Error("unauthorized"), { code: "storage/unauthorized" }));
+  }
+  const prefix = String((r && (r.fullPath || r.path)) || "").replace(/\/$/, "");
+  const items = storageObjects().filter(o => {
+    const rest = String(o.path || "").startsWith(prefix + "/") ? String(o.path).slice(prefix.length + 1) : "";
+    return rest && !rest.includes("/");
+  });
+  record("listAll", { path: prefix, count: items.length });
+  return Promise.resolve({ prefixes: [], items: items.map(o => ({ path: o.path, fullPath: o.path })) });
+}
+export function getMetadata(r) {
+  const path = r && (r.fullPath || r.path);
+  const o = storageObjects().find(x => x.path === path);
+  record("getMetadata", { path });
+  if (!o) return Promise.reject(Object.assign(new Error("object-not-found"), { code: "storage/object-not-found" }));
+  return Promise.resolve({
+    contentType: o.contentType || "",
+    size: o.size,
+    customMetadata: o.customMetadata || {},
+    timeCreated: o.timeCreated || "2026-11-06T00:00:00.000Z",
+  });
+}
+export function getBlob(r) {
+  const path = r && (r.fullPath || r.path);
+  const o = storageObjects().find(x => x.path === path);
+  record("getBlob", { path });
+  if (!o) return Promise.reject(Object.assign(new Error("object-not-found"), { code: "storage/object-not-found" }));
+  const bytes = o.bytes instanceof Uint8Array ? o.bytes : new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
+  return Promise.resolve(new Blob([bytes], { type: o.contentType || "image/jpeg" }));
 }
 export function deleteDoc() { return Promise.resolve(); }
 export function runTransaction(_db, fn) {

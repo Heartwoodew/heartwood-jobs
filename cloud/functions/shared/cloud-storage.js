@@ -104,6 +104,48 @@ export function canSeeJob(membership, job) {
   return Array.isArray(job.assigned) && job.assigned.includes(membership.uid);
 }
 
+/** Storage prefix for one job's photos. The path is not authority; canSeeJob is. */
+export function jobPhotoPrefix(membership, job) {
+  if (!membership?.ok) return deny(membership?.reason || "no-membership");
+  if (!job?.id) return deny("no-job");
+  if (!canSeeJob(membership, job)) {
+    return deny(jobTenantOf(job) !== membership.tenantId ? "wrong-tenant" : "not-allowed");
+  }
+  return { ok: true, prefix: `tenants/${membership.tenantId}/jobs/${job.id}/photos` };
+}
+
+/**
+ * One object returned by a storage list. Receipt objects stay hidden.
+ * Missing purpose is still a job photo when the path and type agree, so an
+ * older mirror without cloud-read metadata can be shown. A receipt purpose
+ * or receipt id is never accepted, even on this prefix.
+ */
+export function listedJobPhoto({ membership, job, path, contentType, customMetadata, size, readable } = {}) {
+  if (readable === false) return deny("not-allowed");
+  const prefix = jobPhotoPrefix(membership, job);
+  if (!prefix.ok) return prefix;
+  const meta = customMetadata && typeof customMetadata === "object" ? customMetadata : {};
+  const full = typeof path === "string" ? path : "";
+  if (meta.purpose === "receipt" || meta.receiptId || full.includes("/receipts/")) return deny("receipt-hidden");
+  if (!full.startsWith(prefix.prefix + "/")) return deny("not-allowed");
+  const name = full.slice(prefix.prefix.length + 1);
+  if (!name || name.includes("/")) return deny("not-allowed");
+  if (meta.purpose && meta.purpose !== "job-photo") return deny("not-allowed");
+  const type = String(contentType || "").toLowerCase();
+  if (type && !JOB_PHOTO_MIMES.includes(type)) return deny("mime-not-allowed");
+  if (size === 0) return deny("empty-file");
+  const storedExpiry = typeof meta.expiresAfter === "string" && /^\d{4}-\d{2}-\d{2}$/.test(meta.expiresAfter) ? meta.expiresAfter : null;
+  return {
+    ok: true,
+    path: full,
+    name,
+    contentType: type || null,
+    storedExpiresAfter: storedExpiry,
+    uploaderUid: typeof meta.uploaderUid === "string" ? meta.uploaderUid : null,
+    bytes: Number.isFinite(size) ? size : null,
+  };
+}
+
 function safePhotoId(id) {
   const s = String(id || "");
   if (!/^p[A-Za-z0-9_-]{1,40}$/.test(s)) return null;

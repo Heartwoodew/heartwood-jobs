@@ -53,11 +53,54 @@ async function waitFor(sel, ms = 4000) {
   }
   return null;
 }
+if (q.get("photos") === "error") window.HW_STORAGE_LIST_ERROR = "1";
+if (q.get("photos") !== "none" && q.get("photos") !== "error") {
+  const jpeg = async (label, color) => {
+    const c = document.createElement("canvas");
+    c.width = 640; c.height = 480;
+    const g = c.getContext("2d");
+    g.fillStyle = color; g.fillRect(0, 0, 640, 480);
+    g.strokeStyle = "#3b2a1a"; g.lineWidth = 16; g.strokeRect(28, 28, 584, 424);
+    g.fillStyle = "#3b2a1a"; g.font = "bold 64px system-ui, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(label, 320, 240);
+    const blob = await new Promise(r => c.toBlob(r, "image/jpeg", 0.86));
+    return new Uint8Array(await blob.arrayBuffer());
+  };
+  const site = await jpeg("Site", "#e7c59a");
+  const crew = await jpeg("Crew", "#f6f1ea");
+  const slip = await jpeg("Receipt", "#d8c3a5");
+  const meta = (purpose, extra) => ({ purpose, tenantId: "heartwood", jobId: "j2", uploaderUid: "patrick", batchCount: "1", expiresAfter: "2099-01-01", ...extra });
+  window.HW_STORAGE_OBJECTS = [
+    { path: "tenants/heartwood/jobs/j2/photos/psite", contentType: "image/jpeg", size: site.length, bytes: site, timeCreated: "2026-11-06T01:00:00.000Z", customMetadata: meta("job-photo") },
+    { path: "tenants/heartwood/jobs/j2/photos/pcrew", contentType: "image/jpeg", size: crew.length, bytes: crew, timeCreated: "2026-11-06T00:30:00.000Z", customMetadata: meta("job-photo") },
+    { path: "tenants/heartwood/jobs/j2/photos/rsecret", contentType: "image/jpeg", size: slip.length, bytes: slip, timeCreated: "2026-11-06T03:00:00.000Z", customMetadata: meta("receipt", { receiptId: "r1" }) },
+    { path: "tenants/heartwood/receipts/r1/original", contentType: "image/jpeg", size: slip.length, bytes: slip, timeCreated: "2026-11-06T03:00:00.000Z", customMetadata: meta("receipt", { receiptId: "r1" }) }
+  ];
+}
 await waitFor(".mob, .sm-layout, #login");
 await sleep(80);
-if (q.get("open") === "detail") document.querySelector('.mrow[data-id="j2"], .hrow[data-id="j2"]')?.click();
+async function openJob(id) {
+  document.querySelector(`.mrow[data-id="${id}"], .hrow[data-id="${id}"]`)?.click();
+  await waitFor(`[data-photoslot="${id}"][data-settled="1"], [data-photos-state="error"]`, 4000);
+}
+if (q.get("open") === "detail" || q.get("open") === "gallery") await openJob("j2");
+if (q.get("open") === "job") {
+  document.querySelector('[data-tab="week"]')?.click();
+  await sleep(40);
+  await openJob(q.get("job") || "j4");
+}
+if (q.get("open") === "gallery" || q.get("view") === "large") {
+  document.querySelector("[data-viewphotos]")?.click();
+  await waitFor(".pgal .pth img, .pgal [data-photos-state='error']", 4000);
+}
+if (q.get("view") === "large") {
+  document.querySelector(".pgal button.pth")?.click();
+  await waitFor(".pview img", 4000);
+}
 if (q.get("open") === "jobs") document.querySelector('[data-tab="week"]')?.click();
-if (q.get("open") === "photos") document.querySelector('[data-tab="photos"]')?.click();
+if (q.get("open") === "photos") {
+  document.querySelector('[data-tab="photos"]')?.click();
+  await waitFor('[data-photoslot][data-settled="1"]', 4000);
+}
 if (q.get("open") === "more") document.querySelector('[data-tab="more"]')?.click();
 if (q.get("open") === "myjobs") document.querySelector('[data-view="myjobs"]')?.click();
 if (q.get("open") === "quotes") {
@@ -117,6 +160,31 @@ if (q.get("check") === "1") {
     const dir = document.querySelector('a[href*="maps"]');
     ok(!!dir && /Brightvale/.test(decodeURIComponent(dir.getAttribute("href"))), "directions");
     ok(!/\$\s?\d/.test(text()), "detail dollars");
+    await waitFor('[data-photoslot][data-settled="1"]');
+    const photosBtn = document.querySelector("[data-viewphotos]");
+    ok(!!photosBtn && /Photos/.test(photosBtn.textContent), "photos action when cloud photos exist");
+    const writes = () => (window.__fbCalls || []).filter(c => c.op === "updateDoc" || c.op === "setDoc" || c.op === "uploadBytes");
+    const beforeWrites = writes().length;
+    const beforePicker = window.__photoClicks || 0;
+    photosBtn.click();
+    await waitFor(".pgal button.pth img");
+    ok(document.querySelectorAll(".pgal button.pth").length === 2, "two job photos and the receipt image stays hidden");
+    const gtext = document.querySelector(".pgal")?.innerText || "";
+    ok(gtext.includes("2027-02-06"), "operational expiry from the job date, not the stored 2099 stamp: " + gtext.slice(0, 280));
+    ok(/not scheduled/i.test(gtext), "deletion is not scheduled");
+    ok(/does not change that date/i.test(gtext), "opening photos does not move the date");
+    ok(!gtext.includes("2099"), "gallery ignores a stored expiresAfter that would reset the clock");
+    ok(!document.querySelector(".pgal [data-cloudexport]"), "operator does not get the admin cloud download");
+    ok(!/\$\s?\d/.test(gtext), "gallery has no dollar amounts");
+    document.querySelector(".pgal button.pth").click();
+    await waitFor(".pview img");
+    ok(!!document.querySelector(".pview img"), "larger photo");
+    document.querySelector(".pview .px")?.click();
+    document.querySelector(".pgal-x")?.click();
+    await sleep(20);
+    ok(document.getElementById("pgal")?.hidden === true, "gallery closes");
+    ok((window.__photoClicks || 0) === beforePicker, "viewing does not open the email picker");
+    ok(writes().length === beforeWrites, "viewing does not write the job or storage");
     document.querySelector('[data-act="start"]')?.click();
     await sleep(30);
     ok((window.__fbCalls || []).some(c => c.op === "updateDoc" && c.status === "In progress"), "start uses updateDoc");
