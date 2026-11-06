@@ -400,7 +400,7 @@ function ensurePhotoList(j, force) {
     paintPhotoSlots();
   }).catch(e => {
     if (ui.photoLists[j.id]?.seq !== seq) return;
-    ui.photoLists[j.id] = { status: "error", count: 0, mark, seq, error: e.code || e.message || "error" };
+    ui.photoLists[j.id] = { status: "error", count: 0, mark, seq, error: /^storage\/[a-z0-9-]{1,40}$/.test(e.code || "") ? e.code : "storage/unknown" };
     paintPhotoSlots();
   });
   ui.photoLists[j.id].pending = pending;
@@ -423,6 +423,7 @@ function paintPhotoSlots() {
       jobId: id, status: row?.status || "loading", count: row?.count || 0,
       role: el.dataset.photorole || "both", variant: el.dataset.photovariant === "sm" ? "sm" : "phone",
       iconHtml: el.dataset.photovariant === "sm" ? "" : ICO.photos,
+      error: row?.error || "",
     });
     el.dataset.settled = row && row.status && row.status !== "loading" ? "1" : "";
     el.querySelectorAll("[data-viewphotos]").forEach(b => b.onclick = ev => {
@@ -462,7 +463,7 @@ async function paintGallery(j) {
   }
   if (row.status !== "ready" || !row.gallery) {
     if (stale()) return;
-    root.innerHTML = galleryHtml({ ...common, status: "error", error: "Couldn't load photos.", retentionText: "" });
+    root.innerHTML = galleryHtml({ ...common, status: "error", error: row.error || "", retentionText: "" });
     wireGallery(j); return;
   }
   const photos = [];

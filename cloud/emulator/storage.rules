@@ -34,23 +34,39 @@ service firebase.storage {
     function canSeeMoney() {
       return rulesAdmin() || (hasProfile() && "role" in profile() && profile().role == "supervisor");
     }
+    // Production allows two Firestore accesses per evaluation. exists() and get()
+    // on the same path each count, and the emulator's cap is higher, so it did
+    // not catch this. Job photos therefore use one get of the job and, only for
+    // a non-bootstrap account, one get of that user. A missing profile is not read.
     function jobPath(jobId) { return /databases/(default)/documents/jobs/$(jobId); }
-    function jobExists(jobId) { return firestore.exists(jobPath(jobId)); }
     function jobData(jobId) { return firestore.get(jobPath(jobId)).data; }
+    function userData() { return firestore.get(userPath()).data; }
     function jobTenant(jobId) {
-      return jobExists(jobId) && "tenantId" in jobData(jobId) && jobData(jobId).tenantId is string && jobData(jobId).tenantId.size() > 0
+      return "tenantId" in jobData(jobId) && jobData(jobId).tenantId is string && jobData(jobId).tenantId.size() > 0
         ? jobData(jobId).tenantId : "heartwood";
     }
-    function customerOk(jobId) {
-      return !(hasProfile() && "customerIds" in profile() && profile().customerIds is list && profile().customerIds.size() > 0)
-        || (jobExists(jobId) && "client" in jobData(jobId) && jobData(jobId).client is string && jobData(jobId).client in profile().customerIds);
+    function accountTenant() {
+      return "tenantId" in userData() && userData().tenantId is string && userData().tenantId.size() > 0
+        ? userData().tenantId : "heartwood";
     }
-    function assigned(jobId) {
-      return jobExists(jobId) && "assigned" in jobData(jobId) && jobData(jobId).assigned is list && request.auth.uid in jobData(jobId).assigned;
+    function accountAssigned(jobId) {
+      return "assigned" in jobData(jobId) && jobData(jobId).assigned is list && request.auth.uid in jobData(jobId).assigned;
+    }
+    function accountCustomerOk(jobId) {
+      return !("customerIds" in userData())
+        || !(userData().customerIds is list)
+        || userData().customerIds.size() == 0
+        || ("client" in jobData(jobId) && jobData(jobId).client is string && jobData(jobId).client in userData().customerIds);
+    }
+    function accountCanSee(tenantId, jobId) {
+      return accountTenant() == tenantId
+        && (("role" in userData() && userData().role == "admin") || accountAssigned(jobId))
+        && accountCustomerOk(jobId);
     }
     function canSeeJob(tenantId, jobId) {
-      return member(tenantId) && jobExists(jobId) && jobTenant(jobId) == tenantId
-        && customerOk(jobId) && (rulesAdmin() || assigned(jobId));
+      return signedIn() && tenantId is string && tenantId.size() > 0
+        && jobTenant(jobId) == tenantId
+        && ((tenantId == "heartwood" && (isAlex() || isPatrick())) || accountCanSee(tenantId, jobId));
     }
     function jobPhotoFile(tenantId, jobId) {
       return request.resource.contentType.matches('image/(jpeg|png|webp|gif)')
