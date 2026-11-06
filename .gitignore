@@ -1,1 +1,6 @@
 .staticrypt.json
+node_modules/
+cloud/firebase-debug.log
+cloud/firestore-debug.log
+cloud/storage-debug.log
+cloud/ui-debug.log

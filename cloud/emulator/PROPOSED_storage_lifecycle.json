@@ -1,0 +1,12 @@
+{
+  "_comment": "PROPOSED ONLY. Do not apply this lifecycle to the live bucket. It does not match live job photos. It only expires objects already moved to the bucket-root prefix _expired/ by a later, owner-approved purge. Age is a backstop of 7 days after that move. Job completion dates are decided by the retention function, not by this file.",
+  "rule": [
+    {
+      "action": { "type": "Delete" },
+      "condition": {
+        "age": 7,
+        "matchesPrefix": ["_expired/"]
+      }
+    }
+  ]
+}
