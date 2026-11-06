@@ -635,3 +635,9 @@ html{-webkit-text-size-adjust:100%}
 .qw-line-row,.qw-total{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px dashed #f0d9a8}
 .qw-total{border-bottom:0;font-size:18px;margin-top:6px}
 .row.gap{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+
+.qw-presets{display:flex;flex-direction:column;gap:6px;margin:8px 0}
+.qw-preset{padding:6px 8px;border:1px solid var(--sm-line);border-radius:8px;background:#fff}
+.qw-builder{margin-top:10px;padding:8px;border:1px dashed #cfd8e3;border-radius:8px}
+.qw-machrate{border:1px solid var(--sm-line);border-radius:8px;padding:8px 10px;margin:8px 0}
+.qw-machrate legend{font-weight:600;padding:0 4px}

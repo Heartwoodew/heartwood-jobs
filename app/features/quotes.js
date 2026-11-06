@@ -1,18 +1,39 @@
 // CallUp guided Quotes (Nov 2026). Prices always ex GST.
 // Rates from meta/quoteRates only — never invent business rates.
-// Draft/Accepted are explicit quoteStatus fields (legacy sm8Status Quote still maps via app queueOf).
-// Admins + app supervisors (canQuote / canSeeMoney). Rate *edits* are admin-only (canEditQuoteRates).
-// Depot for travel guidance (Alex, Nov 2026): 208-220 Holdsworth Rd, Chuwar QLD 4306.
-// Travel km helper uses Nominatim geocode + OSRM road route when available — never silently substitutes straight-line as billable km.
+// Draft/Accepted are explicit quoteStatus fields.
+// Admins + supervisors (canQuote / canSeeMoney). Rate *edits* admin-only (canEditQuoteRates).
+// Depot: 208-220 Holdsworth Rd, Chuwar QLD 4306. Travel via Nominatim+OSRM — never straight-line as billable km.
+// Equipment: fleet Machine-register names; presets Truck ± skid ± excavator; each machine rate includes operator.
+// Optional labourer is a separate rate. Hours drive hourly packages; day rates use machineDays (not × hours).
+// No GPS in this build.
 
 export const DEFAULT_DEPOT = {
   yardAddress: "208-220 Holdsworth Rd, Chuwar QLD 4306",
   yardMapsUrl: "https://maps.app.goo.gl/w4AX7X6VtPtqH75S7?g_st=ic"
 };
 
+/** Fleet plant from Heartwood Machine register (names/codes). Rates blank until admin sets them. */
+export const FLEET_MACHINES = [
+  { id: "truck", name: "Truck", registerName: "Truck", code: "", kind: "truck" },
+  { id: "skid", name: "Skid steer (Bobcat)", registerName: "Bobcat", code: "CA", kind: "skid" },
+  { id: "excavator", name: "Excavator (JCB)", registerName: "Jcb", code: "EX", kind: "excavator" }
+];
+
+/**
+ * Equipment presets (Alex Nov 2026): Truck with skid and/or excavator.
+ * Each preset lists machine ids once — truck is never charged twice.
+ * Preset package rate includes operator; labourer is optional add-on.
+ */
+export const EQUIPMENT_PRESETS = [
+  { id: "truck", label: "Truck only", machines: ["truck"] },
+  { id: "truck_skid", label: "Truck + skid steer", machines: ["truck", "skid"] },
+  { id: "truck_excavator", label: "Truck + excavator", machines: ["truck", "excavator"] },
+  { id: "truck_skid_excavator", label: "Truck + skid steer + excavator", machines: ["truck", "skid", "excavator"] },
+  { id: "excavator", label: "Excavator only", machines: ["excavator"] }
+];
+
 const DEFAULT_RATE_KEYS = [
   ["travelPerKm", "Travel $ / km (ex GST)", "km"],
-  ["hourlyOnSite", "Time on site $ / hour (ex GST)", "h"],
   ["materialPerUnit", "Materials $ / unit (ex GST)", "unit"],
   ["tipPerLoad", "Rubbish / tip $ / load (ex GST)", "load"]
 ];
@@ -26,19 +47,33 @@ let api = null;
 export function installQuotes(a) {
   api = a;
   return {
-    calcQuote, DEFAULT_RATE_KEYS, DEFAULT_DEPOT, quoteLines, roadDistanceKm,
+    calcQuote, DEFAULT_RATE_KEYS, DEFAULT_DEPOT, FLEET_MACHINES, EQUIPMENT_PRESETS,
+    resolvePresetId, machineSelectionFromPreset, quoteLines, roadDistanceKm,
     bindAdmin: bindAdminExtras,
     openQuoteWizard, openRatesEditor, refreshQuotes, ensureRates,
     adminViewRouter, quotesViewHtml
   };
 }
 
+function emptyMachineRates() {
+  const out = {};
+  for (const m of FLEET_MACHINES) {
+    out[m.id] = { rate: null, unit: "hour" }; // hour | day — blank $ until admin fills
+  }
+  return out;
+}
+
 function emptyRates() {
   return {
-    travelPerKm: null, hourlyOnSite: null, materialPerUnit: null, tipPerLoad: null,
+    travelPerKm: null, materialPerUnit: null, tipPerLoad: null,
+    // Legacy key kept null and unused when plant is selected (avoids operator double-charge).
+    hourlyOnSite: null,
     materialUnitLabel: "unit", tipUnitLabel: "load",
     yardAddress: DEFAULT_DEPOT.yardAddress,
     yardMapsUrl: DEFAULT_DEPOT.yardMapsUrl,
+    machineRates: emptyMachineRates(),
+    labourerRate: null,
+    labourerUnit: "hour",
     updatedAt: null
   };
 }
@@ -52,27 +87,142 @@ function canEditRates() {
   return typeof api.canEditQuoteRates === "function" ? !!api.canEditQuoteRates() : !!(api.isAdmin && api.isAdmin());
 }
 
-/** Quote math. If any line with qty > 0 is missing a rate, totalEx is null (not a partial sum). */
+function normalizeMachineIds(ids) {
+  const allowed = new Set(FLEET_MACHINES.map(m => m.id));
+  const uniq = [];
+  for (const id of ids || []) {
+    if (allowed.has(id) && !uniq.includes(id)) uniq.push(id);
+  }
+  // Stable order: truck, skid, excavator
+  const order = FLEET_MACHINES.map(m => m.id);
+  return uniq.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+}
+
+/** Map a selection of machine ids to a known preset id, or null if custom/empty. */
+export function resolvePresetId(machineIds) {
+  const sel = normalizeMachineIds(machineIds).join(",");
+  if (!sel) return null;
+  for (const p of EQUIPMENT_PRESETS) {
+    if (normalizeMachineIds(p.machines).join(",") === sel) return p.id;
+  }
+  return null;
+}
+
+export function machineSelectionFromPreset(presetId) {
+  const p = EQUIPMENT_PRESETS.find(x => x.id === presetId);
+  return p ? normalizeMachineIds(p.machines) : [];
+}
+
+function fleetName(id) {
+  return FLEET_MACHINES.find(m => m.id === id)?.name || id;
+}
+
+function machineRateOf(rates, id) {
+  const mr = (rates && rates.machineRates && rates.machineRates[id]) || {};
+  return {
+    rate: mr.rate != null ? +mr.rate : null,
+    unit: mr.unit === "day" ? "day" : "hour"
+  };
+}
+
+/**
+ * Quote math.
+ * - Travel / materials / tip as before.
+ * - Each selected machine once (no double truck): rate includes operator.
+ * - Hourly machine → × hoursOnSite; day machine → × machineDays (default 1) — never × hours.
+ * - Optional labourer add-on (separate rate); same unit rule.
+ * - Generic hourlyOnSite is NOT added when any machine is selected (operator is in the plant rate).
+ * - If any used line is missing a rate, totalEx is null.
+ */
 export function calcQuote(inputs, rates) {
   const travelKm = Math.max(0, +inputs.travelKm || 0);
   const hours = Math.max(0, +inputs.hoursOnSite || 0);
+  const machineDays = Math.max(0, +inputs.machineDays || 0) || (inputs.machineDays === 0 ? 0 : 1);
   const matQty = Math.max(0, +inputs.materialQty || 0);
   const tipLoads = Math.max(0, +inputs.tipLoads || 0);
+  const machines = normalizeMachineIds(inputs.machines || inputs.machineIds || []);
+  const includeLabourer = !!(inputs.includeLabourer || inputs.labourer);
   const r = rates || {};
+
   const lines = [
-    { key: "travel", label: `Travel ${travelKm} km`, qty: travelKm, rate: r.travelPerKm, amount: r.travelPerKm != null ? travelKm * r.travelPerKm : null },
-    { key: "time", label: `Time on site ${hours} h`, qty: hours, rate: r.hourlyOnSite, amount: r.hourlyOnSite != null ? hours * r.hourlyOnSite : null },
-    { key: "materials", label: `Materials (${matQty} ${r.materialUnitLabel || "unit"})`, qty: matQty, rate: r.materialPerUnit, amount: r.materialPerUnit != null ? matQty * r.materialPerUnit : null },
-    { key: "rubbish", label: `Rubbish removed (${tipLoads} ${r.tipUnitLabel || "load"})`, qty: tipLoads, rate: r.tipPerLoad, amount: r.tipPerLoad != null ? tipLoads * r.tipPerLoad : null }
-  ].map(l => ({ ...l, amount: l.amount == null ? null : Math.round(l.amount * 100) / 100 }));
-  const missingRates = lines.filter(l => l.qty > 0 && l.rate == null).map(l => l.key);
-  const known = lines.filter(l => l.amount != null);
+    { key: "travel", label: `Travel ${travelKm} km`, qty: travelKm, rate: r.travelPerKm,
+      amount: r.travelPerKm != null ? travelKm * r.travelPerKm : null }
+  ];
+
+  // Plant + operator packages (each machine once)
+  for (const mid of machines) {
+    const { rate, unit } = machineRateOf(r, mid);
+    const qty = unit === "day" ? machineDays : hours;
+    const unitLab = unit === "day" ? "day" : "h";
+    lines.push({
+      key: "machine:" + mid,
+      machineId: mid,
+      label: `${fleetName(mid)} + operator (${qty} ${unitLab})`,
+      qty, rate, unit,
+      amount: rate != null ? qty * rate : null
+    });
+  }
+
+  // Optional labourer — never folded into plant rate
+  if (includeLabourer) {
+    const unit = r.labourerUnit === "day" ? "day" : "hour";
+    const qty = unit === "day" ? machineDays : hours;
+    const unitLab = unit === "day" ? "day" : "h";
+    const rate = r.labourerRate != null ? +r.labourerRate : null;
+    lines.push({
+      key: "labourer",
+      label: `Labourer (${qty} ${unitLab})`,
+      qty, rate, unit,
+      amount: rate != null ? qty * rate : null
+    });
+  }
+
+  // Legacy crew-only time: only when NO plant selected (avoids operator double-charge).
+  if (!machines.length && !includeLabourer) {
+    const rate = r.hourlyOnSite != null ? +r.hourlyOnSite : null;
+    lines.push({
+      key: "time",
+      label: `Time on site ${hours} h`,
+      qty: hours, rate,
+      amount: rate != null ? hours * rate : null
+    });
+  }
+
+  lines.push(
+    { key: "materials", label: `Materials (${matQty} ${r.materialUnitLabel || "unit"})`, qty: matQty,
+      rate: r.materialPerUnit, amount: r.materialPerUnit != null ? matQty * r.materialPerUnit : null },
+    { key: "rubbish", label: `Rubbish removed (${tipLoads} ${r.tipUnitLabel || "load"})`, qty: tipLoads,
+      rate: r.tipPerLoad, amount: r.tipPerLoad != null ? tipLoads * r.tipPerLoad : null }
+  );
+
+  const rounded = lines.map(l => ({ ...l, amount: l.amount == null ? null : Math.round(l.amount * 100) / 100 }));
+  const missingRates = rounded.filter(l => l.qty > 0 && l.rate == null).map(l => l.key);
+  const known = rounded.filter(l => l.amount != null);
   const totalEx = missingRates.length ? null
     : (known.length ? Math.round(known.reduce((t, l) => t + l.amount, 0) * 100) / 100 : 0);
-  return { lines, totalEx, missingRates, travelKm, hours, matQty, tipLoads, complete: !missingRates.length };
+  return {
+    lines: rounded, totalEx, missingRates, travelKm, hours, machineDays, matQty, tipLoads,
+    machines, includeLabourer, presetId: resolvePresetId(machines),
+    complete: !missingRates.length
+  };
 }
 
 function quoteLines(calc) { return calc.lines; }
+
+function mergeMachineRates(stored) {
+  const base = emptyMachineRates();
+  if (!stored || typeof stored !== "object") return base;
+  for (const m of FLEET_MACHINES) {
+    const s = stored[m.id];
+    if (s && typeof s === "object") {
+      base[m.id] = {
+        rate: s.rate != null && s.rate !== "" && !Number.isNaN(+s.rate) ? +s.rate : null,
+        unit: s.unit === "day" ? "day" : "hour"
+      };
+    }
+  }
+  return base;
+}
 
 async function ensureRates(force) {
   const ui = api.getUi();
@@ -80,9 +230,10 @@ async function ensureRates(force) {
   try {
     const s = await api.getDoc(api.doc(api.db, "meta", "quoteRates"));
     ui.quoteRates = s.exists() ? { ...emptyRates(), ...s.data() } : emptyRates();
-    // Always keep depot defaults if unset in Firestore (address only — never invent $ rates).
+    ui.quoteRates.machineRates = mergeMachineRates(ui.quoteRates.machineRates);
     if (!ui.quoteRates.yardAddress) ui.quoteRates.yardAddress = DEFAULT_DEPOT.yardAddress;
     if (!ui.quoteRates.yardMapsUrl) ui.quoteRates.yardMapsUrl = DEFAULT_DEPOT.yardMapsUrl;
+    if (ui.quoteRates.labourerUnit !== "day") ui.quoteRates.labourerUnit = "hour";
   } catch {
     ui.quoteRates = emptyRates();
   }
@@ -100,7 +251,6 @@ async function refreshQuotes() {
   }
 }
 
-/* ---- road distance (geocode + OSRM). Returns null on failure — never invents km. */
 async function geocodeAu(address) {
   const key = String(address || "").trim().toLowerCase();
   if (!key) return null;
@@ -125,7 +275,7 @@ async function geocodeAu(address) {
   } catch { return null; }
 }
 
-/** One-way road distance in km via OSRM, or null if routing unavailable. Does not use straight-line as a substitute. */
+/** One-way road distance in km via OSRM, or null if routing unavailable. Never uses straight-line. */
 export async function roadDistanceKm(fromAddress, toAddress) {
   const a = await geocodeAu(fromAddress);
   const b = await geocodeAu(toAddress);
@@ -148,21 +298,29 @@ export function quotesViewHtml(ui, esc, $$, helpers = {}) {
   const list = (ui.quotes || []).slice().sort((a, b) => String(b.updatedAtIso || "").localeCompare(String(a.updatedAtIso || "")));
   const drafts = list.filter(q => q.quoteStatus === "Draft");
   const accepted = list.filter(q => q.quoteStatus === "Accepted").slice(0, 30);
-  const rateWarn = DEFAULT_RATE_KEYS.some(([k]) => rates[k] == null);
+  const plantMissing = FLEET_MACHINES.some(m => (rates.machineRates?.[m.id]?.rate) == null);
+  const rateWarn = DEFAULT_RATE_KEYS.some(([k]) => rates[k] == null) || plantMissing || rates.labourerRate == null;
   const editRates = helpers.canEditQuoteRates != null ? helpers.canEditQuoteRates() : canEditRates();
   const money = v => (v != null && $$) ? `${esc($$(v))} <span class="sub">ex GST</span>` : `<span class="unal">incomplete</span>`;
+  const mach = q => {
+    const ids = normalizeMachineIds(q.machines || []);
+    if (!ids.length) return "";
+    const lab = EQUIPMENT_PRESETS.find(p => p.id === q.presetId)?.label
+      || ids.map(fleetName).join(" + ");
+    return `<div class="sub">${esc(lab)}${q.includeLabourer ? " + labourer" : ""}</div>`;
+  };
   const row = q => `<tr class="jr" data-qid="${esc(q.id)}"><td><span class="qpill ${q.quoteStatus === "Draft" ? "q-quote" : "q-wo"}">${esc(q.quoteStatus)}</span></td>
-    <td><b>${esc(q.client || "")}</b><div class="sub">${esc(q.address || "")}</div></td>
+    <td><b>${esc(q.client || "")}</b><div class="sub">${esc(q.address || "")}</div>${mach(q)}</td>
     <td>${esc(q.description || q.type || "")}</td>
     <td>${q.totalEx != null ? money(q.totalEx) : `<span class="unal">rates needed</span>`}</td>
     <td>${q.quoteStatus === "Draft" ? `<button type="button" class="sm-btn" data-qaccept="${esc(q.id)}">Accept → job</button>` : `<span class="sub">Job ${esc(q.jobId || "—")}</span>`}</td></tr>`;
   return `<div class="sm-head"><h1>Quotes</h1>
     <div class="row gap"><button type="button" class="sm-btn primary" id="newquote">＋ New quote</button>
     ${editRates ? `<button type="button" class="sm-btn" id="editrates">Quote rates &amp; depot</button>` : `<span class="sub pad">Rates are set by an admin · depot ${esc(rates.yardAddress || DEFAULT_DEPOT.yardAddress)}</span>`}</div></div>
-    <p class="pad sub">Guided quote: travel → time on site → materials → rubbish removed → price (ex GST). Accepting creates an unscheduled job with the quote kept on it. Admins and supervisors only — staff never see Quotes or dollars.</p>
+    <p class="pad sub">Guided quote: site → equipment (+ operator) → optional labourer → travel → duration → materials → rubbish → price (ex GST). Accepting creates an unscheduled job. Admins and supervisors only.</p>
     <p class="pad sub">Depot (travel start): <b>${esc(rates.yardAddress || DEFAULT_DEPOT.yardAddress)}</b>
       · <a href="${esc(rates.yardMapsUrl || DEFAULT_DEPOT.yardMapsUrl)}" target="_blank" rel="noopener">Maps</a></p>
-    ${rateWarn ? `<p class="pad warnt">Set travel, hourly, materials and tip rates before quoting — nothing is invented for you.</p>` : ""}
+    ${rateWarn ? `<p class="pad warnt">Set plant (incl. operator), labourer, travel, materials and tip rates before accepting — nothing is invented for you.</p>` : ""}
     <div class="sm-head"><h2>Drafts <span class="cnt">${drafts.length}</span></h2></div>
     <div class="tablewrap"><table class="jobs"><thead><tr><th>Status</th><th>Client / site</th><th>Scope</th><th>Total</th><th></th></tr></thead>
     <tbody>${drafts.map(row).join("") || `<tr><td colspan="5" class="muted pad">No draft quotes yet.</td></tr>`}</tbody></table></div>
@@ -193,12 +351,28 @@ function openRatesEditor() {
   const { $, esc, toast, db, doc, setDoc, serverTimestamp, getUi, renderAdmin, getMe } = api;
   const me = getMe();
   ensureRates(false).then(rates => {
+    const mr = mergeMachineRates(rates.machineRates);
     const d = $("#dlg"); d.className = ""; d.onclose = () => renderAdmin();
+    const plantFields = FLEET_MACHINES.map(m => {
+      const cur = mr[m.id];
+      return `<fieldset class="qw-machrate"><legend>${esc(m.name)}${m.code ? ` (${esc(m.code)})` : ""} — includes operator</legend>
+        <label>$ / ${cur.unit === "day" ? "day" : "hour"} (ex GST)<input name="mr_${m.id}" type="number" step="0.01" min="0" value="${esc(cur.rate ?? "")}"></label>
+        <label>Unit<select name="mu_${m.id}"><option value="hour" ${cur.unit !== "day" ? "selected" : ""}>Per hour</option><option value="day" ${cur.unit === "day" ? "selected" : ""}>Per day</option></select></label>
+      </fieldset>`;
+    }).join("");
     d.innerHTML = `<form method="dialog" id="qrf" class="jf"><h2>Quote rates &amp; depot</h2>
-      <p class="sub">Stored in meta/quoteRates. Dollar rates are ex GST — leave blank until you know them (nothing is invented). Depot is the travel start for Calculate travel.</p>
+      <p class="sub">Stored in <code>meta/quoteRates</code>. Dollar rates are ex GST — leave blank until you know them (nothing invented). Plant rates include the operator. Labourer is a separate optional add-on. Depot is travel start.</p>
+      <h3>Plant (operator included)</h3>
+      <p class="sub">Presets: Truck only · Truck + skid · Truck + excavator · Truck + skid + excavator · Excavator only. Selecting a combo charges each machine once (no double truck).</p>
+      ${plantFields}
+      <h3>Labourer (optional add-on)</h3>
+      <label>Labourer $ (ex GST)<input name="labourerRate" type="number" step="0.01" min="0" value="${esc(rates.labourerRate ?? "")}"></label>
+      <label>Labourer unit<select name="labourerUnit"><option value="hour" ${rates.labourerUnit !== "day" ? "selected" : ""}>Per hour</option><option value="day" ${rates.labourerUnit === "day" ? "selected" : ""}>Per day</option></select></label>
+      <h3>Travel, materials, tip</h3>
       ${DEFAULT_RATE_KEYS.map(([k, lab]) => `<label>${esc(lab)}<input name="${k}" type="number" step="0.01" min="0" value="${esc(rates[k] ?? "")}"></label>`).join("")}
       <label>Materials unit label<input name="materialUnitLabel" value="${esc(rates.materialUnitLabel || "unit")}"></label>
       <label>Rubbish unit label<input name="tipUnitLabel" value="${esc(rates.tipUnitLabel || "load")}"></label>
+      <h3>Depot</h3>
       <label>Depot / yard address<input name="yardAddress" value="${esc(rates.yardAddress || DEFAULT_DEPOT.yardAddress)}"></label>
       <label>Depot Maps link (optional)<input name="yardMapsUrl" value="${esc(rates.yardMapsUrl || DEFAULT_DEPOT.yardMapsUrl)}"></label>
       <div class="btns"><button value="cancel" formnovalidate class="ghost">Cancel</button><button value="save" class="primary">Save</button></div></form>`;
@@ -206,17 +380,29 @@ function openRatesEditor() {
     $("#qrf").onsubmit = async ev => {
       if (ev.submitter?.value !== "save") return;
       ev.preventDefault(); const f = ev.target;
+      const machineRates = {};
+      for (const m of FLEET_MACHINES) {
+        machineRates[m.id] = {
+          rate: numOrNull(f["mr_" + m.id].value),
+          unit: f["mu_" + m.id].value === "day" ? "day" : "hour"
+        };
+      }
       const data = {
-        travelPerKm: numOrNull(f.travelPerKm.value), hourlyOnSite: numOrNull(f.hourlyOnSite.value),
+        travelPerKm: numOrNull(f.travelPerKm.value),
         materialPerUnit: numOrNull(f.materialPerUnit.value), tipPerLoad: numOrNull(f.tipPerLoad.value),
         materialUnitLabel: f.materialUnitLabel.value.trim() || "unit", tipUnitLabel: f.tipUnitLabel.value.trim() || "load",
         yardAddress: f.yardAddress.value.trim() || DEFAULT_DEPOT.yardAddress,
         yardMapsUrl: f.yardMapsUrl.value.trim() || DEFAULT_DEPOT.yardMapsUrl,
+        machineRates,
+        labourerRate: numOrNull(f.labourerRate.value),
+        labourerUnit: f.labourerUnit.value === "day" ? "day" : "hour",
+        // Clear legacy crew rate from new saves so it cannot double-charge operator.
+        hourlyOnSite: null,
         updatedAt: serverTimestamp(), updatedBy: me.uid
       };
       try {
         await setDoc(doc(db, "meta", "quoteRates"), data, { merge: true });
-        getUi().quoteRates = { ...emptyRates(), ...data, updatedAt: new Date().toISOString() };
+        getUi().quoteRates = { ...emptyRates(), ...data, machineRates: mergeMachineRates(machineRates), updatedAt: new Date().toISOString() };
         d.close(); toast("Quote rates saved"); renderAdmin();
       } catch (e) { toast("Not saved: " + (e.code || e.message)); }
     };
@@ -230,16 +416,22 @@ function openQuoteWizard(existing, opts = {}) {
     if (existing?.jobId && existing?.quoteStatus === "Accepted" && opts.jumpToPrice) {
       toast("Already accepted — job kept as " + existing.jobId);
     }
+    const initMachines = normalizeMachineIds(existing?.machines || machineSelectionFromPreset(existing?.presetId) || []);
     const state = Object.assign({
       quoteStatus: "Draft", client: CLIENTS[0], type: "spoil", travelKm: "", hoursOnSite: "",
-      materialQty: "", tipLoads: "", address: "", description: "",
-      travelMode: "oneway", travelNote: ""
+      machineDays: "1", materialQty: "", tipLoads: "", address: "", description: "",
+      travelMode: "oneway", travelNote: "",
+      machines: initMachines, includeLabourer: !!existing?.includeLabourer,
+      presetId: resolvePresetId(initMachines)
     }, existing || {});
-    let step = opts.jumpToPrice ? 5 : 0;
-    const steps = ["Site", "Travel", "Time on site", "Materials", "Rubbish", "Price"];
+    state.machines = normalizeMachineIds(state.machines || []);
+    state.presetId = resolvePresetId(state.machines);
+    // Steps: Site, Equipment, Travel, Duration, Materials, Rubbish, Price
+    let step = opts.jumpToPrice ? 6 : 0;
+    const steps = ["Site", "Equipment", "Travel", "Duration", "Materials", "Rubbish", "Price"];
     const d = $("#dlg"); d.className = "jobcard"; d.onclose = () => renderAdmin();
     const paint = () => {
-      const draft = { ...state };
+      const draft = { ...state, machines: normalizeMachineIds(state.machines) };
       const calc = calcQuote(draft, rates);
       const already = !!(existing?.jobId && (existing.quoteStatus === "Accepted" || state.quoteStatus === "Accepted"));
       const canAccept = !already && calc.complete && calc.totalEx != null && !!(draft.client && draft.address);
@@ -248,13 +440,13 @@ function openQuoteWizard(existing, opts = {}) {
         <button value="cancel" formnovalidate class="jc-x">✕</button></div>
         <div class="jc-body qw-body"><div class="qw-steps">${steps.map((s, i) => `<span class="qw-dot ${i === step ? "on" : i < step ? "done" : ""}">${i + 1}</span>`).join("<span class=\"qw-line\"></span>")}</div>
         ${stepHtml(step, draft, calc, rates, esc, TYPES, CLIENTS, canSeeMoney, $$)}
-        ${step === 5 && !calc.complete ? `<p class="warnt pad">Missing rates for: ${esc(calc.missingRates.join(", "))}. Save as draft, or ask an admin to set rates. Total is not shown as valid until every used line has a rate.</p>` : ""}
+        ${step === 6 && !calc.complete ? `<p class="warnt pad">Missing rates for: ${esc(calc.missingRates.join(", "))}. Save as draft, or ask an admin to set rates. Total is not shown as valid until every used line has a rate.</p>` : ""}
         ${already ? `<p class="pad sub">Already accepted → job <b>${esc(existing.jobId)}</b>. Accept will not create another job.</p>` : ""}
         </div>
         <p id="qerr" class="err"></p>
         <div class="btns jc-foot">
           <button type="button" class="sm-btn" id="qwback" ${step === 0 ? "disabled" : ""}>Back</button>
-          ${step < 5 ? `<button type="button" class="sm-btn primary" id="qwnext">Next</button>` :
+          ${step < 6 ? `<button type="button" class="sm-btn primary" id="qwnext">Next</button>` :
             `<button type="button" class="sm-btn" id="qwsave">Save draft</button>
              <button type="button" class="sm-btn primary" id="qwaccept" ${canAccept ? "" : "disabled"} title="${canAccept ? "" : already ? "Already accepted" : "Complete site + rates first"}">Accept → create job</button>`}
         </div></form>`;
@@ -279,6 +471,19 @@ function openQuoteWizard(existing, opts = {}) {
           paint();
         }
       });
+      d.querySelectorAll("[name=preset]").forEach(r => r.onchange = () => {
+        state.presetId = r.value;
+        state.machines = machineSelectionFromPreset(r.value);
+        paint();
+      });
+      d.querySelectorAll("[data-mach]").forEach(cb => cb.onchange = () => {
+        syncFormToState();
+        paint();
+      });
+      d.querySelector("#qlabourer")?.addEventListener("change", () => {
+        state.includeLabourer = !!d.querySelector("#qlabourer")?.checked;
+        paint();
+      });
     };
     const syncFormToState = () => {
       const f = $("#qwf"); if (!f) return;
@@ -288,14 +493,32 @@ function openQuoteWizard(existing, opts = {}) {
       if (f.description) state.description = f.description.value.trim();
       if (f.travelKm) state.travelKm = f.travelKm.value;
       if (f.hoursOnSite) state.hoursOnSite = f.hoursOnSite.value;
+      if (f.machineDays) state.machineDays = f.machineDays.value;
       if (f.materialQty) state.materialQty = f.materialQty.value;
       if (f.tipLoads) state.tipLoads = f.tipLoads.value;
       const mode = f.querySelector("[name=travelMode]:checked");
       if (mode) state.travelMode = mode.value;
+      // Checkboxes are source of truth when present (and/or builder); presets only set machines on radio change.
+      const boxes = f.querySelectorAll("[data-mach]");
+      if (boxes.length) {
+        const ids = [];
+        boxes.forEach(cb => { if (cb.checked) ids.push(cb.getAttribute("data-mach")); });
+        state.machines = normalizeMachineIds(ids);
+        state.presetId = resolvePresetId(state.machines);
+      } else {
+        const preset = f.querySelector("[name=preset]:checked");
+        if (preset) {
+          state.presetId = preset.value;
+          state.machines = machineSelectionFromPreset(preset.value);
+        }
+      }
+      const lab = f.querySelector("#qlabourer");
+      if (lab) state.includeLabourer = !!lab.checked;
     };
     const validateStep = (s, data) => {
       const err = $("#qerr");
       if (s === 0 && (!data.client || !data.address)) { err.textContent = "Client and site address are required."; return false; }
+      if (s === 1 && !(data.machines && data.machines.length)) { err.textContent = "Pick an equipment preset (truck and/or skid / excavator)."; return false; }
       err.textContent = ""; return true;
     };
     const calcTravel = async () => {
@@ -320,10 +543,19 @@ function openQuoteWizard(existing, opts = {}) {
       paint();
     };
     const saveQuote = async (accept) => {
-      const data = { ...state }; if (!validateStep(0, data)) return;
+      const data = { ...state, machines: normalizeMachineIds(state.machines) };
+      if (!validateStep(0, data)) return;
+      if (accept && !validateStep(1, data)) { step = 1; paint(); return; }
       const calc = calcQuote(data, rates);
       if (accept && !calc.complete) { $("#qerr").textContent = "Set quote rates for every used line before accepting."; return; }
-      // Idempotent accept: never create a second job for the same quote.
+      if (accept) {
+        const needH = (calc.machines || []).some(id => machineRateOf(rates, id).unit === "hour")
+          || (calc.includeLabourer && rates.labourerUnit !== "day");
+        if (needH && !(+data.hoursOnSite > 0)) {
+          $("#qerr").textContent = "Enter hours on site for hourly plant / labourer.";
+          step = 3; paint(); return;
+        }
+      }
       if (accept && existing?.jobId && existing?.quoteStatus === "Accepted") {
         toast("Already accepted — existing job " + existing.jobId);
         d.close(); renderAdmin(); return;
@@ -331,14 +563,19 @@ function openQuoteWizard(existing, opts = {}) {
       const payload = {
         client: data.client, address: data.address, type: data.type, description: data.description,
         travelKm: +data.travelKm || 0, hoursOnSite: +data.hoursOnSite || 0,
+        machineDays: Math.max(1, +data.machineDays || 1),
         materialQty: +data.materialQty || 0, tipLoads: +data.tipLoads || 0,
         travelMode: data.travelMode || "oneway", travelNote: data.travelNote || "",
         yardAddress: rates.yardAddress || DEFAULT_DEPOT.yardAddress,
-        lines: calc.lines, totalEx: calc.complete ? calc.totalEx : null, ratesSnapshot: {
-          travelPerKm: rates.travelPerKm, hourlyOnSite: rates.hourlyOnSite,
+        machines: calc.machines, presetId: calc.presetId, includeLabourer: !!calc.includeLabourer,
+        lines: calc.lines, totalEx: calc.complete ? calc.totalEx : null,
+        ratesSnapshot: {
+          travelPerKm: rates.travelPerKm,
           materialPerUnit: rates.materialPerUnit, tipPerLoad: rates.tipPerLoad,
           materialUnitLabel: rates.materialUnitLabel, tipUnitLabel: rates.tipUnitLabel,
-          yardAddress: rates.yardAddress || DEFAULT_DEPOT.yardAddress
+          yardAddress: rates.yardAddress || DEFAULT_DEPOT.yardAddress,
+          machineRates: mergeMachineRates(rates.machineRates),
+          labourerRate: rates.labourerRate, labourerUnit: rates.labourerUnit
         },
         quoteStatus: accept ? "Accepted" : "Draft", source: "app",
         updatedAt: serverTimestamp(), updatedBy: me.uid, updatedAtIso: new Date().toISOString()
@@ -352,7 +589,6 @@ function openQuoteWizard(existing, opts = {}) {
           existing = { id: qid, ...payload };
         }
         if (accept) {
-          // Re-read idempotency in case of double-click
           if (existing?.jobId) { toast("Already accepted"); d.close(); renderAdmin(); return; }
           const jobId = await createJobFromQuote(qid, payload);
           await updateDoc(doc(db, "quotes", qid), { jobId, quoteStatus: "Accepted", acceptedAt: serverTimestamp() });
@@ -371,12 +607,38 @@ function openQuoteWizard(existing, opts = {}) {
 function stepHtml(step, d, calc, rates, esc, TYPES, CLIENTS, canSeeMoney, $$) {
   const depot = rates.yardAddress || DEFAULT_DEPOT.yardAddress;
   const maps = rates.yardMapsUrl || DEFAULT_DEPOT.yardMapsUrl;
+  const rateTxt = (v, suffix) => (v != null && canSeeMoney()) ? `${$$(v)}${suffix} ex GST` : "not set yet";
   if (step === 0) return `<div class="qw-pane"><h4>Who and where</h4>
     <label>Client<input name="client" list="qclients" value="${esc(d.client || "")}" required><datalist id="qclients">${CLIENTS.map(c => `<option value="${esc(c)}">`).join("")}</datalist></label>
     <label>Site address<input name="address" value="${esc(d.address || "")}" required></label>
     <label>Category<select name="type">${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${d.type === k ? "selected" : ""}>${v}</option>`).join("")}</select></label>
+    <p class="sub">One category per job (mixed work is split later). Equipment is chosen on the next step.</p>
     <label>Scope / notes<textarea name="description" rows="3">${esc(d.description || "")}</textarea></label></div>`;
-  if (step === 1) return `<div class="qw-pane"><h4>Travel distance</h4>
+  if (step === 1) {
+    const sel = new Set(normalizeMachineIds(d.machines || []));
+    const preset = d.presetId || resolvePresetId([...sel]);
+    const presets = EQUIPMENT_PRESETS.map(p => `<label class="ck qw-preset"><input type="radio" name="preset" value="${esc(p.id)}" ${preset === p.id ? "checked" : ""}> ${esc(p.label)}</label>`).join("");
+    // and/or builder mirrors preset: truck + optional skid + optional excavator
+    const builder = `<div class="qw-builder">
+      <p class="sub">Or tick and/or (same machines — truck counted once):</p>
+      <label class="ck"><input type="checkbox" data-mach="truck" ${sel.has("truck") ? "checked" : ""}> Truck</label>
+      <label class="ck"><input type="checkbox" data-mach="skid" ${sel.has("skid") ? "checked" : ""}> Skid steer (Bobcat)</label>
+      <label class="ck"><input type="checkbox" data-mach="excavator" ${sel.has("excavator") ? "checked" : ""}> Excavator (JCB)</label>
+    </div>`;
+    const plantBits = [...sel].map(id => {
+      const { rate, unit } = machineRateOf(rates, id);
+      return `<div class="sub">${esc(fleetName(id))} + operator: ${rateTxt(rate, unit === "day" ? "/day" : "/h")}</div>`;
+    }).join("");
+    return `<div class="qw-pane"><h4>Equipment (operator included)</h4>
+      <p class="sub">Each plant rate includes the operator. Choosing Truck + excavator charges truck once and excavator once — never twice for the truck.</p>
+      <div class="qw-presets">${presets}</div>
+      ${builder}
+      <label class="ck" style="margin-top:12px"><input type="checkbox" id="qlabourer" ${d.includeLabourer ? "checked" : ""}> Include labourer (separate rate)</label>
+      <p class="sub">Labourer: ${rateTxt(rates.labourerRate, rates.labourerUnit === "day" ? "/day" : "/h")}</p>
+      ${plantBits || `<p class="warnt">Select a preset.</p>`}
+    </div>`;
+  }
+  if (step === 2) return `<div class="qw-pane"><h4>Travel distance</h4>
     <p class="sub">Depot (start): <b>${esc(depot)}</b> · <a href="${esc(maps)}" target="_blank" rel="noopener">Maps link</a></p>
     <p class="sub">Use <b>Calculate travel</b> for a <b>road</b> distance (OSRM) depot → site. Straight-line is never filled in as travel km. Choose one-way or return (return = 2 × one-way). You can still type kilometres yourself.</p>
     <div class="row gap" style="margin:8px 0">
@@ -386,16 +648,26 @@ function stepHtml(step, d, calc, rates, esc, TYPES, CLIENTS, canSeeMoney, $$) {
     </div>
     <p id="qwtravelst" class="sub">${esc(d.travelNote || "")}</p>
     <label>Kilometres (billable)<input name="travelKm" type="number" min="0" step="0.1" value="${esc(d.travelKm)}" inputmode="decimal"></label>
-    <p class="sub">Rate: ${rates.travelPerKm != null && canSeeMoney() ? $$(rates.travelPerKm) + "/km ex GST" : "not set yet"}</p></div>`;
-  if (step === 2) return `<div class="qw-pane"><h4>Time on site</h4>
-    <label>Hours<input name="hoursOnSite" type="number" min="0" step="0.25" value="${esc(d.hoursOnSite)}" inputmode="decimal"></label>
-    <p class="sub">Rate: ${rates.hourlyOnSite != null && canSeeMoney() ? $$(rates.hourlyOnSite) + "/h ex GST" : "not set yet"}</p></div>`;
-  if (step === 3) return `<div class="qw-pane"><h4>Materials used</h4>
+    <p class="sub">Rate: ${rateTxt(rates.travelPerKm, "/km")}</p></div>`;
+  if (step === 3) {
+    const anyDay = (d.machines || []).some(id => machineRateOf(rates, id).unit === "day")
+      || (d.includeLabourer && rates.labourerUnit === "day");
+    const anyHour = (d.machines || []).some(id => machineRateOf(rates, id).unit === "hour")
+      || (d.includeLabourer && rates.labourerUnit !== "day")
+      || !(d.machines || []).length;
+    return `<div class="qw-pane"><h4>Duration on site</h4>
+      <p class="sub">Hours drive <b>hourly</b> plant+operator (and labourer) lines. <b>Day</b> rates use days below — not multiplied by hours (avoids overcharging).</p>
+      ${anyHour ? `<label>Hours on site<input name="hoursOnSite" type="number" min="0" step="0.25" value="${esc(d.hoursOnSite)}" inputmode="decimal"></label>` : ""}
+      ${anyDay ? `<label>Days (for day-rate plant / labourer)<input name="machineDays" type="number" min="1" step="1" value="${esc(d.machineDays || 1)}" inputmode="numeric"></label>` : `<input type="hidden" name="machineDays" value="${esc(d.machineDays || 1)}">`}
+      ${!anyHour ? `<input type="hidden" name="hoursOnSite" value="${esc(d.hoursOnSite || 0)}">` : ""}
+    </div>`;
+  }
+  if (step === 4) return `<div class="qw-pane"><h4>Materials used</h4>
     <label>Quantity (${esc(rates.materialUnitLabel || "unit")})<input name="materialQty" type="number" min="0" step="0.1" value="${esc(d.materialQty)}" inputmode="decimal"></label>
-    <p class="sub">Rate: ${rates.materialPerUnit != null && canSeeMoney() ? $$(rates.materialPerUnit) + " each ex GST" : "not set yet"}</p></div>`;
-  if (step === 4) return `<div class="qw-pane"><h4>Material / rubbish removed</h4>
+    <p class="sub">Rate: ${rateTxt(rates.materialPerUnit, " each")}</p></div>`;
+  if (step === 5) return `<div class="qw-pane"><h4>Material / rubbish removed</h4>
     <label>Loads removed<input name="tipLoads" type="number" min="0" step="1" value="${esc(d.tipLoads)}" inputmode="numeric"></label>
-    <p class="sub">Tip / disposal rate: ${rates.tipPerLoad != null && canSeeMoney() ? $$(rates.tipPerLoad) + " / load ex GST" : "not set yet"}</p></div>`;
+    <p class="sub">Tip / disposal rate: ${rateTxt(rates.tipPerLoad, " / load")}</p></div>`;
   const lines = calc.lines.map(l => {
     let amt = "—";
     if (l.qty > 0 && l.rate == null) amt = `<span class="unal">rate missing</span>`;
@@ -406,18 +678,25 @@ function stepHtml(step, d, calc, rates, esc, TYPES, CLIENTS, canSeeMoney, $$) {
   const total = !calc.complete
     ? `<span class="unal">Incomplete — set rates first</span>`
     : (canSeeMoney() ? esc($$(calc.totalEx)) : "—");
+  const presetLab = EQUIPMENT_PRESETS.find(p => p.id === calc.presetId)?.label
+    || (calc.machines || []).map(fleetName).join(" + ") || "—";
   return `<div class="qw-pane"><h4>Calculated quote</h4>
+    <p class="sub">Equipment: <b>${esc(presetLab)}</b>${calc.includeLabourer ? " + labourer" : ""} · one job category only</p>
     ${d.travelNote ? `<p class="sub">${esc(d.travelNote)}</p>` : ""}
     <div class="qw-sum">${lines}
     <div class="qw-total"><span>Total ex GST</span><b>${total}</b></div></div>
-    <p class="sub">Accepting creates a pending unscheduled job with this quote and amount preserved. GST is not added here.</p></div>`;
+    <p class="sub">Accepting creates a pending unscheduled job with this quote, plant selection and labourer flag preserved. GST is not added here.</p></div>`;
 }
 
 async function createJobFromQuote(qid, q) {
   const { db, addDoc, collection, serverTimestamp, getMe } = api;
   const me = getMe();
   if (q.totalEx == null) throw new Error("Cannot create job from incomplete quote");
-  const desc = [q.description || "", "", "Quoted (ex GST):",
+  const presetLab = EQUIPMENT_PRESETS.find(p => p.id === q.presetId)?.label
+    || (q.machines || []).map(fleetName).join(" + ");
+  const desc = [q.description || "", "",
+    presetLab ? `Equipment: ${presetLab}${q.includeLabourer ? " + labourer" : ""}` : "",
+    "Quoted (ex GST):",
     q.travelNote ? `Travel: ${q.travelNote}` : "",
     ...(q.lines || []).map(l => `• ${l.label}${l.amount != null ? `: $${Number(l.amount).toFixed(2)}` : " (rate missing)"}`),
     `Total ex GST: $${Number(q.totalEx).toFixed(2)}`].filter(Boolean).join("\n");
@@ -426,10 +705,13 @@ async function createJobFromQuote(qid, q) {
     date: "", time: "", status: "Scheduled", assigned: [], assignedNames: [],
     source: "quote", quoteId: qid, quoteStatus: "Accepted",
     quote: {
-      travelKm: q.travelKm, hoursOnSite: q.hoursOnSite, materialQty: q.materialQty, tipLoads: q.tipLoads,
+      travelKm: q.travelKm, hoursOnSite: q.hoursOnSite, machineDays: q.machineDays,
+      materialQty: q.materialQty, tipLoads: q.tipLoads,
+      machines: q.machines || [], presetId: q.presetId || null, includeLabourer: !!q.includeLabourer,
       lines: q.lines, totalEx: q.totalEx, travelMode: q.travelMode || "oneway", travelNote: q.travelNote || "",
       yardAddress: q.yardAddress || DEFAULT_DEPOT.yardAddress
     },
+    machines: q.machines || [], presetId: q.presetId || null, includeLabourer: !!q.includeLabourer,
     quoteAmount: q.totalEx, poAmount: q.totalEx, poAmountBasis: "accepted quote (ex GST)", poAmountSource: "quote",
     log: [], createdAt: serverTimestamp(), updatedAt: serverTimestamp(), updatedBy: me.uid, editedInApp: true
   });
