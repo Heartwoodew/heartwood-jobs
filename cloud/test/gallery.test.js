@@ -174,7 +174,8 @@ test("the photos action is absent until a cloud photo exists", () => {
   assert.equal(photoSlotHtml({ jobId: "j2", status: "ready", count: 0, role: "action" }), "");
   assert.match(photoSlotHtml({ jobId: "j2", status: "ready", count: 2, role: "action" }), /Photos \(2\)/);
   assert.match(photoSlotHtml({ jobId: "j2", status: "loading", role: "status" }), /Checking photos/);
-  assert.match(photoSlotHtml({ jobId: "j2", status: "error", role: "status" }), /Couldn't load photos/);
+  assert.match(photoSlotHtml({ jobId: "j2", status: "error", role: "status", error: "storage/unauthorized" }), /storage\/unauthorized/);
+  assert.doesNotMatch(photoSlotHtml({ jobId: "j2", status: "error", role: "status", error: "tenants/secret alex@heartwoodew.com" }), /secret|alex@/);
   const html = galleryHtml({
     status: "ready", title: "Photos", retentionText: "Operational cloud copy expires 2027-02-06. Deletion is not scheduled.",
     photos: [{ path: "tenants/heartwood/jobs/j2/photos/psite", src: "blob:photo" }], canDownload: false,
@@ -198,6 +199,10 @@ test("gallery code does not schedule deletion or rewrite retention anchors", () 
   assert.equal(prod.equals(emu), true);
   assert.match(rules, /match \/tenants\/\{tenantId\}\/jobs\/\{jobId\}\/photos \{/);
   assert.match(rules, /allow list: if canSeeJob/);
+  const jobFns = rules.slice(rules.indexOf("function jobPath"), rules.indexOf("function jobPhotoFile"));
+  assert.equal(jobFns.includes("firestore.exists"), false);
+  assert.match(jobFns, /firestore\.get\(jobPath\(jobId\)\)/);
+  assert.match(jobFns, /firestore\.get\(userPath\(\)\)/);
   assert.match(rules, /allow delete: if false/);
   assert.doesNotMatch(rules, /match \/tenants\/\{tenantId\}\/receipts\/\{receiptId\} \{\s*allow list/);
   assert.match(life, /PROPOSED ONLY/);

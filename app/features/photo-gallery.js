@@ -83,7 +83,16 @@ export function galleryExportPhotos(gallery, blobs, job) {
   return out;
 }
 
-export function photoSlotHtml({ jobId, status, count, role = "both", variant, iconHtml } = {}) {
+function safeStorageCode(raw) {
+  const m = /^storage\/[a-z0-9-]{1,40}$/.exec(String(raw || "").trim());
+  return m ? m[0] : "";
+}
+function photoErrorText(error) {
+  const code = safeStorageCode(error);
+  return code ? `Couldn't load photos (${code}).` : "Couldn't load photos.";
+}
+
+export function photoSlotHtml({ jobId, status, count, role = "both", variant, iconHtml, error } = {}) {
   const id = esc(jobId || "");
   const n = Number(count) || 0;
   const button = status === "ready" && n > 0
@@ -92,7 +101,7 @@ export function photoSlotHtml({ jobId, status, count, role = "both", variant, ic
   if (role === "action") return button;
   let statusHtml = "";
   if (status === "error") {
-    statusHtml = `<p class="err" data-photos-state="error">Couldn't load photos. <button type="button" class="sm-btn" data-photoretry="${id}">Try again</button></p>`;
+    statusHtml = `<p class="err" data-photos-state="error">${esc(photoErrorText(error))} <button type="button" class="sm-btn" data-photoretry="${id}">Try again</button></p>`;
   } else if (status === "loading" || !status) {
     statusHtml = `<p class="muted sub" data-photos-state="loading">Checking photos…</p>`;
   } else {
@@ -108,7 +117,7 @@ export function galleryHtml({ title, subtitle, status, error, retentionText, can
   const dl = canDownload ? `<button type="button" class="sm-btn" data-cloudexport="1">Download cloud copy</button>` : "";
   let body;
   if (status === "loading") body = `<p class="muted pad" data-photos-state="loading">Loading photos…</p>`;
-  else if (status === "error") body = `<p class="err pad" data-photos-state="error">${esc(error || "Couldn't load photos.")} <button type="button" class="sm-btn" data-photoretry="${esc(jobId || "")}">Try again</button></p>`;
+  else if (status === "error") body = `<p class="err pad" data-photos-state="error">${esc(photoErrorText(error))} <button type="button" class="sm-btn" data-photoretry="${esc(jobId || "")}">Try again</button></p>`;
   else if (!photos?.length) body = `<p class="muted pad" data-photos-state="empty">No cloud photos on this job yet.</p>`;
   else {
     body = `<div class="pgrid">${photos.map(p => p.failed
