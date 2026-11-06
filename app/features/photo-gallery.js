@@ -92,7 +92,14 @@ function photoErrorText(error) {
   return code ? `Couldn't load photos (${code}).` : "Couldn't load photos.";
 }
 
-export function photoSlotHtml({ jobId, status, count, role = "both", variant, iconHtml, error } = {}) {
+/** Empty cloud list. The emailed count is history, not a promise of thumbnails. */
+export function cloudEmptyCopy(emailedCount) {
+  const n = Number(emailedCount) || 0;
+  if (n > 0) return `No cloud copies on this job yet. The ${n} emailed photos are separate from this gallery.`;
+  return "No cloud copies on this job yet. Emailed photos are separate from this gallery.";
+}
+
+export function photoSlotHtml({ jobId, status, count, role = "both", variant, iconHtml, error, emailedCount } = {}) {
   const id = esc(jobId || "");
   const n = Number(count) || 0;
   const cloud = role === "cloud";
@@ -107,21 +114,24 @@ export function photoSlotHtml({ jobId, status, count, role = "both", variant, ic
     statusHtml = `<p class="muted sub" data-photos-state="loading">Checking photos…</p>`;
   } else if (cloud && (status === "loading" || !status)) {
     statusHtml = `<p class="muted sub" data-photos-state="loading">Checking cloud photos…</p>`;
+  } else if (cloud && n === 0) {
+    statusHtml = `<p class="muted sub cloud-empty" data-photos-state="empty">${esc(cloudEmptyCopy(emailedCount))}</p>`;
   } else {
     statusHtml = `<span data-photos-state="${n > 0 ? "ready" : "empty"}" hidden></span>`;
   }
   if (role === "status") return statusHtml;
+  if (role === "cloud") return button + statusHtml;
   return statusHtml + button;
 }
 
-export function galleryHtml({ title, subtitle, status, error, retentionText, canDownload, photos, closeHtml, jobId } = {}) {
+export function galleryHtml({ title, subtitle, status, error, retentionText, canDownload, photos, closeHtml, jobId, emailedCount } = {}) {
   const head = `<div class="pgal-bar"><button type="button" class="pgal-x" aria-label="Close photos">${closeHtml || "Back"}</button><div><div class="mob-title">${esc(title || "Photos")}</div><div class="mob-sub">${esc(subtitle || "")}</div></div></div>`;
   const note = `${esc(retentionText || "")} Opening these photos does not change that date.`.trim();
   const dl = canDownload ? `<button type="button" class="sm-btn" data-cloudexport="1">Download cloud copy</button>` : "";
   let body;
   if (status === "loading") body = `<p class="muted pad" data-photos-state="loading">Loading photos…</p>`;
   else if (status === "error") body = `<p class="err pad" data-photos-state="error">${esc(photoErrorText(error))} <button type="button" class="sm-btn" data-photoretry="${esc(jobId || "")}">Try again</button></p>`;
-  else if (!photos?.length) body = `<p class="muted pad" data-photos-state="empty">No cloud photos on this job yet.</p>`;
+  else if (!photos?.length) body = `<p class="muted pad" data-photos-state="empty">${esc(cloudEmptyCopy(emailedCount))}</p>`;
   else {
     body = `<div class="pgrid">${photos.map(p => p.failed
       ? `<div class="pth perr" data-photo-path="${esc(p.path)}">Couldn't load</div>`

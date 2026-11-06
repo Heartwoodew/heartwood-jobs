@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { planJobPhotoMirrors, resolveMembership, canReadObject, listedJobPhoto, JOB_PHOTO_MIMES } from "../../app/features/cloud-storage.js";
 import { SCHEDULING_APPROVED, operationalExpiresAfter } from "../../app/features/cloud-retention.js";
 import { buildOperationalExport } from "../../app/features/cloud-retention.js";
-import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, galleryHtml } from "../../app/features/photo-gallery.js";
+import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, galleryHtml, cloudEmptyCopy } from "../../app/features/photo-gallery.js";
 
 const staff = resolveMembership({ uid: "op1", profile: { role: "operator", name: "Sam" } });
 const stranger = resolveMembership({ uid: "idle", profile: { role: "operator", name: "Idle" } });
@@ -170,12 +170,39 @@ test("gallery requires an explicit accepted image type", () => {
   );
 });
 
+test("job 674 email history is not a cloud gallery until private objects exist", () => {
+  const id = "sm8_01a0e504-b690-794e-a99e-374ec5ab19ab_202611060900";
+  const job = {
+    id, status: "Done", sm8JobNo: "674", po: "110565/900/01",
+    client: "Orbit Homes (Qld) Pty Ltd", assigned: ["op1"],
+    photosEmailedCount: 4, photosEmailedAt: "2026-11-05T02:47:00.000Z",
+  };
+  const none = buildJobGallery({ membership: staff, job, listing: [], now: new Date("2026-11-06T12:00:00+10:00") });
+  assert.equal(none.photos.length, 0);
+  assert.equal(cloudEmptyCopy(4), "No cloud copies on this job yet. The 4 emailed photos are separate from this gallery.");
+  const slot = photoSlotHtml({ jobId: id, status: "ready", count: 0, role: "cloud", variant: "sm", emailedCount: 4 });
+  assert.match(slot, /View cloud photos/);
+  assert.match(slot, /The 4 emailed photos are separate from this gallery/);
+  assert.equal((slot.match(/<img/g) || []).length, 0);
+  const four = [1, 2, 3, 4].map(i => photo(`tenants/heartwood/jobs/${id}/photos/p${i}`, { timeCreated: `2026-11-06T0${i}:00:00.000Z` }));
+  const hiddenReceipt = photo(`tenants/heartwood/receipts/r674/original`, { customMetadata: { purpose: "receipt", receiptId: "r674" } });
+  const listed = buildJobGallery({ membership: staff, job, listing: [...four, hiddenReceipt], now: new Date("2026-11-06T12:00:00+10:00") });
+  assert.equal(listed.photos.length, 4);
+  assert.ok(listed.hidden.some(h => h.reason === "receipt-hidden"));
+  const html = galleryHtml({ status: "ready", photos: listed.photos.map(p => ({ path: p.path, src: "blob:private" })), emailedCount: 4 });
+  assert.equal((html.match(/<img/g) || []).length, 4);
+  assert.doesNotMatch(html, /firebasestorage\.googleapis|getDownloadURL|alt="".*http/);
+});
+
 test("the photos action is absent until a cloud photo exists", () => {
   assert.equal(photoSlotHtml({ jobId: "j2", status: "ready", count: 0, role: "action" }), "");
-  const cloudZero = photoSlotHtml({ jobId: "j4", status: "ready", count: 0, role: "cloud", variant: "sm" });
+  const cloudZero = photoSlotHtml({ jobId: "j4", status: "ready", count: 0, role: "cloud", variant: "sm", emailedCount: 4 });
   assert.match(cloudZero, /data-viewphotos="j4"/);
   assert.match(cloudZero, /View cloud photos/);
-  assert.match(cloudZero, /data-photos-state="empty"/);
+  assert.match(cloudZero, /No cloud copies on this job yet\. The 4 emailed photos are separate from this gallery\./);
+  assert.doesNotMatch(cloudZero, /src=/);
+  assert.equal(cloudEmptyCopy(0), "No cloud copies on this job yet. Emailed photos are separate from this gallery.");
+  assert.equal(cloudEmptyCopy(4), "No cloud copies on this job yet. The 4 emailed photos are separate from this gallery.");
   const cloudErr = photoSlotHtml({ jobId: "j4", status: "error", role: "cloud", error: "storage/unauthorized" });
   assert.match(cloudErr, /View cloud photos/);
   assert.match(cloudErr, /data-photoretry="j4"/);
@@ -191,7 +218,8 @@ test("the photos action is absent until a cloud photo exists", () => {
   assert.match(html, /data-photo-path="tenants\/heartwood\/jobs\/j2\/photos\/psite"/);
   assert.match(html, /does not change that date/);
   assert.doesNotMatch(html, /data-cloudexport/);
-  assert.match(galleryHtml({ status: "empty", photos: [], retentionText: "Operational cloud copy expires 2027-02-06." }).replace("empty", ""), /No cloud photos/);
+  assert.match(galleryHtml({ status: "ready", photos: [], emailedCount: 4, retentionText: "Operational cloud copy expires 2027-02-06." }), /The 4 emailed photos are separate from this gallery/);
+  assert.equal((galleryHtml({ status: "ready", photos: [], emailedCount: 4 }).match(/<img/g) || []).length, 0);
   assert.match(galleryHtml({ status: "error", error: "Couldn't load photos.", jobId: "j2" }), /data-photoretry="j2"/);
 });
 

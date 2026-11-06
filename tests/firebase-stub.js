@@ -30,7 +30,14 @@ const JOBS = [
     address: "Lot 3 · 9 River Road, Chuwar QLD 4306",
     date: "2026-11-07", time: "07:30", durationHrs: 3, status: "Scheduled",
     description: "Site clean", po: "440011",
-    assigned: ["patrick"], assignedNames: ["Patrick"], log: [] }
+    assigned: ["patrick"], assignedNames: ["Patrick"], log: [] },
+  { id: "sm8_01a0e504-b690-794e-a99e-374ec5ab19ab_202611060900", sm8JobNo: "674",
+    client: "Orbit Homes (Qld) Pty Ltd", type: "backslab",
+    address: "Lot 88 · 14 Brightvale Street, Redbank Plains QLD 4301",
+    date: "2026-11-06", time: "09:00", durationHrs: 4, status: "Done",
+    description: "Slab clean, backblade and road base", po: "110565/900/01",
+    assigned: ["patrick", "admin-preview"], assignedNames: ["Patrick"], log: [],
+    photosEmailedAt: "2026-11-05T02:47:00.000Z", photosEmailedCount: 4 }
 ];
 
 const FILLED_RATES = {

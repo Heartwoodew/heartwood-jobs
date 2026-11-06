@@ -60,16 +60,37 @@ test("phone shell, quote gate and handlers", async () => {
       }
       if (query.includes("photos=none") && query.includes("open=job&")) {
         const text = await page.send("Runtime.evaluate", { expression: "document.querySelector('.pgal')?.innerText || ''", returnByValue: true });
-        assert.match(text.result.value, /No cloud photos/, name);
+        assert.match(text.result.value, /No cloud copies on this job yet/, name);
         const view = await page.send("Runtime.evaluate", { expression: "!!document.querySelector('[data-viewphotos]')", returnByValue: true });
         assert.equal(view.result.value, true, name);
+      }
+      if (query.includes("open=job674")) {
+        const text = await page.send("Runtime.evaluate", { expression: "(document.querySelector('#jf')?.innerText || '') + '\\n' + (document.querySelector('.pgal')?.innerText || '')", returnByValue: true });
+        assert.match(text.result.value, /View cloud photos/, name);
+        assert.match(text.result.value, /Email history \(4 photos\)/, name);
+        assert.match(text.result.value, /Email photos/, name);
+        if (query.includes("shot=empty")) {
+          assert.match(text.result.value, /No cloud copies on this job yet\. The 4 emailed photos are separate from this gallery/, name);
+          const n = await page.send("Runtime.evaluate", { expression: "document.querySelectorAll('.pgal button.pth').length", returnByValue: true });
+          assert.equal(n.result.value, 0, name);
+        }
+        if (query.includes("cloud=4")) {
+          assert.match(text.result.value, /View cloud photos \(4\)/, name);
+          const n = await page.send("Runtime.evaluate", { expression: "document.querySelectorAll('.pgal button.pth').length", returnByValue: true });
+          assert.equal(n.result.value, 4, name);
+          assert.doesNotMatch(text.result.value, /Receipt/, name);
+        }
       }
       if (query.includes("open=jobphotos")) {
         const text = await page.send("Runtime.evaluate", { expression: "(document.querySelector('#jf')?.innerText || '') + '\\n' + (document.querySelector('.pgal')?.innerText || '')", returnByValue: true });
         assert.match(text.result.value, /View cloud photos/, name);
         assert.match(text.result.value, /Email photos/, name);
         assert.doesNotMatch(text.result.value, /📷 Photos/, name);
-        if (query.includes("shot=empty")) assert.match(text.result.value, /No cloud photos/, name);
+        if (query.includes("shot=empty")) {
+          assert.match(text.result.value, /No cloud copies on this job yet/, name);
+          assert.match(text.result.value, /The 4 emailed photos are separate from this gallery/, name);
+          assert.match(text.result.value, /Email history \(4 photos\)/, name);
+        }
         if (query.includes("shot=gallery")) {
           const n = await page.send("Runtime.evaluate", { expression: "document.querySelectorAll('.pgal button.pth').length", returnByValue: true });
           assert.ok(n.result.value >= 1, name);
@@ -91,6 +112,9 @@ test("phone shell, quote gate and handlers", async () => {
     await run("after-admin-job-photos", "?role=admin&open=jobphotos&photos=none", 390, 844);
     await run("after-admin-job-photos-empty", "?role=admin&open=jobphotos&photos=none&shot=empty", 390, 844);
     await run("after-admin-job-photos-gallery", "?role=admin&open=jobphotos&shot=gallery", 390, 844);
+    await run("after-job674-emailed", "?role=admin&open=job674&photos=none", 390, 844);
+    await run("after-job674-empty", "?role=admin&open=job674&photos=none&shot=empty", 390, 844);
+    await run("after-job674-gallery", "?role=admin&open=job674&cloud=4&shot=gallery", 390, 844);
     await run("after-phone-gallery", "?role=operator&open=gallery", 390, 844);
     await run("after-phone-gallery-large", "?role=operator&open=gallery&view=large", 390, 844);
     await run("after-phone-detail-empty", "?role=operator&open=job&job=j4&photos=none", 390, 844);

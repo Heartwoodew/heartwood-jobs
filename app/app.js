@@ -425,6 +425,7 @@ function paintPhotoSlots() {
       role: el.dataset.photorole || "both", variant: el.dataset.photovariant === "sm" ? "sm" : "phone",
       iconHtml: el.dataset.photovariant === "sm" ? "" : ICO.photos,
       error: row?.error || "",
+      emailedCount: Number(findJob(id)?.photosEmailedCount) || 0,
     });
     el.dataset.settled = row && row.status && row.status !== "loading" ? "1" : "";
     el.querySelectorAll("[data-viewphotos]").forEach(b => b.onclick = ev => {
@@ -482,7 +483,7 @@ async function paintGallery(j) {
     photos.push({ path: p.path, src });
   }
   if (stale()) return;
-  root.innerHTML = galleryHtml({ ...common, status: "ready", retentionText: row.gallery.retentionText, canDownload: !!(me && me.role === "admin"), photos });
+  root.innerHTML = galleryHtml({ ...common, status: "ready", retentionText: row.gallery.retentionText, canDownload: !!(me && me.role === "admin"), photos, emailedCount: Number(j.photosEmailedCount) || 0 });
   wireGallery(j);
 }
 async function openPhotoGallery(j) {
@@ -859,7 +860,11 @@ const jobPhotosUrl = j => GM + "#search/" + encodeURIComponent(`subject:"[Job Ph
 const hasPhotos = j => !!(j.photosEmailedAt || j.photosEmailedCount);
 const jobPhotosIcon = j => hasPhotos(j) ? ` <a class="phicon" href="${jobPhotosUrl(j)}" target="_blank" rel="noopener" title="Photos in Gmail" onclick="event.stopPropagation()">📷</a>` : "";
 const jobPhotosLink = j => !hasPhotos(j) ? "" : ` <a class="phlink" href="${jobPhotosUrl(j)}" target="_blank" rel="noopener">📷 Photos (${j.photosEmailedCount || 1} sent)</a>`;
-const emailedPhotosNote = j => !hasPhotos(j) ? "" : `<span class="sub emailed-note">Emailed photos <a class="phlink" href="${jobPhotosUrl(j)}" target="_blank" rel="noopener">${j.photosEmailedCount || 1} sent</a></span>`;
+const emailedPhotosNote = j => {
+  const n = Number(j && j.photosEmailedCount) || 0;
+  if (n < 1) return "";
+  return `<span class="sub emailed-note"><a class="phlink" href="${jobPhotosUrl(j)}" target="_blank" rel="noopener">Email history (${n} photo${n === 1 ? "" : "s"})</a></span>`;
+};
 const greet = () => { const h = +new Intl.DateTimeFormat("en-AU", { hour: "numeric", hourCycle: "h23", timeZone: TZ }).format(new Date()); return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening"; };
 function homeRow(j) {
   const q = queueOf(j), names = namesOf(j);
