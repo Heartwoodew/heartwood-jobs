@@ -89,6 +89,7 @@ test("job photo list follows job access and a private receipt stays unread", asy
   assert.equal(readBack.customMetadata.expiresAfter, "2026-11-06");
   assert.equal(readBack.customMetadata.purpose, "job-photo");
   await assertSucceeds(getBytes(ref(storageOf(ALEX), path)));
+  await assertSucceeds(getMetadata(ref(storageOf(PATRICK), path)));
   const afterView = await assertSucceeds(getMetadata(ref(storageOf("op1"), path)));
   assert.equal(afterView.customMetadata.expiresAfter, "2026-11-06");
   await assertFails(listAll(ref(storageOf("idle"), "tenants/heartwood/jobs/job1/photos")));

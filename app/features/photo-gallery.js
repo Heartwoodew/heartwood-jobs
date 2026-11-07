@@ -4,7 +4,7 @@
 // Receipt objects are left out. Image bytes are not written to Firestore.
 // The 3-month operational date is guidance. SCHEDULING_APPROVED stays false.
 
-import { jobPhotoPrefix, jobTenantOf, listedJobPhoto } from "./cloud-storage.js";
+import { jobPhotoPrefix, jobTenantOf, listedJobPhoto, storageErrorCode } from "./cloud-storage.js";
 import { operationalExpiresAfter, retentionAdminText, SCHEDULING_APPROVED } from "./cloud-retention.js";
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -16,6 +16,7 @@ export function buildJobGallery({ membership, job, listing, now } = {}) {
   const hidden = [];
   for (const item of listing || []) {
     const path = item && (item.path || item.fullPath) || "";
+    if (item && item.error) return { ok: false, reason: storageErrorCode(item.error) };
     const row = listedJobPhoto({
       membership,
       job,
@@ -24,7 +25,9 @@ export function buildJobGallery({ membership, job, listing, now } = {}) {
       customMetadata: item && item.customMetadata,
       size: item && item.size,
       readable: item && item.readable,
+      error: item && item.error,
     });
+    if (!row.ok && String(row.reason || "").startsWith("storage/")) return { ok: false, reason: row.reason };
     if (!row.ok) hidden.push({ path, reason: row.reason });
     else photos.push({ ...row, timeCreated: item && typeof item.timeCreated === "string" ? item.timeCreated : null });
   }
@@ -84,12 +87,16 @@ export function galleryExportPhotos(gallery, blobs, job) {
 }
 
 function safeStorageCode(raw) {
-  const m = /^storage\/[a-z0-9-]{1,40}$/.exec(String(raw || "").trim());
+  const value = raw && typeof raw === "object" && "code" in raw ? raw.code : raw;
+  const m = /^storage\/[a-z0-9-]{1,40}$/.exec(String(value || "").trim());
   return m ? m[0] : "";
 }
 function photoErrorText(error) {
   const code = safeStorageCode(error);
   return code ? `Couldn't load photos (${code}).` : "Couldn't load photos.";
+}
+export function photoFailureText(error) {
+  return photoErrorText(storageErrorCode(error));
 }
 
 /** Empty cloud list. The emailed count is history, not a promise of thumbnails. */
@@ -99,12 +106,29 @@ export function cloudEmptyCopy(emailedCount) {
   return "No cloud copies on this job yet. Emailed photos are separate from this gallery.";
 }
 
-export function photoSlotHtml({ jobId, status, count, role = "both", variant, iconHtml, error, emailedCount } = {}) {
+/** Inline thumbnails. src is a same-page blob URL after a private getBlob, never a download URL. */
+export function photoGridHtml({ photos, retentionText } = {}) {
+  const list = Array.isArray(photos) ? photos : [];
+  if (!list.length) return "";
+  const note = retentionText
+    ? `<p class="pgal-ret">${esc(String(retentionText))} Opening these photos does not change that date.</p>`
+    : "";
+  const cells = list.map(p => {
+    const path = esc(p && p.path || "");
+    if (p && p.failed) return `<div class="pth perr" data-photo-path="${path}">${esc(photoFailureText(p.error || ""))}</div>`;
+    const src = p && (p.thumb || p.src) || "";
+    return `<button type="button" class="pth" data-photo-path="${path}" aria-label="View photo"><img alt="" data-photo-path="${path}" loading="lazy" decoding="async"${src ? ` src="${esc(src)}"` : " hidden"}></button>`;
+  }).join("");
+  return `${note}<div class="pgrid" data-photo-grid="1">${cells}</div>`;
+}
+
+export function photoSlotHtml({ jobId, status, count, role = "both", variant, iconHtml, error, emailedCount, photos, retentionText } = {}) {
   const id = esc(jobId || "");
   const n = Number(count) || 0;
   const cloud = role === "cloud";
-  const button = cloud || (status === "ready" && n > 0)
-    ? `<button type="button" class="${variant === "sm" ? "sm-btn viewphotos" : "viewphotos"}" data-viewphotos="${id}" aria-label="View cloud photos">${iconHtml || ""}<span>${cloud ? (n > 0 ? `View cloud photos (${n})` : "View cloud photos") : `Photos (${n})`}</span></button>`
+  const grid = cloud ? photoGridHtml({ photos, retentionText }) : "";
+  const button = !cloud && status === "ready" && n > 0
+    ? `<button type="button" class="${variant === "sm" ? "sm-btn viewphotos" : "viewphotos"}" data-viewphotos="${id}" aria-label="View cloud photos">${iconHtml || ""}<span>Photos (${n})</span></button>`
     : "";
   if (role === "action") return button;
   let statusHtml = "";
@@ -120,7 +144,7 @@ export function photoSlotHtml({ jobId, status, count, role = "both", variant, ic
     statusHtml = `<span data-photos-state="${n > 0 ? "ready" : "empty"}" hidden></span>`;
   }
   if (role === "status") return statusHtml;
-  if (role === "cloud") return button + statusHtml;
+  if (role === "cloud") return grid + statusHtml;
   return statusHtml + button;
 }
 
@@ -134,12 +158,23 @@ export function galleryHtml({ title, subtitle, status, error, retentionText, can
   else if (!photos?.length) body = `<p class="muted pad" data-photos-state="empty">${esc(cloudEmptyCopy(emailedCount))}</p>`;
   else {
     body = `<div class="pgrid">${photos.map(p => p.failed
-      ? `<div class="pth perr" data-photo-path="${esc(p.path)}">Couldn't load</div>`
-      : `<button type="button" class="pth" data-photo-path="${esc(p.path)}" aria-label="View photo"><img alt=""${p.src ? ` src="${esc(p.src)}"` : ""}></button>`).join("")}</div>`;
+      ? `<div class="pth perr" data-photo-path="${esc(p.path)}">${esc(photoFailureText(p.error || ""))}</div>`
+      : `<button type="button" class="pth" data-photo-path="${esc(p.path)}" aria-label="View photo"><img alt="" loading="lazy" decoding="async"${p.src ? ` src="${esc(p.src)}"` : ""}></button>`).join("")}</div>`;
   }
   return `${head}<div class="pgal-body"><p class="pgal-ret">${note}</p>${dl}${body}</div>`;
 }
 
-export function largePhotoHtml({ src, caption, closeHtml } = {}) {
-  return `<div class="pview" role="dialog" aria-modal="true" aria-label="Photo"><button type="button" class="px" aria-label="Close photo">${closeHtml || "×"}</button><img alt="" src="${esc(src || "")}"><div class="pcap">${esc(caption || "Job photo")}</div></div>`;
+export function lightboxHtml({ src, caption, closeHtml, index, count } = {}) {
+  const n = Number(count) || 0;
+  const i = Number(index) || 0;
+  const nav = n > 1
+    ? `<button type="button" class="pnav pp" aria-label="Previous photo">‹</button><button type="button" class="pnav pn" aria-label="Next photo">›</button>`
+    : "";
+  const img = src ? `<img alt="" src="${esc(src)}">` : "";
+  const place = n > 1 ? ` · ${i + 1} of ${n}` : "";
+  return `<div class="pview" role="dialog" aria-modal="true" aria-label="Photo" data-lightbox="1" tabindex="-1"><button type="button" class="px" aria-label="Close photo">${closeHtml || "×"}</button>${nav}${img}<div class="pcap">${esc(caption || "Job photo")}${esc(place)}</div></div>`;
+}
+
+export function largePhotoHtml(opts = {}) {
+  return lightboxHtml(opts);
 }
