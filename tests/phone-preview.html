@@ -46,6 +46,25 @@
     ]
   };
   window.HW_PREVIEW_RATES = q.get("rates") || "";
+  if (q.get("open") === "optimise") {
+    window.HW_GEO_BY_ID = {
+      j1: { lat: -27.64, lng: 152.86, query: "Lot 95 · 21 Lumen Street, Redbank Plains QLD 4301", source: "nominatim" },
+      j2: { lat: -27.65, lng: 152.87, query: "Lot 88 · 14 Brightvale Street, Redbank Plains QLD 4301", source: "nominatim" },
+      j3: { lat: -27.57, lng: 152.79, query: "Lot 12 · 4 Cedar Court, Redbank Plains QLD 4301", source: "nominatim" },
+    };
+    localStorage.setItem("hwDepotGeo:v1", JSON.stringify({
+      query: "208-220 Holdsworth Rd, Chuwar QLD 4306", lat: -27.56, lng: 152.78, source: "nominatim",
+    }));
+  }
+  if (q.get("run") === "1") {
+    window.HW_RUNSHEET = {
+      id: "patrick_2026-11-06", workerUid: "patrick", workerName: "Patrick", date: "2026-11-06",
+      jobIds: ["j3", "j1", "j2"], returnToDepot: false, status: "approved",
+      depot: "208-220 Holdsworth Rd, Chuwar QLD 4306", method: "exact", provider: "osrm",
+      totalMinutes: 37, totalKm: 26.9, currentMinutes: 64, currentKm: 46.1,
+      approvedBy: "admin-preview", approvedByName: "Alex",
+    };
+  }
   window.__errs = [];
   window.addEventListener("error", e => window.__errs.push(String(e.message || e.error)));
   window.addEventListener("unhandledrejection", e => window.__errs.push(String(e.reason && (e.reason.stack || e.reason.message || e.reason))));
@@ -59,6 +78,27 @@
 <script type="module">
 const q = new URLSearchParams(location.search);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+if (q.get("open") === "optimise") {
+  const durations = [
+    [0, 1800, 1900, 300],
+    [1800, 0, 240, 1700],
+    [1900, 240, 0, 1800],
+    [300, 1700, 1800, 0],
+  ];
+  const distances = durations.map(row => row.map(s => s * 12));
+  const origFetch = window.fetch.bind(window);
+  window.fetch = (url, opts) => {
+    const u = String(url);
+    if (u.includes("router.project-osrm.org")) {
+      return Promise.resolve(new Response(JSON.stringify({ code: "Ok", durations, distances }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    }
+    if (u.includes("nominatim.openstreetmap.org") || u.includes("openrouteservice.org")) {
+      window.__routeGeoFetches = (window.__routeGeoFetches || 0) + 1;
+      return Promise.resolve(new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } }));
+    }
+    return origFetch(url, opts);
+  };
+}
 async function waitFor(sel, ms = 4000) {
   const t0 = performance.now();
   while (performance.now() - t0 < ms) {
@@ -184,6 +224,33 @@ if (q.get("open") === "jobchat") {
   await waitFor(".job-chat .chat-msg", 4000);
 }
 if (q.get("open") === "more") document.querySelector('[data-tab="more"]')?.click();
+if (q.get("open") === "dispatch") {
+  document.querySelector('[data-view="dispatch"]')?.click();
+  await waitFor("#optorder", 6000);
+}
+if (q.get("open") === "optimise") {
+  document.querySelector('[data-view="dispatch"]')?.click();
+  await waitFor("#optorder", 6000);
+  document.querySelector("#optorder").click();
+  await waitFor("#routesuggest", 6000);
+  document.querySelector("#routesuggest").click();
+  await waitFor(".route-leg", 8000);
+  if (q.get("tweak") === "1") {
+    document.querySelector('#routelist .route-nudge[data-dir="1"]')?.click();
+    await waitFor("#routetotals", 4000);
+    const until = performance.now() + 4000;
+    while (performance.now() < until && !/longer than the current order/.test(document.body.innerText)) await sleep(30);
+  }
+  if (q.get("approve") === "1") {
+    document.querySelector("#routeapprove")?.click();
+    const until = performance.now() + 4000;
+    while (performance.now() < until && !(window.__fbCalls || []).some(c => c.op === "setDoc" && c.col === "runSheets")) await sleep(30);
+  }
+}
+if (q.get("run") === "1") {
+  await waitFor(".run-note", 6000);
+  await waitFor('.mob-list .mrow[data-id="j3"]', 6000);
+}
 if (q.get("open") === "myjobs") document.querySelector('[data-view="myjobs"]')?.click();
 if (q.get("open") === "quotes") {
   document.querySelector('[data-tab="more"]')?.click();
