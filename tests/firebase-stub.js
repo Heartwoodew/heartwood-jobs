@@ -239,6 +239,11 @@ export function listAll(r) {
 }
 export function getMetadata(r) {
   const path = r && (r.fullPath || r.path);
+  if (typeof window !== "undefined" && window.HW_STORAGE_META_ERROR) {
+    const code = String(window.HW_STORAGE_META_ERROR);
+    record("getMetadata", { path, error: code });
+    return Promise.reject(Object.assign(new Error("unauthorized"), { code }));
+  }
   const o = storageObjects().find(x => x.path === path);
   record("getMetadata", { path });
   if (!o) return Promise.reject(Object.assign(new Error("object-not-found"), { code: "storage/object-not-found" }));

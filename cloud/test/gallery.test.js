@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { planJobPhotoMirrors, resolveMembership, canReadObject, listedJobPhoto, JOB_PHOTO_MIMES } from "../../app/features/cloud-storage.js";
+import { planJobPhotoMirrors, resolveMembership, canReadObject, listedJobPhoto, JOB_PHOTO_MIMES, storageErrorCode, summarizePhotoListing } from "../../app/features/cloud-storage.js";
 import { SCHEDULING_APPROVED, operationalExpiresAfter } from "../../app/features/cloud-retention.js";
 import { buildOperationalExport } from "../../app/features/cloud-retention.js";
-import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, galleryHtml, cloudEmptyCopy } from "../../app/features/photo-gallery.js";
+import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, galleryHtml, cloudEmptyCopy, lightboxHtml, photoGridHtml } from "../../app/features/photo-gallery.js";
 
 const staff = resolveMembership({ uid: "op1", profile: { role: "operator", name: "Sam" } });
 const stranger = resolveMembership({ uid: "idle", profile: { role: "operator", name: "Idle" } });
@@ -181,7 +181,7 @@ test("job 674 email history is not a cloud gallery until private objects exist",
   assert.equal(none.photos.length, 0);
   assert.equal(cloudEmptyCopy(4), "No cloud copies on this job yet. The 4 emailed photos are separate from this gallery.");
   const slot = photoSlotHtml({ jobId: id, status: "ready", count: 0, role: "cloud", variant: "sm", emailedCount: 4 });
-  assert.match(slot, /View cloud photos/);
+  assert.doesNotMatch(slot, /data-viewphotos/);
   assert.match(slot, /The 4 emailed photos are separate from this gallery/);
   assert.equal((slot.match(/<img/g) || []).length, 0);
   const four = [1, 2, 3, 4].map(i => photo(`tenants/heartwood/jobs/${id}/photos/p${i}`, { timeCreated: `2026-11-06T0${i}:00:00.000Z` }));
@@ -197,14 +197,13 @@ test("job 674 email history is not a cloud gallery until private objects exist",
 test("the photos action is absent until a cloud photo exists", () => {
   assert.equal(photoSlotHtml({ jobId: "j2", status: "ready", count: 0, role: "action" }), "");
   const cloudZero = photoSlotHtml({ jobId: "j4", status: "ready", count: 0, role: "cloud", variant: "sm", emailedCount: 4 });
-  assert.match(cloudZero, /data-viewphotos="j4"/);
-  assert.match(cloudZero, /View cloud photos/);
+  assert.doesNotMatch(cloudZero, /data-viewphotos/);
   assert.match(cloudZero, /No cloud copies on this job yet\. The 4 emailed photos are separate from this gallery\./);
   assert.doesNotMatch(cloudZero, /src=/);
   assert.equal(cloudEmptyCopy(0), "No cloud copies on this job yet. Emailed photos are separate from this gallery.");
   assert.equal(cloudEmptyCopy(4), "No cloud copies on this job yet. The 4 emailed photos are separate from this gallery.");
   const cloudErr = photoSlotHtml({ jobId: "j4", status: "error", role: "cloud", error: "storage/unauthorized" });
-  assert.match(cloudErr, /View cloud photos/);
+  assert.doesNotMatch(cloudErr, /data-viewphotos/);
   assert.match(cloudErr, /data-photoretry="j4"/);
   assert.match(cloudErr, /storage\/unauthorized/);
   assert.match(photoSlotHtml({ jobId: "j2", status: "ready", count: 2, role: "action" }), /Photos \(2\)/);
@@ -223,6 +222,58 @@ test("the photos action is absent until a cloud photo exists", () => {
   assert.match(galleryHtml({ status: "error", error: "Couldn't load photos.", jobId: "j2" }), /data-photoretry="j2"/);
 });
 
+test("a metadata failure surfaces the storage code instead of an empty gallery", () => {
+  const job = {
+    id: "job1", status: "Scheduled", date: "2026-11-06",
+    client: "Orbit Homes (Qld) Pty Ltd", assigned: ["op1"],
+  };
+  assert.equal(storageErrorCode({ code: "storage/unauthorized" }), "storage/unauthorized");
+  assert.equal(storageErrorCode({ code: "permission denied alex@heartwoodew.com" }), "storage/unknown");
+  assert.equal(storageErrorCode("storage/unauthorized"), "storage/unauthorized");
+  const failed = summarizePhotoListing([
+    { path: "tenants/heartwood/jobs/job1/photos/mig-1.jpg", error: { code: "storage/unauthorized" } },
+    photo("tenants/heartwood/jobs/job1/photos/pnew"),
+  ]);
+  assert.equal(failed.ok, false);
+  assert.equal(failed.reason, "storage/unauthorized");
+  const gallery = buildJobGallery({
+    membership: staff, job, now: new Date("2026-11-06T12:00:00+10:00"),
+    listing: [{ path: "tenants/heartwood/jobs/job1/photos/mig-1.jpg", error: "storage/unauthorized", readable: false, contentType: "image/jpeg", size: 10 }],
+  });
+  assert.equal(gallery.ok, false);
+  assert.equal(gallery.reason, "storage/unauthorized");
+  const hidden = listedJobPhoto({
+    membership: staff, job, path: "tenants/heartwood/jobs/job1/photos/punreadable",
+    contentType: "image/jpeg", size: 10, readable: false,
+  });
+  assert.equal(hidden.reason, "not-allowed");
+  const grid = photoGridHtml({
+    photos: [
+      { path: "tenants/heartwood/jobs/job1/photos/p1" },
+      { path: "tenants/heartwood/jobs/job1/photos/p2", thumb: "blob:thumb" },
+    ],
+    retentionText: "Operational cloud copy expires 2027-02-06. Deletion is not scheduled.",
+  });
+  assert.match(grid, /loading="lazy"/);
+  assert.match(grid, /data-photo-grid="1"/);
+  assert.match(grid, /blob:thumb/);
+  assert.match(grid, /does not change that date/);
+  assert.doesNotMatch(grid, /getDownloadURL|firebasestorage\.googleapis|data-viewphotos/);
+  const box = lightboxHtml({ src: "blob:full", caption: "6 Nov 2026", index: 1, count: 9 });
+  assert.match(box, /aria-label="Close photo"/);
+  assert.match(box, /aria-label="Previous photo"/);
+  assert.match(box, /aria-label="Next photo"/);
+  assert.match(box, /blob:full/);
+  assert.match(box, /2 of 9/);
+  assert.doesNotMatch(box, /getDownloadURL|firebasestorage\.googleapis/);
+  const slot = photoSlotHtml({
+    jobId: "job1", status: "ready", count: 2, role: "cloud", retentionText: "Operational cloud copy expires 2027-02-06.",
+    photos: [{ path: "tenants/heartwood/jobs/job1/photos/p1", thumb: "blob:thumb" }],
+  });
+  assert.match(slot, /data-photo-grid="1"/);
+  assert.doesNotMatch(slot, /data-viewphotos/);
+});
+
 test("gallery code does not schedule deletion or rewrite retention anchors", () => {
   const app = readFileSync(new URL("../../app/app.js", import.meta.url), "utf8");
   const gallery = readFileSync(new URL("../../app/features/photo-gallery.js", import.meta.url), "utf8");
@@ -234,11 +285,19 @@ test("gallery code does not schedule deletion or rewrite retention anchors", () 
   const prodJson = JSON.parse(readFileSync(new URL("../production/firebase.json", import.meta.url), "utf8"));
   assert.equal(prod.equals(emu), true);
   assert.match(rules, /match \/tenants\/\{tenantId\}\/jobs\/\{jobId\}\/photos \{/);
-  assert.match(rules, /allow list: if canSeeJob/);
-  const jobFns = rules.slice(rules.indexOf("function jobPath"), rules.indexOf("function jobPhotoFile"));
-  assert.equal(jobFns.includes("firestore.exists"), false);
-  assert.match(jobFns, /firestore\.get\(jobPath\(jobId\)\)/);
-  assert.match(jobFns, /firestore\.get\(userPath\(\)\)/);
+  assert.match(rules, /allow list: if canSeeJob\(tenantId, jobId\);/);
+  assert.match(rules, /allow read: if signedIn\(\) && tenantId == "heartwood" && \(isAlex\(\) \|\| isPatrick\(\)\)/);
+  assert.match(rules, /allow read: if jobPhotoStaff\(tenantId, jobId\)/);
+  assert.match(rules, /allow create, update: if canSeeJob\(tenantId, jobId\) && jobPhotoFile/);
+  const staffFn = rules.slice(rules.indexOf("function jobPhotoStaff"), rules.indexOf("function jobPhotoFile"));
+  assert.equal(staffFn.split("firestore.get(").length - 1, 1);
+  assert.doesNotMatch(staffFn, /firestore\.get\(userPath\(\)\)/);
+  assert.match(staffFn, /request\.auth\.uid in job\.assigned/);
+  assert.match(rules, /allow read: if canReadReceipt\(tenantId, receiptId\);/);
+  const legacy = rules.slice(rules.indexOf("function jobPath"), rules.indexOf("function jobPhotoStaff"));
+  assert.equal(legacy.includes("firestore.exists"), false);
+  assert.match(legacy, /firestore\.get\(jobPath\(jobId\)\)/);
+  assert.match(legacy, /firestore\.get\(userPath\(\)\)/);
   assert.match(rules, /allow delete: if false/);
   assert.doesNotMatch(rules, /match \/tenants\/\{tenantId\}\/receipts\/\{receiptId\} \{\s*allow list/);
   assert.match(life, /PROPOSED ONLY/);
@@ -247,8 +306,14 @@ test("gallery code does not schedule deletion or rewrite retention anchors", () 
   assert.equal(prodJson.firestore, undefined);
   assert.doesNotMatch(app, /updateMetadata|deleteObject/);
   assert.equal(app.split("photosEmailedAt:").length - 1, 1);
-  const openFn = app.slice(app.indexOf("async function openPhotoGallery"), app.indexOf("function closePhotoGallery"));
-  assert.doesNotMatch(openFn, /updateDoc|cloudPhotosAt|photosEmailedAt/);
+  const listing = app.slice(app.indexOf("async function loadJobPhotoListing"), app.indexOf("function ensurePhotoList"));
+  assert.match(listing, /summarizePhotoListing/);
+  assert.match(listing, /getMetadata/);
+  assert.doesNotMatch(listing, /readable:\s*false/);
+  const openFn = app.slice(app.indexOf("async function openPhotoLightbox"), app.indexOf("function wireLightbox"));
+  assert.doesNotMatch(openFn, /updateDoc|cloudPhotosAt|photosEmailedAt|getDownloadURL/);
+  assert.doesNotMatch(app, /getDownloadURL/);
+  assert.match(readFileSync(new URL("../../app/sw.js", import.meta.url), "utf8"), /hw-shell-v55-chat/);
   const mirror = app.slice(app.indexOf("async function mirrorJobPhotos"), app.indexOf("function galleryNow"));
   assert.match(mirror, /cloudPhotosAt/);
   assert.match(app, /stampExpiresAfter\(/);

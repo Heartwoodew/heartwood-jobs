@@ -1,7 +1,8 @@
 rules_version = '2';
 // EMULATOR AND PROPOSED STORAGE RULES.
 // Do not deploy until the owner completes cloud/MIGRATION.md.
-// Job-photo list uses the same canSeeJob check as reading a file.
+// Job-photo list stays on canSeeJob. Object read does not: repeated jobData()
+// calls are counted on get and production denies them, while list still caches.
 // Receipts, finance and exports are unchanged. Delete stays off for those,
 // and for job photos. Chat photos are a separate path: the uploader or an
 // admin of that tenant may delete one. No public download tokens.
@@ -70,6 +71,18 @@ service firebase.storage {
         && jobTenant(jobId) == tenantId
         && ((tenantId == "heartwood" && (isAlex() || isPatrick())) || accountCanSee(tenantId, jobId));
     }
+    // Object read must not call canSeeJob. That helper calls jobData() once per field.
+    // Production counts each call on getMetadata/getBlob and denies the read once the
+    // two-document cap is passed. list still caches those calls, so the folder lists
+    // and the gallery hides the storage/unauthorized as an empty set. Bootstrap admins
+    // read with no Firestore access. Assigned staff use one get of the job. A missing
+    // user profile is not read: that get throws and would deny the admin allow too.
+    function jobPhotoStaff(tenantId, jobId) {
+      let job = firestore.get(jobPath(jobId)).data;
+      let jobTenant = "tenantId" in job && job.tenantId is string && job.tenantId.size() > 0 ? job.tenantId : "heartwood";
+      let assigned = "assigned" in job && job.assigned is list && request.auth.uid in job.assigned;
+      return signedIn() && tenantId is string && tenantId.size() > 0 && jobTenant == tenantId && assigned;
+    }
     function jobPhotoFile(tenantId, jobId) {
       return request.resource.contentType.matches('image/(jpeg|png|webp|gif)')
         && request.resource.size > 0
@@ -88,7 +101,8 @@ service firebase.storage {
     }
 
     match /tenants/{tenantId}/jobs/{jobId}/photos/{file} {
-      allow read: if canSeeJob(tenantId, jobId);
+      allow read: if signedIn() && tenantId == "heartwood" && (isAlex() || isPatrick());
+      allow read: if jobPhotoStaff(tenantId, jobId);
       allow create, update: if canSeeJob(tenantId, jobId) && jobPhotoFile(tenantId, jobId);
       allow delete: if false;
     }

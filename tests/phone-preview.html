@@ -68,6 +68,7 @@ async function waitFor(sel, ms = 4000) {
   return null;
 }
 if (q.get("photos") === "error") window.HW_STORAGE_LIST_ERROR = "1";
+if (q.get("photos") === "meta") window.HW_STORAGE_META_ERROR = "storage/unauthorized";
 if (q.get("photos") !== "none" && q.get("photos") !== "error") {
   const jpeg = async (label, color) => {
     const c = document.createElement("canvas");
@@ -133,11 +134,11 @@ if (q.get("open") === "job") {
   await openJob(q.get("job") || "j4");
 }
 if (q.get("open") === "gallery" || q.get("view") === "large") {
-  document.querySelector("[data-viewphotos]")?.click();
-  await waitFor(".pgal .pth img, .pgal [data-photos-state='error']", 4000);
+  document.querySelector("[data-photo-grid]")?.scrollIntoView({ block: "center" });
+  await waitFor("[data-photo-grid] img[src]", 8000);
 }
 if (q.get("view") === "large") {
-  document.querySelector(".pgal button.pth")?.click();
+  document.querySelector("[data-photo-grid] button.pth")?.click();
   await waitFor(".pview img", 4000);
 }
 if (q.get("open") === "jobs") document.querySelector('[data-tab="week"]')?.click();
@@ -146,30 +147,30 @@ if (q.get("open") === "photos") {
   await waitFor('[data-photoslot][data-settled="1"]', 4000);
 }
 if (q.get("open") === "job" && q.get("photos") === "none") {
-  await waitFor("[data-viewphotos]");
-  document.querySelector("[data-viewphotos]")?.click();
-  await waitFor(".pgal [data-photos-state='empty']", 4000);
+  await waitFor('[data-photos-state="empty"]', 4000);
 }
 if (q.get("open") === "job674") {
   await waitFor(`[data-id="${JOB674}"]`, 6000);
   document.querySelector(`[data-id="${JOB674}"]`)?.click();
   await waitFor("#emailph", 6000);
   document.querySelector('[data-jt="photos"]')?.click();
-  await waitFor("[data-viewphotos]", 4000);
-  if (q.get("shot")) {
-    document.querySelector(`[data-photoslot="${JOB674}"] [data-viewphotos]`)?.click();
-    await waitFor(".pgal [data-photos-state], .pgal .pth img", 4000);
+  await waitFor(`[data-photoslot="${JOB674}"][data-settled="1"]`, 4000);
+  if (q.get("cloud") === "4") {
+    document.querySelector(`[data-photoslot="${JOB674}"] [data-photo-grid]`)?.scrollIntoView({ block: "center" });
+    await waitFor(`[data-photoslot="${JOB674}"] img[src]`, 8000);
   }
+  if (q.get("shot") === "empty") await waitFor(`[data-photoslot="${JOB674}"] [data-photos-state="empty"]`, 4000);
 }
 if (q.get("open") === "jobphotos") {
   await waitFor("[data-id='j2']", 6000);
   document.querySelector("[data-id='j2']")?.click();
   await waitFor("#emailph", 6000);
   document.querySelector('[data-jt="photos"]')?.click();
-  await waitFor("[data-viewphotos]", 4000);
-  if (q.get("shot") === "empty" || q.get("shot") === "gallery") {
-    document.querySelector("[data-viewphotos]")?.click();
-    await waitFor(".pgal [data-photos-state], .pgal .pth img", 4000);
+  await waitFor('[data-photoslot][data-settled="1"]', 4000);
+  if (q.get("shot") === "empty" || q.get("photos") === "none") await waitFor('[data-photos-state="empty"]', 4000);
+  if (q.get("shot") === "gallery") {
+    document.querySelector("[data-photo-grid]")?.scrollIntoView({ block: "center" });
+    await waitFor("[data-photo-grid] img[src]", 8000);
   }
 }
 if (q.get("open") === "chat") {
@@ -242,28 +243,53 @@ if (q.get("check") === "1") {
     ok(!!dir && /Brightvale/.test(decodeURIComponent(dir.getAttribute("href"))), "directions");
     ok(!/\$\s?\d/.test(text()), "detail dollars");
     await waitFor('[data-photoslot][data-settled="1"]');
-    const photosBtn = document.querySelector("[data-viewphotos]");
-    ok(!!photosBtn && /View cloud photos/.test(photosBtn.textContent), "photos action when cloud photos exist");
-    const writes = () => (window.__fbCalls || []).filter(c => c.op === "updateDoc" || c.op === "setDoc" || c.op === "uploadBytes");
-    const beforeWrites = writes().length;
-    const beforePicker = window.__photoClicks || 0;
-    photosBtn.click();
-    await waitFor(".pgal button.pth img");
-    ok(document.querySelectorAll(".pgal button.pth").length === 2, "two job photos and the receipt image stays hidden");
-    const gtext = document.querySelector(".pgal")?.innerText || "";
+    document.querySelector("[data-photoslot]")?.scrollIntoView({ block: "center" });
+    await waitFor("[data-photo-grid] img[src]", 8000);
+    const thumbs = [...document.querySelectorAll("[data-photo-grid] button.pth")];
+    ok(thumbs.length === 2, "two job photos and the receipt image stays hidden");
+    const loaded = document.querySelector("[data-photo-grid] img");
+    if (loaded && !loaded.complete) await new Promise(r => { loaded.onload = r; loaded.onerror = r; });
+    ok(loaded && loaded.naturalWidth > 0 && loaded.naturalWidth <= 320, "thumbnail is downscaled, got " + (loaded && loaded.naturalWidth));
+    const gtext = document.querySelector("[data-photoslot]")?.innerText || "";
     ok(gtext.includes("2027-02-06"), "operational expiry from the job date, not the stored 2099 stamp: " + gtext.slice(0, 280));
     ok(/not scheduled/i.test(gtext), "deletion is not scheduled");
     ok(/does not change that date/i.test(gtext), "opening photos does not move the date");
     ok(!gtext.includes("2099"), "gallery ignores a stored expiresAfter that would reset the clock");
-    ok(!document.querySelector(".pgal [data-cloudexport]"), "operator does not get the admin cloud download");
+    ok(!document.querySelector("[data-cloudexport]"), "operator does not get the admin cloud download");
     ok(!/\$\s?\d/.test(gtext), "gallery has no dollar amounts");
-    document.querySelector(".pgal button.pth").click();
+    ok(!(window.__fbCalls || []).some(c => c.op === "getDownloadURL"), "no download URL");
+    const writes = () => (window.__fbCalls || []).filter(c => c.op === "updateDoc" || c.op === "setDoc" || c.op === "uploadBytes");
+    const beforeWrites = writes().length;
+    const beforePicker = window.__photoClicks || 0;
+    thumbs[0].click();
     await waitFor(".pview img");
-    ok(!!document.querySelector(".pview img"), "larger photo");
+    const full = document.querySelector(".pview img");
+    if (full && !full.complete) await new Promise(r => { full.onload = r; full.onerror = r; });
+    ok(!!full && full.naturalWidth > 320, "lightbox is the full photo");
+    ok(!!document.querySelector(".pview .pn") && !!document.querySelector(".pview .pp"), "next and previous");
+    const beforeSrc = full.src;
+    document.querySelector(".pview .pn").click();
+    await waitFor(".pview img");
+    const nextImg = document.querySelector(".pview img");
+    ok(nextImg && nextImg.src && nextImg.src !== beforeSrc, "next photo");
+    document.querySelector(".pview .pp")?.click();
+    await waitFor(".pview img");
+    await sleep(50);
+    const view = document.querySelector(".pview");
+    const srcBeforeSwipe = view?.querySelector("img")?.src || "";
+    ok(srcBeforeSwipe === beforeSrc, "previous returns to the first photo");
+    const touch = (type, x) => {
+      const t = new Touch({ identifier: 1, target: view, clientX: x, clientY: 240, pageX: x, pageY: 240, screenX: x, screenY: 240 });
+      view.dispatchEvent(new TouchEvent(type, { bubbles: true, cancelable: true, changedTouches: [t], touches: type === "touchend" ? [] : [t] }));
+    };
+    touch("touchstart", 280);
+    touch("touchend", 40);
+    const tSwipe = performance.now();
+    while (performance.now() - tSwipe < 2000 && document.querySelector(".pview img")?.src === srcBeforeSwipe) await sleep(30);
+    ok(document.querySelector(".pview img")?.src !== srcBeforeSwipe, "swipe moves to the next photo");
     document.querySelector(".pview .px")?.click();
-    document.querySelector(".pgal-x")?.click();
     await sleep(20);
-    ok(document.getElementById("pgal")?.hidden === true, "gallery closes");
+    ok(!document.querySelector(".pview"), "lightbox closes");
     ok((window.__photoClicks || 0) === beforePicker, "viewing does not open the email picker");
     ok(writes().length === beforeWrites, "viewing does not write the job or storage");
     document.querySelector('[data-act="start"]')?.click();

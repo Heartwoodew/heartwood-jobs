@@ -9,9 +9,9 @@ import { getStorage, ref as storageRef, uploadBytes, connectStorageEmulator, lis
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
 import { firebaseConfig, useEmulator } from "./firebase-config.js";
 import { installQuotes, adminViewRouter } from "./features/quotes.js";
-import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPlanned, jobPhotoPrefix } from "./features/cloud-storage.js";
+import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPlanned, jobPhotoPrefix, storageErrorCode, summarizePhotoListing } from "./features/cloud-storage.js";
 import { buildOperationalExport, retentionAdminText, retentionView } from "./features/cloud-retention.js";
-import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, galleryHtml, largePhotoHtml } from "./features/photo-gallery.js";
+import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, lightboxHtml, photoFailureText } from "./features/photo-gallery.js";
 import { installChatApp } from "./features/chat-ui.js";
 
 const cfg = useEmulator ? { ...firebaseConfig, apiKey: "demo-key", projectId: "demo-heartwood" } : firebaseConfig;
@@ -57,7 +57,7 @@ let me = null, staff = [], jobs = [], unsub = null;
 let CHAT = { badge() { return ""; }, teamHtml() { return ""; }, jobHtml() { return ""; }, mount() {}, openJob() {}, start() {}, stop() {}, watch() {}, refresh() {} };
 let QG = { bindAdmin() {} }; // Quotes module; filled after helpers load
 const ALEX_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";      // Alex has no users/{uid} profile doc; always staff
-const ui = { view: "list", staffF: "", typeF: "", photoLists: {}, photoUrls: {}, photoBlobs: {}, photoJobs: {}, photoPaint: 0 };
+const ui = { view: "list", staffF: "", typeF: "", photoLists: {}, photoUrls: {}, photoBlobs: {}, photoThumbs: {}, photoThumbTasks: {}, photoErrors: {}, photoJobs: {}, photoPaint: 0 };
 
 // ------------------------------------------------------------------ auth
 $("#logout").onclick = () => signOut(auth);
@@ -350,7 +350,7 @@ async function mirrorJobPhotos(j, files) {
   // job's completion or existing activity date. This only asks other open phones to list again.
   updateDoc(doc(db, "jobs", j.id), { cloudPhotosAt: at.toISOString() }).catch(e => console.warn("cloud photo stamp not saved", e.code || e.message));
   await ensurePhotoList(j, true);
-  if (ui.galleryJob === j.id) await paintGallery(findJob(j.id) || j);
+  paintPhotoSlots();
 }
 function galleryNow() {
   const pin = typeof window !== "undefined" ? window.HW_TODAY : "";
@@ -362,27 +362,21 @@ function rememberJob(j) { if (j && j.id) ui.photoJobs[j.id] = j; }
 function findJob(id) {
   return [...(jobs || []), ...(ui.done || []), ...(ui.undated || [])].find(j => j.id === id) || ui.photoJobs[id] || null;
 }
-function jobSubtitle(j) { return "Job #" + jobNo(j) + (j.address ? " · " + j.address : ""); }
-function galleryRoot() {
-  let el = document.getElementById("pgal");
-  const host = document.querySelector("dialog[open]") || document.body;
-  if (!el) { el = document.createElement("div"); el.id = "pgal"; el.className = "pgal"; el.hidden = true; }
-  if (el.parentElement !== host) host.appendChild(el);
-  return el;
-}
 async function loadJobPhotoListing(j) {
   const prefix = jobPhotoPrefix(cloudMembership(), j);
   if (!prefix.ok) return { ok: false, reason: prefix.reason };
   const listed = await listAll(storageRef(storage, prefix.prefix));
-  const items = [];
+  const rows = [];
   for (const itemRef of listed.items || []) {
     const path = itemRef.fullPath || itemRef.path;
     try {
       const meta = await getMetadata(itemRef);
-      items.push({ path, contentType: meta.contentType || "", customMetadata: meta.customMetadata || {}, size: meta.size, timeCreated: meta.timeCreated || null });
-    } catch { items.push({ path, readable: false }); }
+      rows.push({ path, contentType: meta.contentType || "", customMetadata: meta.customMetadata || {}, size: meta.size, timeCreated: meta.timeCreated || null });
+    } catch (e) {
+      rows.push({ path, error: e });
+    }
   }
-  return { ok: true, items };
+  return summarizePhotoListing(rows);
 }
 function ensurePhotoList(j, force) {
   if (!j?.id) return Promise.resolve();
@@ -406,7 +400,7 @@ function ensurePhotoList(j, force) {
     paintPhotoSlots();
   }).catch(e => {
     if (ui.photoLists[j.id]?.seq !== seq) return;
-    ui.photoLists[j.id] = { status: "error", count: 0, mark, seq, error: /^storage\/[a-z0-9-]{1,40}$/.test(e.code || "") ? e.code : "storage/unknown" };
+    ui.photoLists[j.id] = { status: "error", count: 0, mark, seq, error: storageErrorCode(e) };
     paintPhotoSlots();
   });
   ui.photoLists[j.id].pending = pending;
@@ -414,121 +408,183 @@ function ensurePhotoList(j, force) {
   return pending;
 }
 function watchJobPhotos(j) {
-  const before = ui.photoLists[j.id];
-  const same = !!(before && before.status === "ready" && before.mark === photoMark(j));
-  return ensurePhotoList(j).then(() => {
-    paintPhotoSlots();
-    if (ui.galleryJob === j.id && !same) return paintGallery(findJob(j.id) || j);
-  });
+  return ensurePhotoList(j).then(() => { paintPhotoSlots(); });
 }
 function paintPhotoSlots() {
+  if (ui.photoObserver) ui.photoObserver.disconnect();
   document.querySelectorAll("[data-photoslot]").forEach(el => {
     const id = el.dataset.photoslot;
     const row = ui.photoLists[id];
+    const photos = (row?.gallery?.photos || []).map(p => ({
+      path: p.path,
+      thumb: ui.photoThumbs[p.path] || "",
+      failed: !!ui.photoErrors?.[p.path],
+      error: ui.photoErrors?.[p.path] || "",
+    }));
     el.innerHTML = photoSlotHtml({
       jobId: id, status: row?.status || "loading", count: row?.count || 0,
       role: el.dataset.photorole || "both", variant: el.dataset.photovariant === "sm" ? "sm" : "phone",
       iconHtml: el.dataset.photovariant === "sm" ? "" : ICO.photos,
       error: row?.error || "",
       emailedCount: Number(findJob(id)?.photosEmailedCount) || 0,
+      photos, retentionText: row?.gallery?.retentionText || "",
     });
     el.dataset.settled = row && row.status && row.status !== "loading" ? "1" : "";
-    el.querySelectorAll("[data-viewphotos]").forEach(b => b.onclick = ev => {
+    el.querySelectorAll("button.pth[data-photo-path]").forEach(b => b.onclick = ev => {
       ev.preventDefault(); ev.stopPropagation();
-      const job = findJob(b.dataset.viewphotos); if (job) openPhotoGallery(job);
+      const job = findJob(id); if (job) openPhotoLightbox(job, b.dataset.photoPath);
     });
     el.querySelectorAll("[data-photoretry]").forEach(b => b.onclick = ev => {
       ev.preventDefault(); ev.stopPropagation();
-      const job = findJob(b.dataset.photoretry); if (job) ensurePhotoList(job, true).then(() => { paintPhotoSlots(); if (ui.galleryJob === job.id) paintGallery(job); });
+      const job = findJob(b.dataset.photoretry); if (job) ensurePhotoList(job, true).then(() => paintPhotoSlots());
     });
   });
+  queuePhotoThumbs();
 }
-function wireGallery(j) {
-  const root = galleryRoot();
-  const job = () => findJob(j.id) || j;
-  root.querySelector(".pgal-x")?.addEventListener("click", closePhotoGallery);
-  root.querySelectorAll("[data-photoretry]").forEach(b => b.onclick = ev => {
-    ev.preventDefault();
-    const current = job();
-    ensurePhotoList(current, true).then(() => paintGallery(current));
-  });
-  root.querySelectorAll("button.pth[data-photo-path]").forEach(b => b.onclick = () => openLargePhoto(job(), b.dataset.photoPath));
-  const dl = root.querySelector("[data-cloudexport]");
-  if (dl) dl.onclick = () => downloadGalleryCopy(job()).catch(e => toast(e.message || "Download failed"));
-}
-async function paintGallery(j) {
-  if (!j || ui.galleryJob !== j.id) return;
-  const token = ++ui.photoPaint;
-  const root = galleryRoot();
-  const row = ui.photoLists[j.id];
-  const common = { title: "Photos", subtitle: jobSubtitle(j), closeHtml: ICO.back, jobId: j.id };
-  const stale = () => token !== ui.photoPaint || ui.galleryJob !== j.id;
-  if (!row || row.status === "loading") {
-    if (stale()) return;
-    root.innerHTML = galleryHtml({ ...common, status: "loading", retentionText: "", photos: [] });
-    wireGallery(j); return;
-  }
-  if (row.status !== "ready" || !row.gallery) {
-    if (stale()) return;
-    root.innerHTML = galleryHtml({ ...common, status: "error", error: row.error || "", retentionText: "" });
-    wireGallery(j); return;
-  }
-  const photos = [];
-  for (const p of row.gallery.photos) {
-    if (stale()) return;
-    let src = ui.photoUrls[p.path];
-    if (!src) {
-      try {
-        const blob = await getBlob(storageRef(storage, p.path));
-        ui.photoBlobs[p.path] = blob;
-        src = URL.createObjectURL(blob);
-        ui.photoUrls[p.path] = src;
-      } catch { photos.push({ path: p.path, failed: true }); continue; }
+function photoObserver() {
+  if (ui.photoObserver) return ui.photoObserver;
+  if (typeof IntersectionObserver !== "function") return null;
+  ui.photoObserver = new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      ui.photoObserver.unobserve(entry.target);
+      const img = entry.target.querySelector?.("img[data-photo-path]") || entry.target;
+      loadThumb(img);
     }
-    photos.push({ path: p.path, src });
+  }, { root: null, rootMargin: "600px 0px" });
+  return ui.photoObserver;
+}
+function queuePhotoThumbs(root) {
+  const scope = root && root.querySelectorAll ? root : document;
+  scope.querySelectorAll("button.pth[data-photo-path]").forEach(btn => {
+    const img = btn.querySelector("img[data-photo-path]");
+    if (!img || img.getAttribute("src") || btn.closest("[hidden]")) return;
+    const io = photoObserver();
+    if (io) io.observe(btn);
+    else loadThumb(img);
+  });
+}
+async function blobForPhoto(path) {
+  if (ui.photoBlobs[path]) return ui.photoBlobs[path];
+  const blob = await getBlob(storageRef(storage, path));
+  ui.photoBlobs[path] = blob;
+  if (!ui.photoUrls[path]) ui.photoUrls[path] = URL.createObjectURL(blob);
+  return blob;
+}
+async function thumbUrlFor(path) {
+  if (ui.photoThumbs[path]) return ui.photoThumbs[path];
+  const blob = await blobForPhoto(path);
+  const bmp = await createImageBitmap(blob, { imageOrientation: "from-image" }).catch(() => null);
+  if (!bmp) {
+    ui.photoThumbs[path] = ui.photoUrls[path];
+    return ui.photoThumbs[path];
   }
-  if (stale()) return;
-  root.innerHTML = galleryHtml({ ...common, status: "ready", retentionText: row.gallery.retentionText, canDownload: !!(me && me.role === "admin"), photos, emailedCount: Number(j.photosEmailedCount) || 0 });
-  wireGallery(j);
+  const edge = Math.max(bmp.width, bmp.height) || 1;
+  const k = Math.min(1, 320 / edge);
+  const w = Math.max(1, Math.round(bmp.width * k));
+  const h = Math.max(1, Math.round(bmp.height * k));
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  canvas.getContext("2d").drawImage(bmp, 0, 0, w, h);
+  bmp.close?.();
+  const out = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.72));
+  ui.photoThumbs[path] = URL.createObjectURL(out || blob);
+  return ui.photoThumbs[path];
 }
-async function openPhotoGallery(j) {
-  ui.galleryJob = j.id;
-  const root = galleryRoot();
-  root.hidden = false;
-  root.innerHTML = galleryHtml({ status: "loading", title: "Photos", subtitle: jobSubtitle(j), closeHtml: ICO.back, jobId: j.id, retentionText: "", photos: [] });
-  wireGallery(j);
-  await ensurePhotoList(findJob(j.id) || j, true);
-  if (ui.galleryJob === j.id) await paintGallery(findJob(j.id) || j);
+function loadThumb(img) {
+  const path = img && img.dataset.photoPath;
+  if (!path) return Promise.resolve();
+  const paint = src => {
+    if (!src) return;
+    document.querySelectorAll("img[data-photo-path]").forEach(el => {
+      if (el.dataset.photoPath !== path) return;
+      el.hidden = false;
+      el.src = src;
+    });
+  };
+  if (ui.photoThumbs[path]) { paint(ui.photoThumbs[path]); return Promise.resolve(); }
+  if (!ui.photoThumbTasks[path]) {
+    ui.photoThumbTasks[path] = thumbUrlFor(path).catch(e => {
+      const code = storageErrorCode(e);
+      ui.photoErrors = ui.photoErrors || {};
+      ui.photoErrors[path] = code;
+      document.querySelectorAll("button.pth").forEach(btn => {
+        if (btn.dataset.photoPath !== path) return;
+        btn.disabled = true;
+        btn.classList.add("perr");
+        btn.textContent = photoFailureText(code);
+      });
+      return "";
+    });
+  }
+  return ui.photoThumbTasks[path].then(paint);
 }
-function closePhotoGallery() {
-  ui.galleryJob = null;
-  const root = document.getElementById("pgal");
-  if (!root) return;
-  root.hidden = true;
-  root.innerHTML = "";
-}
-function openLargePhoto(j, path) {
-  const src = ui.photoUrls[path];
-  if (!src) return;
+function photoCaption(j, path) {
   const meta = ui.photoLists[j.id]?.gallery?.photos?.find(p => p.path === path);
-  let caption = "Job photo";
   if (meta?.timeCreated) {
     const d = new Date(meta.timeCreated);
-    if (!Number.isNaN(d.getTime())) caption = d.toLocaleString("en-AU", { timeZone: TZ, dateStyle: "medium", timeStyle: "short" });
+    if (!Number.isNaN(d.getTime())) return d.toLocaleString("en-AU", { timeZone: TZ, dateStyle: "medium", timeStyle: "short" });
   }
+  return "Job photo";
+}
+function lightboxHost() {
+  return document.querySelector("dialog[open]") || document.body;
+}
+async function openPhotoLightbox(j, path, index) {
+  const photos = ui.photoLists[j.id]?.gallery?.photos || [];
+  if (!photos.length || !j) return;
+  let i = Number.isInteger(index) ? index : photos.findIndex(p => p.path === path);
+  if (i < 0) i = 0;
+  i = ((i % photos.length) + photos.length) % photos.length;
+  const photo = photos[i];
+  let src = "";
+  let caption = photoCaption(j, photo.path);
+  try {
+    await blobForPhoto(photo.path);
+    src = ui.photoUrls[photo.path] || "";
+  } catch (e) {
+    caption = photoFailureText(storageErrorCode(e));
+  }
+  const host = lightboxHost();
+  host.querySelectorAll(".pview").forEach(node => node.remove());
   const wrap = document.createElement("div");
-  wrap.innerHTML = largePhotoHtml({ src, caption, closeHtml: "×" });
+  wrap.innerHTML = lightboxHtml({ src, caption, closeHtml: "×", index: i, count: photos.length });
   const el = wrap.firstElementChild;
-  galleryRoot().appendChild(el);
-  el.querySelector(".px").onclick = () => el.remove();
+  el.dataset.jobId = j.id;
+  el.dataset.index = String(i);
+  host.appendChild(el);
+  wireLightbox(el, j);
+  el.focus();
+}
+function wireLightbox(el, j) {
+  const close = () => { if (el.isConnected) el.remove(); };
+  const step = delta => openPhotoLightbox(j, null, (Number(el.dataset.index) || 0) + delta);
+  el.querySelector(".px").onclick = ev => { ev.preventDefault(); ev.stopPropagation(); close(); };
+  el.querySelector(".pp")?.addEventListener("click", ev => { ev.preventDefault(); ev.stopPropagation(); step(-1); });
+  el.querySelector(".pn")?.addEventListener("click", ev => { ev.preventDefault(); ev.stopPropagation(); step(1); });
+  let x0 = null;
+  el.addEventListener("touchstart", ev => { x0 = ev.changedTouches && ev.changedTouches[0] ? ev.changedTouches[0].clientX : null; }, { passive: true });
+  el.addEventListener("touchend", ev => {
+    if (x0 == null || !ev.changedTouches || !ev.changedTouches[0]) return;
+    const dx = ev.changedTouches[0].clientX - x0;
+    x0 = null;
+    if (Math.abs(dx) < 48) return;
+    step(dx < 0 ? 1 : -1);
+  }, { passive: true });
+  el.addEventListener("keydown", ev => {
+    if (ev.key === "ArrowRight") { ev.preventDefault(); step(1); }
+    else if (ev.key === "ArrowLeft") { ev.preventDefault(); step(-1); }
+    else if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); close(); }
+  });
+  const dlg = el.closest("dialog");
+  if (dlg) dlg.addEventListener("cancel", ev => { if (!el.isConnected) return; ev.preventDefault(); close(); });
 }
 async function downloadGalleryCopy(j) {
   const gallery = ui.photoLists[j.id]?.gallery;
   if (!gallery?.ok) return toast("Couldn't build the download.");
   const blobs = {};
   for (const p of gallery.photos) {
-    const blob = ui.photoBlobs[p.path];
-    if (!blob) continue;
+    const blob = await blobForPhoto(p.path);
     blobs[p.path] = new Uint8Array(await blob.arrayBuffer());
   }
   return downloadCloudCopy(j, galleryExportPhotos(gallery, blobs, j));
@@ -1176,7 +1232,7 @@ function editJob(j) {
   d.showModal();
   if (!n) jobTabs(d, j);
   if (!n) { rememberJob(j); $("#emailph").onclick = () => emailPhotos(j); watchJobPhotos(j); paintPhotoSlots(); }
-  if (!n && $("#cloudexport")) $("#cloudexport").onclick = () => downloadCloudCopy(j).catch(e => toast(e.message || "Download failed"));
+  if (!n && $("#cloudexport")) $("#cloudexport").onclick = () => downloadGalleryCopy(j).catch(e => toast(e.message || "Download failed"));
   if (!n) { wireFindPo(j); supervisors(); wireJobReceipts(j); fillSupCard(j); }
   if (!n && $("#unschbtn")) $("#unschbtn").onclick = ev => { if (!armBtn(ev.currentTarget, "✕ Remove from dispatch board", "Tap again to remove from the board")) return;
     d.close(); unscheduleJob(j).catch(e => toast("Not removed: " + (e.code || e.message))); };
@@ -1241,7 +1297,7 @@ function jobTabs(d, j) {
   if (!P.hist.children.length) P.hist.innerHTML = `<p class="muted sub">No history yet.</p>`;
   P.chat.innerHTML = CHAT.jobHtml(j);
   body.innerHTML = ""; body.classList.add("tabbed"); Object.values(P).forEach(x => body.appendChild(x));
-  const show = k => { ui.jtab = k; f.querySelectorAll("[data-jt]").forEach(b => b.classList.toggle("on", b.dataset.jt === k)); Object.entries(P).forEach(([kk, x]) => x.hidden = kk !== k); if (k === "chat") CHAT.openJob(P.chat, j); };
+  const show = k => { ui.jtab = k; f.querySelectorAll("[data-jt]").forEach(b => b.classList.toggle("on", b.dataset.jt === k)); Object.entries(P).forEach(([kk, x]) => x.hidden = kk !== k); if (k === "photos") queuePhotoThumbs(f); if (k === "chat") CHAT.openJob(P.chat, j); };
   // v47: facts + tabs + panes share ONE scroll area (phones); display:contents elsewhere so iPad/desktop are unchanged
   if (!f.querySelector(".jc-scroll")) { const sc = document.createElement("div"); sc.className = "jc-scroll";
     f.insertBefore(sc, f.querySelector(".jc-facts")); sc.append(f.querySelector(".jc-facts"), f.querySelector(".jc-tabs"), body); }
@@ -1865,7 +1921,7 @@ function renderOpDetail(j) {
       </dl>
       <div class="mcard"><div class="mlbl">Diary</div>${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("") || `<div class="muted sub">No notes yet</div>`}
         <button class="mnote" type="button" data-act="note">Add note</button></div>
-      <div class="mcard"><div class="mlbl">Photos</div><div data-photoslot="${esc(j.id)}" data-photorole="status"></div>${emailedPhotosNote(j)}<div class="muted sub">Cloud photos are the private copies stored for this job.</div></div>
+      <div class="mcard"><div class="mlbl">Photos</div><div data-photoslot="${esc(j.id)}" data-photorole="cloud"></div>${emailedPhotosNote(j)}<div class="muted sub">Cloud photos are the private copies stored for this job.</div></div>
       <div class="mcard safecard"><div class="mlbl">Safety</div><button type="button" class="mnote" data-swms="${j.id}">View SWMS</button><button type="button" class="mnote incbtn" data-inc="${j.id}">Report incident</button></div>
       <div class="mcard">${jobReceiptsHtml(j)}</div>
     </div>
@@ -1873,7 +1929,6 @@ function renderOpDetail(j) {
       `<button class="mbtn start" type="button" data-act="start" ${started ? "disabled" : ""}>${ICO.play}<span>${started ? "Started" : "Start job"}</span></button>
        <button class="mbtn complete" type="button" data-act="done">Complete job</button>`}
       <button type="button" class="mbtn mnote op-photo" id="emailph">${ICO.photos}<span>Add photos</span></button>
-      <div data-photoslot="${esc(j.id)}" data-photorole="cloud"></div>
       <a class="mcard link mbtn outline" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener">${ICO.pin}<span>Get directions</span></a>
     </div></div>`;
   rememberJob(j); $("#emailph").onclick = () => emailPhotos(j); wireJobReceipts(j); fillSupCard(j); watchJobPhotos(j); paintPhotoSlots();

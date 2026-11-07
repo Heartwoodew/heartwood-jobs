@@ -36,7 +36,7 @@ test("phone shell, quote gate and handlers", async () => {
         returnByValue: true
       });
       const data = JSON.parse(info.result.value);
-      const full = /detail|check-|empty|job-photos/.test(name);
+      const full = /detail|check-|empty|job-photos|gallery|photos/.test(name);
       const heightPx = full
         ? Math.min(2400, (await page.send("Runtime.evaluate", { expression: "Math.max(document.documentElement.scrollHeight, window.innerHeight)", returnByValue: true })).result.value)
         : height;
@@ -65,44 +65,42 @@ test("phone shell, quote gate and handlers", async () => {
         assert.match(text.result.value, /backblade/, name);
       }
       if (query.includes("open=gallery")) {
-        const g = await page.send("Runtime.evaluate", { expression: "document.querySelector('.pgal')?.innerText || ''", returnByValue: true });
+        const g = await page.send("Runtime.evaluate", { expression: "document.querySelector('[data-photoslot]')?.innerText || ''", returnByValue: true });
         assert.match(g.result.value, /2027-02-06/, name);
         assert.match(g.result.value, /not scheduled/i, name);
         assert.doesNotMatch(g.result.value, /2099/, name);
         if (query.includes("view=large")) {
-          const img = await page.send("Runtime.evaluate", { expression: "!!document.querySelector('.pview img')", returnByValue: true });
+          const img = await page.send("Runtime.evaluate", { expression: "!!document.querySelector('.pview img') && !!document.querySelector('.pview .pn') && !!document.querySelector('.pview .px')", returnByValue: true });
           assert.equal(img.result.value, true, name);
         } else {
-          const n = await page.send("Runtime.evaluate", { expression: "document.querySelectorAll('.pgal button.pth').length", returnByValue: true });
+          const n = await page.send("Runtime.evaluate", { expression: "document.querySelectorAll('[data-photo-grid] button.pth').length", returnByValue: true });
           assert.equal(n.result.value, 2, name);
         }
       }
       if (query.includes("photos=none") && query.includes("open=job&")) {
-        const text = await page.send("Runtime.evaluate", { expression: "document.querySelector('.pgal')?.innerText || ''", returnByValue: true });
+        const text = await page.send("Runtime.evaluate", { expression: "document.querySelector('[data-photos-state=\"empty\"]')?.textContent || ''", returnByValue: true });
         assert.match(text.result.value, /No cloud copies on this job yet/, name);
-        const view = await page.send("Runtime.evaluate", { expression: "!!document.querySelector('[data-viewphotos]')", returnByValue: true });
-        assert.equal(view.result.value, true, name);
+        const grid = await page.send("Runtime.evaluate", { expression: "document.querySelectorAll('[data-photo-grid] img').length", returnByValue: true });
+        assert.equal(grid.result.value, 0, name);
       }
       if (query.includes("open=job674")) {
-        const text = await page.send("Runtime.evaluate", { expression: "(document.querySelector('#jf')?.innerText || '') + '\\n' + (document.querySelector('.pgal')?.innerText || '')", returnByValue: true });
-        assert.match(text.result.value, /View cloud photos/, name);
+        const text = await page.send("Runtime.evaluate", { expression: "document.querySelector('#jf')?.innerText || ''", returnByValue: true });
         assert.match(text.result.value, /Email history \(4 photos\)/, name);
         assert.match(text.result.value, /Email photos/, name);
         if (query.includes("shot=empty")) {
           assert.match(text.result.value, /No cloud copies on this job yet\. The 4 emailed photos are separate from this gallery/, name);
-          const n = await page.send("Runtime.evaluate", { expression: "document.querySelectorAll('.pgal button.pth').length", returnByValue: true });
+          const n = await page.send("Runtime.evaluate", { expression: "document.querySelectorAll('[data-photo-grid] button.pth').length", returnByValue: true });
           assert.equal(n.result.value, 0, name);
         }
         if (query.includes("cloud=4")) {
-          assert.match(text.result.value, /View cloud photos \(4\)/, name);
-          const n = await page.send("Runtime.evaluate", { expression: "document.querySelectorAll('.pgal button.pth').length", returnByValue: true });
+          const n = await page.send("Runtime.evaluate", { expression: "document.querySelectorAll('[data-photo-grid] button.pth').length", returnByValue: true });
           assert.equal(n.result.value, 4, name);
-          assert.doesNotMatch(text.result.value, /Receipt/, name);
+          const grid = await page.send("Runtime.evaluate", { expression: "document.querySelector('[data-photo-grid]')?.innerText || ''", returnByValue: true });
+          assert.doesNotMatch(grid.result.value, /Receipt/, name);
         }
       }
       if (query.includes("open=jobphotos")) {
-        const text = await page.send("Runtime.evaluate", { expression: "(document.querySelector('#jf')?.innerText || '') + '\\n' + (document.querySelector('.pgal')?.innerText || '')", returnByValue: true });
-        assert.match(text.result.value, /View cloud photos/, name);
+        const text = await page.send("Runtime.evaluate", { expression: "document.querySelector('#jf')?.innerText || ''", returnByValue: true });
         assert.match(text.result.value, /Email photos/, name);
         assert.doesNotMatch(text.result.value, /📷 Photos/, name);
         if (query.includes("shot=empty")) {
@@ -111,16 +109,16 @@ test("phone shell, quote gate and handlers", async () => {
           assert.match(text.result.value, /Email history \(4 photos\)/, name);
         }
         if (query.includes("shot=gallery")) {
-          const n = await page.send("Runtime.evaluate", { expression: "document.querySelectorAll('.pgal button.pth').length", returnByValue: true });
+          const n = await page.send("Runtime.evaluate", { expression: "document.querySelectorAll('[data-photo-grid] button.pth').length", returnByValue: true });
           assert.ok(n.result.value >= 1, name);
         }
       }
-      if (query.includes("photos=error")) {
+      if (query.includes("photos=error") || query.includes("photos=meta")) {
         const state = await page.send("Runtime.evaluate", { expression: "document.querySelector('[data-photos-state=\"error\"]')?.textContent || ''", returnByValue: true });
         assert.match(state.result.value, /Couldn't load photos \(storage\/unauthorized\)/, name);
         assert.match(state.result.value, /Try again/, name);
-        const btn = await page.send("Runtime.evaluate", { expression: "!!document.querySelector('[data-viewphotos]')", returnByValue: true });
-        assert.equal(btn.result.value, true, name);
+        const empty = await page.send("Runtime.evaluate", { expression: "document.body.innerText.includes('No cloud copies on this job yet')", returnByValue: true });
+        if (query.includes("photos=meta")) assert.equal(empty.result.value, false, name);
       }
       return page;
     }
@@ -138,6 +136,7 @@ test("phone shell, quote gate and handlers", async () => {
     await run("after-phone-gallery-large", "?role=operator&open=gallery&view=large", 390, 844);
     await run("after-phone-detail-empty", "?role=operator&open=job&job=j4&photos=none", 390, 844);
     await run("after-phone-photos-error", "?role=operator&open=detail&photos=error", 390, 844);
+    await run("after-phone-photos-meta", "?role=operator&open=detail&photos=meta", 390, 844);
     await run("after-phone-more", "?role=operator&open=more", 390, 844);
     await run("chat-phone", "?role=operator&open=chat", 390, 844);
     await run("chat-job-phone", "?role=operator&open=jobchat", 390, 844);

@@ -96,6 +96,26 @@ function customerOk(membership, job) {
   return membership.customerIds.includes(job && job.client);
 }
 
+/** Firebase Storage error codes only. A raw server message is not shown. */
+export function storageErrorCode(error) {
+  const raw = error && typeof error === "object" && "code" in error ? error.code : error;
+  const m = /^storage\/[a-z0-9-]{1,40}$/.exec(String(raw || "").trim());
+  return m ? m[0] : "storage/unknown";
+}
+
+/**
+ * One metadata failure is a storage error, not an empty gallery.
+ * `readable: false` must not be used to hide getMetadata or getBlob.
+ */
+export function summarizePhotoListing(rows) {
+  const items = [];
+  for (const row of rows || []) {
+    if (row && row.error) return { ok: false, reason: storageErrorCode(row.error) };
+    items.push(row);
+  }
+  return { ok: true, items };
+}
+
 export function canSeeJob(membership, job) {
   if (!membership?.ok || !job?.id) return false;
   if (jobTenantOf(job) !== membership.tenantId) return false;
@@ -120,7 +140,8 @@ export function jobPhotoPrefix(membership, job) {
  * accepted image. An absent or unknown content type is not shown.
  * A receipt purpose or receipt id is never accepted, even on this prefix.
  */
-export function listedJobPhoto({ membership, job, path, contentType, customMetadata, size, readable } = {}) {
+export function listedJobPhoto({ membership, job, path, contentType, customMetadata, size, readable, error } = {}) {
+  if (error) return deny(storageErrorCode(error));
   if (readable === false) return deny("not-allowed");
   const prefix = jobPhotoPrefix(membership, job);
   if (!prefix.ok) return prefix;
