@@ -4,7 +4,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { initializeTestEnvironment, assertFails, assertSucceeds } from "@firebase/rules-unit-testing";
-import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, setDoc, updateDoc, serverTimestamp, Timestamp } from "firebase/firestore";
+import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, query, setDoc, updateDoc, serverTimestamp, Timestamp, where } from "firebase/firestore";
+import { swmsSignatureData } from "../../app/features/swms-sign.js";
 import { ref, uploadBytes, getBytes, list, listAll, getMetadata, deleteObject } from "firebase/storage";
 
 const ALEX = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";
@@ -286,4 +287,43 @@ test("chat photos stay private to the thread and are not receipt or finance file
   await assertSucceeds(deleteObject(ref(storageOf(ALEX), jobPath)));
   await assertFails(uploadBytes(ref(storageOf(ALEX), "tenants/heartwood/finance/chat.jpg"), jpeg, staffMeta));
   await assertFails(deleteObject(ref(storageOf(ALEX), "tenants/heartwood/jobs/job1/photos/p1.jpg")));
+});
+
+const TINY_SIG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+function swmsPayload(uid, extra = {}) {
+  const now = Date.now();
+  return {
+    ...swmsSignatureData({
+      uid, name: extra.name || "Sam", swmsId: extra.swmsId || "electrical",
+      jobId: extra.jobId || "", jobLabel: extra.jobLabel || "", sig: TINY_SIG, now, device: "rules-test",
+    }),
+    signedAt: serverTimestamp(),
+  };
+}
+
+test("SWMS signatures are self-only for staff and readable by admins", async () => {
+  const mine = await assertSucceeds(addDoc(collection(db("op1"), "swmsSignatures"), swmsPayload("op1", {
+    jobId: "job1", jobLabel: "#2402 · 14 Brightvale Street",
+  })));
+  await assertSucceeds(getDoc(mine));
+  await assertSucceeds(getDocs(query(collection(db("op1"), "swmsSignatures"), where("uid", "==", "op1"))));
+  await assertFails(getDocs(collection(db("op1"), "swmsSignatures")));
+  await assertFails(getDoc(doc(db("idle"), mine.path)));
+  await assertFails(getDocs(collection(db("sup1"), "swmsSignatures")));
+  await assertSucceeds(getDocs(query(collection(db("sup1"), "swmsSignatures"), where("uid", "==", "sup1"))));
+  await assertSucceeds(getDocs(collection(db(ALEX), "swmsSignatures")));
+  await assertSucceeds(getDocs(collection(db(PATRICK), "swmsSignatures")));
+  await assertFails(addDoc(collection(db("op1"), "swmsSignatures"), swmsPayload("idle")));
+  await assertFails(addDoc(collection(db("stranger"), "swmsSignatures"), swmsPayload("stranger")));
+  await assertFails(addDoc(collection(db("op1"), "swmsSignatures"), { ...swmsPayload("op1"), signedAt: Timestamp.fromDate(new Date()) }));
+  await assertFails(addDoc(collection(db("op1"), "swmsSignatures"), { ...swmsPayload("op1"), expiresAtMs: Date.now() + 30 * 86400000 }));
+  await assertFails(addDoc(collection(db("op1"), "swmsSignatures"), { ...swmsPayload("op1"), swmsId: "made-up-method" }));
+  await assertFails(addDoc(collection(db("op1"), "swmsSignatures"), { ...swmsPayload("op1"), sig: "data:image/jpeg;base64,AAAA" }));
+  await assertFails(updateDoc(mine, { name: "Someone else" }));
+  await assertFails(deleteDoc(mine));
+  await assertFails(deleteDoc(doc(db(ALEX), mine.path)));
+  await assertFails(updateDoc(doc(db("op1"), "receipts/rOp"), { amountInc: 99 }));
+  await assertFails(setDoc(doc(db("op1"), "xeroQueue/from-swms"), { status: "queued", by: "op1" }));
+  const signedOut = env.unauthenticatedContext().firestore();
+  await assertFails(getDocs(collection(signedOut, "swmsSignatures")));
 });
