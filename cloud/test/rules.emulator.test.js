@@ -287,3 +287,43 @@ test("chat photos stay private to the thread and are not receipt or finance file
   await assertFails(uploadBytes(ref(storageOf(ALEX), "tenants/heartwood/finance/chat.jpg"), jpeg, staffMeta));
   await assertFails(deleteObject(ref(storageOf(ALEX), "tenants/heartwood/jobs/job1/photos/p1.jpg")));
 });
+
+function fleetBody(uid, extra = {}) {
+  return {
+    type: "vehicle", name: "Preview tipper", rego: "PRE001", regoExpiry: "2026-10-01",
+    coiRequired: true, coiExpiry: "2026-09-15", notes: "", updatedBy: uid, updatedAt: serverTimestamp(),
+    ...extra,
+  };
+}
+function policyBody(uid, extra = {}) {
+  return {
+    type: "workcover", insurer: "WorkCover Queensland", policyNumber: "WC-PREVIEW",
+    startDate: "2025-07-01", expiry: "2026-11-25", amount: "Statutory", notes: "", assetId: "",
+    updatedBy: uid, updatedAt: serverTimestamp(), ...extra,
+  };
+}
+
+test("fleet is signed-in read and admin write; policies stay admin-only", async () => {
+  await assertSucceeds(setDoc(doc(db(ALEX), "tenants", "heartwood", "fleet", "tipper"), fleetBody(ALEX)));
+  await assertSucceeds(getDoc(doc(db("op1"), "tenants", "heartwood", "fleet", "tipper")));
+  await assertSucceeds(getDocs(collection(db("sup1"), "tenants", "heartwood", "fleet")));
+  await assertFails(setDoc(doc(db("op1"), "tenants", "heartwood", "fleet", "nope"), fleetBody("op1")));
+  await assertFails(updateDoc(doc(db("op1"), "tenants", "heartwood", "fleet", "tipper"), { notes: "changed" }));
+  await assertFails(getDoc(doc(db("op2"), "tenants", "heartwood", "fleet", "tipper")));
+  await assertFails(getDocs(collection(env.unauthenticatedContext().firestore(), "tenants", "heartwood", "fleet")));
+  await assertFails(setDoc(doc(db(ALEX), "tenants", "heartwood", "fleet", "bad"), fleetBody(ALEX, { type: "insurance" })));
+
+  await assertSucceeds(setDoc(doc(db(ALEX), "tenants", "heartwood", "policies", "wc"), policyBody(ALEX)));
+  await assertSucceeds(getDoc(doc(db(PATRICK), "tenants", "heartwood", "policies", "wc")));
+  await assertFails(getDoc(doc(db("op1"), "tenants", "heartwood", "policies", "wc")));
+  await assertFails(getDocs(collection(db("sup1"), "tenants", "heartwood", "policies")));
+  await assertFails(setDoc(doc(db("op1"), "tenants", "heartwood", "policies", "leak"), policyBody("op1")));
+  await assertSucceeds(setDoc(doc(db("finOther"), "tenants", "otherco", "policies", "pl"), policyBody("finOther", { type: "public-liability", insurer: "Other Mutual" })));
+  await assertFails(getDoc(doc(db("op1"), "tenants", "otherco", "policies", "pl")));
+  await assertFails(getDoc(doc(db(ALEX), "tenants", "otherco", "policies", "pl")));
+  await assertFails(deleteDoc(doc(db("op1"), "tenants", "heartwood", "policies", "wc")));
+  await assertSucceeds(deleteDoc(doc(db(ALEX), "tenants", "heartwood", "policies", "wc")));
+  await assertFails(deleteDoc(doc(db("sup1"), "tenants", "heartwood", "fleet", "tipper")));
+  await assertSucceeds(deleteDoc(doc(db(PATRICK), "tenants", "heartwood", "fleet", "tipper")));
+  await assertFails(setDoc(doc(db(ALEX), "receipts", "from-fleet"), { uid: ALEX, amountInc: 1 }));
+});

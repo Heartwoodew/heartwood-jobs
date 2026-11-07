@@ -1,0 +1,92 @@
+// Firestore Compliance rules to merge into the LIVE ruleset for heartwood-9f37f.
+// Paste this block once, inside the existing:
+//   service cloud.firestore { match /databases/{database}/documents { ... } }
+// Do not deploy this file, and do not deploy cloud/emulator/firestore.rules.
+// This block does not change jobs, quotes, receipts, finance, xeroQueue or chat.
+// It covers only:
+//   tenants/{tenantId}/fleet/{assetId}      registration and Queensland COI
+//   tenants/{tenantId}/policies/{policyId}  WorkCover and insurance
+// COI is a certificate of inspection, not an insurance policy.
+// Fleet: a signed-in member of that tenant can read. An admin of that tenant writes.
+// Policies: admin of that tenant only. Staff cannot read policy details.
+// Missing profile tenantId means heartwood, same as chat and storage.
+// Alex and Patrick are Heartwood admins. No seed data belongs in these collections.
+
+// BEGIN FLEET RULES
+    function fleetSignedIn() { return request.auth != null; }
+    function fleetIsAlex() { return fleetSignedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
+    function fleetIsPatrick() { return fleetSignedIn() && request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"; }
+    function fleetUserPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function fleetHasProfile() { return fleetSignedIn() && exists(fleetUserPath()); }
+    function fleetProfile() { return get(fleetUserPath()).data; }
+    function fleetExplicitTenant() {
+      return fleetHasProfile() && "tenantId" in fleetProfile() && fleetProfile().tenantId is string && fleetProfile().tenantId.size() > 0;
+    }
+    function fleetCallerTenant() {
+      return fleetExplicitTenant()
+        ? fleetProfile().tenantId
+        : ((fleetHasProfile() || fleetIsAlex() || fleetIsPatrick()) ? "heartwood" : "");
+    }
+    function fleetMember(tenantId) {
+      return fleetSignedIn()
+        && tenantId is string
+        && tenantId.matches('^[a-z0-9][a-z0-9-]{0,39}$')
+        && fleetCallerTenant() == tenantId;
+    }
+    function fleetAdmin(tenantId) {
+      return fleetMember(tenantId) && (
+        fleetIsAlex() || fleetIsPatrick() || (fleetHasProfile() && "role" in fleetProfile() && fleetProfile().role == "admin")
+      );
+    }
+    function fleetDateOk(v) {
+      return v is string && (v == "" || v.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$'));
+    }
+    function fleetAssetOk() {
+      return request.resource.data.keys().hasOnly(["type", "name", "rego", "regoExpiry", "coiRequired", "coiExpiry", "notes", "updatedAt", "updatedBy"])
+        && (request.resource.data.type == "vehicle" || request.resource.data.type == "trailer" || request.resource.data.type == "plant")
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80
+        && request.resource.data.rego is string
+        && request.resource.data.rego.size() <= 20
+        && fleetDateOk(request.resource.data.regoExpiry)
+        && request.resource.data.coiRequired is bool
+        && fleetDateOk(request.resource.data.coiExpiry)
+        && request.resource.data.notes is string
+        && request.resource.data.notes.size() <= 2000
+        && request.resource.data.updatedBy == request.auth.uid
+        && request.resource.data.updatedAt == request.time;
+    }
+    function fleetPolicyOk() {
+      return request.resource.data.keys().hasOnly(["type", "insurer", "policyNumber", "startDate", "expiry", "amount", "notes", "assetId", "updatedAt", "updatedBy"])
+        && (request.resource.data.type == "workcover" || request.resource.data.type == "public-liability" || request.resource.data.type == "vehicle" || request.resource.data.type == "plant" || request.resource.data.type == "contract-works")
+        && request.resource.data.insurer is string
+        && request.resource.data.insurer.size() > 0
+        && request.resource.data.insurer.size() <= 120
+        && request.resource.data.policyNumber is string
+        && request.resource.data.policyNumber.size() <= 60
+        && fleetDateOk(request.resource.data.startDate)
+        && fleetDateOk(request.resource.data.expiry)
+        && request.resource.data.amount is string
+        && request.resource.data.amount.size() <= 40
+        && request.resource.data.notes is string
+        && request.resource.data.notes.size() <= 2000
+        && request.resource.data.assetId is string
+        && request.resource.data.assetId.size() <= 80
+        && request.resource.data.assetId.matches('^[A-Za-z0-9_-]*$')
+        && request.resource.data.updatedBy == request.auth.uid
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    match /tenants/{tenantId}/fleet/{assetId} {
+      allow read: if fleetMember(tenantId);
+      allow create, update: if fleetAdmin(tenantId) && fleetAssetOk();
+      allow delete: if fleetAdmin(tenantId);
+    }
+
+    match /tenants/{tenantId}/policies/{policyId} {
+      allow read: if fleetAdmin(tenantId);
+      allow create, update: if fleetAdmin(tenantId) && fleetPolicyOk();
+      allow delete: if fleetAdmin(tenantId);
+    }
+// END FLEET RULES

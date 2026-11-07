@@ -313,7 +313,7 @@ test("gallery code does not schedule deletion or rewrite retention anchors", () 
   const openFn = app.slice(app.indexOf("async function openPhotoLightbox"), app.indexOf("function wireLightbox"));
   assert.doesNotMatch(openFn, /updateDoc|cloudPhotosAt|photosEmailedAt|getDownloadURL/);
   assert.doesNotMatch(app, /getDownloadURL/);
-  assert.match(readFileSync(new URL("../../app/sw.js", import.meta.url), "utf8"), /hw-shell-v55-chat/);
+  assert.match(readFileSync(new URL("../../app/sw.js", import.meta.url), "utf8"), /hw-shell-v56-compliance/);
   const mirror = app.slice(app.indexOf("async function mirrorJobPhotos"), app.indexOf("function galleryNow"));
   assert.match(mirror, /cloudPhotosAt/);
   assert.match(app, /stampExpiresAfter\(/);

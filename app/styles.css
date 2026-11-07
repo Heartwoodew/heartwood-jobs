@@ -854,3 +854,25 @@ body.operator .job-chat .chat-screen{height:calc(100dvh - 168px - env(safe-area-
   dialog.jobcard .jc-pane[data-pane="chat"] .chat-screen{height:calc(100dvh - 210px)}
   .chat-compose{padding-bottom:calc(8px + env(safe-area-inset-bottom))}
 }
+
+/* Compliance: fleet registration / COI, and admin-only policies. */
+.comp-pro{display:inline-block;margin-left:6px;background:#3b2a1a;color:#e7c59a;border-radius:999px;padding:2px 8px;font-size:12px;font-weight:800;letter-spacing:.02em;vertical-align:2px}
+.comp-help{color:#5c4e42;font-size:14px;line-height:1.4;margin:0 0 12px}
+.comp-list{display:grid;gap:10px;max-width:720px}
+.comp-card{background:#fffdf9;border:1px solid #eadfd3;border-radius:16px;padding:12px 14px}
+.comp-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.comp-top b{font-size:18px;letter-spacing:-.02em}
+.comp-lines{display:grid;gap:6px;margin-top:8px}
+.comp-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.comp-line .lbl{min-width:58px;color:#7a6a5a;font-weight:750}
+.comp-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.comp-add{margin-left:auto}
+.comp-form{display:grid;gap:10px;max-width:560px}
+.comp-form h2{margin:0;font-size:22px}
+.comp-form label{color:#5c4e42;font-weight:650}
+.comp-check{display:flex;align-items:center;gap:10px;min-height:44px;font-weight:750}
+.comp-check input{width:22px;height:22px}
+.comp-banner{margin:8px 0 12px}
+body.operator .comp-list{padding:0 16px 12px}
+body.operator .comp-help.pad-note{padding:4px 16px 8px}
+body.operator .comp-banner{margin:8px 16px 12px}
