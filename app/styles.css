@@ -674,10 +674,10 @@ body.operator .mrow .mst .sub{font-weight:500;color:#7a6a5a}
 body.operator .mob-sec.mday{background:transparent;color:#7a6a5a;border:none;border-top:none;padding:14px 16px 2px;margin:0;text-transform:none;font-size:14px;font-weight:700}
 body.operator .mob-sec.mday span{background:#efe6da;color:#3b2a1a}
 body.operator .mob-tabs{position:fixed;z-index:30;left:50%;bottom:0;transform:translateX(-50%);width:min(560px,100%);
-  display:grid;grid-template-columns:repeat(4,1fr);grid-auto-flow:unset;background:#fffdf9;border-top:1px solid #eadfd3;border-bottom:none;
+  display:grid;grid-template-columns:repeat(5,minmax(0,1fr));grid-auto-flow:unset;background:#fffdf9;border-top:1px solid #eadfd3;border-bottom:none;
   padding-bottom:env(safe-area-inset-bottom);box-shadow:0 -6px 18px rgba(59,42,26,.05)}
-body.operator .mob-tabs button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-height:56px;padding:8px 2px 10px;
-  border:none;border-bottom:none;border-radius:0;background:transparent;color:#7a6a5a;font-size:12px;font-weight:650}
+body.operator .mob-tabs button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-height:56px;padding:8px 0 10px;
+  border:none;border-bottom:none;border-radius:0;background:transparent;color:#7a6a5a;font-size:11px;font-weight:650;position:relative}
 body.operator .mob-tabs button.on{color:#3b2a1a;border-bottom-color:transparent}
 body.operator .mob-tabs .mic{display:grid;place-items:center;width:28px;height:24px}
 body.operator .toast{bottom:calc(78px + env(safe-area-inset-bottom));z-index:40}
@@ -791,3 +791,55 @@ dialog.jobcard:has(.qw){max-width:520px;background:#f6f1ea}
 .qw-machrate{border:1px solid var(--sm-line);border-radius:8px;padding:8px 10px;margin:8px 0}
 .qw-machrate legend{font-weight:600;padding:0 4px}
 .cloudret{margin:8px 16px;padding:8px 10px;border:1px solid var(--sm-line);border-radius:8px;background:#fff}
+
+/* Team chat and job chat. Cream page, coffee bubbles, caramel send. */
+.nav-badge{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:#8a5a2b;color:#fff;font-size:11px;font-weight:750;line-height:1}
+.nav-badge[hidden]{display:none !important}
+.sm-nav .nav-badge{margin-left:auto}
+body.operator .mob-tabs .nav-badge{position:absolute;top:4px;right:4px}
+.jc-tabs .nav-badge,.job-switch .nav-badge{margin-left:6px}
+.chat-screen{display:flex;flex-direction:column;min-height:0;height:calc(100dvh - 150px);background:#f6f1ea;color:#2b2118;overflow:hidden}
+.chat-head,.chat-compose,.chat-pending{flex:0 0 auto}
+.sm-main .chat-screen{height:calc(100dvh - 130px)}
+body.operator .mob:has(.chat-screen){padding-bottom:0}
+body.operator .chat-screen{height:calc(100dvh - 64px - 78px - env(safe-area-inset-bottom))}
+body.operator .job-chat .chat-screen{height:calc(100dvh - 168px - env(safe-area-inset-bottom))}
+.jc-pane[data-pane="chat"] .chat-screen{height:min(62vh,560px)}
+.chat-head{padding:8px 16px 4px}
+.chat-head h2{margin:0;font-size:22px;letter-spacing:-.02em}
+.chat-head p{margin:2px 0 0;color:#7a6a5a;font-size:14px}
+.chat-log{flex:1 1 auto;overflow-y:auto;padding:8px 12px 12px;display:flex;flex-direction:column;gap:8px;-webkit-overflow-scrolling:touch}
+.chat-log>:first-child{margin-top:auto}
+.chat-empty{color:#7a6a5a;text-align:center;margin:28px 16px}
+.chat-msg{max-width:min(86%,420px);background:#fffdf9;border:1px solid #eadfd3;border-radius:16px 16px 16px 6px;padding:8px 12px 10px}
+.chat-msg.mine{align-self:flex-end;background:#3b2a1a;color:#f6f1ea;border-color:#3b2a1a;border-radius:16px 16px 6px 16px}
+.chat-meta{font-size:12px;color:#7a6a5a;margin-bottom:2px}
+.chat-msg.mine .chat-meta{color:#e7c59a}
+.chat-text{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:16px;line-height:1.35}
+.chat-pic{display:block;margin-top:6px;padding:0;border:none;background:transparent;border-radius:12px;overflow:hidden;max-width:220px}
+.chat-pic img{display:block;width:100%;max-height:180px;object-fit:cover;border-radius:12px;background:#efe6da}
+.chat-del{margin-top:4px;border:none;background:transparent;color:#8a5a2b;font-size:13px;padding:4px 0;min-height:32px}
+.chat-msg.mine .chat-del{color:#e7c59a}
+.chat-pending{display:flex;align-items:center;gap:8px;padding:6px 12px}
+.chat-pending[hidden]{display:none !important}
+.chat-pending img{width:48px;height:48px;object-fit:cover;border-radius:8px}
+.chat-clear{min-height:36px;background:#efe6da;border-color:#eadfd3}
+.chat-compose{display:flex;gap:8px;align-items:flex-end;padding:8px 10px calc(8px + env(safe-area-inset-bottom));background:#fffdf9;border-top:1px solid #eadfd3}
+.chat-compose textarea{flex:1;font-size:16px;border-radius:12px;border:1px solid #eadfd3;padding:10px 12px;min-height:44px;max-height:120px;resize:none;background:#fff;color:#2b2118}
+.chat-send,.chat-attach{min-width:52px;min-height:44px;border-radius:12px}
+.chat-send{background:#8a5a2b;border-color:#8a5a2b;color:#fff;font-weight:750}
+.chat-attach{background:#efe6da;border-color:#eadfd3;color:#3b2a1a;font-size:22px;font-weight:700}
+.chat-denied{padding:24px 16px}
+.chat-denied p{color:#5c4e42}
+.job-chat[hidden],.det-body[hidden],.mactions[hidden]{display:none !important}
+.job-switch{display:flex;gap:8px;padding:8px 16px 0}
+.job-switch button{flex:1;border:none;border-radius:999px;background:#efe6da;min-height:44px;font-weight:750;color:#5c4e42}
+.job-switch button.on{background:#3b2a1a;color:#f6f1ea}
+.job-switch button.on .nav-badge{background:#e7c59a;color:#3b2a1a}
+.chat-view{position:fixed;inset:0;z-index:90;background:#3b2a1a;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.chat-view img{max-width:100%;max-height:calc(100dvh - 72px);object-fit:contain}
+.chat-view-x{position:absolute;top:8px;left:8px;color:#f6f1ea;background:transparent;border:none;min-height:44px;font-weight:700}
+@media (max-width:760px){
+  dialog.jobcard .jc-pane[data-pane="chat"] .chat-screen{height:calc(100dvh - 210px)}
+  .chat-compose{padding-bottom:calc(8px + env(safe-area-inset-bottom))}
+}

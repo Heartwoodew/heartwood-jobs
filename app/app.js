@@ -12,6 +12,7 @@ import { installQuotes, adminViewRouter } from "./features/quotes.js";
 import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPlanned, jobPhotoPrefix } from "./features/cloud-storage.js";
 import { buildOperationalExport, retentionAdminText, retentionView } from "./features/cloud-retention.js";
 import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, galleryHtml, largePhotoHtml } from "./features/photo-gallery.js";
+import { installChatApp } from "./features/chat-ui.js";
 
 const cfg = useEmulator ? { ...firebaseConfig, apiKey: "demo-key", projectId: "demo-heartwood" } : firebaseConfig;
 const fb = initializeApp(cfg);
@@ -53,6 +54,7 @@ function guessType(text) {
 }
 
 let me = null, staff = [], jobs = [], unsub = null;
+let CHAT = { badge() { return ""; }, teamHtml() { return ""; }, jobHtml() { return ""; }, mount() {}, openJob() {}, start() {}, stop() {}, watch() {}, refresh() {} };
 let QG = { bindAdmin() {} }; // Quotes module; filled after helpers load
 const ALEX_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";      // Alex has no users/{uid} profile doc; always staff
 const ui = { view: "list", staffF: "", typeF: "", photoLists: {}, photoUrls: {}, photoBlobs: {}, photoJobs: {}, photoPaint: 0 };
@@ -61,6 +63,7 @@ const ui = { view: "list", staffF: "", typeF: "", photoLists: {}, photoUrls: {},
 $("#logout").onclick = () => signOut(auth);
 onAuthStateChanged(auth, async user => {
   if (unsub) { unsub(); unsub = null; }
+  CHAT.stop();
   if (!user) { me = null; $("#who").textContent = ""; $("#logout").classList.add("hidden"); return renderLogin(); }
   // Admin = UID listed in firestore.rules (Alex, sync, Patrick): detected by being ALLOWED to list users - so if the
   // rules don't (yet) make someone admin they simply fall back to the operator view.
@@ -73,6 +76,7 @@ onAuthStateChanged(auth, async user => {
   me = users ? { uid: user.uid, name: (prof && prof.name) || "Alex", role: "admin", staffRole: prof && prof.role } : { uid: user.uid, ...prof };
   me.cloudProfile = prof;
   $("#who").textContent = `${me.name} · ${me.role}`; $("#logout").classList.remove("hidden");
+  CHAT.start();
   if (me.role === "admin") {
     const logins = users.docs.map(d => ({ uid: d.id, ...d.data() })).filter(u => u.role === "operator" || u.role === "supervisor");
     staff = [{ uid: ALEX_UID, name: "Alex" }, ...logins.filter(u => u.uid !== ALEX_UID)];
@@ -82,14 +86,14 @@ onAuthStateChanged(auth, async user => {
     // Invoicing: every Done job (any date), admin only.
     const u2 = onSnapshot(query(collection(db, "jobs"), where("status", "==", "Done")), s => { ui.done = s.docs.map(d => ({ id: d.id, ...d.data() })); donePill(); if (ui.view === "invoices" || ui.view === "completed" || ui.view === "home") renderAdmin(); });
     const u3 = onSnapshot(collection(db, "incidents"), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); if (ui.view === "safety" || ui.view === "home") renderAdmin(); incRefresh(); }, e => console.warn("incidents", e.code));
-    unsub = () => { u1(); u2(); u3(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub();
+    unsub = () => { u1(); u2(); u3(); CHAT.stop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub();
     getDocs(query(collection(db, "jobs"), where("date", "==", ""))).then(s => { ui.undated = s.docs.map(d => ({ id: d.id, ...d.data() })); addNameOnlyStaff(ui.undated); renderAdmin(); });
   } else {
     // Operators may only list jobs assigned to them (enforced by firestore.rules).
     const q = query(collection(db, "jobs"), where("assigned", "array-contains", user.uid));
     const u1 = onSnapshot(q, s => { jobs = s.docs.map(d => ({ id: d.id, ...d.data() })); renderOperator(); });
     const u3 = onSnapshot(query(collection(db, "incidents"), where("reportedBy", "==", user.uid)), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); if (!ui.opSel && (ui.opTab || "today") === "today") renderOperator(); incRefresh(); }, e => console.warn("incidents", e.code));
-    unsub = () => { u1(); u3(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub();
+    unsub = () => { u1(); u3(); CHAT.stop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub();
   }
 });
 
@@ -134,21 +138,22 @@ function queueOf(j) {
 const jobNo = j => j.sm8JobNo ? j.sm8JobNo : "HW-" + String(j.id || "").slice(-4).toUpperCase();
 const firstLine = s => String(s || "").split(/\n|\. /)[0];
 const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Unscheduled";
-const NAV = [["home", "⌂", "Home"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["inbox", "✉", "Inbox", 0, 1],
+const NAV = [["home", "⌂", "Home"], ["chat", "💬", "Chat"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["inbox", "✉", "Inbox", 0, 1],
   ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["reimb", "💵", "Reimbursements", 0, 1], ["settings", "⚙", "Settings", 1]];
 ui.view = "home"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
 const PHONE = matchMedia("(max-width:760px)");
 const TOUCH = matchMedia("(pointer:coarse)");
 PHONE.addEventListener?.("change", () => { if (me && me.role === "admin") renderAdmin(); });
 // Grouped side menu: top items, then collapsible groups (open/closed remembered on this device; the group holding the current screen is always open).
-const NAV_TOP = ["home", "inbox", "clients"];
+const NAV_TOP = ["home", "chat", "inbox", "clients"];
 const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "jobs", "unscheduled", "quotes", "completed", "myjobs"]], ["money", "$", "Money", ["invoices", "reimb", "timesheet"]], ["safety", "⚠", "Safety", ["safety", "swms"]]];
 const NAV_LBL = { safety: "Incidents" };
 ui.navCol = (() => { try { return JSON.parse(localStorage.getItem("hwNavCol") || "{}"); } catch { return {}; } })();
 function shell(inner) {
   const cur = NAV.find(n => n[0] === ui.view);
   const item = k => { const x = NAV.find(n => n[0] === k); if (!x || x[3] || (x[4] && !isOwner()) || (k === "invoices" && (!me || me.role !== "admin")) || (k === "quotes" && !canQuote())) return "";
-    return `<button class="sm-nav ${ui.view === k ? "on" : ""}" data-view="${k}" title="${esc(NAV_LBL[k] || x[2])}"><span class="ic">${x[1]}</span><span class="lbl">${esc(NAV_LBL[k] || x[2])}</span></button>`; };
+    const badge = k === "chat" ? CHAT.badge("staff") : "";
+    return `<button class="sm-nav ${ui.view === k ? "on" : ""}" data-view="${k}" title="${esc(NAV_LBL[k] || x[2])}"><span class="ic">${x[1]}</span><span class="lbl">${esc(NAV_LBL[k] || x[2])}</span>${badge}</button>`; };
   const grp = ([g, ic, n, ks]) => { const has = ks.includes(ui.view), open = has || !ui.navCol[g];
     return `<div class="sm-grp ${open ? "open" : ""} ${has ? "has" : ""}"><button class="sm-gh" data-grp="${g}" aria-expanded="${open}"><span class="ic">${ic}</span><span class="lbl">${n}</span><span class="car">${open ? "▾" : "▸"}</span></button>
       <div class="sm-gi">${ks.map(item).join("")}</div></div>`; };
@@ -975,12 +980,15 @@ function renderAdmin() {
   if (ui.myJobs) return renderOperator();
   if ($("#dlg").open) return;          // don't redraw under an open job card
   if (ui.view === "timesheet" && ui.tsDirty && $("#tsf")) return;   // don't wipe unsaved hours
+  if (ui.view === "chat" && document.activeElement?.closest?.(".chat-compose")) return;
   document.body.className = "admin";
   const fj = filtered(), und = (ui.undated || []).filter(j => (!ui.typeF || j.type === ui.typeF));
   const all = [...fj, ...und.filter(u => !fj.some(j => j.id === u.id))];
   const quotesHtml = ui.view === "quotes" ? adminViewRouter(ui.view, ui, { esc, $$, staff, jobs: all, todayStr, rerender: () => renderAdmin(), canEditQuoteRates }) : null;
-  $("#app").innerHTML = shell(ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : quotesHtml != null ? quotesHtml : jobsView(all));
+  $("#app").innerHTML = shell(ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : quotesHtml != null ? quotesHtml : jobsView(all));
   const A = $("#app"); inboxBadge();
+  CHAT.watch([...(jobs || []), ...(ui.undated || [])]);
+  if (ui.view === "chat") CHAT.mount(A);
   if (ui.view === "invoices") bindInvoices(A);
   if (ui.view === "clients") bindClients(A);
   if (ui.view === "inbox") bindInbox(A);
@@ -1214,9 +1222,9 @@ function jobTabs(d, j) {
     <div class="kf"><small>Staff</small><b>${names.length ? esc(names.map(label).join(", ")) : `<span class="unal">Unallocated</span>`}</b></div>
     <div class="kf"><small>PO</small><b>${j.po ? esc(j.po) : `<span class="nopo">No PO</span>`}</b></div>
     <div class="kf"><small>Status</small><b class="pstack">${st}</b></div>${canXero() && q === "Completed" ? `<div class="kf kf-xero"><small>Xero</small><b>${xcCell(j)}</b></div>` : ""}</div>
-    <div class="jc-tabs" role="tablist">${[["details", "Details"], ["photos", "Photos"], ["sup", "Supervisor"], ["safety", "Safety"], ["hist", "History"]].map(([k, l]) => `<button type="button" role="tab" data-jt="${k}">${l}</button>`).join("")}</div>`);
+    <div class="jc-tabs" role="tablist">${[["details", "Details"], ["chat", "Chat"], ["photos", "Photos"], ["sup", "Supervisor"], ["safety", "Safety"], ["hist", "History"]].map(([k, l]) => `<button type="button" role="tab" data-jt="${k}">${l}${k === "chat" ? CHAT.badge("job_" + j.id) : ""}</button>`).join("")}</div>`);
   const pane = k => { const x = document.createElement("div"); x.className = "jc-pane"; x.dataset.pane = k; return x; };
-  const P = { details: pane("details"), photos: pane("photos"), sup: pane("sup"), safety: pane("safety"), hist: pane("hist") };
+  const P = { details: pane("details"), chat: pane("chat"), photos: pane("photos"), sup: pane("sup"), safety: pane("safety"), hist: pane("hist") };
   const cols = [...body.querySelectorAll(".jc-col")];
   const detL = document.createElement("div"), detR = document.createElement("div"); detL.className = detR.className = "jc-col";
   cols.forEach((c, ci) => { let sec = "details";
@@ -1231,8 +1239,9 @@ function jobTabs(d, j) {
   P.safety.innerHTML = `<h4>Safety</h4><div class="safebtns"><button type="button" class="sm-btn" data-swms="${j.id}">📋 View SWMS</button><button type="button" class="sm-btn incbtn" data-inc="${j.id}">⚠ Report incident on this job</button></div>
     <h4>Incidents on this job</h4>${incs.map(r => `<div class="at-j" data-incid="${esc(r.id)}"><b>${esc(r.reportNo || "")}</b> ${esc(r.type || "")} · <span class="qpill ${incCls(r)}">${esc(r.status)}</span></div>`).join("") || `<p class="muted sub">None reported.</p>`}`;
   if (!P.hist.children.length) P.hist.innerHTML = `<p class="muted sub">No history yet.</p>`;
+  P.chat.innerHTML = CHAT.jobHtml(j);
   body.innerHTML = ""; body.classList.add("tabbed"); Object.values(P).forEach(x => body.appendChild(x));
-  const show = k => { ui.jtab = k; f.querySelectorAll("[data-jt]").forEach(b => b.classList.toggle("on", b.dataset.jt === k)); Object.entries(P).forEach(([kk, x]) => x.hidden = kk !== k); };
+  const show = k => { ui.jtab = k; f.querySelectorAll("[data-jt]").forEach(b => b.classList.toggle("on", b.dataset.jt === k)); Object.entries(P).forEach(([kk, x]) => x.hidden = kk !== k); if (k === "chat") CHAT.openJob(P.chat, j); };
   // v47: facts + tabs + panes share ONE scroll area (phones); display:contents elsewhere so iPad/desktop are unchanged
   if (!f.querySelector(".jc-scroll")) { const sc = document.createElement("div"); sc.className = "jc-scroll";
     f.insertBefore(sc, f.querySelector(".jc-facts")); sc.append(f.querySelector(".jc-facts"), f.querySelector(".jc-tabs"), body); }
@@ -1680,6 +1689,7 @@ const ICO = {
   jobs: `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="3.5" width="15" height="17" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 8h8M8 12h8M8 16h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`,
   photos: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3.2l1.4-2h6.8l1.4 2H20a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="12" cy="13" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>`,
   more: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`,
+  chat: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6.5h14a1 1 0 0 1 1 1V15a1 1 0 0 1-1 1H9l-3.5 3v-3H5a1 1 0 0 1-1-1V7.5a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>`,
   back: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6 8.5 12l6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   play: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>`,
   pin: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-6.1 7-11a7 7 0 1 0-14 0c0 4.9 7 11 7 11z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="10" r="2.1" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>`
@@ -1709,11 +1719,11 @@ const longDate = s => {
   const month = d.toLocaleDateString("en-AU", { month: "long", timeZone: "UTC" });
   return `${w}, ${day} ${month}`;
 };
-const opTabKey = t => t === "week" ? "week" : t === "photos" ? "photos" : t === "today" ? "today" : "more";
+const opTabKey = t => t === "week" ? "week" : t === "photos" ? "photos" : t === "chat" ? "chat" : t === "today" ? "today" : "more";
 const opTabs = on => {
   const key = opTabKey(on);
-  const tabs = [["today", "Today", ICO.today], ["week", "Jobs", ICO.jobs], ["photos", "Photos", ICO.photos], ["more", "More", ICO.more]];
-  return `<nav class="mob-tabs" aria-label="Sections">${tabs.map(([k, n, ic]) => `<button type="button" data-tab="${k}" class="${key === k ? "on" : ""}"${key === k ? ` aria-current="page"` : ""}><span class="mic">${ic}</span><span>${n}</span></button>`).join("")}</nav>`;
+  const tabs = [["today", "Today", ICO.today], ["week", "Jobs", ICO.jobs], ["chat", "Chat", ICO.chat], ["photos", "Photos", ICO.photos], ["more", "More", ICO.more]];
+  return `<nav class="mob-tabs" aria-label="Sections">${tabs.map(([k, n, ic]) => `<button type="button" data-tab="${k}" class="${key === k ? "on" : ""}"${key === k ? ` aria-current="page"` : ""}><span class="mic">${ic}</span><span>${n}</span>${k === "chat" ? CHAT.badge("staff") : ""}</button>`).join("")}</nav>`;
 };
 const adminBack = () => me.role === "admin" ? `<button class="mback adminback" id="toadmin" type="button">Admin view</button>` : "";
 const opSeg = on => `<div class="seg mob-seg" role="group" aria-label="When">${[["today", "Today"], ["week", "Upcoming"]].map(([k, n]) => `<button type="button" data-tab="${k}" class="${on === k ? "on" : ""}">${n}</button>`).join("")}</div>`;
@@ -1734,7 +1744,7 @@ function bindOp(mine) {
   if ($("#toadmin")) $("#toadmin").onclick = () => { ui.myJobs = false; ui.opSel = null; renderAdmin(); };
   $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; renderOperator(); window.scrollTo(0, 0); });
   $("#app").querySelectorAll("[data-go]").forEach(b => b.onclick = () => { if (b.dataset.go === "swms") return swmsOverlay(); ui.opTab = b.dataset.go; renderOperator(); window.scrollTo(0, 0); });
-  const openJob = id => { ui.opSel = id; renderOperator(); window.scrollTo(0, 0); };
+  const openJob = id => { if (ui.opSel !== id) ui.jobPane = "job"; ui.opSel = id; renderOperator(); window.scrollTo(0, 0); };
   $("#app").querySelectorAll(".mrow").forEach(r => {
     r.onclick = e => { if (e.target.closest("a, button")) return; openJob(r.dataset.id); };
     r.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openJob(r.dataset.id); } };
@@ -1748,10 +1758,12 @@ function bindOp(mine) {
 }
 function renderOperator() {
   document.body.className = "operator";
+  CHAT.watch(jobs);
   const t0 = todayStr(), t1 = addDays(t0, 1), wkEnd = addDays(t0, 7);
   const mine = jobs.filter(j => j.status !== "Cancelled" && (me.role !== "admin" || (j.assigned || []).includes(me.uid))).sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
   const sel = ui.opSel && mine.find(j => j.id === ui.opSel);
   if (sel) return renderOpDetail(sel);
+  if (ui.opTab === "chat" && document.activeElement?.closest?.(".chat-compose")) return;
   if (!ui.opTab || ui.opTab === "home") ui.opTab = "today";
   if (ui.opTab === "quotes" && !(canQuote() && me.role !== "admin")) ui.opTab = "more";
   if (ui.opTab === "quotes") {
@@ -1781,6 +1793,14 @@ function renderOperator() {
       ${myIncidentsHtml()}
       ${opTabs("more")}</div>`;
     bindOp(mine); return;
+  }
+  if (ui.opTab === "chat") {
+    $("#app").innerHTML = `<div class="mob">${adminBack()}
+      ${CHAT.teamHtml()}
+      ${opTabs("chat")}</div>`;
+    bindOp(mine);
+    CHAT.mount($("#app"));
+    return;
   }
   if (ui.opTab === "photos") {
     const list = mine.filter(j => j.status !== "Cancelled");
@@ -1824,9 +1844,15 @@ function renderOpDetail(j) {
   const crew = namesOf(j);
   const type = TYPES[j.type] || "Job";
   const addrLine = [p.street, p.place].filter(Boolean).join(", ") || p.full || j.address || "";
+  const onChat = ui.jobPane === "chat";
   $("#app").innerHTML = `<div class="mob"><div class="mob-bar det ${QCLS[q]}"><button class="mback" id="back" type="button">${ICO.back}<span class="sr">Jobs</span></button>
       <div class="mob-bar-txt"><div class="mob-title">Job details</div>${started ? ipTop(j, "onbar") : ""}<div class="mob-sub">${done ? "Completed" : started ? "In progress" : "Scheduled"} · #${esc(jobNo(j))}</div></div></div>
-    <div class="det-body">
+    <div class="job-switch" role="tablist" aria-label="Job sections">
+      <button type="button" data-jtab="job" class="${onChat ? "" : "on"}">Job</button>
+      <button type="button" data-jtab="chat" class="${onChat ? "on" : ""}">Chat ${CHAT.badge("job_" + j.id)}</button>
+    </div>
+    <div class="job-chat"${onChat ? "" : " hidden"}></div>
+    <div class="det-body"${onChat ? " hidden" : ""}>
       <div class="typepill">${esc(type)}</div>
       <h1 class="det-lot">${esc(p.head || "Job")}</h1>
       <p class="det-addr">${esc(addrLine || "-")}</p>
@@ -1843,7 +1869,7 @@ function renderOpDetail(j) {
       <div class="mcard safecard"><div class="mlbl">Safety</div><button type="button" class="mnote" data-swms="${j.id}">View SWMS</button><button type="button" class="mnote incbtn" data-inc="${j.id}">Report incident</button></div>
       <div class="mcard">${jobReceiptsHtml(j)}</div>
     </div>
-    <div class="mactions">${done ? `<div class="donebar">Completed${j.loads ? ` · ${esc(j.loads)} loads` : ""}</div>` :
+    <div class="mactions"${onChat ? " hidden" : ""}>${done ? `<div class="donebar">Completed${j.loads ? ` · ${esc(j.loads)} loads` : ""}</div>` :
       `<button class="mbtn start" type="button" data-act="start" ${started ? "disabled" : ""}>${ICO.play}<span>${started ? "Started" : "Start job"}</span></button>
        <button class="mbtn complete" type="button" data-act="done">Complete job</button>`}
       <button type="button" class="mbtn mnote op-photo" id="emailph">${ICO.photos}<span>Add photos</span></button>
@@ -1851,7 +1877,19 @@ function renderOpDetail(j) {
       <a class="mcard link mbtn outline" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener">${ICO.pin}<span>Get directions</span></a>
     </div></div>`;
   rememberJob(j); $("#emailph").onclick = () => emailPhotos(j); wireJobReceipts(j); fillSupCard(j); watchJobPhotos(j); paintPhotoSlots();
-  $("#back").onclick = () => { ui.opSel = null; renderOperator(); };
+  const showJobPane = which => {
+    ui.jobPane = which === "chat" ? "chat" : "job";
+    $("#app").querySelectorAll("[data-jtab]").forEach(b => { b.classList.toggle("on", b.dataset.jtab === ui.jobPane); b.setAttribute("aria-selected", b.dataset.jtab === ui.jobPane ? "true" : "false"); });
+    const chatOn = ui.jobPane === "chat";
+    document.querySelector(".det-body")?.toggleAttribute("hidden", chatOn);
+    document.querySelector(".mactions")?.toggleAttribute("hidden", chatOn);
+    const pane = document.querySelector(".job-chat");
+    pane?.toggleAttribute("hidden", !chatOn);
+    if (chatOn) CHAT.openJob(pane, j);
+  };
+  $("#app").querySelectorAll("[data-jtab]").forEach(b => b.onclick = () => showJobPane(b.dataset.jtab));
+  if (onChat) CHAT.openJob(document.querySelector(".job-chat"), j);
+  $("#back").onclick = () => { ui.opSel = null; ui.jobPane = "job"; renderOperator(); };
   $("#app").querySelectorAll("[data-act]").forEach(b => b.onclick = () => opAction(j, b.dataset.act));
 }
 const logEntry = text => ({ text, by: me.uid, byName: me.name, at: new Date().toLocaleString("en-AU", { timeZone: TZ, dateStyle: "short", timeStyle: "short" }) });
@@ -2502,6 +2540,7 @@ document.addEventListener("click", e => {
   setInterval(() => box.classList.toggle("hidden", !me), 1000);
 })();
 
+CHAT = installChatApp({ db, storage, getMe: () => me, toast });
 // ---- Guided Quotes (CallUp, Nov 2026). Rates in meta/quoteRates — never invented. No GPS in this build.
 QG = installQuotes({
   db, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, collection, query, where, onSnapshot, serverTimestamp, arrayUnion,

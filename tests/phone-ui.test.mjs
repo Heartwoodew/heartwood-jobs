@@ -45,6 +45,25 @@ test("phone shell, quote gate and handlers", async () => {
       assert.deepEqual(errors, [], name + " exceptions");
       assert.deepEqual(data.errs, [], name + " page errors " + data.errs.join("\n"));
       if (query.includes("check=1")) assert.equal(data.check, "pass", data.fails);
+      if (query.includes("open=chat")) {
+        const text = await page.send("Runtime.evaluate", { expression: "document.querySelector('.chat-log')?.innerText || ''", returnByValue: true });
+        assert.match(text.result.value, /Brightvale slab is clear/, name);
+        assert.match(text.result.value, /See you there/, name);
+        const order = await page.send("Runtime.evaluate", { expression: "(() => { const t=[...document.querySelectorAll('.chat-msg')].map(n=>n.innerText); return t.findIndex(s=>s.includes('Brightvale')) < t.findIndex(s=>s.includes('See you there')); })()", returnByValue: true });
+        assert.equal(order.result.value, true, name + " newest last");
+        const img = await page.send("Runtime.evaluate", { expression: "!!document.querySelector('.chat-pic img')", returnByValue: true });
+        assert.equal(img.result.value, true, name);
+        const scrolled = await page.send("Runtime.evaluate", { expression: "(() => { const log=document.querySelector('.chat-log'); if(!log) return false; return log.scrollHeight - log.scrollTop - log.clientHeight < 80; })()", returnByValue: true });
+        assert.equal(scrolled.result.value, true, name + " stuck to bottom");
+        const calls = await page.send("Runtime.evaluate", { expression: "JSON.stringify((window.__fbCalls||[]).map(c=>c.op))", returnByValue: true });
+        assert.doesNotMatch(calls.result.value, /getDownloadURL/, name);
+        assert.match(calls.result.value, /getBlob/, name);
+      }
+      if (query.includes("open=jobchat")) {
+        const text = await page.send("Runtime.evaluate", { expression: "document.querySelector('.job-chat')?.innerText || ''", returnByValue: true });
+        assert.match(text.result.value, /Road base is on the truck/, name);
+        assert.match(text.result.value, /backblade/, name);
+      }
       if (query.includes("open=gallery")) {
         const g = await page.send("Runtime.evaluate", { expression: "document.querySelector('.pgal')?.innerText || ''", returnByValue: true });
         assert.match(g.result.value, /2027-02-06/, name);
@@ -120,6 +139,8 @@ test("phone shell, quote gate and handlers", async () => {
     await run("after-phone-detail-empty", "?role=operator&open=job&job=j4&photos=none", 390, 844);
     await run("after-phone-photos-error", "?role=operator&open=detail&photos=error", 390, 844);
     await run("after-phone-more", "?role=operator&open=more", 390, 844);
+    await run("chat-phone", "?role=operator&open=chat", 390, 844);
+    await run("chat-job-phone", "?role=operator&open=jobchat", 390, 844);
     await run("after-desktop-operator", "?role=operator", 1280, 800);
     await run("after-desktop-admin", "?role=admin", 1280, 800);
     await run("after-quote-wizard", "?role=supervisor&open=wizard", 390, 844);

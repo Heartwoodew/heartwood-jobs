@@ -86,15 +86,34 @@ export function initializeFirestore() { return {}; }
 export function connectFirestoreEmulator() {}
 export function persistentLocalCache() { return {}; }
 export function persistentMultipleTabManager() { return {}; }
-export function collection(_db, name) { return { _col: name }; }
-export function doc(a, b, c) {
-  if (a && typeof a === "object" && a._col && b == null) return { _col: a._col, _id: "auto" };
-  return { _col: b, _id: c };
+export function collection(_db, name, ...rest) {
+  const parts = [name, ...rest].filter(x => typeof x === "string");
+  return { _col: parts[parts.length - 1], _path: parts.join("/") };
 }
-export function query(ref) { return { _col: ref && ref._col, _q: true }; }
+export function doc(a, ...parts) {
+  if (!parts.length) {
+    if (a && typeof a === "object") return { _col: a._col, _path: a._path, _id: "auto" };
+    return { _col: a, _id: "auto" };
+  }
+  return { _col: parts.length >= 2 ? parts[parts.length - 2] : parts[0], _id: parts[parts.length - 1], _path: parts.join("/") };
+}
+export function query(ref) { return { _col: ref && ref._col, _path: ref && ref._path, _id: ref && ref._id, _q: true }; }
 export function where() { return {}; }
 export function orderBy() { return {}; }
+export function limitToLast() { return {}; }
 export function serverTimestamp() { return { _server: true }; }
+function chatStamp(value) {
+  const d = value instanceof Date ? value : new Date(value || Date.now());
+  const ms = Number.isNaN(d.getTime()) ? Date.now() : d.getTime();
+  return { seconds: Math.floor(ms / 1000), nanoseconds: 0, toDate: () => new Date(ms), toMillis: () => ms };
+}
+function chatRows(thread) {
+  const table = (typeof window !== "undefined" && window.HW_CHAT) || {};
+  return (table[thread] || []).map(row => {
+    const createdAt = row.createdAt && row.createdAt.toDate ? row.createdAt : chatStamp(row.createdAt);
+    return { ...row, createdAt };
+  });
+}
 export function arrayUnion(...xs) { return { _union: xs }; }
 
 export function getDoc(ref) {
@@ -137,9 +156,29 @@ export function getDocs(ref) {
 export function onSnapshot(ref, onNext) {
   const col = ref && ref._col;
   const id = ref && ref._id;
-  record("onSnapshot", { col, id });
+  const path = (ref && ref._path) || "";
+  record("onSnapshot", { col, id, path });
   queueMicrotask(() => {
     try {
+      if (path.includes("/chatSeen/")) {
+        onNext({ id, exists: () => false, data: () => undefined });
+        return;
+      }
+      if (path.includes("/chats/") && path.endsWith("/messages")) {
+        onNext(snap(chatRows(path.split("/").at(-2))));
+        return;
+      }
+      if (path.includes("/chats/")) {
+        const thread = path.split("/").at(-1);
+        const rows = chatRows(thread);
+        const last = rows[rows.length - 1];
+        onNext({
+          id: thread,
+          exists: () => !!last,
+          data: () => (last ? { lastAt: last.createdAt, lastSenderUid: last.senderUid, lastSenderName: last.senderName, preview: last.text || "Photo" } : undefined),
+        });
+        return;
+      }
       if (col === "jobs" && id && id !== "auto") {
         const row = JOBS.find(j => j.id === id);
         onNext({
@@ -214,11 +253,28 @@ export function getBlob(r) {
   const path = r && (r.fullPath || r.path);
   const o = storageObjects().find(x => x.path === path);
   record("getBlob", { path });
+  if (!o && String(path || "").includes("/chat/")) {
+    const c = document.createElement("canvas");
+    c.width = 640; c.height = 360;
+    const g = c.getContext("2d");
+    g.fillStyle = "#e7c59a"; g.fillRect(0, 0, 640, 360);
+    g.strokeStyle = "#3b2a1a"; g.lineWidth = 12; g.strokeRect(18, 18, 604, 324);
+    g.fillStyle = "#3b2a1a"; g.font = "bold 42px system-ui, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
+    g.fillText("Site photo", 320, 180);
+    return new Promise(resolve => c.toBlob(blob => resolve(blob), "image/jpeg", 0.86));
+  }
   if (!o) return Promise.reject(Object.assign(new Error("object-not-found"), { code: "storage/object-not-found" }));
   const bytes = o.bytes instanceof Uint8Array ? o.bytes : new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
   return Promise.resolve(new Blob([bytes], { type: o.contentType || "image/jpeg" }));
 }
-export function deleteDoc() { return Promise.resolve(); }
+export function deleteDoc(ref) {
+  record("deleteDoc", { col: ref && ref._col, id: ref && ref._id, path: ref && ref._path });
+  return Promise.resolve();
+}
+export function deleteObject(r) {
+  record("deleteObject", { path: r && (r.fullPath || r.path) });
+  return Promise.resolve();
+}
 export function runTransaction(_db, fn) {
   record("runTransaction", {});
   return Promise.resolve(fn({ get: () => Promise.resolve({ exists: () => false, data: () => ({}) }), update() {}, set() {} }));

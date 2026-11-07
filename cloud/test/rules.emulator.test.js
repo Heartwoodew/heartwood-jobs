@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { initializeTestEnvironment, assertFails, assertSucceeds } from "@firebase/rules-unit-testing";
-import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
+import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, setDoc, updateDoc, serverTimestamp, Timestamp } from "firebase/firestore";
 import { ref, uploadBytes, getBytes, list, listAll, getMetadata, deleteObject } from "firebase/storage";
 
 const ALEX = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";
@@ -168,4 +168,121 @@ test("ordinary roles cannot read the Xero queue or rewrite their tenant", async 
   const still = await assertSucceeds(getDoc(doc(op, "users/op1")));
   assert.equal(still.data().role, "operator");
   assert.equal(still.data().tenantId, undefined);
+});
+
+function db(uid) { return env.authenticatedContext(uid).firestore(); }
+function messages(uid, tenant, thread) {
+  return collection(db(uid), "tenants", tenant, "chats", thread, "messages");
+}
+function chatMsg(uid, text, extra = {}) {
+  return { senderName: "Sam", text, createdAt: serverTimestamp(), ...extra, senderUid: uid };
+}
+
+test("team chat is limited to tenant members and server timestamps", async () => {
+  const thread = messages("op1", "heartwood", "staff");
+  await assertSucceeds(addDoc(thread, chatMsg("op1", "On site")));
+  await assertSucceeds(getDocs(messages("idle", "heartwood", "staff")));
+  await assertSucceeds(addDoc(messages("idle", "heartwood", "staff"), chatMsg("idle", "Copy")));
+  await assertFails(addDoc(messages("op2", "heartwood", "staff"), chatMsg("op2", "Other tenant")));
+  await assertSucceeds(addDoc(messages("op2", "otherco", "staff"), chatMsg("op2", "Our yard")));
+  await assertFails(addDoc(messages("stranger", "heartwood", "staff"), chatMsg("stranger", "No profile")));
+  const signedOut = env.unauthenticatedContext().firestore();
+  await assertFails(getDocs(collection(signedOut, "tenants", "heartwood", "chats", "staff", "messages")));
+  await assertFails(addDoc(thread, { senderName: "Sam", text: "spoof", createdAt: serverTimestamp(), senderUid: "idle" }));
+  await assertFails(addDoc(thread, { senderName: "Sam", text: "clock", createdAt: Timestamp.fromDate(new Date()), senderUid: "op1" }));
+  await assertFails(addDoc(thread, chatMsg("op1", "")));
+  await assertFails(addDoc(thread, chatMsg("op1", "x".repeat(4001))));
+  const withPhoto = await assertSucceeds(addDoc(thread, chatMsg("op1", "", {
+    photoPath: "tenants/heartwood/chat/staff/photos/c12345678",
+    photoType: "image/jpeg",
+  })));
+  await assertFails(addDoc(thread, chatMsg("op1", "slip", {
+    photoPath: "tenants/heartwood/receipts/rOp/original",
+    photoType: "image/jpeg",
+  })));
+  await assertFails(updateDoc(withPhoto, { text: "changed" }));
+  await assertSucceeds(deleteDoc(withPhoto));
+  const other = await assertSucceeds(addDoc(thread, chatMsg("op1", "keep")));
+  await assertFails(deleteDoc(doc(db("idle"), other.path)));
+  await assertFails(deleteDoc(doc(db("sup1"), other.path)));
+  await assertSucceeds(deleteDoc(doc(db(ALEX), other.path)));
+  await assertSucceeds(setDoc(doc(db("op1"), "tenants", "heartwood", "chats", "staff"), {
+    lastAt: serverTimestamp(), lastSenderUid: "op1", lastSenderName: "Sam", preview: "keep",
+  }));
+  await assertFails(setDoc(doc(db("op1"), "tenants", "heartwood", "chats", "staff"), {
+    lastAt: serverTimestamp(), lastSenderUid: "idle", lastSenderName: "Sam", preview: "no",
+  }));
+  await assertSucceeds(setDoc(doc(db("op1"), "tenants", "heartwood", "chatSeen", "op1", "threads", "staff"), { seenAt: serverTimestamp() }));
+  await assertFails(setDoc(doc(db("op1"), "tenants", "heartwood", "chatSeen", "idle", "threads", "staff"), { seenAt: serverTimestamp() }));
+  await assertFails(getDoc(doc(db("idle"), "tenants", "heartwood", "chatSeen", "op1", "threads", "staff")));
+  await assertFails(setDoc(doc(db("op1"), "receipts", "from-chat"), { uid: "op1", amountInc: 1 }));
+});
+
+test("job chat follows admin and assigned visibility", async () => {
+  await assertSucceeds(addDoc(messages("op1", "heartwood", "job_job1"), chatMsg("op1", "Crew note")));
+  await assertSucceeds(addDoc(messages("sup1", "heartwood", "job_job1"), chatMsg("sup1", "Supervisor note")));
+  await assertSucceeds(addDoc(messages("scoped", "heartwood", "job_job1"), chatMsg("scoped", "Orbit only")));
+  await assertSucceeds(getDocs(messages(ALEX, "heartwood", "job_job1")));
+  await assertSucceeds(getDocs(messages(PATRICK, "heartwood", "job_job1")));
+  await assertFails(getDocs(messages("idle", "heartwood", "job_job1")));
+  await assertFails(addDoc(messages("idle", "heartwood", "job_job1"), chatMsg("idle", "Not on this job")));
+  await assertFails(addDoc(messages("scoped", "heartwood", "job_silk"), chatMsg("scoped", "Wrong customer")));
+  await assertFails(addDoc(messages("op1", "heartwood", "job_other"), chatMsg("op1", "Wrong tenant job")));
+  await assertSucceeds(addDoc(messages("op2", "otherco", "job_other"), chatMsg("op2", "Other crew")));
+  await assertFails(getDocs(messages("op1", "otherco", "job_other")));
+  const note = await assertSucceeds(addDoc(messages("op1", "heartwood", "job_job1"), chatMsg("op1", "Mine")));
+  await assertSucceeds(deleteDoc(note));
+  const theirs = await assertSucceeds(addDoc(messages("op1", "heartwood", "job_job1"), chatMsg("op1", "Admin can remove")));
+  await assertFails(deleteDoc(doc(db("sup1"), theirs.path)));
+  await assertSucceeds(deleteDoc(doc(db(PATRICK), theirs.path)));
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), "tenants", "heartwood", "chats", "job_silk"), {
+      lastAt: new Date(), lastSenderUid: "scoped", lastSenderName: "Scope", preview: "hidden",
+    });
+  });
+  await assertFails(getDocs(collection(db("idle"), "tenants", "heartwood", "chats")));
+  await assertFails(getDoc(doc(db("idle"), "tenants", "heartwood", "chats", "job_silk")));
+  await assertSucceeds(getDoc(doc(db("op1"), "tenants", "heartwood", "chats", "job_silk")));
+  await assertSucceeds(getDoc(doc(db("op1"), "tenants", "heartwood", "chats", "staff")));
+});
+
+test("chat photos stay private to the thread and are not receipt or finance files", async () => {
+  const staffPath = "tenants/heartwood/chat/staff/photos/c12345678";
+  const staffMeta = {
+    contentType: "image/jpeg",
+    customMetadata: { tenantId: "heartwood", threadId: "staff", uploaderUid: "op1", purpose: "chat-photo" },
+  };
+  await assertSucceeds(uploadBytes(ref(storageOf("op1"), staffPath), jpeg, staffMeta));
+  await assertSucceeds(getBytes(ref(storageOf("idle"), staffPath)));
+  await assertSucceeds(listAll(ref(storageOf("sup1"), "tenants/heartwood/chat/staff/photos")));
+  await assertFails(getBytes(ref(storageOf("op2"), staffPath)));
+  await assertFails(listAll(ref(storageOf("op2"), "tenants/heartwood/chat/staff/photos")));
+  await assertFails(getBytes(ref(env.unauthenticatedContext().storage(), staffPath)));
+  await assertFails(deleteObject(ref(storageOf("idle"), staffPath)));
+  await assertSucceeds(deleteObject(ref(storageOf("op1"), staffPath)));
+  await assertSucceeds(uploadBytes(ref(storageOf("op1"), staffPath), jpeg, staffMeta));
+  await assertSucceeds(deleteObject(ref(storageOf(ALEX), staffPath)));
+  await assertFails(uploadBytes(ref(storageOf("op1"), "tenants/heartwood/chat/staff/photos/c12345678"), jpeg, {
+    contentType: "text/plain",
+    customMetadata: staffMeta.customMetadata,
+  }));
+  const jobPath = "tenants/heartwood/chat/jobs/job1/photos/c12345678";
+  const jobMeta = {
+    contentType: "image/jpeg",
+    customMetadata: { tenantId: "heartwood", threadId: "job_job1", jobId: "job1", uploaderUid: "op1", purpose: "chat-photo" },
+  };
+  await assertSucceeds(uploadBytes(ref(storageOf("op1"), jobPath), jpeg, jobMeta));
+  await assertSucceeds(getBytes(ref(storageOf("sup1"), jobPath)));
+  await assertSucceeds(getBytes(ref(storageOf(PATRICK), jobPath)));
+  await assertFails(uploadBytes(ref(storageOf("idle"), jobPath), jpeg, {
+    contentType: "image/jpeg",
+    customMetadata: { ...jobMeta.customMetadata, uploaderUid: "idle" },
+  }));
+  await assertFails(getBytes(ref(storageOf("idle"), jobPath)));
+  await assertFails(listAll(ref(storageOf("idle"), "tenants/heartwood/chat/jobs/job1/photos")));
+  await assertFails(getBytes(ref(storageOf("scoped"), "tenants/heartwood/chat/jobs/silk/photos/c12345678")));
+  await assertFails(deleteObject(ref(storageOf("sup1"), jobPath)));
+  await assertSucceeds(deleteObject(ref(storageOf(ALEX), jobPath)));
+  await assertFails(uploadBytes(ref(storageOf(ALEX), "tenants/heartwood/finance/chat.jpg"), jpeg, staffMeta));
+  await assertFails(deleteObject(ref(storageOf(ALEX), "tenants/heartwood/jobs/job1/photos/p1.jpg")));
 });

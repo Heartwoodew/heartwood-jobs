@@ -31,6 +31,20 @@
   const q = new URLSearchParams(location.search);
   window.HW_TODAY = "2026-11-06";
   window.HW_PREVIEW_ROLE = q.get("role") || "operator";
+  window.HW_CHAT = {
+    staff: [
+      { id: "m1", senderUid: "sam", senderName: "Sam", text: "Brightvale slab is clear. The crew can start.", createdAt: "2026-11-06T07:05:00+10:00" },
+      { id: "m2", senderUid: "patrick", senderName: "Patrick", text: "Thanks. I'm on site now.", createdAt: "2026-11-06T07:12:00+10:00" },
+      { id: "m3", senderUid: "sam", senderName: "Sam", text: "Gate's open. Photo of the edge is below.", createdAt: "2026-11-06T07:18:00+10:00", photoPath: "tenants/heartwood/chat/staff/photos/csitephoto1", photoType: "image/jpeg" },
+      { id: "m4", senderUid: "patrick", senderName: "Patrick", text: "Got it. I'll send the office a note when the backblade is done.", createdAt: "2026-11-06T07:24:00+10:00" },
+      { id: "m5", senderUid: "sam", senderName: "Sam", text: "Next one is Cedar Court this afternoon.", createdAt: "2026-11-06T07:31:00+10:00" },
+      { id: "m6", senderUid: "patrick", senderName: "Patrick", text: "See you there.", createdAt: "2026-11-06T07:36:00+10:00" }
+    ],
+    job_j2: [
+      { id: "j2m1", senderUid: "sam", senderName: "Sam", text: "Slab edge is clean. Road base is on the truck.", createdAt: "2026-11-06T08:02:00+10:00" },
+      { id: "j2m2", senderUid: "patrick", senderName: "Patrick", text: "Starting the backblade after this photo.", createdAt: "2026-11-06T08:10:00+10:00", photoPath: "tenants/heartwood/chat/jobs/j2/photos/cjobphoto01", photoType: "image/jpeg" }
+    ]
+  };
   window.HW_PREVIEW_RATES = q.get("rates") || "";
   window.__errs = [];
   window.addEventListener("error", e => window.__errs.push(String(e.message || e.error)));
@@ -157,6 +171,16 @@ if (q.get("open") === "jobphotos") {
     document.querySelector("[data-viewphotos]")?.click();
     await waitFor(".pgal [data-photos-state], .pgal .pth img", 4000);
   }
+}
+if (q.get("open") === "chat") {
+  document.querySelector('[data-tab="chat"]')?.click();
+  await waitFor(".chat-log .chat-msg", 4000);
+  await waitFor(".chat-pic img", 4000);
+}
+if (q.get("open") === "jobchat") {
+  await openJob("j2");
+  document.querySelector('[data-jtab="chat"]')?.click();
+  await waitFor(".job-chat .chat-msg", 4000);
 }
 if (q.get("open") === "more") document.querySelector('[data-tab="more"]')?.click();
 if (q.get("open") === "myjobs") document.querySelector('[data-view="myjobs"]')?.click();

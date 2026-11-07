@@ -1,0 +1,153 @@
+// Firestore chat rules to merge into the LIVE ruleset for heartwood-9f37f.
+// Paste this block once, inside the existing:
+//   service cloud.firestore { match /databases/{database}/documents { ... } }
+// Do not deploy cloud/emulator/firestore.rules. That file is an emulator model
+// and would replace jobs, quotes, receipts and the rest of the live rules.
+// This block does not change those matches. Receipts, finance and xeroQueue
+// stay as they are. Function names are prefixed so they do not collide.
+//
+// Team thread id: staff
+//   tenants/{tenantId}/chats/staff/messages/{messageId}
+// Job thread id: job_ + the job document id
+//   tenants/{tenantId}/chats/job_{jobId}/messages/{messageId}
+// Read cursors: tenants/{tenantId}/chatSeen/{uid}/threads/{threadId}
+//
+// Access: signed-in member of that tenant (missing profile tenantId means
+// heartwood, same as storage). Job threads also require the same visibility
+// as job photos: admin or assigned, customer scope included, Alex and Patrick
+// on Heartwood. senderUid must equal auth.uid. createdAt must be request.time.
+// Updates are denied. Delete is the sender, or an admin of that tenant.
+
+// BEGIN CHAT RULES
+    function chatSignedIn() { return request.auth != null; }
+    function chatIsAlex() { return chatSignedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
+    function chatIsPatrick() { return chatSignedIn() && request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"; }
+    function chatUserPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function chatHasProfile() { return chatSignedIn() && exists(chatUserPath()); }
+    function chatProfile() { return get(chatUserPath()).data; }
+    function chatExplicitTenant() {
+      return chatHasProfile() && "tenantId" in chatProfile() && chatProfile().tenantId is string && chatProfile().tenantId.size() > 0;
+    }
+    function chatCallerTenant() {
+      return chatExplicitTenant()
+        ? chatProfile().tenantId
+        : ((chatHasProfile() || chatIsAlex() || chatIsPatrick()) ? "heartwood" : "");
+    }
+    function chatMember(tenantId) {
+      return chatSignedIn()
+        && tenantId is string
+        && tenantId.matches('^[a-z0-9][a-z0-9-]{0,39}$')
+        && chatCallerTenant() == tenantId;
+    }
+    function chatJobPath(jobId) { return /databases/$(database)/documents/jobs/$(jobId); }
+    function chatJob(jobId) { return get(chatJobPath(jobId)).data; }
+    function chatJobTenant(jobId) {
+      return "tenantId" in chatJob(jobId) && chatJob(jobId).tenantId is string && chatJob(jobId).tenantId.size() > 0
+        ? chatJob(jobId).tenantId
+        : "heartwood";
+    }
+    function chatAccountTenant() {
+      return chatExplicitTenant() ? chatProfile().tenantId : "heartwood";
+    }
+    function chatAssigned(jobId) {
+      return "assigned" in chatJob(jobId) && chatJob(jobId).assigned is list && request.auth.uid in chatJob(jobId).assigned;
+    }
+    function chatCustomerOk(jobId) {
+      return !chatHasProfile()
+        || !("customerIds" in chatProfile())
+        || !(chatProfile().customerIds is list)
+        || chatProfile().customerIds.size() == 0
+        || ("client" in chatJob(jobId) && chatJob(jobId).client is string && chatJob(jobId).client in chatProfile().customerIds);
+    }
+    function chatAccountCanSee(tenantId, jobId) {
+      return chatHasProfile()
+        && chatAccountTenant() == tenantId
+        && (("role" in chatProfile() && chatProfile().role == "admin") || chatAssigned(jobId))
+        && chatCustomerOk(jobId);
+    }
+    function chatCanSeeJob(tenantId, jobId) {
+      return chatSignedIn()
+        && jobId is string
+        && jobId.size() > 0
+        && jobId.size() <= 200
+        && chatJobTenant(jobId) == tenantId
+        && ((tenantId == "heartwood" && (chatIsAlex() || chatIsPatrick())) || chatAccountCanSee(tenantId, jobId));
+    }
+    function chatThreadOk(threadId) {
+      return threadId == "staff"
+        || (threadId is string && threadId.size() <= 210 && threadId.matches('^job_[A-Za-z0-9_-]{1,200}$'));
+    }
+    function chatJobId(threadId) { return threadId[4:threadId.size()]; }
+    function chatCanAccess(tenantId, threadId) {
+      return chatThreadOk(threadId) && (
+        threadId == "staff"
+          ? chatMember(tenantId)
+          : chatCanSeeJob(tenantId, chatJobId(threadId))
+      );
+    }
+    function chatAdmin(tenantId) {
+      return chatMember(tenantId) && (
+        chatIsAlex() || chatIsPatrick() || (chatHasProfile() && "role" in chatProfile() && chatProfile().role == "admin")
+      );
+    }
+    function chatHasPhoto() { return "photoPath" in request.resource.data; }
+    function chatPhotoPathOk(tenantId, threadId) {
+      return threadId == "staff"
+        ? request.resource.data.photoPath.matches('^tenants/' + tenantId + '/chat/staff/photos/c[A-Za-z0-9]{8,40}$')
+        : request.resource.data.photoPath.matches('^tenants/' + tenantId + '/chat/jobs/' + chatJobId(threadId) + '/photos/c[A-Za-z0-9]{8,40}$');
+    }
+    function chatMessageOk(tenantId, threadId) {
+      return request.resource.data.keys().hasOnly(["senderUid", "senderName", "text", "createdAt", "photoPath", "photoType"])
+        && request.resource.data.senderUid == request.auth.uid
+        && request.resource.data.senderName is string
+        && request.resource.data.senderName.size() > 0
+        && request.resource.data.senderName.size() <= 80
+        && request.resource.data.text is string
+        && request.resource.data.text.size() <= 4000
+        && request.resource.data.createdAt == request.time
+        && (request.resource.data.text.size() > 0 || chatHasPhoto())
+        && (!chatHasPhoto() || (
+          request.resource.data.photoPath is string
+          && request.resource.data.photoPath.size() > 0
+          && request.resource.data.photoPath.size() <= 300
+          && request.resource.data.photoType is string
+          && request.resource.data.photoType.matches('^image/(jpeg|png|webp|gif)$')
+          && chatPhotoPathOk(tenantId, threadId)
+        ))
+        && (chatHasPhoto() || !("photoType" in request.resource.data));
+    }
+    function chatHeadOk() {
+      return request.resource.data.keys().hasOnly(["lastAt", "lastSenderUid", "lastSenderName", "preview"])
+        && request.resource.data.lastSenderUid == request.auth.uid
+        && request.resource.data.lastAt == request.time
+        && request.resource.data.lastSenderName is string
+        && request.resource.data.lastSenderName.size() > 0
+        && request.resource.data.lastSenderName.size() <= 80
+        && request.resource.data.preview is string
+        && request.resource.data.preview.size() <= 140;
+    }
+
+    match /tenants/{tenantId}/chats/{threadId} {
+      allow read: if chatCanAccess(tenantId, threadId);
+      allow create, update: if chatCanAccess(tenantId, threadId) && chatHeadOk();
+      allow delete: if false;
+    }
+
+    match /tenants/{tenantId}/chats/{threadId}/messages/{messageId} {
+      allow read: if chatCanAccess(tenantId, threadId);
+      allow create: if chatCanAccess(tenantId, threadId) && chatMessageOk(tenantId, threadId);
+      allow update: if false;
+      allow delete: if chatCanAccess(tenantId, threadId)
+        && (resource.data.senderUid == request.auth.uid || chatAdmin(tenantId));
+    }
+
+    match /tenants/{tenantId}/chatSeen/{uid}/threads/{threadId} {
+      allow read: if chatSignedIn() && request.auth.uid == uid && chatCanAccess(tenantId, threadId);
+      allow create, update: if chatSignedIn()
+        && request.auth.uid == uid
+        && chatCanAccess(tenantId, threadId)
+        && request.resource.data.keys().hasOnly(["seenAt"])
+        && request.resource.data.seenAt == request.time;
+      allow delete: if false;
+    }
+// END CHAT RULES

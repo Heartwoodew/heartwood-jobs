@@ -2,7 +2,9 @@ rules_version = '2';
 // EMULATOR AND PROPOSED STORAGE RULES.
 // Do not deploy until the owner completes cloud/MIGRATION.md.
 // Job-photo list uses the same canSeeJob check as reading a file.
-// Receipts, finance and exports are unchanged. Delete stays off.
+// Receipts, finance and exports are unchanged. Delete stays off for those,
+// and for job photos. Chat photos are a separate path: the uploader or an
+// admin of that tenant may delete one. No public download tokens.
 // Do not deploy this file from the app. The reviewed command is storage-only.
 // A matching path, file name, or client metadata tenantId is not enough.
 // The caller must be a member of that tenant via their profile (missing tenantId
@@ -142,6 +144,63 @@ service firebase.storage {
     match /tenants/{tenantId}/_exports/{allPaths=**} {
       allow read: if member(tenantId) && rulesAdmin();
       allow write: if false;
+    }
+
+    // Chat photos. Private blobs only: the app reads them with getBlob.
+    // Staff thread: any member of the tenant. Job thread: canSeeJob (admin or
+    // assigned, same customer scope as job photos). Two Firestore reads max.
+    function chatPhotoBytes() {
+      return request.resource.contentType.matches('image/(jpeg|png|webp|gif)')
+        && request.resource.size > 0
+        && request.resource.size <= 8 * 1024 * 1024;
+    }
+    function chatStaffFile(tenantId) {
+      return chatPhotoBytes()
+        && request.resource.metadata.tenantId == tenantId
+        && request.resource.metadata.threadId == "staff"
+        && request.resource.metadata.uploaderUid == request.auth.uid
+        && request.resource.metadata.purpose == "chat-photo";
+    }
+    function chatJobFile(tenantId, jobId) {
+      return chatPhotoBytes()
+        && request.resource.metadata.tenantId == tenantId
+        && request.resource.metadata.jobId == jobId
+        && request.resource.metadata.threadId == "job_" + jobId
+        && request.resource.metadata.uploaderUid == request.auth.uid
+        && request.resource.metadata.purpose == "chat-photo";
+    }
+    function chatNameOk(file) {
+      return file.matches('^c[A-Za-z0-9]{8,40}$');
+    }
+
+    match /tenants/{tenantId}/chat/staff/photos {
+      allow list: if member(tenantId);
+    }
+    match /tenants/{tenantId}/chat/staff/photos/{file} {
+      allow read: if member(tenantId);
+      allow create: if member(tenantId) && chatNameOk(file) && chatStaffFile(tenantId);
+      allow update: if false;
+      allow delete: if member(tenantId) && chatNameOk(file) && resource.metadata.purpose == "chat-photo"
+        && (
+          resource.metadata.uploaderUid == request.auth.uid
+          || isAlex() || isPatrick()
+          || (hasProfile() && "role" in profile() && profile().role == "admin")
+        );
+    }
+
+    match /tenants/{tenantId}/chat/jobs/{jobId}/photos {
+      allow list: if canSeeJob(tenantId, jobId);
+    }
+    match /tenants/{tenantId}/chat/jobs/{jobId}/photos/{file} {
+      allow read: if canSeeJob(tenantId, jobId);
+      allow create: if canSeeJob(tenantId, jobId) && chatNameOk(file) && chatJobFile(tenantId, jobId);
+      allow update: if false;
+      allow delete: if canSeeJob(tenantId, jobId) && chatNameOk(file) && resource.metadata.purpose == "chat-photo"
+        && (
+          resource.metadata.uploaderUid == request.auth.uid
+          || isAlex() || isPatrick()
+          || ("role" in userData() && userData().role == "admin")
+        );
     }
   }
 }
