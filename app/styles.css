@@ -601,6 +601,18 @@ html{-webkit-text-size-adjust:100%}
 .swdlrow .swbtn { min-height: 40px; }
 .swacts { white-space: nowrap; } .swacts .swbtn + .swbtn { margin-left: 6px; }
 .swdlbtns { flex-wrap: wrap; gap: 8px; } .swdlbtns a.mbtn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
+.swph { color: #8a2a1a; background: #fde4e4; border-radius: 8px; padding: 8px 10px; margin: 8px 0; font-size: 14px; line-height: 1.35; }
+.swframe { width: 100%; height: 210px; border: 1px solid #e4d9cc; border-radius: 8px; background: #fff; margin-top: 8px; }
+.swpeople { display: none; }
+.swperson { background: #fffdf9; border: 1px solid #e4d9cc; border-radius: 14px; padding: 12px 14px; }
+.swperson > b { display: block; font-size: 18px; margin-bottom: 4px; }
+.swprow { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid #eadfd3; }
+.swprow > span:first-child { font-weight: 700; }
+body.operator .swremind { margin: 4px 16px 12px; width: calc(100% - 32px); }
+@media (max-width: 760px) {
+  .swpeople { display: grid; gap: 10px; }
+  .swtablewrap.team { display: none; }
+}
 @media (max-width: 600px) { .swdljob, .swdlrow .swbtn { flex: 1 1 100%; max-width: none; } .swacts { white-space: normal; } .swacts .swbtn { display: block; margin: 4px 0 0 !important; } }
 
 /* Check Xero */

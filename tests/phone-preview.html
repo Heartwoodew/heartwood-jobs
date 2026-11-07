@@ -30,7 +30,19 @@
 <script>
   const q = new URLSearchParams(location.search);
   window.HW_TODAY = "2026-11-06";
+  window.HW_NOW = Date.parse("2026-11-06T10:00:00+10:00");
   window.HW_PREVIEW_ROLE = q.get("role") || "operator";
+  (() => {
+    const c = document.createElement("canvas");
+    c.width = 360; c.height = 120;
+    const g = c.getContext("2d");
+    g.strokeStyle = "#0b1f3a"; g.lineWidth = 4; g.lineCap = "round"; g.lineJoin = "round";
+    g.beginPath(); g.moveTo(24, 78);
+    g.bezierCurveTo(70, 20, 110, 110, 160, 64);
+    g.bezierCurveTo(210, 20, 250, 100, 330, 48);
+    g.stroke();
+    window.HW_SWMS_SIG = c.toDataURL("image/png");
+  })();
   window.HW_CHAT = {
     staff: [
       { id: "m1", senderUid: "sam", senderName: "Sam", text: "Brightvale slab is clear. The crew can start.", createdAt: "2026-11-06T07:05:00+10:00" },
@@ -184,6 +196,43 @@ if (q.get("open") === "jobchat") {
   await waitFor(".job-chat .chat-msg", 4000);
 }
 if (q.get("open") === "more") document.querySelector('[data-tab="more"]')?.click();
+if (q.get("open") === "sign") {
+  document.querySelector('.mrow[data-id="j2"]')?.click();
+  await waitFor('[data-swms="j2"]');
+  document.querySelector('[data-swms="j2"]')?.click();
+  await waitFor('[data-swsign="electrical"]');
+  document.querySelector('[data-swsign="electrical"]')?.click();
+  await waitFor("#swpad");
+  await sleep(120);
+  document.querySelector("#swread")?.click();
+  const box = document.querySelector("#swok");
+  if (box) { box.checked = true; box.dispatchEvent(new Event("change", { bubbles: true })); }
+  const nm = document.querySelector("#swnm");
+  if (nm) { nm.value = "Patrick"; nm.dispatchEvent(new Event("input", { bubbles: true })); }
+  const pad = document.querySelector("#swpad");
+  const rect = pad.getBoundingClientRect();
+  const fire = (type, x, y) => pad.dispatchEvent(new PointerEvent(type, {
+    clientX: rect.left + x, clientY: rect.top + y, pointerId: 1, bubbles: true, cancelable: true, pointerType: "touch",
+  }));
+  fire("pointerdown", 24, 100);
+  for (let i = 1; i <= 18; i++) fire("pointermove", 24 + i * 14, 100 - Math.sin(i / 2.2) * 34);
+  fire("pointerup", 270, 72);
+  const t0 = performance.now();
+  while (document.querySelector("#swgo")?.disabled && performance.now() - t0 < 8000) await sleep(40);
+  document.querySelector("#swpad")?.scrollIntoView({ block: "center" });
+}
+if (q.get("open") === "adminswms") {
+  document.querySelector('[data-view="swms"]')?.click();
+  await waitFor(".swperson");
+  [...document.querySelectorAll(".swh")].find(n => n.textContent.includes("Team status"))?.scrollIntoView({ block: "start" });
+  await sleep(40);
+}
+if (q.get("open") === "swmspdf") {
+  document.querySelector('[data-view="swms"]')?.click();
+  await waitFor('[data-swdl="working-near-roads"]');
+  document.querySelector('[data-swdl="working-near-roads"]')?.click();
+  await waitFor("#swdl, .swdlov .swph", 8000);
+}
 if (q.get("open") === "myjobs") document.querySelector('[data-view="myjobs"]')?.click();
 if (q.get("open") === "quotes") {
   document.querySelector('[data-tab="more"]')?.click();
