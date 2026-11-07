@@ -187,6 +187,8 @@ export function onSnapshot(ref, onNext) {
           data: () => { if (!row) return undefined; const { id: _id, ...rest } = row; return rest; }
         });
       } else if (col === "jobs") onNext(snap(JOBS));
+      else if (col === "fleet") onNext(snap((typeof window !== "undefined" && window.HW_FLEET) || []));
+      else if (col === "policies") onNext(snap((typeof window !== "undefined" && window.HW_POLICIES) || []));
       else if (col === "swmsSignatures") {
         const uid = uidFor(role());
         onNext(snap(SWMS_IDS.map(id => ({
