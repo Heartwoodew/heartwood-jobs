@@ -19,6 +19,28 @@ const adminEmail = "alex.hours@heartwood.test";
 const patrickEmail = "patrick.hours@heartwood.test";
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".svg": "image/svg+xml", ".json": "application/json", ".webmanifest": "application/manifest+json" };
 
+function assertDailyBreakdown(xml) {
+  assert.match(xml, /Patrick/);
+  assert.match(xml, /Monday/);
+  assert.match(xml, /Sunday/);
+  assert.match(xml, /02\/11\/2026/);
+  assert.match(xml, /08\/11\/2026/);
+  assert.match(xml, /6:00 am/);
+  assert.match(xml, /2:00 pm/);
+  assert.match(xml, /5:30 am/);
+  assert.match(xml, /1:00 pm/);
+  assert.match(xml, /30min lunch/);
+  assert.match(xml, /Sick leave · Medical certificate/);
+  assert.match(xml, /Leave requested \(pending\)/);
+  assert.match(xml, /Day off/);
+  assert.match(xml, /Day total/);
+  assert.match(xml, /Patrick week total/);
+  assert.match(xml, /Annual leave days/);
+  assert.match(xml, /Sick days/);
+  assert.equal((xml.match(/Day off/g) || []).length, 3);
+  assert.doesNotMatch(xml, /secret-scan|Declined holiday|leaveCertificates/);
+}
+
 function hostPort(value, fallbackPort) {
   const raw = value || `127.0.0.1:${fallbackPort}`;
   const [host, port] = raw.split(":");
@@ -102,6 +124,26 @@ test("timesheet download and make-and-send work against the emulator", { timeout
         },
         entries: {}, totalHrs: 14.5, updatedAt: Timestamp.now(), updatedAtIso: "2026-11-08T06:00:00.000Z",
       });
+      await setDoc(doc(db, "leaveRequests", "lv1111111111111111"), {
+        uid: patrickId, name: "Patrick", type: "sick", start: "2026-11-04", end: "2026-11-04",
+        startHalf: "", endHalf: "", reason: "Flu",
+        certificatePath: `leaveCertificates/${patrickId}/lv1111111111111111/cert.pdf`,
+        certificateName: "secret-scan.pdf", status: "approved", decisionNote: "Ok",
+        decidedBy: adminId, decidedByName: "Alex Admin", decidedAt: Timestamp.now(),
+        createdAt: Timestamp.now(), updatedAt: Timestamp.now(),
+      });
+      await setDoc(doc(db, "leaveRequests", "lv2222222222222222"), {
+        uid: patrickId, name: "Patrick", type: "annual", start: "2026-11-06", end: "2026-11-06",
+        startHalf: "", endHalf: "", reason: "Family", certificatePath: "", certificateName: "",
+        status: "pending", decisionNote: "", decidedBy: "", decidedByName: "", decidedAt: null,
+        createdAt: Timestamp.now(), updatedAt: Timestamp.now(),
+      });
+      await setDoc(doc(db, "leaveRequests", "lv3333333333333333"), {
+        uid: patrickId, name: "Patrick", type: "other", start: "2026-11-07", end: "2026-11-07",
+        startHalf: "", endHalf: "", reason: "Declined holiday", certificatePath: "", certificateName: "",
+        status: "declined", decisionNote: "No", decidedBy: adminId, decidedByName: "Alex Admin",
+        decidedAt: Timestamp.now(), createdAt: Timestamp.now(), updatedAt: Timestamp.now(),
+      });
     });
 
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
@@ -114,6 +156,7 @@ test("timesheet download and make-and-send work against the emulator", { timeout
     await page.locator("#hxdl").waitFor({ timeout: 15000 });
     await page.locator(".ts-card h3", { hasText: "Patrick" }).waitFor({ timeout: 10000 });
     assert.match(await page.locator(".ts-card h3", { hasText: "Patrick" }).innerText(), /14\.5 h/);
+    await page.getByText("Sick leave").first().waitFor({ timeout: 10000 });
 
     const downloadOnly = page.waitForEvent("download", { timeout: 10000 });
     await page.locator("#hxdl").click();
@@ -122,13 +165,14 @@ test("timesheet download and make-and-send work against the emulator", { timeout
     const onlyBytes = readFileSync(await only.path());
     assert.equal(onlyBytes[0], 0x50);
     assert.equal(onlyBytes[1], 0x4b);
-    assert.match(onlyBytes.toString("utf8"), /Patrick/);
+    assertDailyBreakdown(onlyBytes.toString("utf8"));
     assert.equal(await page.locator("#hxerr").count(), 0);
 
     const sentDownload = page.waitForEvent("download");
     await page.locator("#hxgo").click();
     const sent = await sentDownload;
     assert.match(sent.suggestedFilename(), /\.xlsx$/);
+    assertDailyBreakdown(readFileSync(await sent.path()).toString("utf8"));
     await page.locator(".qpill", { hasText: "Queued, emails within ~15 min" }).waitFor({ timeout: 15000 });
     assert.equal(await page.locator("#hxerr").count(), 0, await page.locator("#hxerr").innerText().catch(() => ""));
     const row = await page.locator(".hx-row").innerText();
@@ -204,7 +248,7 @@ test("timesheet download and make-and-send work against the emulator", { timeout
     const stored = new Uint8Array(await getBytes(ref(storage, data.storagePath)));
     assert.equal(stored[0], 0x50);
     assert.equal(stored[1], 0x4b);
-    assert.match(Buffer.from(stored).toString("utf8"), /Patrick/);
+    assertDailyBreakdown(Buffer.from(stored).toString("utf8"));
     assert.equal(errors.filter(e => /rerender|hxRun|ReferenceError/.test(e)).join("\n"), "");
     await terminate(db);
     await deleteApp(probe);
