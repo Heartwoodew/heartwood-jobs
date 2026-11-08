@@ -9,7 +9,7 @@
 
 import { CALLUP_BASE, HEARTWOOD_TENANT, resolveMembership } from "./cloud-storage.js";
 import { costPayload, intervalFormHtml, planPayload, serviceAttention, serviceFormHtml, servicePayload, serviceViews, servicingHtml } from "./servicing.js";
-import { itemsFor, missingToday, openDefects, prestartAdminHtml, prestartFormHtml, prestartPayload, templateFormHtml, templatePayload } from "./prestart.js";
+import { itemsFor, openDefects, prestartAdminHtml, prestartFormHtml, prestartHistoryHtml, prestartPayload, templateFormHtml, templatePayload } from "./prestart.js";
 
 export const DUE_DAYS = 30;
 
@@ -380,8 +380,8 @@ export function installCompliance(deps) {
     if (!who) return;
     const ui = deps.getUi();
     if (who.role === "admin" && !ui.myJobs) {
-      if (ui.view === "home" || ui.view === "compliance") deps.rerenderAdmin();
-    } else if (!ui.opSel && (ui.opTab === "fleet" || ui.opTab === "today" || !ui.opTab)) {
+      if (ui.view === "home" || ui.view === "compliance" || ui.view === "prestart") deps.rerenderAdmin();
+    } else if (!ui.opSel && (ui.opTab === "fleet" || ui.opTab === "prestart" || ui.opTab === "today" || !ui.opTab)) {
       deps.rerenderOperator();
     }
   }
@@ -495,9 +495,11 @@ export function installCompliance(deps) {
   }
 
   function tabOf(adminView) {
+    const ui = deps.getUi() || {};
     const showService = viewService();
     const showPrestart = viewPrestart();
     const showPolicies = adminView && canViewPolicies(plan(), "admin");
+    if ((ui.view === "prestart" || ui.opTab === "prestart") && showPrestart) return "prestart";
     if (state.tab === "servicing" && showService) return "servicing";
     if (state.tab === "prestart" && showPrestart) return "prestart";
     if (state.tab === "policies" && showPolicies) return "policies";
@@ -522,17 +524,16 @@ export function installCompliance(deps) {
       const type = state.editing.id || "vehicle";
       return templateFormHtml(type, itemsFor(type, state.templates));
     }
-    if (!adminView) {
-      const asset = state.assets.find(item => item.id === state.prestartAsset) || state.assets[0];
-      const items = itemsFor((asset && asset.type) || "vehicle", state.templates);
-      return `${err}${prestartFormHtml({
-        assets: state.assets, assetId: asset && asset.id, items,
-        signerName: me() && me().name, defects: openDefects(state.prestarts),
-      })}`;
-    }
+    const asset = state.assets.find(item => item.id === state.prestartAsset) || state.assets[0];
+    const items = itemsFor((asset && asset.type) || "vehicle", state.templates);
+    const form = prestartFormHtml({
+      assets: state.assets, assetId: asset && asset.id, items,
+      signerName: me() && me().name, defects: openDefects(state.prestarts),
+    });
+    if (!adminView) return `${err}${form}<h3 class="swh">History</h3>${prestartHistoryHtml(state.prestarts)}`;
     const jobs = deps.getJobs ? deps.getJobs() : [];
     const tools = `<div class="comp-actions"><button type="button" class="sm-btn" data-ps-template="vehicle">Vehicle checklist</button><button type="button" class="sm-btn" data-ps-template="trailer">Trailer checklist</button><button type="button" class="sm-btn" data-ps-template="plant">Plant checklist</button></div>`;
-    return `${err}<p class="comp-help">Daily checks before a machine is used. A fail stays up until you mark it resolved. Photos are not stored in the app.</p>${tools}${prestartAdminHtml({ assets: state.assets, prestarts: state.prestarts, jobs, today: today(), canResolve: true })}`;
+    return `${err}${form}${tools}${prestartAdminHtml({ assets: state.assets, prestarts: state.prestarts, jobs, today: today(), canResolve: true })}`;
   }
 
   function servicingBlock(editable) {
@@ -774,6 +775,7 @@ export function installCompliance(deps) {
     canSee: () => canViewFleet(plan()) || viewService() || viewPrestart(),
     canEdit: () => canEditCompliance(plan(), me() && me().role),
     canEditService: () => editService(),
+    canPrestart: () => viewPrestart(),
     abandon,
     baseFleet: CALLUP_BASE.features.fleet,
   };

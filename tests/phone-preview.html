@@ -314,9 +314,7 @@ if (q.get("open") === "serviceedit") {
 if (q.get("open") === "prestart") {
   document.querySelector('[data-tab="more"]')?.click();
   await sleep(40);
-  document.querySelector('[data-go="fleet"]')?.click();
-  await waitFor('[data-ctab="prestart"]');
-  document.querySelector('[data-ctab="prestart"]')?.click();
+  document.querySelector('[data-go="prestart"]')?.click();
   await waitFor("#prestartform");
   document.querySelector('#prestartform input[name="result-fluids"][value="pass"]')?.click();
   document.querySelector('#prestartform input[name="result-tyres"][value="pass"]')?.click();
@@ -325,10 +323,8 @@ if (q.get("open") === "prestart") {
   if (note) note.value = "Weep at the ram";
 }
 if (q.get("open") === "prestartadmin") {
-  document.querySelector('[data-view="compliance"]')?.click();
-  await waitFor('[data-ctab="prestart"]');
-  document.querySelector('[data-ctab="prestart"]')?.click();
-  await waitFor("[data-prestart], .comp-card");
+  document.querySelector('[data-view="prestart"]')?.click();
+  await waitFor("#prestartform");
 }
 if (q.get("open") === "staffservice") {
   document.querySelector('[data-tab="more"]')?.click();

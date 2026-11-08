@@ -8,6 +8,7 @@ const PORT = 8786;
 const shots = "/opt/cursor/artifacts";
 mkdirSync(shots, { recursive: true });
 const pages = [
+  ["prestart_safety_menu_phone", "?role=operator&open=more", 390, 844],
   ["prestart_checklist_phone", "?role=operator&fleet=1&prestart=1&open=prestart", 390, 844],
   ["prestart_admin_phone", "?role=admin&fleet=1&prestart=1&open=prestartadmin", 390, 844],
   ["prestart_home_banner_phone", "?role=admin&fleet=1&prestart=1", 390, 844],
@@ -37,7 +38,9 @@ try {
     });
     const data = JSON.parse(info.result.value);
     if (errors.length || data.errs.length) throw new Error(name + " " + [...errors, ...data.errs].join("\n"));
+    if (name.includes("menu") && !/Prestart/.test(data.text)) throw new Error("safety menu missing prestart");
     if (name.includes("checklist") && !/Hydraulics/.test(data.text)) throw new Error("checklist missing\n" + data.text.slice(0, 400));
+    if (name.includes("checklist") && !/History/.test(data.text)) throw new Error("staff history missing");
     if (name.includes("admin") && !/Defect — check before use/.test(data.text)) throw new Error("defect missing\n" + data.text.slice(0, 500));
     if (name.includes("admin") && !/Sam/.test(data.text)) throw new Error("missing person not shown");
     if (name.includes("banner") && !/check before use/i.test(data.text)) throw new Error("home alert missing\n" + data.text.slice(0, 500));

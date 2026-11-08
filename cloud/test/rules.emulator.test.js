@@ -439,3 +439,21 @@ test("prestarts are create-only for staff and only an admin can resolve a defect
   }));
   await assertFails(setDoc(doc(db("op1"), "receipts", "from-prestart"), { uid: "op1", amountInc: 1 }));
 });
+
+test("Test Worker operator can prestart any machine and read the history", async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), "users/testworker"), { role: "operator", name: "Test Worker" });
+  });
+  const worker = db("testworker");
+  const created = await assertSucceeds(addDoc(collection(worker, "tenants", "heartwood", "prestarts"), prestartBody("testworker", {
+    assetId: "excavator", assetType: "plant", assetName: "Excavator", signerName: "Test Worker",
+  })));
+  const listed = await assertSucceeds(getDocs(collection(worker, "tenants", "heartwood", "prestarts")));
+  assert.equal(listed.docs.some(row => row.data().assetId === "excavator"), true);
+  await assertSucceeds(getDoc(doc(worker, "tenants", "heartwood", "prestarts", created.id)));
+  await assertFails(updateDoc(created, { signerName: "Changed" }));
+  await assertFails(deleteDoc(created));
+  await assertFails(addDoc(collection(db("noprofile"), "tenants", "heartwood", "prestarts"), prestartBody("noprofile", {
+    assetId: "excavator", assetName: "Excavator", signerName: "No Profile",
+  })));
+});

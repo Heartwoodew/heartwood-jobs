@@ -144,7 +144,7 @@ function queueOf(j) {
 const jobNo = j => j.sm8JobNo ? j.sm8JobNo : "HW-" + String(j.id || "").slice(-4).toUpperCase();
 const firstLine = s => String(s || "").split(/\n|\. /)[0];
 const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Unscheduled";
-const NAV = [["home", "⌂", "Home"], ["compliance", "🚐", "Compliance"], ["chat", "💬", "Chat"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["inbox", "✉", "Inbox", 0, 1],
+const NAV = [["home", "⌂", "Home"], ["compliance", "🚐", "Compliance"], ["prestart", "☑", "Prestart"], ["chat", "💬", "Chat"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["inbox", "✉", "Inbox", 0, 1],
   ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["reimb", "💵", "Reimbursements", 0, 1], ["settings", "⚙", "Settings", 1]];
 ui.view = "home"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
 const PHONE = matchMedia("(max-width:760px)");
@@ -152,12 +152,12 @@ const TOUCH = matchMedia("(pointer:coarse)");
 PHONE.addEventListener?.("change", () => { if (me && me.role === "admin") renderAdmin(); });
 // Grouped side menu: top items, then collapsible groups (open/closed remembered on this device; the group holding the current screen is always open).
 const NAV_TOP = ["home", "chat", "inbox", "clients"];
-const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "jobs", "unscheduled", "quotes", "completed", "myjobs"]], ["money", "$", "Money", ["invoices", "reimb", "timesheet"]], ["safety", "⚠", "Safety", ["safety", "swms", "compliance"]]];
+const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "jobs", "unscheduled", "quotes", "completed", "myjobs"]], ["money", "$", "Money", ["invoices", "reimb", "timesheet"]], ["safety", "⚠", "Safety", ["safety", "swms", "prestart", "compliance"]]];
 const NAV_LBL = { safety: "Incidents" };
 ui.navCol = (() => { try { return JSON.parse(localStorage.getItem("hwNavCol") || "{}"); } catch { return {}; } })();
 function shell(inner) {
   const cur = NAV.find(n => n[0] === ui.view);
-  const item = k => { const x = NAV.find(n => n[0] === k); if (!x || x[3] || (x[4] && !isOwner()) || (k === "invoices" && (!me || me.role !== "admin")) || (k === "quotes" && !canQuote()) || (k === "compliance" && !COMP.canSee())) return "";
+  const item = k => { const x = NAV.find(n => n[0] === k); if (!x || x[3] || (x[4] && !isOwner()) || (k === "invoices" && (!me || me.role !== "admin")) || (k === "quotes" && !canQuote()) || (k === "compliance" && !COMP.canSee()) || (k === "prestart" && !COMP.canPrestart())) return "";
     const badge = k === "chat" ? CHAT.badge("staff") : "";
     return `<button class="sm-nav ${ui.view === k ? "on" : ""}" data-view="${k}" title="${esc(NAV_LBL[k] || x[2])}"><span class="ic">${x[1]}</span><span class="lbl">${esc(NAV_LBL[k] || x[2])}</span>${badge}</button>`; };
   const grp = ([g, ic, n, ks]) => { const has = ks.includes(ui.view), open = has || !ui.navCol[g];
@@ -1043,14 +1043,14 @@ function renderAdmin() {
   if (ui.myJobs) return renderOperator();
   if ($("#dlg").open) return;          // don't redraw under an open job card
   const force = ui.forceRender; ui.forceRender = false;
-  if (!force && ui.view === "compliance" && document.querySelector("#compform")) return;
+  if (!force && (ui.view === "compliance" || ui.view === "prestart") && document.querySelector("#compform, #prestartform")) return;
   if (ui.view === "timesheet" && ui.tsDirty && $("#tsf")) return;   // don't wipe unsaved hours
   if (ui.view === "chat" && document.activeElement?.closest?.(".chat-compose")) return;
   document.body.className = "admin";
   const fj = filtered(), und = (ui.undated || []).filter(j => (!ui.typeF || j.type === ui.typeF));
   const all = [...fj, ...und.filter(u => !fj.some(j => j.id === u.id))];
   const quotesHtml = ui.view === "quotes" ? adminViewRouter(ui.view, ui, { esc, $$, staff, jobs: all, todayStr, rerender: () => renderAdmin(), canEditQuoteRates }) : null;
-  $("#app").innerHTML = shell(ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : quotesHtml != null ? quotesHtml : jobsView(all));
+  $("#app").innerHTML = shell(ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : quotesHtml != null ? quotesHtml : jobsView(all));
   const A = $("#app"); inboxBadge();
   CHAT.watch([...(jobs || []), ...(ui.undated || [])]);
   if (ui.view === "chat") CHAT.mount(A);
@@ -1060,7 +1060,7 @@ function renderAdmin() {
   if (ui.view === "reimb") bindReimb(A);
   if (ui.view === "timesheet") bindTs(A, renderAdmin);
   if (ui.view === "quotes") QG.bindAdmin({ ui, A });
-  if (ui.view === "compliance") COMP.bind(A);
+  if (ui.view === "compliance" || ui.view === "prestart") COMP.bind(A);
   A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.navOpen = false;
     if (b.dataset.view === "myjobs") { ui.myJobs = true; ui.opSel = null; window.scrollTo(0, 0); return renderAdmin(); }
     if (b.dataset.view !== "compliance") COMP.abandon();
@@ -1860,7 +1860,7 @@ function withRunOrder(list) {
   return out;
 }
 function renderOperator() {
-  if (!ui.forceRender && document.querySelector("#compform")) return;
+  if (!ui.forceRender && document.querySelector("#compform, #prestartform")) return;
   ui.forceRender = false;
   document.body.className = "operator";
   ui.runStops = {};
@@ -1886,6 +1886,14 @@ function renderOperator() {
       <div class="pad">${tsEditor()}</div>${opTabs("hours")}</div>`;
     bindOp(mine); bindTs($("#app"), renderOperator); return;
   }
+  if (ui.opTab === "prestart" && COMP.canPrestart()) {
+    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Prestart</div><div class="mob-sub">Any machine · before you use it</div></div>
+      ${COMP.staffHtml()}${opTabs("prestart")}</div>`;
+    bindOp(mine);
+    COMP.bind($("#app"));
+    return;
+  }
+  if (ui.opTab === "prestart") ui.opTab = "more";
   if (ui.opTab === "fleet" && COMP.canSee()) {
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Compliance</div><div class="mob-sub">${COMP.canEditService() ? "Fleet and servicing" : "Fleet and servicing · read only"}</div></div>
       ${COMP.staffHtml()}${opTabs("fleet")}</div>`;
@@ -1903,6 +1911,7 @@ function renderOperator() {
         <button type="button" class="mob-more" data-go="done"><b>Completed</b><small>Finished in the last 30 days</small></button>
         <div class="mob-sec">Safety</div>
         <button type="button" class="mob-more" data-go="swms"><b>SWMS</b><small>Read and sign</small></button>
+        ${COMP.canPrestart() ? `<button type="button" class="mob-more" data-go="prestart"><b>Prestart</b><small>Any machine, before you use it</small></button>` : ""}
         ${fleetBtn}
         <button type="button" class="mob-more incbtn" data-inc=""><b>Report incident</b><small>Safety report</small></button>
         ${quoteBtn}

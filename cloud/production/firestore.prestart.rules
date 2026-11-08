@@ -3,7 +3,11 @@
 //   service cloud.firestore { match /databases/{database}/documents { ... } }
 // Do not deploy this file. It does not change fleet, servicing, jobs, receipts or finance.
 //
-//   tenants/{tenantId}/prestarts/{id}              daily checklist. Create-only for members.
+//   tenants/{tenantId}/prestarts/{id}              daily checklist.
+// Create: any signed-in member of the tenant who has a users profile
+// (operators, supervisors, admins, and test accounts such as Test Worker).
+// Alex and Patrick count as Heartwood members even without a profile doc.
+// The machine does not have to be assigned to the signer.
 //   tenants/{tenantId}/prestartTemplates/{type}    checklist per asset type. Admins write.
 // Staff cannot update or delete a submitted checklist.
 // An admin may only mark an open defect resolved.

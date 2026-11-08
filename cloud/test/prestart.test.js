@@ -5,7 +5,7 @@ import { CALLUP_BASE } from "../../app/features/cloud-storage.js";
 import { CALLUP_PLANS, canViewPrestart } from "../../app/features/compliance.js";
 import { SCHEDULING_APPROVED } from "../../app/features/cloud-retention.js";
 import {
-  DEFAULT_PRESTART, itemsFor, missingToday, openDefects, prestartPayload, templatePayload,
+  DEFAULT_PRESTART, itemsFor, missingToday, openDefects, prestartFormHtml, prestartPayload, templatePayload,
 } from "../../app/features/prestart.js";
 
 const asset = { id: "a1", type: "vehicle", name: "Preview tipper", rego: "PRE001" };
@@ -43,6 +43,14 @@ test("a fail needs a comment and opens a defect until an admin resolves it", () 
   });
   assert.deepEqual(missing.machines.map(item => item.id), ["a2"]);
   assert.deepEqual(missing.missingPeople, ["Sam"]);
+  const form = prestartFormHtml({
+    assets: [asset, { id: "plant1", type: "plant", name: "Excavator", rego: "EX1" }],
+    assetId: "plant1", items: itemsFor("plant", []), signerName: "Test Worker", defects: [],
+  });
+  assert.match(form, /Preview tipper/);
+  assert.match(form, /Excavator/);
+  assert.match(form, /Any machine in the fleet/);
+  assert.equal(form.includes("assigned to it"), true);
   const tpl = templatePayload("trailer", { tyres: { on: true, label: "Tyres" }, lights: { on: false, label: "Lights" } }, "admin");
   assert.equal(tpl.ok, true);
   assert.deepEqual(tpl.data.items, [{ id: "tyres", label: "Tyres" }]);

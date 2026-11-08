@@ -156,7 +156,7 @@ export function prestartFormHtml({ assets, assetId, items, signerName, defects }
     <label class="ps-note">Comment<input name="comment-${esc(item.id)}" maxlength="500" autocomplete="off"></label>
   </fieldset>`).join("");
   return `<form id="prestartform" class="comp-form">
-    <p class="comp-help">Check the machine before you use it. Your name and the time are saved with the checklist. Photos are not stored in the app.</p>
+    <p class="comp-help">Any machine in the fleet. You do not have to be assigned to it. Your name and the time are saved with the checklist. Photos are not stored in the app.</p>
     ${warn ? `<p class="swpill sw-exp">Defect — check before use</p>` : ""}
     <label>Machine<select name="assetId">${options}</select></label>
     <label>Hours or km<input name="reading" inputmode="numeric" autocomplete="off"></label>
@@ -180,6 +180,21 @@ export function templateFormHtml(type, items) {
   </form>`;
 }
 
+export function prestartHistoryHtml(prestarts) {
+  const history = [...(prestarts || [])].sort((a, b) => String(b.day).localeCompare(String(a.day)) || String(b.assetName || "").localeCompare(String(a.assetName || "")));
+  if (!history.length) return `<p class="muted pad">No prestarts yet.</p>`;
+  const days = [];
+  for (const row of history) {
+    const last = days[days.length - 1];
+    if (!last || last.day !== row.day) days.push({ day: row.day, rows: [row] });
+    else last.rows.push(row);
+  }
+  return days.map(group => `<h3 class="swh">${esc(formatAu(group.day))}</h3>${group.rows.map(row => {
+    const flag = isOpenDefect(row) ? `<span class="swpill sw-exp">Defect — check before use</span>` : hasFail(row) ? `<span class="swpill sw-ok">Resolved</span>` : `<span class="swpill sw-ok">Pass</span>`;
+    return `<article class="comp-card" data-prestart-history="${esc(row.id || row.assetId)}"><div class="comp-top"><div><b>${esc(row.assetName || "Machine")}</b><div class="sub">${esc(row.signerName || "")}${row.reading ? ` · ${Number(row.reading).toLocaleString("en-AU")} ${row.readingUnit === "km" ? "km" : "hours"}` : ""}</div></div>${flag}</div></article>`;
+  }).join("")}`).join("");
+}
+
 export function prestartAdminHtml({ assets, prestarts, jobs, today, canResolve }) {
   const defects = openDefects(prestarts);
   const missing = missingToday({ assets, prestarts, jobs, today });
@@ -191,22 +206,11 @@ export function prestartAdminHtml({ assets, prestarts, jobs, today, canResolve }
       ${canResolve ? `<div class="comp-actions"><button type="button" class="sm-btn" data-ps-resolve="${esc(row.id)}">Mark resolved</button></div>` : ""}
     </article>`;
   }).join("");
-  const history = [...(prestarts || [])].sort((a, b) => String(b.day).localeCompare(String(a.day)) || String(b.assetName || "").localeCompare(String(a.assetName || "")));
-  const days = [];
-  for (const row of history) {
-    const last = days[days.length - 1];
-    if (!last || last.day !== row.day) days.push({ day: row.day, rows: [row] });
-    else last.rows.push(row);
-  }
-  const historyHtml = days.map(group => `<h3 class="swh">${esc(formatAu(group.day))}</h3>${group.rows.map(row => {
-    const flag = isOpenDefect(row) ? `<span class="swpill sw-exp">Defect — check before use</span>` : hasFail(row) ? `<span class="swpill sw-ok">Resolved</span>` : `<span class="swpill sw-ok">Pass</span>`;
-    return `<article class="comp-card"><div class="comp-top"><div><b>${esc(row.assetName || "Machine")}</b><div class="sub">${esc(row.signerName || "")}${row.reading ? ` · ${Number(row.reading).toLocaleString("en-AU")} ${row.readingUnit === "km" ? "km" : "hours"}` : ""}</div></div>${flag}</div></article>`;
-  }).join("")}`).join("");
   const machineLine = missing.machines.length ? missing.machines.map(asset => esc(asset.name || "Machine")).join(", ") : "Every machine has a prestart today.";
   const peopleLine = missing.missingPeople.length ? missing.missingPeople.map(esc).join(", ") : "Everyone assigned today has done a prestart.";
   return `<div class="comp-list">
     <section class="comp-card"><b>No prestart today</b><p class="sub">${machineLine}</p><b>Assigned today, no prestart</b><p class="sub">${peopleLine}</p></section>
     ${defectCards}
-    ${historyHtml || `<p class="muted pad">No prestarts yet.</p>`}
+    ${prestartHistoryHtml(prestarts)}
   </div>`;
 }
