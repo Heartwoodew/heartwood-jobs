@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import {
   CERT_MAX_BYTES, addDays, assignmentWarning, approvedOn, cellLeaveText, certificateContentType,
   certificateObjectName, certificateStoragePath, halvesOk, leaveCreateBody, leaveDecisionBody,
-  leaveScreenHtml, leaveSpan, newLeaveId, plannerLeaveHtml, portionLabel, weekLeaveHtml, weekLeaves,
+  leaveScreenHtml, leaveSpan, newLeaveId, plannerLeaveHtml, portionLabel, saveCertificate, certificateDownloadName, weekLeaveHtml, weekLeaves,
 } from "../../app/features/leave.js";
 
 const id = "lv0123456789abcdef";
@@ -99,16 +99,55 @@ test("the screen lets staff request leave and hides the file from a supervisor",
   const staff = leaveScreenHtml({ requests: rows, uid: "op1", canDecide: false, canOpenCert: false });
   assert.match(staff, /id="leaveform"/);
   assert.match(staff, /Open certificate/);
+  assert.match(staff, />Download</);
   assert.equal(staff.includes("To decide"), false);
   const supervisor = leaveScreenHtml({ requests: rows, uid: "sup1", canDecide: true, canOpenCert: false });
   assert.match(supervisor, /To decide/);
   assert.match(supervisor, /Approve/);
   assert.match(supervisor, /Decline/);
   assert.equal(supervisor.includes("Open certificate"), false);
+  assert.equal(supervisor.includes(">Download<"), false);
   assert.match(supervisor, /Only that person and an admin/);
   const admin = leaveScreenHtml({ requests: rows, uid: "ada", canDecide: true, canOpenCert: true });
   assert.match(admin, /Open certificate/);
+  assert.match(admin, />Download</);
   assert.equal(staff.includes("<script"), false);
+});
+
+test("a certificate downloads as name, leave type, and start date", async () => {
+  const row = { name: "Sam Lee", type: "sick", start: "2026-11-10", certificatePath: "leaveCertificates/op1/lv0123456789abcdef/cert.jpeg" };
+  assert.equal(certificateDownloadName(row), "Sam_Lee_sick_2026-11-10.jpg");
+  assert.equal(certificateDownloadName({ name: "Sam", type: "annual", start: "2026-11-20", certificatePath: "leaveCertificates/op1/x/cert.pdf" }), "Sam_annual_2026-11-20.pdf");
+  const links = [];
+  const doc = {
+    body: { appendChild(node) { links.push(node); } },
+    createElement() { return { href: "", download: "", rel: "", target: "", click() {}, remove() {} }; },
+  };
+  const shared = [];
+  const ios = await saveCertificate({
+    blob: new Uint8Array([1, 2, 3]),
+    downloadUrl: "https://example.invalid/cert.pdf",
+    filename: "Sam_sick_2026-11-10.pdf",
+    doc,
+    nav: {
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
+      canShare() { return true; },
+      share(payload) { shared.push(payload.files[0].name); },
+    },
+  });
+  assert.equal(ios.via, "share");
+  assert.deepEqual(shared, ["Sam_sick_2026-11-10.pdf"]);
+  assert.equal(links.length, 0);
+  const desktop = await saveCertificate({
+    blob: null,
+    downloadUrl: "https://example.invalid/cert.pdf",
+    filename: "Sam_sick_2026-11-10.pdf",
+    doc,
+    nav: { userAgent: "Mozilla/5.0 (Macintosh)" },
+  });
+  assert.equal(desktop.via, "url");
+  assert.equal(links[0].download, "Sam_sick_2026-11-10.pdf");
+  assert.equal(links[0].href, "https://example.invalid/cert.pdf");
 });
 
 test("leave rules use the live helpers and match the emulator block", () => {

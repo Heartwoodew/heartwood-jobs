@@ -1060,3 +1060,5 @@ body.operator .helper-launch{bottom:calc(84px + env(safe-area-inset-bottom))}
 .lv-form input,.lv-form select,.lv-form textarea,.lv-decide textarea{display:block;width:100%;margin-top:4px;font:16px/1.35 system-ui,sans-serif}
 .lv-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .lv-card .qpill{display:inline-block;margin-top:4px}
+.lv-cert-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.lv-cert-row .sm-btn{min-height:44px}

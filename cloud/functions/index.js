@@ -14,8 +14,9 @@
  * INVITE_EMAIL_ENABLED must be the string "true" or the message is held in
  * inviteMail and nothing is sent. This file does not open an SMTP connection.
  *
- * helperAsk answers only for an admin, and only calls a model when
- * HELPER_ENABLED=true. Confirm is the only step that writes.
+ * helperAsk answers for every signed-in Heartwood member when
+ * HELPER_ENABLED=true. What they can hear and change follows their role.
+ * Confirm is the only step that writes.
  * See helper/DEPLOY.md. Do not deploy it from this branch.
  */
 import { onDocumentCreated, onDocumentWritten } from "firebase-functions/v2/firestore";

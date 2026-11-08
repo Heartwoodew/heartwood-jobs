@@ -16,7 +16,7 @@ A change is separate from the model. Helper prepares it from the signed-in perso
 
 If you later set `HELPER_ENABLED=true`, the provider is Vertex AI Gemini through the function's own service account (Application Default Credentials on Cloud Functions). No API key is read from the client or from this repo. The request stays in `australia-southeast1`. The code refuses any other region, including a silent fallback to `us-central1`. The default model id is `gemini-3.5-flash` because `gemini-2.5-flash` retired on Vertex on 20 October 2026, and `gemini-3.5-flash` runs in `australia-southeast1`. `gemini-3.8-flash` is not used: its endpoints are global, `us`, and `eu` only. Override the model with `HELPER_VERTEX_MODEL` only after you confirm that id is enabled in `australia-southeast1`. There is still no tool list on the Vertex request. Thinking is turned off (`thinkingBudget: 0`) so a short answer is not spent on a hidden draft.
 
-Helper is admin only. `rulesAdmin` (profile role `admin`, or Alex and Patrick) may call it. An operator or supervisor is refused before any job is read into a prompt, and the phone hides the button unless a status call returns `enabled: true`.
+Every signed-in member can open Helper when `HELPER_ENABLED=true`. The phone still hides the button unless a status call returns `enabled: true`. What they can hear and change is their role: an operator gets their own jobs, run sheets, timesheets, leave, and fleet without costs; a supervisor also gets the jobs, quotes, leave decisions, and invites their role already allows; an admin keeps the full set. A stored proposal is checked again on Confirm against that same role. The model cannot widen it.
 
 The exact enablement, IAM, and deploy commands are in `DEPLOY.md`.
 

@@ -93,9 +93,13 @@ test("emulator admin SDK can read another business, and helperAsk still hides it
     enabled: true,
     now: new Date(TODAY + "T02:00:00Z"),
   });
-  assert.equal(result.ok, false);
-  assert.equal(result.reply, "You don't have access to Helper.");
-  assert.equal(seen.length, 0);
+  assert.equal(result.ok, true);
+  const blob = seen[0].user;
+  assert.match(blob, /12 Ironbark Street/);
+  assert.match(blob, /2468/);
+  for (const secret of ["9999", "8800", "SECRET-OTHERCO-8841", "WOMBAT-LEDGER-77", "CLIENT-INJECTED-SECRET", "cert.pdf"]) {
+    assert.equal(blob.includes(secret), false, secret);
+  }
   assert.equal(result.reply.includes("$"), false);
   const after = await db.collection("jobs").doc("job-iron").get();
   assert.equal(after.data().sentinel, "keep");

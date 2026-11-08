@@ -29,6 +29,7 @@ export function packUserPayload(base) {
   if (base.servicing && base.servicing.length) payload.servicing = base.servicing;
   if (base.timesheets && base.timesheets.length) payload.timesheets = base.timesheets;
   if (base.leave && base.leave.length) payload.leave = base.leave;
+  if (base.prestarts && base.prestarts.length) payload.prestarts = base.prestarts;
   const size = () => JSON.stringify(payload).length;
   while (size() > USER_CAP && payload.jobs.length > 1) payload.jobs.pop();
   if (size() > USER_CAP && payload.knowledge && payload.knowledge.length > 400) {
@@ -52,6 +53,7 @@ export function packUserPayload(base) {
     delete payload.servicing;
     delete payload.timesheets;
     delete payload.leave;
+    delete payload.prestarts;
     payload.truncated = true;
   }
   return payload;
@@ -102,6 +104,7 @@ export function buildHelperPrompt({
     servicing: context.servicing,
     timesheets: context.timesheets,
     leave: context.leave,
+    prestarts: context.prestarts,
     question,
   }));
   return { system, user, canary: token };

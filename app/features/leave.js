@@ -218,8 +218,60 @@ const STATUS_LABEL = { pending: "Pending", approved: "Approved", declined: "Decl
 
 function certHtml(row, uid, canOpenCert) {
   if (!row.certificatePath) return "";
-  if (row.uid === uid || canOpenCert) return `<button type="button" class="sm-btn lv-cert" data-cert="${esc(row.id)}">Open certificate</button>`;
+  if (row.uid === uid || canOpenCert) {
+    const id = esc(row.id);
+    return `<div class="lv-cert-row"><button type="button" class="sm-btn lv-cert" data-cert="${id}">Open certificate</button><button type="button" class="sm-btn primary lv-cert-dl" data-cert="${id}">Download</button></div>`;
+  }
   return `<p class="sub">Certificate attached. Only that person and an admin can open it.</p>`;
+}
+
+export function certificateDownloadName(row) {
+  const name = String(row && row.name || "staff").trim().replace(/[^A-Za-z0-9]+/g, "_").replace(/^_|_$/g, "") || "staff";
+  const type = ["annual", "sick", "other"].includes(row && row.type) ? row.type : "leave";
+  const start = /^\d{4}-\d{2}-\d{2}$/.test(row && row.start || "") ? row.start : "date";
+  const match = /\.(pdf|jpeg|jpg|png|webp)$/i.exec(String(row && row.certificatePath || ""));
+  let ext = match ? match[1].toLowerCase() : "bin";
+  if (ext === "jpeg") ext = "jpg";
+  return `${name}_${type}_${start}.${ext}`;
+}
+
+function clickFileLink(documentRef, { href, download, target }) {
+  const link = documentRef.createElement("a");
+  link.href = href;
+  link.download = download;
+  link.rel = "noopener";
+  if (target) link.target = target;
+  documentRef.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+/** Save a certificate the person is already allowed to read. Blob keeps the filename on desktop. iPhone uses the share sheet, then the download URL. */
+export async function saveCertificate({ blob, downloadUrl, filename, doc, nav } = {}) {
+  const documentRef = doc || globalThis.document;
+  const navigatorRef = nav || globalThis.navigator;
+  const ua = String(navigatorRef && navigatorRef.userAgent || "");
+  const ios = /iPhone|iPad|iPod/i.test(ua) || !!(navigatorRef && navigatorRef.platform === "MacIntel" && navigatorRef.maxTouchPoints > 1);
+  const file = blob && typeof File === "function" ? new File([blob], filename, { type: blob.type || "application/octet-stream" }) : null;
+  if (ios && file && navigatorRef && typeof navigatorRef.canShare === "function" && navigatorRef.canShare({ files: [file] }) && typeof navigatorRef.share === "function") {
+    try {
+      await navigatorRef.share({ files: [file], title: filename });
+      return { ok: true, via: "share", filename };
+    } catch (err) {
+      if (err && err.name === "AbortError") return { ok: true, via: "share", filename };
+    }
+  }
+  if (blob && documentRef && typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
+    const objectUrl = URL.createObjectURL(blob);
+    clickFileLink(documentRef, { href: objectUrl, download: filename, target: ios ? "_blank" : "" });
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+    if (!ios) return { ok: true, via: "blob", filename };
+  }
+  if (downloadUrl && documentRef) {
+    clickFileLink(documentRef, { href: downloadUrl, download: filename, target: "_blank" });
+    return { ok: true, via: "url", filename };
+  }
+  return { ok: !!blob, via: blob ? "blob" : "", filename };
 }
 
 export function leaveScreenHtml({ requests, uid, canDecide, canOpenCert, error } = {}) {
