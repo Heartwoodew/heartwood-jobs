@@ -1,5 +1,5 @@
 // App-shell cache. Bump VERSION on every deploy so phones pick up the new files.
-const VERSION = "callup-shell-v74-no-helper";
+const VERSION = "callup-shell-v75-hours-download";
 const SHELL = ["./", "index.html", "styles.css", "app.js", "org-settings.js", "firebase-config.js", "route-config.js", "features/quotes.js", "features/route-order.js", "features/swms-sign.js", "features/cloud-storage.js", "features/cloud-retention.js", "features/photo-gallery.js", "features/chat.js", "features/chat-ui.js", "features/compliance.js", "features/servicing.js", "features/prestart.js", "features/timesheet.js", "features/leave.js", "features/claims.js", "features/hours-export.js", "manifest.webmanifest", "icons/callup-wordmark.svg", "icons/apple-touch-icon-180.png",
   "icons/icon-192.png", "icons/icon-512.png", "vendor/pdf-lib.min.js"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL))); self.skipWaiting(); });
@@ -10,6 +10,8 @@ self.addEventListener("activate", e => {
 self.addEventListener("fetch", e => {
   const u = new URL(e.request.url);
   if (e.request.method !== "GET") return;
+  // A spreadsheet download is a blob: URL. Its origin matches this page, so it would otherwise be fetched here and the file would never save.
+  if (u.protocol === "blob:") return;
   // Firestore/Auth API traffic is never cached here (the SDK has its own offline cache).
   if (u.hostname.endsWith("googleapis.com") || u.port === "8080" || u.port === "9099" || u.port === "9199") return;
   const sameOrigin = u.origin === location.origin;

@@ -151,3 +151,45 @@ export function xlsxBytes(sheets) {
 }
 export const exportFileName = (company, weekStart) => `${String(company || "Heartwood").replace(/[^A-Za-z0-9]+/g, "_")}_hours_${weekStart}_to_${addD(weekStart, 6)}.xlsx`;
 export function newExportId() { let s = "hx"; while (s.length < 18) s += Math.random().toString(36).slice(2); return s.replace(/[^a-z0-9]/g, "a").slice(0, 18); }
+
+// iPhone (and iPad desktop-mode) gets the share sheet. Everywhere else, including Windows desktop, saves with an anchor.
+// canShare throws on some desktop browsers and for file types the share sheet will not take. That must not skip the download.
+export function isIosLike(nav) {
+  const ua = String(nav && nav.userAgent || "");
+  return /iPhone|iPad|iPod/i.test(ua) || !!(nav && nav.platform === "MacIntel" && nav.maxTouchPoints > 1);
+}
+function anchorDownload(documentRef, file) {
+  if (!documentRef || !documentRef.body || typeof URL === "undefined" || typeof URL.createObjectURL !== "function") {
+    return { ok: false, via: "download", filename: file.name, error: "This browser could not save the file" };
+  }
+  const url = URL.createObjectURL(file);
+  const link = documentRef.createElement("a");
+  link.href = url;
+  link.download = file.name;
+  link.rel = "noopener";
+  documentRef.body.appendChild(link);
+  link.click();
+  const timer = setTimeout(() => { try { link.remove(); } catch { /* already gone */ } try { URL.revokeObjectURL(url); } catch { /* ignore */ } }, 60000);
+  if (timer && typeof timer.unref === "function") timer.unref();
+  return { ok: true, via: "download", filename: file.name };
+}
+export async function deliverHoursFile({ bytes, filename, mime = XLSX_MIME, nav, doc } = {}) {
+  const navigatorRef = nav || globalThis.navigator;
+  const documentRef = doc || globalThis.document;
+  const file = new File([bytes], filename, { type: mime || XLSX_MIME });
+  if (isIosLike(navigatorRef)) {
+    try {
+      const can = typeof navigatorRef.canShare === "function" && navigatorRef.canShare({ files: [file] });
+      if (can && typeof navigatorRef.share === "function") {
+        try {
+          await navigatorRef.share({ files: [file], title: filename });
+          return { ok: true, via: "share", filename };
+        } catch (err) {
+          if (err && err.name === "AbortError") return { ok: false, cancelled: true, via: "share", filename };
+        }
+      }
+    } catch { /* canShare threw; fall through to the anchor while the tap is still a user gesture */ }
+  }
+  try { return anchorDownload(documentRef, file); }
+  catch (err) { return { ok: false, via: "download", filename, error: (err && (err.message || err.name)) || "Download failed" }; }
+}
