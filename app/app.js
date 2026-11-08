@@ -15,6 +15,7 @@ import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPla
 import { buildOperationalExport, retentionAdminText, retentionView } from "./features/cloud-retention.js";
 import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, lightboxHtml, photoFailureText } from "./features/photo-gallery.js";
 import { installChatApp } from "./features/chat-ui.js";
+import { installHelperApp } from "./features/helper-ui.js";
 import { installCompliance } from "./features/compliance.js";
 import { SWMS, SWMS_VERSION, sigMs, sigExp, latestSig, statusOf, swmsSignatureData, buildPlaceholderPdf } from "./features/swms-sign.js";
 import {
@@ -69,6 +70,7 @@ function guessType(text) {
 
 let me = null, staff = [], jobs = [], unsub = null;
 let CHAT = { badge() { return ""; }, teamHtml() { return ""; }, jobHtml() { return ""; }, mount() {}, openJob() {}, start() {}, stop() {}, watch() {}, refresh() {} };
+let HELPER = { start() {}, stop() {} };
 let COMP = { start() {}, stop() {}, bind() {}, abandon() {}, adminHtml() { return ""; }, staffHtml() { return ""; }, adminBannerHtml() { return ""; }, staffBannerHtml() { return ""; }, canSee() { return false; }, canEdit() { return false; }, canPrestart() { return false; }, canEditService() { return false; } };
 let QG = { bindAdmin() {} }; // Quotes module; filled after helpers load
 let ROUTE = { open() {} };
@@ -80,6 +82,7 @@ $("#logout").onclick = () => signOut(auth);
 onAuthStateChanged(auth, async user => {
   if (unsub) { unsub(); unsub = null; }
   CHAT.stop();
+  HELPER.stop();
   COMP.stop();
   const inviteToken = new URLSearchParams(location.search).get("invite") || "";
   if (!user) {
@@ -100,6 +103,7 @@ onAuthStateChanged(auth, async user => {
   me.cloudProfile = prof;
   $("#who").textContent = `${me.name} · ${me.role}`; $("#logout").classList.remove("hidden");
   CHAT.start();
+  HELPER.start();
   if (me.role === "admin") {
     if (window.HW_PREVIEW_VIEW === "staff") ui.view = "staff";
     const logins = users.docs.map(d => ({ uid: d.id, ...d.data() })).filter(u => u.role === "operator" || u.role === "supervisor");
@@ -3401,6 +3405,7 @@ document.addEventListener("click", e => {
 })();
 
 CHAT = installChatApp({ db, storage, getMe: () => me, toast });
+HELPER = installHelperApp({ app: fb, useEmulator, getMe: () => me });
 COMP = installCompliance({
   db, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp,
   getJobs: () => [...(jobs || []), ...(ui.undated || []), ...(ui.done || [])],
