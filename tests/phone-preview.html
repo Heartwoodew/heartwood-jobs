@@ -73,6 +73,26 @@
     ]
   };
   window.HW_PREVIEW_RATES = q.get("rates") || "";
+  if (q.get("open") === "inbox") {
+    window.HW_INBOX = [
+      { id: "fake-orbit-spoil", builder: "Orbit", fromName: "BusinessCraft", fromEmail: "noreply@example.test", date: "2026-11-08T01:12:00.000Z", link: "https://example.test/mail/fake-orbit-spoil", read: false,
+        subject: "Purchase Order JOB/900/02 — Lot 45 Wattle Street",
+        snippet: "PO JOB/900/02. Site: Lot 45, 12 Wattle Street, Springfield Lakes QLD 4300. Cost code 900. Required date: 14/11/2026. Supervisor: Dave Brown 0412 345 678 dave.brown@example.test. Notes: Spoil is piled on the nature strip." },
+      { id: "fake-orbit-slab", builder: "Orbit", fromName: "BusinessCraft", fromEmail: "noreply@example.test", date: "2026-11-07T02:00:00.000Z", link: "https://example.test/mail/fake-orbit-slab", read: true,
+        subject: "Call up 110565/900/01 slab",
+        snippet: "Slab clean. Lot 88, 14 Brightvale Street, Redbank Plains QLD 4301. PO 110565/900/01. Cost code 900. Required date 12/11/2026. Supervisor: Dana Lee 0400 111 222 dana@example.test." },
+      { id: "fake-torsion", builder: "Torsion", fromName: "Jake Smith", fromEmail: "jake@example.test", date: "2026-11-08T00:30:00.000Z", link: "https://example.test/mail/fake-torsion", read: false,
+        subject: "Lot 8 Oak Circuit Ripley - slab clean Thursday",
+        snippet: "Hi Alex, slab clean at Lot 8, 22 Oak Circuit, Ripley on Thursday. PO TB-44821. Cheers Jake 0413 555 666" },
+      { id: "fake-silk", builder: "Silkwood", fromName: "Kelly Watts", fromEmail: "kelly@example.test", date: "2026-11-06T04:00:00.000Z", link: "https://example.test/mail/fake-silk", read: false,
+        subject: "Final clean Lot 3 Banksia Drive",
+        snippet: "Please book final clean for 18 Nov 2026. Lot 3, 7 Banksia Drive, Bellbird Park. Supervisor Kelly Watts kelly@example.test 0422 333 444. PO SW-90319. Cost code 903. Notes: Hose the driveway." },
+      { id: "fake-remit", builder: "Orbit", fromName: "Accounts", fromEmail: "accounts@example.test", date: "2026-11-05T01:00:00.000Z", link: "https://example.test/mail/fake-remit", read: true,
+        subject: "Remittance advice October", snippet: "Payment of the October account has been deposited. Please find the remittance attached." },
+      { id: "fake-done", builder: "Silkwood", fromName: "Kelly Watts", fromEmail: "kelly@example.test", date: "2026-11-04T01:00:00.000Z", link: "https://example.test/mail/fake-done", read: true, imported: true, importedJobId: "j4", jobIds: ["j4"],
+        subject: "Already imported clean", snippet: "Lot 3, 9 River Road, Chuwar. Final clean. PO 440011." }
+    ];
+  }
   if (q.get("fleet") === "1") {
     window.HW_FLEET = [
       { id: "a1", type: "vehicle", prestartKind: "tip-truck", name: "Preview tipper", rego: "PRE001", regoExpiry: "2026-10-01", coiRequired: true, coiExpiry: "2026-09-15", notes: "Preview only" },
@@ -422,6 +442,40 @@ if (q.get("run") === "1") {
   await waitFor('.mob-list .mrow[data-id="j3"]', 6000);
 }
 if (q.get("open") === "myjobs") document.querySelector('[data-view="myjobs"]')?.click();
+if (q.get("open") === "inbox") {
+  if (window.HW_PREVIEW_ROLE === "operator") {
+    await waitFor('[data-tab="more"]', 6000);
+    document.querySelector('[data-tab="more"]')?.click();
+    await sleep(80);
+  } else if (window.HW_PREVIEW_ROLE === "supervisor") {
+    await waitFor('[data-tab="more"]', 6000);
+    document.querySelector('[data-tab="more"]')?.click();
+    await waitFor('[data-go="inbox"]', 4000);
+    document.querySelector('[data-go="inbox"]')?.click();
+    await waitFor("[data-iimport]", 6000);
+  } else {
+    await waitFor('[data-view="inbox"]', 6000);
+    document.querySelector('[data-view="inbox"]')?.click();
+    await waitFor("[data-iimport]", 6000);
+    if (q.get("step") === "form") {
+      document.querySelector('[data-iimport="fake-orbit-spoil"]')?.click();
+      await waitFor("#jf", 4000);
+    } else if (q.get("step") === "duplicate") {
+      document.querySelector('[data-iimport="fake-orbit-slab"]')?.click();
+      await waitFor("#importdate", 4000);
+    } else if (q.get("step") === "bulk") {
+      document.querySelector("#ibulk")?.click();
+      await waitFor("[data-isel]", 4000);
+    } else if (q.get("step") === "review") {
+      document.querySelector("#ibulk")?.click();
+      await waitFor("#iall", 4000);
+      document.querySelector("#iall")?.click();
+      await waitFor("#ireview", 4000);
+      document.querySelector("#ireview")?.click();
+      await waitFor("#isave", 4000);
+    }
+  }
+}
 if (q.get("open") === "quotes") {
   document.querySelector('[data-tab="more"]')?.click();
   await sleep(40);
@@ -466,6 +520,7 @@ if (q.get("check") === "1") {
     ok(!!document.querySelector('[data-inc]'), "incident");
     ok(!document.querySelector('[data-go="quotes"]'), "more hides quotes");
     ok(!document.querySelector('[data-go="staff"]'), "operator more hides staff");
+    ok(!document.querySelector('[data-go="inbox"]') && !text().includes("Import as job"), "operator more hides inbox");
     ok(!/\$\s?\d/.test(text()), "more dollars");
     document.querySelector('[data-tab="today"]')?.click();
     await sleep(40);
