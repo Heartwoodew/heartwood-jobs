@@ -1036,7 +1036,7 @@ test("company A cannot read or write company B, and only the platform owner list
   await assertFails(setDoc(doc(a, "jobs/newAcme"), { companyId: "bravo", client: "nope" }));
   await assertFails(updateDoc(doc(a, "companies/bravo"), { name: "Taken" }));
   await assertFails(updateDoc(doc(a, "companies/acme"), { plan: "paid" }));
-  await assertFails(updateDoc(doc(a, "companies/acme"), { billing: { provider: "stripe", status: "active", customerId: "cus_x", subscriptionId: "sub_x" } }));
+  await assertFails(updateDoc(doc(a, "companies/acme"), { billing: { provider: "stripe", status: "active", stripeCustomerId: "cus_x", stripeSubscriptionId: "sub_x" } }));
   await assertFails(updateDoc(doc(a, "users/coA"), { platformOwner: true }));
   await assertFails(updateDoc(doc(a, "users/coA"), { companyId: "bravo" }));
   await assertFails(updateDoc(doc(a, "users/coA"), { role: "admin", platformOwner: true }));
@@ -1071,4 +1071,81 @@ test("company A cannot read or write company B, and only the platform owner list
     email: "ari@acme.test", email_verified: true, platformOwner: true,
   }).firestore();
   await assertFails(getDocs(collection(strangerClaim, "companies")));
+});
+
+test("test companies, friend invites and billing ids stay with the platform owner", async () => {
+  const owner = ownerDb();
+  const billing = { provider: null, status: "not-configured", stripeCustomerId: null, stripeSubscriptionId: null };
+  const yard = {
+    name: "Yard Demo", legalName: "Yard Demo (test)", abn: "00 000 000 000", signoff: "Yard Demo",
+    logoUrl: "", address: "Test company. No real site.", phone: "", email: "preview@example.com",
+    accountsEmail: "preview@example.com", hubdocAddress: "", ownerUid: ALEX, createdBy: ALEX,
+    status: "active", plan: "trial", origin: "test", isTest: true, demoData: false,
+    signedUpAt: serverTimestamp(), trialEndsAt: null, staffCount: 0, jobCount: 0, lastActivityAt: serverTimestamp(),
+    billing,
+  };
+  await assertSucceeds(setDoc(doc(owner, "companies/yarddemo"), yard));
+  await assertFails(setDoc(doc(db("coA"), "companies/sneakytest"), { ...yard, ownerUid: "coA", createdBy: "coA" }));
+  await assertFails(updateDoc(doc(owner, "companies/acme"), { isTest: true }));
+  await assertFails(updateDoc(doc(db("coA"), "companies/acme"), { isTest: true, plan: "trial" }));
+  await assertFails(updateDoc(doc(owner, "companies/acme"), { plan: "paid", billing: { provider: "stripe", status: "active", stripeCustomerId: "cus_x", stripeSubscriptionId: "sub_x" } }));
+  const staff = { name: "Sam Taylor", role: "operator", companyId: "yarddemo", tenantId: "yarddemo", demo: true, email: "" };
+  await assertSucceeds(setDoc(doc(owner, "users/demo-yarddemo-sam"), staff));
+  await assertFails(setDoc(doc(db("coA"), "users/demo-yarddemo-sue"), { ...staff, name: "Sue Nguyen", role: "supervisor" }));
+  const demoJob = {
+    client: "Sample Homes", address: "12 Test Street", type: "other", description: "Sample job",
+    date: "2026-11-10", time: "07:00", status: "Scheduled", companyId: "yarddemo", tenantId: "yarddemo",
+    demo: true, assigned: [], assignedNames: ["Sam Taylor"],
+  };
+  await assertSucceeds(setDoc(doc(owner, "jobs/demo-yarddemo-job1"), demoJob));
+  await assertFails(getDoc(doc(db("coA"), "jobs/demo-yarddemo-job1")));
+  await assertFails(deleteDoc(doc(owner, "companies/yarddemo")));
+  await assertSucceeds(setDoc(doc(owner, "platformSessions", ALEX), { companyId: "yarddemo" }));
+  try {
+    await assertSucceeds(getDoc(doc(owner, "jobs/demo-yarddemo-job1")));
+    await assertFails(getDoc(doc(owner, "jobs/job1")));
+    await assertFails(setDoc(doc(owner, "xeroQueue/fromyard"), { status: "queued", by: ALEX, jobId: "demo-yarddemo-job1" }));
+    await assertSucceeds(updateDoc(doc(owner, "companies/yarddemo"), { status: "archived", archivedAt: serverTimestamp() }));
+  } finally {
+    await assertSucceeds(setDoc(doc(owner, "platformSessions", ALEX), { companyId: "" }));
+  }
+  const kept = await assertSucceeds(getDoc(doc(owner, "companies/yarddemo")));
+  assert.equal(kept.exists(), true);
+  assert.equal(kept.data().status, "archived");
+  assert.equal(kept.data().isTest, true);
+
+  await assertSucceeds(setDoc(doc(owner, "friendInvites/abcd2345"), { status: "pending", createdBy: ALEX, createdAt: serverTimestamp(), note: "" }));
+  await assertFails(setDoc(doc(db("coA"), "friendInvites/zzzz9999"), { status: "pending", createdBy: "coA", createdAt: serverTimestamp(), note: "" }));
+  const friendDb = env.authenticatedContext("friend1", { email: "sam@friend.test", email_verified: true }).firestore();
+  const friendCo = {
+    name: "Mate Civil", legalName: "Mate Civil Pty Ltd", abn: "11 111 111 111", signoff: "Mate",
+    logoUrl: "", address: "9 Friend St", phone: "0400000009", email: "office@mate.test",
+    accountsEmail: "accounts@mate.test", hubdocAddress: "", ownerUid: "friend1", createdBy: "friend1",
+    status: "active", plan: "friend", origin: "friend", isTest: false, demoData: false,
+    friendInvite: "abcd2345", friendEndsAt: null, signedUpAt: serverTimestamp(), trialEndsAt: null,
+    staffCount: 1, jobCount: 0, lastActivityAt: serverTimestamp(), billing,
+  };
+  await assertSucceeds(runTransaction(friendDb, async tx => {
+    tx.set(doc(friendDb, "companies/matecivil"), friendCo);
+    tx.update(doc(friendDb, "friendInvites/abcd2345"), { status: "used", usedBy: "friend1", companyId: "matecivil", usedAt: serverTimestamp() });
+  }));
+  const friend2 = env.authenticatedContext("friend2", { email: "bea@friend.test", email_verified: true }).firestore();
+  await assertFails(runTransaction(friend2, async tx => {
+    tx.set(doc(friend2, "companies/mateagain"), { ...friendCo, ownerUid: "friend2", createdBy: "friend2" });
+    tx.update(doc(friend2, "friendInvites/abcd2345"), { status: "used", usedBy: "friend2", companyId: "mateagain", usedAt: serverTimestamp() });
+  }));
+  await assertSucceeds(setDoc(doc(owner, "friendInvites/revoke99"), { status: "pending", createdBy: ALEX, createdAt: serverTimestamp(), note: "" }));
+  await assertSucceeds(updateDoc(doc(owner, "friendInvites/revoke99"), { status: "revoked", revokedAt: serverTimestamp() }));
+  await assertFails(runTransaction(friend2, async tx => {
+    tx.set(doc(friend2, "companies/revokedco"), { ...friendCo, ownerUid: "friend2", createdBy: "friend2", friendInvite: "revoke99" });
+    tx.update(doc(friend2, "friendInvites/revoke99"), { status: "used", usedBy: "friend2", companyId: "revokedco", usedAt: serverTimestamp() });
+  }));
+  await assertSucceeds(updateDoc(doc(owner, "companies/matecivil"), { friendEndsAt: Timestamp.fromDate(new Date("2027-06-01T00:00:00Z")) }));
+  await assertSucceeds(updateDoc(doc(owner, "companies/matecivil"), { plan: "trial", trialEndsAt: Timestamp.fromDate(new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)) }));
+  await assertSucceeds(updateDoc(doc(owner, "companies/matecivil"), { plan: "paid" }));
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), "users/friend1"), { role: "admin", name: "Sam Friend", companyId: "matecivil", tenantId: "matecivil" });
+  });
+  await assertFails(updateDoc(doc(friendDb, "companies/matecivil"), { plan: "friend" }));
+  await assertFails(updateDoc(doc(friendDb, "companies/matecivil"), { billing: { provider: "stripe", status: "active", stripeCustomerId: "cus_friend", stripeSubscriptionId: "sub_friend" } }));
 });

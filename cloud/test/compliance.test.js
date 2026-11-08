@@ -19,24 +19,22 @@ function rulesSlice(text) {
   return text.slice(start, end + "// END FLEET RULES".length);
 }
 
-test("fleet and policies are Pro, off on Base, and on for Heartwood only", () => {
-  assert.equal(CALLUP_BASE.features.fleet, false);
-  assert.equal(CALLUP_BASE.features.policies, false);
+test("fleet and policies are included for every company, and Xero is not a product flag", () => {
+  assert.equal(CALLUP_BASE.features.fleet, true);
+  assert.equal(CALLUP_BASE.features.policies, true);
   assert.equal(CALLUP_BASE.xero, false);
   assert.equal(CALLUP_BASE.invoicing, false);
-  assert.equal(CALLUP_PLANS.base.features.fleet, false);
-  assert.equal(CALLUP_PLANS.base.features.policies, false);
-  assert.equal(CALLUP_PLANS.pro.plan, "pro");
-  assert.equal(CALLUP_PLANS.pro.features.fleet, true);
-  assert.equal(CALLUP_PLANS.pro.features.policies, true);
-  assert.equal(CALLUP_PLANS.base.features.servicing, false);
-  assert.equal(CALLUP_PLANS.pro.features.servicing, true);
-  assert.equal(CALLUP_PLANS.base.features.prestart, false);
-  assert.equal(CALLUP_PLANS.pro.features.prestart, true);
-  assert.equal(CALLUP_BASE.features.servicing, false);
-  assert.equal(CALLUP_BASE.features.prestart, false);
+  assert.equal(CALLUP_PLANS.callup.plan, "callup");
+  assert.equal(CALLUP_PLANS.callup.features.fleet, true);
+  assert.equal(CALLUP_PLANS.callup.features.policies, true);
+  assert.equal(CALLUP_PLANS.callup.features.servicing, true);
+  assert.equal(CALLUP_PLANS.callup.features.prestart, true);
+  assert.equal(CALLUP_BASE.features.servicing, true);
+  assert.equal(CALLUP_BASE.features.prestart, true);
+  assert.equal(CALLUP_PLANS.pro, undefined);
+  assert.equal(CALLUP_PLANS.base, undefined);
   const heartwood = featuresFor(resolveMembership({ uid: "op1", profile: { role: "operator", name: "Sam" } }));
-  assert.equal(heartwood.plan, "pro");
+  assert.equal(heartwood.plan, "callup");
   assert.equal(heartwood.features.fleet, true);
   assert.equal(canViewFleet(heartwood), true);
   assert.equal(canEditCompliance(heartwood, "operator"), false);
@@ -48,10 +46,11 @@ test("fleet and policies are Pro, off on Base, and on for Heartwood only", () =>
   const other = featuresFor(resolveMembership({
     uid: "adm2", profile: { role: "admin", tenantId: "otherco", plan: "pro" }, requestedTenantId: "heartwood",
   }));
-  assert.equal(other.plan, "base");
-  assert.equal(other.features.fleet, false);
-  assert.equal(canViewPolicies(other, "admin"), false);
+  assert.equal(other.plan, "callup");
+  assert.equal(other.features.fleet, true);
+  assert.equal(canViewPolicies(other, "admin"), true);
   assert.equal(complianceFor({ uid: "1JKLsoxkQNfkphBBO0vDz2ziEyj2", role: "admin", cloudProfile: null }).features.fleet, true);
+  assert.equal(complianceFor(null).features.fleet, false);
 });
 
 test("rego and COI status is OK, due within 30 days, or expired", () => {

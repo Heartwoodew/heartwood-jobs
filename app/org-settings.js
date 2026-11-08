@@ -64,9 +64,18 @@ export function setActiveCompany(company) {
     activeCompany = null;
     return orgSettings();
   }
+  const billing = company.billing && typeof company.billing === "object" ? company.billing : null;
   activeCompany = {
     ...clean(company),
     companyId: typeof company.companyId === "string" && company.companyId ? company.companyId : DEFAULT_ORG.companyId,
+    isTest: company.isTest === true,
+    plan: typeof company.plan === "string" ? company.plan : "",
+    billing: billing ? {
+      provider: billing.provider === "stripe" ? "stripe" : null,
+      status: ["active", "past_due", "canceled", "not-configured"].includes(billing.status) ? billing.status : "not-configured",
+      stripeCustomerId: typeof billing.stripeCustomerId === "string" ? billing.stripeCustomerId : null,
+      stripeSubscriptionId: typeof billing.stripeSubscriptionId === "string" ? billing.stripeSubscriptionId : null,
+    } : null,
   };
   return orgSettings();
 }

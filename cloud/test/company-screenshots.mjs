@@ -34,7 +34,7 @@ async function seedMaster() {
   const now = Timestamp.fromDate(new Date("2026-11-08T00:00:00Z"));
   const trialEnd = Timestamp.fromDate(new Date("2026-11-20T00:00:00Z"));
   const ended = Timestamp.fromDate(new Date("2026-10-01T00:00:00Z"));
-  const billing = { provider: null, status: "not-configured", customerId: null, subscriptionId: null };
+  const billing = { provider: null, status: "not-configured", stripeCustomerId: null, stripeSubscriptionId: null };
   await env.withSecurityRulesDisabled(async ctx => {
     const db = ctx.firestore();
     await setDoc(doc(db, "companies/heartwood"), {

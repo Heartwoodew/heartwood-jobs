@@ -14,15 +14,15 @@ export const HEARTWOOD_ADDRESS = "208-220 Holdsworth Rd, Chuwar QLD 4306";
 export const TRIAL_DAYS = 14;
 export const COMPANY_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
-// Later, a Stripe webhook (Admin SDK, not the browser) may set provider to "stripe"
-// and status to "active" | "past_due" | "canceled", plus customerId and subscriptionId.
-// Nothing in this app creates a Stripe customer or reads a card.
+// The browser always creates billing as not-configured. A webhook (Admin SDK) may later
+// set provider to "stripe" and status to "active", "past_due" or "canceled".
+// Test companies and friend trials stay on this empty hook. The browser never writes a Stripe id.
 export function billingHook() {
   return {
     provider: null,
     status: "not-configured",
-    customerId: null,
-    subscriptionId: null,
+    stripeCustomerId: null,
+    stripeSubscriptionId: null,
   };
 }
 
@@ -118,12 +118,113 @@ export function buildCompanyCreate(value, { companyId, ownerUid, signedUpAt, tri
     status: "active",
     plan: "trial",
     origin: "signup",
+    isTest: false,
     signedUpAt,
     trialEndsAt,
     staffCount: 1,
     jobCount: 0,
     lastActivityAt,
     billing: billingHook(),
+  };
+}
+
+// A test company is not a customer. Emails are not sent and nothing is billed.
+export function buildTestCompany(name, { companyId, ownerUid, signedUpAt, demoData }) {
+  const label = clip(name, 80);
+  const demo = demoData === true;
+  return {
+    name: label,
+    legalName: clip(label + " (test)", 120),
+    abn: "00 000 000 000",
+    signoff: label,
+    logoUrl: "",
+    address: "Test company. No real site.",
+    phone: "",
+    email: "preview@example.com",
+    accountsEmail: "preview@example.com",
+    hubdocAddress: "",
+    ownerUid,
+    createdBy: ownerUid,
+    status: "active",
+    plan: "trial",
+    origin: "test",
+    isTest: true,
+    demoData: demo,
+    signedUpAt,
+    trialEndsAt: null,
+    staffCount: demo ? 2 : 0,
+    jobCount: demo ? 2 : 0,
+    lastActivityAt: signedUpAt,
+    billing: billingHook(),
+  };
+}
+
+// A friend trial is a real company. The friend types their own details.
+export function buildFriendCompany(value, { companyId, ownerUid, signedUpAt, friendInvite }) {
+  return {
+    ...value,
+    ownerUid,
+    createdBy: ownerUid,
+    status: "active",
+    plan: "friend",
+    origin: "friend",
+    isTest: false,
+    demoData: false,
+    friendInvite,
+    friendEndsAt: null,
+    signedUpAt,
+    trialEndsAt: null,
+    staffCount: 1,
+    jobCount: 0,
+    lastActivityAt: signedUpAt,
+    billing: billingHook(),
+  };
+}
+
+const FRIEND_CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
+
+export function newFriendCode(fill) {
+  const bytes = new Uint8Array(8);
+  if (typeof fill === "function") fill(bytes);
+  else if (globalThis.crypto && globalThis.crypto.getRandomValues) globalThis.crypto.getRandomValues(bytes);
+  else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  let out = "";
+  for (const b of bytes) out += FRIEND_CODE_ALPHABET[b % FRIEND_CODE_ALPHABET.length];
+  return out;
+}
+
+export function friendInviteLink(code) {
+  return "https://jobs.heartwoodew.com/app?friend=" + encodeURIComponent(String(code || ""));
+}
+
+export function friendCodeOk(code) {
+  return typeof code === "string" && /^[a-z0-9]{8}$/.test(code);
+}
+
+// Stable ids so a reset overwrites the same documents and never deletes them.
+export function demoBundle(companyId, { date = "2026-11-10" } = {}) {
+  const id = cleanCompanyId(companyId);
+  const staff = [
+    { id: `demo-${id}-sam`, name: "Sam Taylor", role: "operator" },
+    { id: `demo-${id}-sue`, name: "Sue Nguyen", role: "supervisor" },
+  ];
+  const jobs = [
+    { id: `demo-${id}-job1`, client: "Sample Homes", address: "12 Test Street, Brisbane QLD", type: "other", description: "Sample job for this test company.", date, status: "Scheduled" },
+    { id: `demo-${id}-job2`, client: "Example Builder", address: "4 Demo Court, Brisbane QLD", type: "spoil", description: "Second sample job. No prices are stored.", date, status: "Scheduled" },
+  ];
+  return {
+    staff: staff.map(person => ({
+      id: person.id,
+      data: { name: person.name, role: person.role, companyId: id, tenantId: id, demo: true, email: "" },
+    })),
+    jobs: jobs.map(job => ({
+      id: job.id,
+      data: {
+        client: job.client, address: job.address, type: job.type, description: job.description,
+        date: job.date, time: "07:00", status: job.status, companyId: id, tenantId: id, demo: true,
+        assigned: [], assignedNames: [job.id.endsWith("job1") ? "Sam Taylor" : "Sue Nguyen"],
+      },
+    })),
   };
 }
 
@@ -190,17 +291,23 @@ function millis(value) {
 }
 
 export function companyPlanView(company, now = new Date()) {
-  const plan = company && company.plan === "paid" ? "paid" : "trial";
-  const status = company && company.status === "suspended" ? "suspended" : "active";
+  const raw = company && company.plan;
+  const plan = raw === "paid" || raw === "friend" ? raw : "trial";
+  const rawStatus = company && company.status;
+  const status = rawStatus === "suspended" || rawStatus === "archived" ? rawStatus : "active";
   const end = millis(company && company.trialEndsAt);
+  const friendEnd = millis(company && company.friendEndsAt);
   const at = now instanceof Date ? now.getTime() : new Date(now).getTime();
-  const trialActive = status === "active" && plan === "trial" && end != null && end > at;
-  const trialEnded = plan === "trial" && end != null && end <= at;
+  const trialActive = status === "active" && plan === "trial" && company && company.isTest !== true && end != null && end > at;
+  const trialEnded = plan === "trial" && company && company.isTest !== true && end != null && end <= at;
+  const friendEnded = plan === "friend" && friendEnd != null && friendEnd <= at;
   let planLabel = "Trial";
-  if (plan === "paid") planLabel = "Paying";
+  if (company && company.isTest === true) planLabel = "Test";
+  else if (plan === "paid") planLabel = "Paying";
+  else if (plan === "friend") planLabel = friendEnded ? "Friend ended" : "Friend";
   else if (trialEnded) planLabel = "Trial ended";
   else if (trialActive) planLabel = "Trial";
-  return { plan, status, trialActive, trialEnded, planLabel, trialEndsAt: end };
+  return { plan, status, trialActive, trialEnded, friendEnded, planLabel, trialEndsAt: end, friendEndsAt: friendEnd };
 }
 
 // Account-level row only. Job text, photos and money are not copied onto it.
@@ -228,17 +335,32 @@ export function masterRow(id, company, now = new Date()) {
     trialActive: view.trialActive,
     trialEnded: view.trialEnded,
     trialEndsAt: view.trialEndsAt,
-    paying: view.plan === "paid" && view.status === "active",
+    friendEndsAt: view.friendEndsAt,
+    friendEnded: view.friendEnded,
+    isTest: company.isTest === true,
+    paying: view.plan === "paid" && view.status === "active" && company.isTest !== true,
+    billingStatus: billingStatusLabel(company, view),
   };
+}
+
+export function billingStatusLabel(company, view = companyPlanView(company)) {
+  if (!company || company.isTest === true || view.plan === "friend") return "Not billed";
+  const status = company.billing && company.billing.status;
+  if (status === "active") return "Active";
+  if (status === "past_due") return "Past due";
+  if (status === "canceled") return "Canceled";
+  return "Not set up";
 }
 
 export function masterTotals(rows) {
   const list = rows || [];
+  const customers = list.filter(r => !r.isTest);
   return {
     companies: list.length,
-    activeTrials: list.filter(r => r.trialActive && r.status === "active").length,
-    paying: list.filter(r => r.paying).length,
-    staff: list.reduce((n, r) => n + (r.staffCount || 0), 0),
+    activeTrials: customers.filter(r => r.trialActive && r.status === "active" && r.plan === "trial").length,
+    paying: customers.filter(r => r.paying).length,
+    friends: customers.filter(r => r.plan === "friend" && r.status === "active" && !r.friendEnded).length,
+    staff: customers.filter(r => r.status !== "archived").reduce((n, r) => n + (r.staffCount || 0), 0),
   };
 }
 
@@ -250,6 +372,9 @@ export function filterMaster(rows, { q = "", status = "all", plan = "all" } = {}
     if (plan === "trial" && !(row.plan === "trial" && row.trialActive)) return false;
     if (plan === "trial-ended" && !row.trialEnded) return false;
     if (plan === "paid" && row.plan !== "paid") return false;
+    if (plan === "friend" && row.plan !== "friend") return false;
+    if (plan === "test" && !row.isTest) return false;
+    if (status === "archived" && row.status !== "archived") return false;
     if (!query) return true;
     const hay = [row.name, row.legalName, row.abn, row.email, row.phone, row.id].join(" ").toLowerCase();
     return hay.includes(query);

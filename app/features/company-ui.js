@@ -15,12 +15,14 @@ function when(ms) {
   }).format(new Date(ms));
 }
 
-export function signupFormHtml() {
+export function signupFormHtml({ friend = false } = {}) {
   return `<form id="signup" class="card login signup">
     <div class="login-brand"><div class="wordmark" aria-label="${esc(PRODUCT_NAME)}">Call<span>Up</span></div>
-      <p class="orgline">New company</p></div>
-    <h2>Create your company</h2>
-    <p class="sub">You become the admin. Staff join only this company, from an invite. A 14-day trial starts today. Payments are not taken on this screen.</p>
+      <p class="orgline">${friend ? "Friend trial" : "New company"}</p></div>
+    <h2>${friend ? "Start your friend trial" : "Create your company"}</h2>
+    <p class="sub">${friend
+      ? "You become the admin of your own company. Your emails work as usual. This friend trial is not billed."
+      : "You become the admin. Staff join only this company, from an invite. A 14-day trial starts today. Payments are not taken on this screen."}</p>
     <h3>Your login</h3>
     <label>Your name<input name="ownerName" required maxlength="80" autocomplete="name"></label>
     <label>Email<input name="ownerEmail" type="email" required maxlength="120" autocomplete="username"></label>
@@ -59,10 +61,32 @@ export function companySettingsHtml(org, { canEdit = false } = {}) {
       <label>Logo URL<span class="sub">Optional https address. Blank keeps the name as text.</span><input name="logoUrl" maxlength="300" value="${esc(org.logoUrl || "")}"${lock}></label>
       ${canEdit ? `<div class="btns"><button type="submit" class="primary">Save company details</button></div>` : `<p class="sub">Only a company admin can change these.</p>`}
       <p class="powered">${esc(POWERED_BY)}</p>
-    </form>`;
+    </form>
+    ${billingCard(org, canEdit)}`;
 }
 
-export function masterPageHtml(companies, filters = {}) {
+function billingCard(org, canEdit) {
+  if (!canEdit || !org || org.companyId === "heartwood" || org.isTest || org.plan === "friend") return "";
+  const status = (org.billing && org.billing.status) || "not-configured";
+  const subscribed = !!(org.billing && org.billing.stripeCustomerId);
+  const label = status === "active" ? "Active" : status === "past_due" ? "Past due" : status === "canceled" ? "Canceled" : "Not set up";
+  return `<div class="card" id="billingcard">
+    <h2>Billing</h2>
+    <p class="sub">The trial is 14 days and does not ask for a card. CallUp is A$20 a month including 1 person, plus A$5 a month for each extra staff member. GST is added at checkout.</p>
+    <p>Status: <b>${esc(label)}</b></p>
+    ${subscribed
+      ? `<button type="button" class="primary" id="billportal">Manage billing</button>`
+      : `<button type="button" class="primary" id="billsub">Subscribe</button>`}
+  </div>`;
+}
+
+function badge(row) {
+  if (row.isTest) return `<span class="co-badge co-test">TEST</span>`;
+  if (row.plan === "friend") return `<span class="co-badge co-friend">FRIEND</span>`;
+  return "";
+}
+
+export function masterPageHtml(companies, filters = {}, invites = []) {
   const rows = filterMaster(companies, filters);
   const totals = masterTotals(companies);
   const q = filters.q || "";
@@ -70,26 +94,45 @@ export function masterPageHtml(companies, filters = {}) {
   const plan = filters.plan || "all";
   const opt = (value, current, label) => `<option value="${value}"${value === current ? " selected" : ""}>${label}</option>`;
   const body = rows.map(row => `<tr data-company="${esc(row.id)}" class="master-row">
-      <td><b>${esc(row.name)}</b><div class="sub">${esc(row.email)}${row.phone ? " · " + esc(row.phone) : ""}</div></td>
+      <td><b>${esc(row.name)}</b> ${badge(row)}<div class="sub">${esc(row.email)}${row.phone ? " · " + esc(row.phone) : ""}</div></td>
       <td>${esc(row.abn)}</td>
       <td>${esc(when(row.signedUpAt))}</td>
-      <td>${esc(row.planLabel)}${row.trialEndsAt && row.plan === "trial" ? `<div class="sub">until ${esc(when(row.trialEndsAt))}</div>` : ""}</td>
+      <td>${esc(row.planLabel)}${row.trialEndsAt && row.plan === "trial" && !row.isTest ? `<div class="sub">until ${esc(when(row.trialEndsAt))}</div>` : ""}${row.plan === "friend" ? `<div class="sub">${row.friendEndsAt ? "until " + esc(when(row.friendEndsAt)) : "no expiry"}</div>` : ""}<div class="sub">${esc(row.billingStatus || "")}</div></td>
       <td>${row.staffCount}</td>
       <td>${row.jobCount}</td>
       <td>${esc(when(row.lastActivityAt))}</td>
       <td><span class="qpill ${row.status === "active" ? "q-comp" : "q-uns"}">${esc(row.status)}</span></td>
     </tr>`).join("");
+  const inviteRows = (invites || []).map(inv => `<li><code>${esc(inv.id)}</code> · ${esc(inv.status || "")}${inv.companyId ? " · " + esc(inv.companyId) : ""}</li>`).join("");
   return `<div class="sm-head"><h1>Master</h1><span class="sub">Platform owner · account details only</span></div>
     <div class="master-totals">
       <div class="tile"><span class="big">${totals.companies}</span><span class="nm">Companies</span></div>
       <div class="tile"><span class="big">${totals.activeTrials}</span><span class="nm">Active trials</span></div>
       <div class="tile"><span class="big">${totals.paying}</span><span class="nm">Paying customers</span></div>
+      <div class="tile"><span class="big">${totals.friends || 0}</span><span class="nm">Friend trials</span></div>
       <div class="tile"><span class="big">${totals.staff}</span><span class="nm">Total staff</span></div>
+    </div>
+    <div class="card master-tools">
+      <form id="testco" class="jf">
+        <h2>Test company</h2>
+        <p class="sub">Not a customer. No emails are sent and nothing is billed. Archive keeps the record.</p>
+        <label>Name<input name="name" required maxlength="80" placeholder="Yard demo"></label>
+        <label class="ck"><input type="checkbox" name="demo"> Add sample jobs and staff names</label>
+        <button class="primary" type="submit">Create test company</button>
+        <p id="testerr" class="err"></p>
+      </form>
+      <form id="friendinv" class="jf">
+        <h2>Friend trial invite</h2>
+        <p class="sub">A real company. Their email works. One use, and you can revoke it before it is used.</p>
+        <button class="primary" type="submit">Create friend invite</button>
+        <p id="friendout" class="sub"></p>
+        <ul class="friend-codes">${inviteRows || `<li class="muted">No invites yet.</li>`}</ul>
+      </form>
     </div>
     <form id="masterf" class="bar master-filters">
       <input id="masterq" type="search" placeholder="Search name, ABN, email" value="${esc(q)}" aria-label="Search companies">
-      <select id="masterstatus" aria-label="Status">${opt("all", status, "All statuses")}${opt("active", status, "Active")}${opt("suspended", status, "Suspended")}</select>
-      <select id="masterplan" aria-label="Plan">${opt("all", plan, "All plans")}${opt("trial", plan, "Active trial")}${opt("trial-ended", plan, "Trial ended")}${opt("paid", plan, "Paying")}</select>
+      <select id="masterstatus" aria-label="Status">${opt("all", status, "All statuses")}${opt("active", status, "Active")}${opt("suspended", status, "Suspended")}${opt("archived", status, "Archived")}</select>
+      <select id="masterplan" aria-label="Plan">${opt("all", plan, "All plans")}${opt("trial", plan, "Active trial")}${opt("trial-ended", plan, "Trial ended")}${opt("friend", plan, "Friend")}${opt("paid", plan, "Paying")}${opt("test", plan, "Test")}</select>
     </form>
     <div class="card master-table-wrap"><table class="jt master-table"><thead><tr>
       <th>Company</th><th>ABN</th><th>Signed up</th><th>Plan</th><th>Staff</th><th>Jobs</th><th>Last activity</th><th>Status</th>
@@ -99,9 +142,17 @@ export function masterPageHtml(companies, filters = {}) {
 
 export function masterDetailHtml(row) {
   if (!row) return "";
+  const testActions = row.isTest && row.status !== "archived"
+    ? `<div class="btns"><button type="button" id="testopen">Open as admin</button><button type="button" id="testreset">Reset demo data</button><button type="button" id="testarchive">Archive</button></div>`
+    : "";
+  const friendActions = !row.isTest && row.plan === "friend"
+    ? `<form id="friendplan" class="jf"><label>Friend end date<span class="sub">Leave blank for no expiry.</span><input name="end" type="date"></label>
+        <div class="btns"><button type="submit" name="act" value="extend">Save end date</button><button type="submit" name="act" value="trial">Convert to trial</button><button type="submit" name="act" value="paid">Convert to paid</button></div></form>`
+    : "";
   return `<article class="card master-detail" id="mastercard">
-    <div class="sm-head"><h2>${esc(row.name)}</h2><button type="button" class="ghost" id="masterclose">Close</button></div>
-    <p class="sub">Read only. Job descriptions, photos and amounts are not shown.</p>
+    <div class="sm-head"><h2>${esc(row.name)} ${badge(row)}</h2><button type="button" class="ghost" id="masterclose">Close</button></div>
+    <p class="sub">${row.isTest ? "Test company. Opening it does not show another company's jobs. Nothing is emailed or billed." : "Account details only. Job descriptions, photos and amounts are not shown."}</p>
+    ${testActions}${friendActions}
     <dl class="master-dl">
       <div><dt>Legal name</dt><dd>${esc(row.legalName)}</dd></div>
       <div><dt>ABN</dt><dd>${esc(row.abn)}</dd></div>
@@ -111,6 +162,7 @@ export function masterDetailHtml(row) {
       <div><dt>Hubdoc</dt><dd>${esc(row.hubdocAddress || "—")}</dd></div>
       <div><dt>Signed up</dt><dd>${esc(when(row.signedUpAt))}</dd></div>
       <div><dt>Plan</dt><dd>${esc(row.planLabel)}</dd></div>
+      <div><dt>Billing</dt><dd>${esc(row.billingStatus || "")}</dd></div>
       <div><dt>Trial ends</dt><dd>${row.plan === "trial" ? esc(when(row.trialEndsAt)) : "—"}</dd></div>
       <div><dt>Staff</dt><dd>${row.staffCount}</dd></div>
       <div><dt>Jobs</dt><dd>${row.jobCount}</dd></div>

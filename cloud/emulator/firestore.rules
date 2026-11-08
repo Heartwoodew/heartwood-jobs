@@ -32,9 +32,11 @@ service cloud.firestore {
     // or a custom claim platformOwner=true. A company admin cannot set this.
     function platformOwner() {
       return signedIn()
+        && "email_verified" in request.auth.token
         && request.auth.token.email_verified == true
+        && "email" in request.auth.token
         && request.auth.token.email == "alex@heartwoodew.com"
-        && (request.auth.token.platformOwner == true || request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2");
+        && (("platformOwner" in request.auth.token && request.auth.token.platformOwner == true) || isAlex());
     }
     function docCompany(data) {
       return ("companyId" in data && data.companyId is string && data.companyId.size() > 0)
@@ -43,8 +45,19 @@ service cloud.firestore {
           ? data.tenantId
           : "heartwood");
     }
+    function sessionPath() { return /databases/$(database)/documents/platformSessions/$(request.auth.uid); }
+    function sessionCompany() {
+      let id = platformOwner() && exists(sessionPath()) ? get(sessionPath()).data.get("companyId", "") : "";
+      return id is string && id.size() > 1
+        && exists(/databases/$(database)/documents/companies/$(id))
+        && get(/databases/$(database)/documents/companies/$(id)).data.isTest == true
+        && get(/databases/$(database)/documents/companies/$(id)).data.status == "active"
+        ? id : "";
+    }
     function callerCompany() {
-      return (isAlex() || isPatrick())
+      let session = sessionCompany();
+      return session != "" ? session
+        : (isAlex() || isPatrick())
         ? "heartwood"
         : (hasProfile() && "companyId" in profile() && profile().companyId is string && profile().companyId.size() > 0
           ? profile().companyId
@@ -70,11 +83,11 @@ service cloud.firestore {
     }
     function companyBillingLocked(data) {
       return data.billing is map
-        && data.billing.keys().hasOnly(["provider", "status", "customerId", "subscriptionId"])
+        && data.billing.keys().hasOnly(["provider", "status", "stripeCustomerId", "stripeSubscriptionId"])
         && data.billing.provider == null
         && data.billing.status == "not-configured"
-        && data.billing.customerId == null
-        && data.billing.subscriptionId == null;
+        && data.billing.stripeCustomerId == null
+        && data.billing.stripeSubscriptionId == null;
     }
     function companyOwnerCreate(companyId) {
       let d = request.resource.data;
@@ -83,12 +96,13 @@ service cloud.firestore {
         && !hasProfile()
         && companyIdOk(companyId)
         && companyId != "heartwood"
-        && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing"])
+        && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing"])
         && companyDetailText(d)
         && d.ownerUid == request.auth.uid
         && d.createdBy == request.auth.uid
         && d.status == "active"
         && d.plan == "trial"
+        && d.isTest == false
         && d.origin == "signup"
         && d.signedUpAt == request.time
         && d.trialEndsAt > request.time + duration.value(13, 'd')
@@ -113,7 +127,100 @@ service cloud.firestore {
         && next.ownerUid == resource.data.ownerUid
         && next.staffCount == resource.data.staffCount
         && next.jobCount == resource.data.jobCount
-        && next.origin == resource.data.origin;
+        && next.origin == resource.data.origin
+        && next.get("isTest", false) == resource.data.get("isTest", false)
+        && next.get("plan", "trial") == resource.data.get("plan", "trial")
+        && next.get("friendEndsAt", null) == resource.data.get("friendEndsAt", null);
+    }
+    function testCompanyCreate(companyId) {
+      let d = request.resource.data;
+      return platformOwner()
+        && companyIdOk(companyId)
+        && companyId != "heartwood"
+        && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "demoData", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing"])
+        && companyDetailText(d)
+        && d.isTest == true
+        && d.plan == "trial"
+        && d.origin == "test"
+        && d.status == "active"
+        && d.demoData is bool
+        && d.ownerUid == request.auth.uid
+        && d.createdBy == request.auth.uid
+        && d.signedUpAt == request.time
+        && d.trialEndsAt == null
+        && d.lastActivityAt == request.time
+        && companyBillingLocked(d)
+        && (d.demoData == true ? (d.staffCount == 2 && d.jobCount == 2) : (d.staffCount == 0 && d.jobCount == 0));
+    }
+    function friendInvitePath(code) { return /databases/$(database)/documents/friendInvites/$(code); }
+    function friendCompanyCreate(companyId) {
+      let d = request.resource.data;
+      return signedIn()
+        && !isAlex() && !isPatrick()
+        && !hasProfile()
+        && companyIdOk(companyId)
+        && companyId != "heartwood"
+        && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "demoData", "friendInvite", "friendEndsAt", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing"])
+        && companyDetailText(d)
+        && d.plan == "friend"
+        && d.isTest == false
+        && d.demoData == false
+        && d.origin == "friend"
+        && d.status == "active"
+        && d.friendInvite is string
+        && d.friendInvite == d.friendInvite
+        && exists(friendInvitePath(d.friendInvite))
+        && get(friendInvitePath(d.friendInvite)).data.status == "pending"
+        && existsAfter(friendInvitePath(d.friendInvite))
+        && getAfter(friendInvitePath(d.friendInvite)).data.status == "used"
+        && getAfter(friendInvitePath(d.friendInvite)).data.usedBy == request.auth.uid
+        && getAfter(friendInvitePath(d.friendInvite)).data.companyId == companyId
+        && d.ownerUid == request.auth.uid
+        && d.friendEndsAt == null
+        && d.trialEndsAt == null
+        && d.signedUpAt == request.time
+        && d.lastActivityAt == request.time
+        && d.staffCount == 1
+        && d.jobCount == 0
+        && companyBillingLocked(d);
+    }
+    function ownerPlanEdit(companyId) {
+      let next = request.resource.data;
+      return platformOwner()
+        && resource.data.get("isTest", false) != true
+        && next.get("isTest", false) == resource.data.get("isTest", false)
+        && next.diff(resource.data).affectedKeys().hasOnly(["plan", "friendEndsAt", "trialEndsAt"])
+        && next.plan in ["friend", "trial", "paid"]
+        && next.billing == resource.data.billing
+        && next.status == resource.data.status
+        && (next.friendEndsAt == null || next.friendEndsAt is timestamp)
+        && (next.plan != "trial" || (
+          next.trialEndsAt > request.time + duration.value(13, 'd')
+          && next.trialEndsAt < request.time + duration.value(15, 'd')
+        ));
+    }
+    function testArchive(companyId) {
+      let next = request.resource.data;
+      return platformOwner()
+        && resource.data.isTest == true
+        && resource.data.status == "active"
+        && next.diff(resource.data).affectedKeys().hasOnly(["status", "archivedAt"])
+        && next.status == "archived"
+        && next.archivedAt == request.time
+        && next.isTest == true
+        && next.plan == resource.data.plan
+        && next.billing == resource.data.billing;
+    }
+    function testDemoCounts(companyId) {
+      let next = request.resource.data;
+      return platformOwner()
+        && resource.data.isTest == true
+        && resource.data.status == "active"
+        && next.diff(resource.data).affectedKeys().hasOnly(["demoData", "staffCount", "jobCount", "lastActivityAt"])
+        && next.demoData == true
+        && next.staffCount == 2
+        && next.jobCount == 2
+        && next.lastActivityAt == request.time;
     }
     function companyStatsBump(companyId) {
       let next = request.resource.data;
@@ -159,6 +266,16 @@ service cloud.firestore {
         (!request.resource.data.keys().hasAny(["tenantId", "role", "customerIds", "finance", "platformOwner", "companyId"]))
         || ownerProfileCreate()
       );
+      allow create, update: if platformOwner()
+        && uid.matches('^demo-[a-z0-9-]{1,80}$')
+        && request.resource.data.keys().hasOnly(["name", "role", "companyId", "tenantId", "demo", "email"])
+        && request.resource.data.demo == true
+        && request.resource.data.role in ["operator", "supervisor"]
+        && request.resource.data.companyId is string
+        && request.resource.data.tenantId == request.resource.data.companyId
+        && exists(/databases/$(database)/documents/companies/$(request.resource.data.companyId))
+        && get(/databases/$(database)/documents/companies/$(request.resource.data.companyId)).data.isTest == true
+        && !request.resource.data.keys().hasAny(["platformOwner", "finance", "isTest"]);
       allow update: if signedIn() && request.auth.uid == uid
         && same("tenantId") && same("role") && same("customerIds") && same("finance")
         && same("companyId") && same("platformOwner");
@@ -168,9 +285,11 @@ service cloud.firestore {
     match /xeroQueue/{id} {
       allow read: if isHeartwoodFinance();
       allow create: if isHeartwoodFinance()
+        && callerCompany() == "heartwood"
         && request.resource.data.status == "queued"
         && request.resource.data.by == request.auth.uid
-        && (!("tenantId" in request.resource.data) || request.resource.data.tenantId == "heartwood");
+        && (!("tenantId" in request.resource.data) || request.resource.data.tenantId == "heartwood")
+        && request.resource.data.get("isTest", false) != true;
       allow update, delete: if false;
     }
 
@@ -182,10 +301,26 @@ service cloud.firestore {
 
     // Reads are company-scoped. Writes stay closed in this emulator model:
     // the live jobs and receipts rules are not in this file. Do not deploy it.
+    function demoJobWrite(id) {
+      let d = request.resource.data;
+      return platformOwner()
+        && id.matches('^demo-[a-z0-9-]{1,80}$')
+        && d.demo == true
+        && d.companyId is string
+        && d.tenantId == d.companyId
+        && exists(/databases/$(database)/documents/companies/$(d.companyId))
+        && get(/databases/$(database)/documents/companies/$(d.companyId)).data.isTest == true
+        && d.keys().hasOnly(["client", "address", "type", "description", "date", "time", "status", "companyId", "tenantId", "demo", "assigned", "assignedNames"])
+        && d.client is string && d.client.size() <= 80
+        && d.address is string && d.address.size() <= 160
+        && d.description is string && d.description.size() <= 400
+        && !d.keys().hasAny(["invoiceAmount", "invoiceNo", "amountInc", "quoteAmount"]);
+    }
     match /jobs/{id} {
       allow get: if signedIn() && callerCompany() != "" && docCompany(resource.data) == callerCompany();
       allow list: if signedIn() && callerCompany() != "" && resource.data.companyId == callerCompany();
       allow write: if false;
+      allow create, update: if demoJobWrite(id);
     }
     match /receipts/{id} {
       allow get: if signedIn() && callerCompany() != "" && docCompany(resource.data) == callerCompany();
@@ -197,11 +332,74 @@ service cloud.firestore {
     match /companies/{companyId} {
       allow get: if platformOwner() || (signedIn() && callerCompany() == companyId);
       allow list: if platformOwner();
-      allow create: if companyOwnerCreate(companyId);
-      allow update: if companyAdminEdit(companyId) || companyStatsBump(companyId);
+      allow create: if companyOwnerCreate(companyId) || testCompanyCreate(companyId) || friendCompanyCreate(companyId);
+      allow update: if ownerPlanEdit(companyId) || testArchive(companyId) || testDemoCounts(companyId) || companyAdminEdit(companyId) || companyStatsBump(companyId);
       allow delete: if false;
     }
 // END COMPANY RULES
+
+    match /platformSessions/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow create, update: if platformOwner() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(["companyId"])
+        && request.resource.data.companyId is string
+        && request.resource.data.companyId.size() <= 40
+        && (request.resource.data.companyId == ""
+          || (exists(/databases/$(database)/documents/companies/$(request.resource.data.companyId))
+            && get(/databases/$(database)/documents/companies/$(request.resource.data.companyId)).data.isTest == true
+            && get(/databases/$(database)/documents/companies/$(request.resource.data.companyId)).data.status == "active"));
+      allow delete: if false;
+    }
+
+    function friendCodeOk(code) { return code.matches('^[a-z0-9]{8}$'); }
+    match /friendInvites/{code} {
+      allow get: if platformOwner()
+        || (signedIn() && resource.data.status == "pending")
+        || (signedIn() && resource.data.usedBy == request.auth.uid);
+      allow list: if platformOwner();
+      allow create: if platformOwner()
+        && friendCodeOk(code)
+        && request.resource.data.keys().hasOnly(["status", "createdBy", "createdAt", "note"])
+        && request.resource.data.status == "pending"
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.note is string
+        && request.resource.data.note.size() <= 80;
+      allow update: if (
+          platformOwner()
+          && resource.data.status == "pending"
+          && request.resource.data.status == "revoked"
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "revokedAt"])
+          && request.resource.data.revokedAt == request.time
+        ) || (
+          signedIn()
+          && resource.data.status == "pending"
+          && request.resource.data.status == "used"
+          && request.resource.data.usedBy == request.auth.uid
+          && request.resource.data.companyId is string
+          && request.resource.data.usedAt == request.time
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "usedBy", "companyId", "usedAt"])
+          && existsAfter(/databases/$(database)/documents/companies/$(request.resource.data.companyId))
+          && getAfter(/databases/$(database)/documents/companies/$(request.resource.data.companyId)).data.ownerUid == request.auth.uid
+          && getAfter(/databases/$(database)/documents/companies/$(request.resource.data.companyId)).data.plan == "friend"
+          && getAfter(/databases/$(database)/documents/companies/$(request.resource.data.companyId)).data.friendInvite == code
+        );
+      allow delete: if false;
+    }
+
+    match /testMailLog/{id} {
+      allow read: if platformOwner();
+      allow create: if platformOwner()
+        && sessionCompany() != ""
+        && request.resource.data.keys().hasOnly(["kind", "status", "companyId", "preview", "createdAt"])
+        && request.resource.data.kind in ["hours", "hubdoc", "xero", "builder"]
+        && request.resource.data.status == "preview"
+        && request.resource.data.companyId == sessionCompany()
+        && request.resource.data.preview is string
+        && request.resource.data.preview.size() <= 2000
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+    }
 
 // BEGIN INVITE RULES
     function inviteSignedIn() { return request.auth != null; }
@@ -1414,7 +1612,8 @@ service cloud.firestore {
           && d.companyName is string && d.companyName.size() > 0 && d.companyName.size() <= 80
           && d.to == hxAccounts()
           && d.to != "accounts@heartwoodew.com"
-          && exists(/databases/$(database)/documents/companies/$(hxCaller())))
+          && exists(/databases/$(database)/documents/companies/$(hxCaller()))
+          && get(/databases/$(database)/documents/companies/$(hxCaller())).data.isTest != true)
       );
     }
     function hxMark() {

@@ -24,8 +24,15 @@ def company_id_of(data, path_company=""):
     return path or HEARTWOOD_ID
 
 
+def is_test(doc=None, company=None):
+    return (doc or {}).get("isTest") is True or (company or {}).get("isTest") is True or (doc or {}).get("status") == "preview"
+
+
 def hours_recipient(doc):
-    """(ok, to, subject_name). Heartwood is accounts@ and the subject word Heartwood."""
+    """(ok, to, subject_name). Heartwood is accounts@ and the subject word Heartwood.
+    Test companies never get a real recipient."""
+    if is_test(doc):
+        return False, "", ""
     cid = company_id_of(doc)
     to = str((doc or {}).get("to") or "").strip()
     if cid == HEARTWOOD_ID:
@@ -42,7 +49,10 @@ def hours_subject(subject_name, week_start_dmy, week_end_dmy, tag):
 
 
 def hubdoc_for(doc, company, heartwood_hub):
-    """Heartwood uses the existing ownerSettings address. Others use their own or are skipped."""
+    """Heartwood uses the existing ownerSettings address. Others use their own or are skipped.
+    A test company is never filed."""
+    if is_test(doc, company):
+        return "", "Test"
     cid = company_id_of(doc)
     if cid == HEARTWOOD_ID:
         return heartwood_hub, "Heartwood"
@@ -58,6 +68,8 @@ def xero_accounts(item, company):
 
     Heartwood returns the existing mailbox and a note that the desktop worker is unchanged.
     """
+    if is_test(item, company):
+        return {"companyId": company_id_of(item), "accountsEmail": "", "send": False, "reason": "test-company-no-send"}
     cid = company_id_of(item)
     if cid == HEARTWOOD_ID:
         return {

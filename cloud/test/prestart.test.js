@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { CALLUP_BASE } from "../../app/features/cloud-storage.js";
-import { CALLUP_PLANS, canViewPrestart } from "../../app/features/compliance.js";
+import { CALLUP_PLAN, canViewPrestart } from "../../app/features/compliance.js";
 import { SCHEDULING_APPROVED } from "../../app/features/cloud-retention.js";
 import {
   DEFAULT_PRESTART, PRESTART_KINDS, PRESTART_SECTIONS, assetKind, itemsFor, missingToday, openDefects,
@@ -11,12 +11,11 @@ import {
 
 const asset = { id: "a1", type: "vehicle", prestartKind: "tip-truck", name: "Preview tipper", rego: "PRE001" };
 
-test("prestart is Pro and off on Base", () => {
-  assert.equal(CALLUP_BASE.features.prestart, false);
-  assert.equal(CALLUP_PLANS.base.features.prestart, false);
-  assert.equal(CALLUP_PLANS.pro.features.prestart, true);
-  assert.equal(canViewPrestart(CALLUP_PLANS.pro), true);
-  assert.equal(canViewPrestart(CALLUP_PLANS.base), false);
+test("prestart is included for every company", () => {
+  assert.equal(CALLUP_BASE.features.prestart, true);
+  assert.equal(CALLUP_PLAN.features.prestart, true);
+  assert.equal(canViewPrestart(CALLUP_PLAN), true);
+  assert.equal(canViewPrestart({ features: { prestart: false } }), false);
   assert.equal(DEFAULT_PRESTART.trailer.includes("seatbelt"), false);
   assert.equal(DEFAULT_PRESTART["tip-truck"].includes("tt-hyd"), true);
 });

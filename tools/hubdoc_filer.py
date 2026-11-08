@@ -51,10 +51,13 @@ def company_doc(c, cid):
 
 
 def hub_for(c, d, heartwood_hub):
-    """Heartwood keeps ownerSettings/hubdoc. Another company uses its own hubdocAddress, or is skipped."""
+    """Heartwood keeps ownerSettings/hubdoc. Another company uses its own hubdocAddress, or is skipped.
+    Test companies are not filed."""
+    if d.get("isTest") is True: return "", "Test"
     cid = company_of(d)
     if cid == "heartwood": return heartwood_hub, "Heartwood"
     comp = company_doc(c, cid)
+    if comp.get("isTest") is True: return "", (comp.get("name") or "Test")
     hub = (comp.get("hubdocAddress") or "").strip().lower()
     name = (comp.get("name") or "Company").strip() or "Company"
     if not re.fullmatch(r"[a-z0-9._+-]+@app\.hubdoc\.com", hub): return "", name

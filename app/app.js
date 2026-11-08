@@ -23,10 +23,12 @@ import {
 } from "./features/staff-invites.js";
 import { PRODUCT_NAME, POWERED_BY, orgSettings, saveOrgSettings, setActiveCompany } from "./org-settings.js";
 import {
-  buildCompanyCreate, companyDetailPatch, companyIdFromName, hoursBrand, isPlatformOwner,
+  buildCompanyCreate, buildFriendCompany, buildTestCompany, companyDetailPatch, companyIdFromName, demoBundle,
+  friendCodeOk, friendInviteLink, hoursBrand, isPlatformOwner, newFriendCode,
   ownerProfile, scopeRecord, trialEnd, validateCompanyInput, masterRow,
 } from "./features/company.js";
 import { companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, signupFormHtml } from "./features/company-ui.js";
+import { exportAllowed, hoursCsv, invoiceCsv, jobsCsv, reimbursementsCsv } from "./features/company-exports.js";
 import {
   accuracyText, brisbaneHM, captureFix, coordText, daysForSheet, editList, entryList, locationConsent,
   locationMap, machineChoicePatch, machinePromptNeeded, mapsHref, needsLocationConsent, newTsId, openClock,
@@ -101,6 +103,8 @@ onAuthStateChanged(auth, async user => {
   if (!user) {
     me = null; setActiveCompany(null); $("#who").textContent = ""; $("#logout").classList.add("hidden");
     if (inviteToken || window.HW_INVITE_PREVIEW) return renderInviteAccept(inviteToken);
+    const friendCode = new URLSearchParams(location.search).get("friend") || "";
+    if (friendCode) return renderSignup(friendCode);
     return renderLogin();
   }
   if (inviteToken) return renderInviteSignedIn();
@@ -125,6 +129,12 @@ onAuthStateChanged(auth, async user => {
     emailVerified: user.emailVerified === true || token?.claims?.email_verified === true,
     claims: token?.claims || {},
   });
+  me.testCompanyId = "";
+  if (me.platformOwner) {
+    const sess = await getDoc(doc(db, "platformSessions", user.uid)).catch(() => null);
+    const cid = sess && sess.exists() ? String(sess.data().companyId || "").trim() : "";
+    if (cid) me.testCompanyId = cid;
+  }
   await loadCompanyBrand();
   $("#who").textContent = `${me.name} · ${me.role}`; $("#logout").classList.remove("hidden");
   CHAT.start();
@@ -169,6 +179,7 @@ onAuthStateChanged(auth, async user => {
 });
 
 function myCompanyId() {
+  if (me && me.testCompanyId) return me.testCompanyId;
   const profile = me && me.cloudProfile;
   const company = profile && typeof profile.companyId === "string" ? profile.companyId.trim() : "";
   if (company) return company;
@@ -201,6 +212,33 @@ function renderInviteSignedIn() {
     <button class="big primary" type="button" id="invitesignout">Sign out</button>
   </form>`;
   $("#invitesignout").onclick = () => signOut(auth);
+}
+async function openBilling(name) {
+  try {
+    const result = await callAuthed(name, { companyId: myCompanyId(), origin: location.origin });
+    if (result.url) location.assign(result.url);
+    else toast("Billing did not return a page.");
+  } catch (e) {
+    toast(e.message || "Billing is not available.");
+  }
+}
+async function callAuthed(name, data) {
+  const projectId = useEmulator ? "demo-heartwood" : firebaseConfig.projectId;
+  const url = useEmulator
+    ? `http://127.0.0.1:5001/${projectId}/australia-southeast1/${name}`
+    : `https://australia-southeast1-${projectId}.cloudfunctions.net/${name}`;
+  const token = auth.currentUser ? await auth.currentUser.getIdToken() : "";
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: token ? `Bearer ${token}` : "" },
+    body: JSON.stringify({ data }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || body.error) {
+    const err = new Error((body.error && body.error.message) || "Billing is not available.");
+    throw err;
+  }
+  return body.result || {};
 }
 async function callInvite(name, data) {
   const projectId = useEmulator ? "demo-heartwood" : firebaseConfig.projectId;
@@ -269,9 +307,22 @@ function orgLogoHtml(org) {
 }
 function paintBrand() {
   const org = orgSettings();
+  const mark = org.isTest ? `<span class="co-badge co-test">TEST</span>` : org.plan === "friend" ? `<span class="co-badge co-friend">FRIEND</span>` : "";
+  const exit = me && me.testCompanyId ? `<button type="button" class="ghost" id="testexit">Back to Heartwood</button>` : "";
   const el = document.querySelector(".brand");
-  if (el) el.innerHTML = `<span class="wordmark" aria-label="${esc(PRODUCT_NAME)}">Call<span>Up</span></span><span class="orgline">${orgLogoHtml(org)}${esc(org.name)}</span>`;
+  if (el) el.innerHTML = `<span class="wordmark" aria-label="${esc(PRODUCT_NAME)}">Call<span>Up</span></span><span class="orgline">${orgLogoHtml(org)}${esc(org.name)} ${mark}</span>${exit}`;
+  const back = document.querySelector("#testexit");
+  if (back) back.onclick = () => leaveTestCompany();
   document.title = `${PRODUCT_NAME} · ${org.name}`;
+}
+function testCompanyActive() { return orgSettings().isTest === true; }
+function holdOutbound(kind, text) {
+  window.HW_LAST_MAIL_PREVIEW = { kind, text };
+  const id = "tm" + Math.random().toString(36).slice(2, 12);
+  setDoc(doc(db, "testMailLog", id), {
+    kind, status: "preview", companyId: myCompanyId(), preview: String(text || "").slice(0, 2000), createdAt: serverTimestamp(),
+  }).catch(() => {});
+  alert("Test company. Nothing was sent.\n\n" + text);
 }
 function renderLogin() {
   const org = orgSettings();
@@ -294,9 +345,13 @@ function renderLogin() {
   };
   $("#opencreate").onclick = () => renderSignup();
 }
-function renderSignup() {
+function renderSignup(friendCode = "") {
   paintBrand();
-  $("#app").innerHTML = signupFormHtml();
+  $("#app").innerHTML = signupFormHtml({ friend: friendCodeOk(friendCode) });
+  if (friendCode && !friendCodeOk(friendCode)) {
+    const err = $("#signuperr");
+    if (err) err.textContent = "That friend invite code is not valid.";
+  }
   $("#signupback").onclick = () => renderLogin();
   $("#signup").onsubmit = async ev => {
     ev.preventDefault();
@@ -316,9 +371,21 @@ function renderSignup() {
       cred = await createUserWithEmailAndPassword(auth, f.ownerEmail.value.trim(), f.password.value);
       const companyId = companyIdFromName(checked.value.name);
       const signedUpAt = serverTimestamp();
-      await setDoc(doc(db, "companies", companyId), buildCompanyCreate(checked.value, {
-        companyId, ownerUid: cred.user.uid, signedUpAt, trialEndsAt: Timestamp.fromDate(trialEnd(new Date())), lastActivityAt: signedUpAt,
-      }));
+      if (friendCodeOk(friendCode)) {
+        await runTransaction(db, async (tx) => {
+          const invRef = doc(db, "friendInvites", friendCode);
+          const inv = await tx.get(invRef);
+          if (!inv.exists() || inv.data().status !== "pending") throw Object.assign(new Error("invite"), { code: "invite" });
+          tx.set(doc(db, "companies", companyId), buildFriendCompany(checked.value, {
+            companyId, ownerUid: cred.user.uid, signedUpAt, friendInvite: friendCode,
+          }));
+          tx.update(invRef, { status: "used", usedBy: cred.user.uid, companyId, usedAt: serverTimestamp() });
+        });
+      } else {
+        await setDoc(doc(db, "companies", companyId), buildCompanyCreate(checked.value, {
+          companyId, ownerUid: cred.user.uid, signedUpAt, trialEndsAt: Timestamp.fromDate(trialEnd(new Date())), lastActivityAt: signedUpAt,
+        }));
+      }
       await setDoc(doc(db, "users", cred.user.uid), { ...ownerProfile(checked.value, companyId, f.ownerName.value.trim()), email: f.ownerEmail.value.trim().toLowerCase() });
       signingUp = false;
       location.reload();
@@ -337,6 +404,10 @@ function settingsView() {
   return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin") });
 }
 function bindSettings(A) {
+  const sub = A.querySelector("#billsub");
+  const portal = A.querySelector("#billportal");
+  if (sub) sub.onclick = () => openBilling("createBillingCheckout");
+  if (portal) portal.onclick = () => openBilling("createBillingPortal");
   const form = A.querySelector("#orgform");
   if (!form || form.querySelector("[disabled]")) return;
   form.onsubmit = async ev => {
@@ -368,7 +439,7 @@ function bindSettings(A) {
 }
 function masterView() {
   const rows = ui.masterRows || [];
-  return masterPageHtml(rows, ui.masterFilters || {});
+  return masterPageHtml(rows, ui.masterFilters || {}, ui.friendInvites || []);
 }
 function bindMaster(A) {
   const form = A.querySelector("#masterf");
@@ -383,6 +454,10 @@ function bindMaster(A) {
   };
   form.onchange = apply;
   A.querySelector("#masterq").oninput = apply;
+  const testForm = A.querySelector("#testco");
+  if (testForm) testForm.onsubmit = ev => { ev.preventDefault(); createTestCompany(testForm); };
+  const friendForm = A.querySelector("#friendinv");
+  if (friendForm) friendForm.onsubmit = ev => { ev.preventDefault(); createFriendInvite(A.querySelector("#friendout")); };
   A.querySelectorAll(".master-row").forEach(tr => {
     tr.onclick = () => {
       const row = (ui.masterRows || []).find(r => r.id === tr.dataset.company);
@@ -390,8 +465,83 @@ function bindMaster(A) {
       if (slot) slot.innerHTML = masterDetailHtml(row);
       const close = A.querySelector("#masterclose");
       if (close) close.onclick = () => { slot.innerHTML = ""; };
+      bindMasterActions(slot, row);
     };
   });
+}
+function bindMasterActions(slot, row) {
+  if (!slot || !row) return;
+  const open = slot.querySelector("#testopen");
+  const reset = slot.querySelector("#testreset");
+  const archive = slot.querySelector("#testarchive");
+  if (open) open.onclick = () => openTestCompany(row.id);
+  if (reset) reset.onclick = () => resetTestDemo(row.id);
+  if (archive) archive.onclick = () => archiveTestCompany(row.id);
+  const plan = slot.querySelector("#friendplan");
+  if (plan) plan.onsubmit = ev => { ev.preventDefault(); saveFriendPlan(row.id, ev.submitter && ev.submitter.value, plan.end.value); };
+}
+async function createTestCompany(form) {
+  const err = form.querySelector("#testerr");
+  const name = form.name.value.trim();
+  if (!name) { if (err) err.textContent = "Enter a name."; return; }
+  const companyId = companyIdFromName(name);
+  const demo = !!form.demo.checked;
+  try {
+    const signedUpAt = serverTimestamp();
+    await setDoc(doc(db, "companies", companyId), buildTestCompany(name, { companyId, ownerUid: me.uid, signedUpAt, demoData: demo }));
+    if (demo) await writeDemo(companyId);
+    form.reset();
+    if (err) err.textContent = "";
+    toast("Test company created");
+  } catch (e) { if (err) err.textContent = e.code || e.message; }
+}
+async function writeDemo(companyId) {
+  const bundle = demoBundle(companyId);
+  for (const person of bundle.staff) await setDoc(doc(db, "users", person.id), person.data);
+  for (const job of bundle.jobs) await setDoc(doc(db, "jobs", job.id), job.data);
+  await updateDoc(doc(db, "companies", companyId), { demoData: true, staffCount: 2, jobCount: 2, lastActivityAt: serverTimestamp() });
+}
+async function createFriendInvite(out) {
+  const code = newFriendCode();
+  try {
+    await setDoc(doc(db, "friendInvites", code), { status: "pending", createdBy: me.uid, createdAt: serverTimestamp(), note: "" });
+    const link = friendInviteLink(code);
+    if (out) out.textContent = code + " · " + link;
+    toast("Friend invite created");
+  } catch (e) { if (out) out.textContent = e.code || e.message; }
+}
+async function openTestCompany(companyId) {
+  await setDoc(doc(db, "platformSessions", me.uid), { companyId });
+  location.reload();
+}
+async function leaveTestCompany() {
+  await setDoc(doc(db, "platformSessions", me.uid), { companyId: "" });
+  location.reload();
+}
+async function resetTestDemo(companyId) {
+  if (!confirm("Put the sample jobs and staff names back? Nothing is deleted.")) return;
+  try { await writeDemo(companyId); toast("Demo data reset"); }
+  catch (e) { toast(e.code || e.message); }
+}
+async function archiveTestCompany(companyId) {
+  if (!confirm("Archive this test company? It stays in the list and is not deleted.")) return;
+  try {
+    await updateDoc(doc(db, "companies", companyId), { status: "archived", archivedAt: serverTimestamp() });
+    if (me.testCompanyId === companyId) await setDoc(doc(db, "platformSessions", me.uid), { companyId: "" });
+    toast("Archived");
+  } catch (e) { toast(e.code || e.message); }
+}
+async function saveFriendPlan(companyId, act, end) {
+  try {
+    if (act === "extend") {
+      await updateDoc(doc(db, "companies", companyId), { plan: "friend", friendEndsAt: end ? Timestamp.fromDate(new Date(end + "T00:00:00Z")) : null });
+    } else if (act === "trial") {
+      await updateDoc(doc(db, "companies", companyId), { plan: "trial", trialEndsAt: Timestamp.fromDate(trialEnd(new Date())) });
+    } else if (act === "paid") {
+      await updateDoc(doc(db, "companies", companyId), { plan: "paid" });
+    }
+    toast("Plan saved");
+  } catch (e) { toast(e.code || e.message); }
 }
 function watchMaster() {
   if (!me || !me.platformOwner || ui.masterUnsub) return;
@@ -399,6 +549,10 @@ function watchMaster() {
     ui.masterRows = snap.docs.map(d => masterRow(d.id, d.data()));
     if (ui.view === "master") renderAdmin();
   }, () => { ui.masterRows = []; if (ui.view === "master") renderAdmin(); });
+  ui.friendUnsub = onSnapshot(collection(db, "friendInvites"), snap => {
+    ui.friendInvites = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (ui.view === "master") renderAdmin();
+  }, () => { ui.friendInvites = []; });
 }
 
 // ------------------------------------------------------------------ admin
@@ -497,7 +651,7 @@ function jobsView(all) {
   const cnt = q => open.filter(j => queueOf(j) === q).length;
   const list = open.filter(j => ui.queue === "All" || queueOf(j) === ui.queue)
     .sort((a, b) => ((a.date || "9") + (a.time || "")).localeCompare((b.date || "9") + (b.time || "")));
-  return `<div class="sm-head"><h1>Jobs</h1><span class="headbtns"><button id="findall" class="sm-btn" title="Run Find PO on every open and not-yet-invoiced job">🔎 Find all POs</button><button id="new" class="sm-btn primary">+ New Job</button></span></div>${searchBar()}
+  return `<div class="sm-head"><h1>Jobs</h1><span class="headbtns">${canCompanyExport() ? `<button id="jobscsv" class="sm-btn">Download CSV</button>` : ""}<button id="findall" class="sm-btn" title="Run Find PO on every open and not-yet-invoiced job">🔎 Find all POs</button><button id="new" class="sm-btn primary">+ New Job</button></span></div>${searchBar()}
     <div class="qtabs"><button data-q="All" class="${ui.queue === "All" ? "on" : ""}">All open <span>${open.length}</span></button>
       ${QUEUES.map(q => `<button data-q="${q}" class="${QCLS[q]} ${ui.queue === q ? "on" : ""}"><span class="qdot ${QCLS[q]}"></span>${q} <span>${cnt(q)}</span></button>`).join("")}</div>
     <div class="filters"><select id="fs"><option value="">All staff</option>${staff.map(s => `<option value="${esc(skey(s))}" ${ui.staffF === skey(s) ? "selected" : ""}>${esc(label(s.name))}</option>`).join("")}<option value="_none" ${ui.staffF === "_none" ? "selected" : ""}>Unallocated</option></select>
@@ -541,6 +695,7 @@ function xcLabel(j) {
 function xcCell(j) { if (!canXero() || queueOf(j) !== "Completed") return "";
   return `<div class="xc">${xcLabel(j)} <button type="button" class="sm-btn xero xc-btn" data-xc="${j.id}" ${j.xeroCheckPending ? "disabled" : ""}>${j.xeroCheck ? "Re-check" : "Check Xero"}</button></div>`; }
 async function checkXero(list) {
+  if (testCompanyActive()) return holdOutbound("xero", "Xero check was not queued.");
   if (!canXero()) return; list = list.filter(j => queueOf(j) === "Completed" && !j.xeroCheckPending);
   if (!list.length) { toast("Already checking."); return; }
   for (const j of list) {
@@ -941,7 +1096,8 @@ const isOwner = () => me && me.uid === OWNER_UID;
 // Who sees anything Xero (profit chart, Send to Xero, Xero labels/wording). Explicit list, NOT the admin role, so future
 // staff (even admins) see no Xero unless added here AND in firestore.rules xeroUser(). Alex, Patrick.
 const XERO_UIDS = [OWNER_UID, "R7t41e54Ykcdk9WPdVZnDd697iI2"];
-const canXero = () => !!me && XERO_UIDS.includes(me.uid);
+const canXero = () => !!me && XERO_UIDS.includes(me.uid) && myCompanyId() === "heartwood";
+const canCompanyExport = () => exportAllowed({ role: me && me.role, companyId: myCompanyId() });
 // Money ($ PO/invoice/receipt/profit amounts): admins + users/{uid}.role "supervisor". Operators (staff) see none in the UI.
 // App roles on users/{uid}: "operator" (staff) | "supervisor" (sees money, still operator shell unless also Firebase-admin).
 const canSeeMoney = () => !!me && (me.role === "admin" || me.role === "supervisor" || me.staffRole === "supervisor");
@@ -1412,10 +1568,14 @@ const hxStatus = x => x.status === "sent" ? `<span class="qpill q-comp">Emailed 
 function hxPanel(ws) {
   if (!me || me.role !== "admin") return "";
   const L = (ui.hxList || []).filter(x => x.weekStart === ws).slice(0, 3);
-  return `<div class="ts-card hx-card"><h3>Hours spreadsheet for accounts</h3>
-    <p class="sub">Builds an Excel file (.xlsx) of everyone's hours for Mon ${dmy(ws)} – Sun ${dmy(addDays(ws, 6))}, saves it to your phone, and emails it to ${esc(hoursBrand(orgSettings()).accountsEmail)} automatically.</p>
-    <div class="btns"><button type="button" class="sm-btn primary" id="hxgo"${ui.hxBusy ? " disabled" : ""}>${ui.hxBusy ? "Building…" : "📊 Make & send hours spreadsheet"}</button>
-    <button type="button" class="sm-btn" id="hxdl"${ui.hxBusy ? " disabled" : ""}>Download only</button></div>
+  const customer = canCompanyExport();
+  return `<div class="ts-card hx-card"><h3>${customer ? "Hours" : "Hours spreadsheet for accounts"}</h3>
+    <p class="sub">${customer
+      ? `Download this week's hours as a spreadsheet or a CSV. The spreadsheet can also be emailed to ${esc(hoursBrand(orgSettings()).accountsEmail)}.`
+      : `Builds an Excel file (.xlsx) of everyone's hours for Mon ${dmy(ws)} – Sun ${dmy(addDays(ws, 6))}, saves it to your phone, and emails it to ${esc(hoursBrand(orgSettings()).accountsEmail)} automatically.`}</p>
+    <div class="btns"><button type="button" class="sm-btn primary" id="hxgo"${ui.hxBusy ? " disabled" : ""}>${ui.hxBusy ? "Building…" : customer ? "Make spreadsheet" : "📊 Make & send hours spreadsheet"}</button>
+    <button type="button" class="sm-btn" id="hxdl"${ui.hxBusy ? " disabled" : ""}>Download only</button>
+    ${customer ? `<button type="button" class="sm-btn" id="hxcsv">Download hours CSV</button>` : ""}</div>
     ${L.map(x => `<p class="sub hx-row">${esc(x.fileName || "")} · ${esc(String(x.totalHours ?? ""))} h · ${hxStatus(x)}</p>`).join("")}</div>`;
 }
 function hxSubs() {
@@ -1436,6 +1596,10 @@ async function hxRun(send) {
   const brand = hoursBrand(orgSettings());
   const company = brand.titleName;
   const rep = buildHoursReport({ weekStart: ws, people: tsPeople(L), sheets: L, leaveText: (p, d) => cellLeaveText(ui.leave || [], { uid: p.uid, name: p.name }, d) });
+  if (send && testCompanyActive()) {
+    holdOutbound("hours", `Preview only. Hours for ${brand.titleName} were not emailed.`);
+    return;
+  }
   if (send && !rep.people.length && !confirm("No hours entered for this week. Email an empty spreadsheet anyway?")) return;
   const name = exportFileName(brand.fileName, ws), bytes = xlsxBytes(reportSheets(rep, { company }));
   const file = new File([bytes], name, { type: XLSX_MIME });
@@ -1641,7 +1805,8 @@ function claimsArgs() {
   return { claims: ui.claims || [], uid: me.uid, isAdmin: claimsIsAdmin(), jobs: claimJobs(), today: todayStr(), error: ui.claimsErr || "", filter: ui.claimsFilter || "open" };
 }
 function claimsView() {
-  return `<div class="sm-head"><h1>Reimbursements</h1><span class="sub">Staff claims for things they paid for</span></div><div class="lv-wrap">${claimsScreenHtml(claimsArgs())}</div>`;
+  const csv = canCompanyExport() ? `<button type="button" class="sm-btn" id="claimcsv">Download CSV</button>` : "";
+  return `<div class="sm-head"><h1>Reimbursements</h1><span class="sub">Staff claims for things they paid for</span>${csv}</div><div class="lv-wrap">${claimsScreenHtml(claimsArgs())}</div>`;
 }
 async function downloadClaimReceipt(id) {
   const row = (ui.claims || []).find(item => item.id === id);
@@ -1662,6 +1827,8 @@ async function downloadClaimReceipt(id) {
   }
 }
 function bindClaims(A, rerender) {
+  const csv = A.querySelector("#claimcsv");
+  if (csv) csv.onclick = () => downloadClaimsCsv();
   const form = A.querySelector("#claimform");
   if (form) form.onsubmit = async ev => {
     ev.preventDefault();
@@ -1699,7 +1866,8 @@ function bindClaims(A, rerender) {
           return say("The receipt was not saved (" + (e.code || "storage") + "). Nothing was claimed.");
         }
       }
-      await setDoc(doc(db, "reimbursementClaims", id), { ...built.data, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+      const claimCompany = myCompanyId() === "heartwood" ? {} : { companyId: myCompanyId() };
+      await setDoc(doc(db, "reimbursementClaims", id), { ...built.data, ...claimCompany, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
       form.reset();
       say("");
       toast("Claim submitted");
@@ -1915,6 +2083,7 @@ function bindTs(A, rerender) {
     hxSubs();
     const hxg = $("#hxgo"); if (hxg) hxg.onclick = () => hxRun(true);
     const hxd = $("#hxdl"); if (hxd) hxd.onclick = () => hxRun(false);
+    const hxc = $("#hxcsv"); if (hxc) hxc.onclick = () => downloadHoursCsv();
     A.querySelectorAll("[data-tsid]").forEach(c => { const t = (ui.tsAll || []).find(x => x.id === c.dataset.tsid); if (!t) return;
       const name = (staff.find(p => p.uid === t.uid) || {}).name || t.name || "?";
       const copy = c.querySelector(".tscopy"); if (copy) copy.onclick = async () => { const txt = tsText(t, name);
@@ -2231,6 +2400,7 @@ function renderAdmin() {
   if ($("#fs")) $("#fs").onchange = e => { ui.staffF = e.target.value; renderAdmin(); };
   if ($("#ft")) $("#ft").onchange = e => { ui.typeF = e.target.value; renderAdmin(); };
   if ($("#new")) $("#new").onclick = () => editJob(null);
+  if ($("#jobscsv")) $("#jobscsv").onclick = () => downloadJobsCsv(all);
   if ($("#findall")) $("#findall").onclick = async () => {
     try { await setDoc(doc(db, "meta", "findAllPos"), { status: "pending", requestedBy: me.name, requestedAt: new Date().toISOString() });
       toast("Find all POs queued - the box runs it within 2 min (6am-8pm); each job shows its result"); }
@@ -2674,6 +2844,7 @@ function editContact(c, i) {
   };
 }
 async function emailSupervisor(j, amt) {
+  if (testCompanyActive()) return holdOutbound("builder", `Builder email for ${j.address || "this job"} was not opened.`);
   let s = await supervisorFor(j);
   if (!s) {
     const e = (prompt(`Supervisor email for ${j.client || "this client"} (remembered for next time):`, "") || "").trim();
@@ -2720,6 +2891,7 @@ const csvCell = v => { v = String(v ?? ""); return /[",\r\n]/.test(v) ? `"${v.re
 function xeroPill(j) { const s = j.xeroStatus; if (!s || !canXero()) return "";
   return `<div class="sub"><span class="qpill ${s === "draft" ? "q-comp" : s === "error" ? "q-alert" : "q-wo"}" title="${esc(j.xeroError || "")}">${s === "draft" ? "Draft in Xero" + (j.xeroInvoiceNo ? " #" + esc(j.xeroInvoiceNo) : "") : s === "error" ? "Xero error" : "Queued for Xero"}</span></div>`; }
 async function sendToXero(list, opts = {}) {
+  if (testCompanyActive()) return holdOutbound("xero", "Xero draft was not queued.");
   if (!canXero()) return;
   const bad = list.filter(j => !j.invoiceNo || !(+j.invoiceAmount > 0)), ok = list.filter(j => !bad.includes(j) && !["queued", "draft"].includes(j.xeroStatus));
   if (!ok.length) { toast(bad.length ? "Those jobs need an invoice number and a price first." : "Already sent to Xero."); return; }
@@ -2739,12 +2911,37 @@ function xeroCsv(list) {
       j.invoiceDescription || invDescDefault(j), "1", Number(j.invoiceAmount).toFixed(2), "", "200", "GST on Income", "AUD"]; });
   return [XERO_COLS, ...rows].map(r => r.map(csvCell).join(",")).join("\r\n") + "\r\n";
 }
+function downloadText(name, text) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: "text/csv" }));
+  a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  window.HW_LAST_CSV = { name, text };
+  toast("Downloaded " + name);
+}
 function downloadCsv(list) {
+  if (myCompanyId() !== "heartwood") {
+    downloadText(`invoices-${todayStr()}.csv`, invoiceCsv(list));
+    return;
+  }
   const ns = list.map(j => +j.invoiceNo).filter(Boolean).sort((a, b) => a - b);
   const name = `${canXero() ? "xero" : "invoice"} import ${ns.length > 1 ? ns[0] + "-" + ns[ns.length - 1] : ns[0]}.csv`;
-  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([xeroCsv(list)], { type: "text/csv" })); a.download = name;
-  document.body.appendChild(a); a.click(); a.remove(); window.HW_LAST_CSV = { name, text: xeroCsv(list) };
-  toast("Downloaded " + name);
+  downloadText(name, xeroCsv(list));
+}
+function downloadHoursCsv() {
+  if (!canCompanyExport()) return;
+  const ws = tsWeek();
+  const L = ui.tsAll && ui.tsAllWs === ws ? ui.tsAll : [];
+  const rep = buildHoursReport({ weekStart: ws, people: tsPeople(L), sheets: L, leaveText: (p, d) => cellLeaveText(ui.leave || [], { uid: p.uid, name: p.name }, d) });
+  downloadText(`hours-${ws}.csv`, hoursCsv(rep));
+}
+function downloadJobsCsv(list) {
+  if (!canCompanyExport()) return;
+  downloadText(`jobs-${todayStr()}.csv`, jobsCsv(list));
+}
+function downloadClaimsCsv() {
+  if (!canCompanyExport()) return;
+  downloadText(`reimbursements-${todayStr()}.csv`, reimbursementsCsv(ui.claims || []));
 }
 ui.inv = "ready"; ui.invSel = new Set();
 function invoicesView() {

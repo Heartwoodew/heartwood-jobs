@@ -19,7 +19,8 @@
  * An environment change cannot turn it back on. See helper/DEPLOY.md.
  */
 import { onDocumentCreated, onDocumentWritten } from "firebase-functions/v2/firestore";
-import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
+import { defineSecret } from "firebase-functions/params";
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
@@ -36,6 +37,17 @@ import { authorizeCallable, handleHelperAsk } from "./helper/ask.js";
 import { adminReader } from "./helper/reader.js";
 import { createModelProvider, helperLiveEnabled } from "./helper/provider.js";
 import { firestoreHelperStore } from "./helper/apply.js";
+import {
+  assertTestKey,
+  handleCheckoutCall,
+  handlePortalCall,
+  handleStripeWebhook,
+  syncStaffQuantity,
+  companiesTouchedByUser,
+} from "./billing/stripe-billing.js";
+
+const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
+const STRIPE_WEBHOOK_SECRET = defineSecret("STRIPE_WEBHOOK_SECRET");
 
 function ensureAdmin() {
   if (!getApps().length) initializeApp();
@@ -192,6 +204,121 @@ export const inviteEmailWorker = onDocumentWritten(
         createdAt: FieldValue.serverTimestamp(),
       }),
     });
+  },
+);
+
+async function billingContext(uid, companyId) {
+  ensureAdmin();
+  const db = getFirestore();
+  const [companySnap, profileSnap, staffSnap] = await Promise.all([
+    db.collection("companies").doc(companyId).get(),
+    db.collection("users").doc(uid).get(),
+    db.collection("users").where("companyId", "==", companyId).get(),
+  ]);
+  return {
+    company: companySnap.exists ? companySnap.data() : null,
+    profile: profileSnap.exists ? profileSnap.data() : null,
+    staffCount: staffSnap.size,
+  };
+}
+
+async function testStripe() {
+  const key = STRIPE_SECRET_KEY.value();
+  assertTestKey(key);
+  const { default: Stripe } = await import("stripe");
+  return new Stripe(key);
+}
+
+function billingFailure(result) {
+  const code = result && (result.code === "unauthenticated" || result.code === "permission-denied" || result.code === "not-found")
+    ? result.code
+    : "failed-precondition";
+  throw new HttpsError(code, (result && result.reason) || "billing-failed");
+}
+
+export const createBillingCheckout = onCall(
+  { region: INVITE_REGION, secrets: [STRIPE_SECRET_KEY] },
+  async request => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "sign-in");
+    const result = await handleCheckoutCall({
+      uid: request.auth.uid,
+      companyId: String(request.data?.companyId || ""),
+      origin: request.data?.origin,
+      getContext: billingContext,
+      stripe: await testStripe(),
+    });
+    if (!result.ok) billingFailure(result);
+    return { url: result.url };
+  },
+);
+
+export const createBillingPortal = onCall(
+  { region: INVITE_REGION, secrets: [STRIPE_SECRET_KEY] },
+  async request => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "sign-in");
+    const result = await handlePortalCall({
+      uid: request.auth.uid,
+      companyId: String(request.data?.companyId || ""),
+      origin: request.data?.origin,
+      getContext: billingContext,
+      stripe: await testStripe(),
+    });
+    if (!result.ok) billingFailure(result);
+    return { url: result.url };
+  },
+);
+
+export const stripeWebhook = onRequest(
+  { region: INVITE_REGION, secrets: [STRIPE_WEBHOOK_SECRET], invoker: "public" },
+  async (req, res) => {
+    if (req.method !== "POST") {
+      res.status(405).send("POST");
+      return;
+    }
+    ensureAdmin();
+    const db = getFirestore();
+    const outcome = await handleStripeWebhook({
+      rawBody: req.rawBody,
+      signature: req.get("stripe-signature") || "",
+      secret: STRIPE_WEBHOOK_SECRET.value(),
+      loadCompany: async companyId => {
+        const snap = await db.collection("companies").doc(companyId).get();
+        return snap.exists ? snap.data() : null;
+      },
+      saveBilling: async (companyId, patch) => {
+        const ref = db.collection("companies").doc(companyId);
+        await db.runTransaction(async tx => {
+          const snap = await tx.get(ref);
+          if (!snap.exists) return;
+          const current = snap.data().billing || {};
+          tx.update(ref, {
+            ...(patch.plan ? { plan: patch.plan } : {}),
+            billing: { ...current, ...patch.billing },
+          });
+        });
+      },
+    });
+    res.status(outcome.status).json(outcome.body);
+  },
+);
+
+export const syncStripeStaff = onDocumentWritten(
+  { document: "users/{uid}", region: INVITE_REGION, secrets: [STRIPE_SECRET_KEY] },
+  async event => {
+    if (process.env.NODE_TEST_CONTEXT) return;
+    const before = event.data?.before?.exists ? event.data.before.data() : null;
+    const after = event.data?.after?.exists ? event.data.after.data() : null;
+    const ids = companiesTouchedByUser(before, after);
+    if (!ids.length) return;
+    ensureAdmin();
+    const db = getFirestore();
+    const stripe = await testStripe();
+    for (const companyId of ids) {
+      const snap = await db.collection("companies").doc(companyId).get();
+      if (!snap.exists) continue;
+      const staff = await db.collection("users").where("companyId", "==", companyId).get();
+      await syncStaffQuantity({ companyId, company: snap.data(), staffCount: staff.size, stripe });
+    }
   },
 );
 

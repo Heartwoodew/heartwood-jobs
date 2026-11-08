@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { DEFAULT_ORG, orgSettings, setActiveCompany } from "../../app/org-settings.js";
 import {
   HEARTWOOD_ACCOUNTS_EMAIL, HEARTWOOD_COMPANY_ID, TRIAL_DAYS, billingHook, buildCompanyCreate,
@@ -72,7 +74,18 @@ test("master rows are account-level and totals ignore job text", () => {
   const paid = masterRow("heartwood", { ...heartwoodSeed(now), name: "Heartwood Earthworx", plan: "paid", status: "active", staffCount: 5, jobCount: 10 }, now);
   const suspended = masterRow("old", { name: "Old Co", plan: "trial", status: "suspended", trialEndsAt: "2026-11-20T00:00:00Z", staffCount: 1, jobCount: 0, email: "a@old.test", abn: "1" }, now);
   const totals = masterTotals([trial, paid, suspended]);
-  assert.deepEqual(totals, { companies: 3, activeTrials: 1, paying: 1, staff: 8 });
+  assert.deepEqual(totals, { companies: 3, activeTrials: 1, paying: 1, friends: 0, staff: 8 });
+  const testCo = masterRow("yard", { name: "Yard", isTest: true, plan: "trial", status: "active", staffCount: 9, jobCount: 2, trialEndsAt: "2026-12-01T00:00:00Z", billing: { status: "not-configured" } }, now);
+  const friend = masterRow("mate", { name: "Mate Co", plan: "friend", status: "active", staffCount: 2, jobCount: 1, friendEndsAt: null, billing: { status: "not-configured" } }, now);
+  const billed = masterRow("paidco", { name: "Paid Co", plan: "paid", status: "active", staffCount: 1, billing: { provider: "stripe", status: "active", stripeCustomerId: "cus_test" } }, now);
+  assert.equal(testCo.planLabel, "Test");
+  assert.equal(testCo.billingStatus, "Not billed");
+  assert.equal(friend.planLabel, "Friend");
+  assert.equal(friend.billingStatus, "Not billed");
+  assert.equal(billed.billingStatus, "Active");
+  assert.equal(billed.stripeCustomerId, undefined);
+  const withExtras = masterTotals([trial, paid, suspended, testCo, friend, billed]);
+  assert.deepEqual(withExtras, { companies: 6, activeTrials: 1, paying: 2, friends: 1, staff: 11 });
   assert.equal(filterMaster([trial, paid, suspended], { q: "acme", status: "active", plan: "trial" }).length, 1);
   assert.equal(filterMaster([trial, paid], { plan: "paid" })[0].id, "heartwood");
 });
@@ -89,4 +102,25 @@ test("migration only adds a missing companyId and never replaces one", () => {
   const patch = companyDetailPatch({ name: "Acme Civil", legalName: "Acme Civil Pty Ltd", abn: "12 345 678 901", address: "1 Yard St", email: "office@acme.test", accountsEmail: "accounts@acme.test", signoff: "Acme", phone: "", hubdocAddress: "", logoUrl: "" }, { phone: "0400111222" });
   assert.equal(patch.ok, true);
   assert.deepEqual(patch.patch, { phone: "0400111222" });
+});
+
+test("mail tools do not send for a test company and still send for Heartwood", () => {
+  const script = `
+import sys
+sys.path.insert(0, "tools")
+from company_scope import hours_recipient, hubdoc_for, xero_accounts
+ok, to, name = hours_recipient({"to": "accounts@heartwoodew.com", "companyId": "heartwood"})
+assert ok and to == "accounts@heartwoodew.com" and name == "Heartwood", (ok, to, name)
+ok, to, name = hours_recipient({"to": "preview@example.com", "isTest": True, "companyId": "yard", "status": "queued"})
+assert ok is False and to == "" and name == ""
+hub, label = hubdoc_for({"companyId": "yard", "isTest": True}, {"isTest": True, "hubdocAddress": "yard@app.hubdoc.com"}, "heartwood@app.hubdoc.com")
+assert hub == "" and label == "Test"
+hub, label = hubdoc_for({"companyId": "heartwood"}, None, "heartwood@app.hubdoc.com")
+assert hub == "heartwood@app.hubdoc.com" and label == "Heartwood"
+row = xero_accounts({"companyId": "yard"}, {"isTest": True, "accountsEmail": "accounts@yard.test"})
+assert row["send"] is False and row["reason"] == "test-company-no-send"
+print("ok")
+`;
+  const out = execFileSync("python3", ["-c", script], { cwd: fileURLToPath(new URL("../..", import.meta.url)), encoding: "utf8" });
+  assert.match(out, /ok/);
 });

@@ -3,8 +3,8 @@
 // Tenant, business/customer and finance come from the signed-in profile
 // (and the Heartwood bootstrap UIDs already used by the jobs app).
 // A tenant id, business id, file name or storage path supplied by the client is not authority.
-// CallUp Base has no Xero and no invoicing. Heartwood's existing Xero UI is unchanged
-// and is not a Base feature.
+// CallUp has one plan. It does not connect customer companies to Xero.
+// Heartwood's existing Xero UI is unchanged and is not a product feature.
 
 export const HEARTWOOD_TENANT = "heartwood";
 export const ALEX_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";
@@ -18,7 +18,7 @@ export const BOOTSTRAP = {
 };
 
 export const CALLUP_BASE = Object.freeze({
-  plan: "base",
+  plan: "callup",
   jobs: true,
   photos: true,
   receipts: true,
@@ -27,13 +27,13 @@ export const CALLUP_BASE = Object.freeze({
   staffInvites: true,
   xero: false,
   invoicing: false,
-  // Registration, Queensland COI, WorkCover, insurance, servicing and prestart are CallUp Pro.
-  // Base stays off. Heartwood turns those features on in features/compliance.js.
+  // Fleet, policies, servicing and prestart are included for every company.
+  // Xero stays off here. Heartwood finance is the bootstrap UID list, not this flag.
   features: Object.freeze({
-    fleet: false,
-    policies: false,
-    servicing: false,
-    prestart: false,
+    fleet: true,
+    policies: true,
+    servicing: true,
+    prestart: true,
   }),
 });
 
@@ -58,7 +58,7 @@ export function resolveMembership({ uid, profile, requestedTenantId, requestedBu
   const ignoredClientTenantId = requestedTenantId ?? null;
   const ignoredClientBusinessId = requestedBusinessId ?? null;
   if (!uid || (!profile && !bootstrap)) {
-    return { ok: false, reason: "no-membership", ignoredClientTenantId, ignoredClientBusinessId, plan: "base" };
+    return { ok: false, reason: "no-membership", ignoredClientTenantId, ignoredClientBusinessId, plan: "callup" };
   }
   const explicit = profile && typeof profile.tenantId === "string" && profile.tenantId.trim();
   const tenantId = explicit ? profile.tenantId.trim() : HEARTWOOD_TENANT;
@@ -78,7 +78,7 @@ export function resolveMembership({ uid, profile, requestedTenantId, requestedBu
     finance,
     canSeeMoney,
     customerIds: customerIds && customerIds.length ? customerIds : null,
-    plan: "base",
+    plan: "callup",
     xero: false,
     invoicing: false,
     ignoredClientTenantId,
