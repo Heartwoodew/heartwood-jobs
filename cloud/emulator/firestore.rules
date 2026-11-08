@@ -4,8 +4,9 @@ rules_version = '2';
 // would replace jobs, quotes, photos-email and receipt rules.
 // These rules cover only the checks this branch adds: tenant fields cannot be
 // self-served, Xero queue items stay on the existing Heartwood finance UIDs,
-// and the CHAT block below (also cloud/production/firestore.chat.rules) is the
-// piece to merge into the live rules. Do not deploy this whole file.
+// the INVITE block (also cloud/production/firestore.invites.rules), and the
+// CHAT block (also cloud/production/firestore.chat.rules). Paste those blocks
+// into the live rules. Do not deploy this whole file.
 // CallUp Base does not use xeroQueue. Heartwood's current app still does.
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -55,6 +56,176 @@ service cloud.firestore {
       allow read: if signedIn();
       allow write: if false;
     }
+
+// BEGIN INVITE RULES
+    function inviteSignedIn() { return request.auth != null; }
+    function inviteIsAlex() { return inviteSignedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
+    function inviteIsPatrick() { return inviteSignedIn() && request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"; }
+    function inviteUserPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function inviteHasProfile() { return inviteSignedIn() && exists(inviteUserPath()); }
+    function inviteProfile() { return get(inviteUserPath()).data; }
+    function inviteAdmin() {
+      return inviteIsAlex() || inviteIsPatrick()
+        || (inviteHasProfile() && "role" in inviteProfile() && inviteProfile().role == "admin");
+    }
+    function inviteCallerTenant() {
+      return inviteIsAlex() || inviteIsPatrick()
+        ? "heartwood"
+        : (inviteHasProfile() && "tenantId" in inviteProfile() && inviteProfile().tenantId is string && inviteProfile().tenantId.size() > 0
+          ? inviteProfile().tenantId
+          : (inviteHasProfile() ? "heartwood" : ""));
+    }
+    function inviteEmailOk(email) {
+      return email is string
+        && email.size() >= 6
+        && email.size() <= 120
+        && email.matches('^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$');
+    }
+    function inviteRoleOk() {
+      return request.resource.data.role == "operator" || request.resource.data.role == "supervisor";
+    }
+    function inviteSame(key) {
+      return (!(key in request.resource.data) && !(key in resource.data))
+        || ((key in request.resource.data) && (key in resource.data) && request.resource.data[key] == resource.data[key]);
+    }
+    function inviteBaseOk() {
+      return request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80
+        && !request.resource.data.name.matches('.*[\\n\\r\\t<>].*')
+        && inviteEmailOk(request.resource.data.email)
+        && inviteRoleOk()
+        && request.resource.data.tenantId is string
+        && request.resource.data.tenantId == inviteCallerTenant()
+        && request.resource.data.tenantId.matches('^[a-z0-9][a-z0-9-]{0,39}$')
+        && request.resource.data.token is string
+        && request.resource.data.token.matches('^[A-Za-z0-9_-]{43,128}$')
+        && request.resource.data.createdBy is string
+        && request.resource.data.createdBy.size() > 0
+        && request.resource.data.createdBy.size() <= 128
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.expiresAt is timestamp;
+    }
+    function inviteExpiryWindow() {
+      return request.resource.data.expiresAt > request.time + duration.value(6, 'd')
+        && request.resource.data.expiresAt < request.time + duration.value(8, 'd');
+    }
+    function inviteLockPath(email) { return /databases/$(database)/documents/inviteEmails/$(email); }
+    function invitePath(inviteId) { return /databases/$(database)/documents/invites/$(inviteId); }
+    function inviteLockFree(email) {
+      return !exists(inviteLockPath(email))
+        || get(inviteLockPath(email)).data.status != "pending";
+    }
+    function inviteLockAgrees(email, inviteId) {
+      return existsAfter(inviteLockPath(email))
+        && getAfter(inviteLockPath(email)).data.keys().hasOnly(["email", "status", "inviteId", "expiresAt", "role", "tenantId"])
+        && getAfter(inviteLockPath(email)).data.email == email
+        && getAfter(inviteLockPath(email)).data.inviteId == inviteId
+        && getAfter(inviteLockPath(email)).data.role == request.resource.data.role
+        && getAfter(inviteLockPath(email)).data.tenantId == request.resource.data.tenantId
+        && getAfter(inviteLockPath(email)).data.status == request.resource.data.status
+        && getAfter(inviteLockPath(email)).data.expiresAt == request.resource.data.expiresAt;
+    }
+    function inviteCreateOk(inviteId) {
+      return inviteAdmin()
+        && inviteBaseOk()
+        && request.resource.data.keys().hasOnly(["name", "email", "role", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId"])
+        && request.resource.data.status == "pending"
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && inviteExpiryWindow()
+        && inviteLockFree(request.resource.data.email)
+        && inviteLockAgrees(request.resource.data.email, inviteId);
+    }
+    function inviteCancelOk(inviteId) {
+      return resource.data.status == "pending"
+        && request.resource.data.status == "cancelled"
+        && request.resource.data.cancelledBy == request.auth.uid
+        && request.resource.data.cancelledAt == request.time
+        && inviteSame("name") && inviteSame("email") && inviteSame("role") && inviteSame("createdBy")
+        && inviteSame("createdAt") && inviteSame("expiresAt") && inviteSame("token") && inviteSame("tenantId")
+        && inviteSame("resentAt") && inviteSame("resentBy")
+        && inviteLockAgrees(request.resource.data.email, inviteId);
+    }
+    function inviteResendOk(inviteId) {
+      return resource.data.status == "pending"
+        && request.resource.data.status == "pending"
+        && request.resource.data.token != resource.data.token
+        && request.resource.data.resentBy == request.auth.uid
+        && request.resource.data.resentAt == request.time
+        && inviteExpiryWindow()
+        && inviteSame("name") && inviteSame("email") && inviteSame("role") && inviteSame("createdBy")
+        && inviteSame("createdAt") && inviteSame("tenantId")
+        && inviteSame("cancelledAt") && inviteSame("cancelledBy")
+        && inviteLockAgrees(request.resource.data.email, inviteId);
+    }
+    function inviteUpdateOk(inviteId) {
+      return inviteAdmin()
+        && inviteBaseOk()
+        && request.resource.data.keys().hasOnly(["name", "email", "role", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId", "cancelledAt", "cancelledBy", "resentAt", "resentBy"])
+        && (inviteCancelOk(inviteId) || inviteResendOk(inviteId));
+    }
+
+    match /invites/{inviteId} {
+      allow get, list: if inviteAdmin() && resource.data.tenantId == inviteCallerTenant();
+      allow create: if inviteCreateOk(inviteId);
+      allow update: if inviteUpdateOk(inviteId);
+      allow delete: if false;
+    }
+
+    function inviteLockEmailOk(email) {
+      return inviteEmailOk(email)
+        && request.resource.data.email == email
+        && inviteRoleOk()
+        && request.resource.data.tenantId == inviteCallerTenant()
+        && request.resource.data.inviteId is string
+        && request.resource.data.inviteId.size() > 0
+        && request.resource.data.inviteId.size() <= 128
+        && request.resource.data.expiresAt is timestamp
+        && (request.resource.data.status == "pending" || request.resource.data.status == "cancelled")
+        && request.resource.data.keys().hasOnly(["email", "status", "inviteId", "expiresAt", "role", "tenantId"]);
+    }
+    function inviteLockPointsAtInvite(email) {
+      return existsAfter(invitePath(request.resource.data.inviteId))
+        && getAfter(invitePath(request.resource.data.inviteId)).data.email == email
+        && getAfter(invitePath(request.resource.data.inviteId)).data.role == request.resource.data.role
+        && getAfter(invitePath(request.resource.data.inviteId)).data.tenantId == request.resource.data.tenantId
+        && getAfter(invitePath(request.resource.data.inviteId)).data.status == request.resource.data.status
+        && getAfter(invitePath(request.resource.data.inviteId)).data.expiresAt == request.resource.data.expiresAt;
+    }
+    function inviteLockWriteOk(email) {
+      return (
+        !exists(inviteLockPath(email))
+        && request.resource.data.status == "pending"
+      ) || (
+        exists(inviteLockPath(email))
+        && get(inviteLockPath(email)).data.status == "pending"
+        && get(inviteLockPath(email)).data.inviteId == request.resource.data.inviteId
+        && (request.resource.data.status == "pending" || request.resource.data.status == "cancelled")
+      ) || (
+        exists(inviteLockPath(email))
+        && get(inviteLockPath(email)).data.status != "pending"
+        && request.resource.data.status == "pending"
+      );
+    }
+
+    match /inviteEmails/{email} {
+      allow get: if inviteAdmin();
+      allow list: if false;
+      allow create, update: if inviteAdmin()
+        && inviteLockEmailOk(email)
+        && inviteLockPointsAtInvite(email)
+        && inviteLockWriteOk(email);
+      allow delete: if false;
+    }
+
+    match /inviteMail/{id} {
+      allow read, write: if false;
+    }
+    match /mail/{id} {
+      allow read, write: if false;
+    }
+// END INVITE RULES
 
 // BEGIN CHAT RULES
     function chatSignedIn() { return request.auth != null; }

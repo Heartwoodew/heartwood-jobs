@@ -31,6 +31,21 @@
   const q = new URLSearchParams(location.search);
   window.HW_TODAY = "2026-11-06";
   window.HW_PREVIEW_ROLE = q.get("role") || "operator";
+  if (q.get("open") === "staff") {
+    window.HW_PREVIEW_VIEW = "staff";
+    window.HW_INVITES = [
+      { id: "p1", name: "Casey Nguyen", email: "casey.nguyen@example.com", role: "operator", status: "pending", token: "pendingpreviewtoken00000000000000000000000", expiresAt: "2026-11-14T10:00:00+10:00" },
+      { id: "a1", name: "Sam Lee", email: "sam.lee@example.com", role: "supervisor", status: "accepted", token: "acceptedpreviewtoken000000000000000000000", expiresAt: "2026-11-20T10:00:00+10:00" },
+      { id: "e1", name: "Riley Chen", email: "riley.chen@example.com", role: "operator", status: "pending", token: "expiredpreviewtoken00000000000000000000000", expiresAt: "2026-11-01T10:00:00+10:00" }
+    ];
+  }
+  if (q.get("open") === "accept") {
+    window.HW_PREVIEW_SIGNED_OUT = true;
+    window.HW_INVITE_PREVIEW = {
+      name: "Casey Nguyen", email: "casey.nguyen@example.com", role: "operator", status: "pending",
+      expiresAt: "2026-11-14T10:00:00+10:00"
+    };
+  }
   window.HW_CHAT = {
     staff: [
       { id: "m1", senderUid: "sam", senderName: "Sam", text: "Brightvale slab is clear. The crew can start.", createdAt: "2026-11-06T07:05:00+10:00" },
@@ -209,6 +224,7 @@ if (q.get("check") === "1") {
     const labels = [...document.querySelectorAll(".mob-tabs button")].map(b => b.textContent.replace(/\s+/g, " ").trim());
     ok(labels.join("|") === "Today|Jobs|Photos|More" || labels.join(" ").includes("Today") && labels.join(" ").includes("Jobs") && labels.join(" ").includes("Photos") && labels.join(" ").includes("More"), "tabs " + labels.join(","));
     ok(!document.querySelector('[data-go="quotes"]') && !text().includes("Quote rates"), "operator has no quotes");
+    ok(!text().includes("Invite staff") && !document.querySelector("#invitef"), "operator has no staff invites");
     ok(!/\$\s?\d/.test(text()), "operator has no dollar amounts: " + text().slice(0, 240));
     document.querySelector('[data-tab="week"]')?.click();
     await sleep(40);
@@ -309,6 +325,7 @@ if (q.get("check") === "1") {
   }
   if (role === "admin") {
     ok(!!document.querySelector('[data-view="quotes"]'), "admin quotes nav");
+    ok(!!document.querySelector('[data-view="staff"]'), "admin staff nav");
     ok(!document.querySelector(".mob-tabs"), "admin home is not the phone shell");
     document.querySelector('[data-view="quotes"]')?.click();
     await waitFor("#editrates");

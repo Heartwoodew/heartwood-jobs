@@ -76,7 +76,21 @@ export function getAuth() { return {}; }
 export function connectAuthEmulator() {}
 export function signOut() { return Promise.resolve(); }
 export function signInWithEmailAndPassword() { return Promise.resolve({ user: { uid: uidFor(role()) } }); }
+export class Timestamp {
+  constructor(seconds, nanoseconds = 0) {
+    this.seconds = seconds;
+    this.nanoseconds = nanoseconds;
+  }
+  static fromDate(date) {
+    return new Timestamp(Math.floor(date.getTime() / 1000), 0);
+  }
+  toDate() { return new Date(this.seconds * 1000); }
+}
 export function onAuthStateChanged(_auth, cb) {
+  if (typeof window !== "undefined" && window.HW_PREVIEW_SIGNED_OUT) {
+    queueMicrotask(() => cb(null));
+    return () => {};
+  }
   const r = role();
   queueMicrotask(() => cb({ uid: uidFor(r), email: r + "@heartwood.test" }));
   return () => {};
@@ -187,7 +201,14 @@ export function onSnapshot(ref, onNext) {
           data: () => { if (!row) return undefined; const { id: _id, ...rest } = row; return rest; }
         });
       } else if (col === "jobs") onNext(snap(JOBS));
-      else if (col === "swmsSignatures") {
+      else if (col === "invites") {
+        const rows = (typeof window !== "undefined" && window.HW_INVITES) || [];
+        onNext(snap(rows.map(row => ({
+          ...row,
+          createdAt: row.createdAt && row.createdAt.toDate ? row.createdAt : chatStamp(row.createdAt || row.expiresAt),
+          expiresAt: row.expiresAt && row.expiresAt.toDate ? row.expiresAt : chatStamp(row.expiresAt),
+        }))));
+      } else if (col === "swmsSignatures") {
         const uid = uidFor(role());
         onNext(snap(SWMS_IDS.map(id => ({
           id: uid + "-" + id, uid, swmsId: id, version: "2026-07", signedAtMs: Date.now(), name: "Patrick"

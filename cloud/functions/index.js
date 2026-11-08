@@ -7,11 +7,132 @@
  *
  * Retention is exported as retentionSweepHandler and is NOT scheduled.
  * Xero processing is not imported. See pro/xero-queue.js.
+ *
+ * Staff invites: previewStaffInvite and acceptStaffInvite are callable.
+ * acceptStaffInvite creates the Auth user and users/{uid} with the invited
+ * role (operator or supervisor only). inviteEmailWorker queues mail.
+ * INVITE_EMAIL_ENABLED must be the string "true" or the message is held in
+ * inviteMail and nothing is sent. This file does not open an SMTP connection.
  */
-import { onDocumentCreated } from "firebase-functions/v2/firestore";
+import { onDocumentCreated, onDocumentWritten } from "firebase-functions/v2/firestore";
+import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { initializeApp, getApps } from "firebase-admin/app";
+import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import { getAuth } from "firebase-admin/auth";
 import { handlePhotoIntake } from "./lib/photo-intake.js";
+import {
+  acceptStaffInvite as acceptInvite,
+  previewStaffInvite as previewInvite,
+  queueInviteEmail,
+  shouldQueueInviteEmail,
+  displayStatus,
+  profileFromInvite,
+} from "./shared/staff-invites.js";
 
 export { retentionSweepHandler } from "./lib/retention-run.js";
+
+const INVITE_REGION = "australia-southeast1";
+
+function inviteBackend() {
+  if (!getApps().length) initializeApp();
+  const db = getFirestore();
+  const auth = getAuth();
+  return {
+    now: () => new Date(),
+    async findByToken(token) {
+      const snap = await db.collection("invites").where("token", "==", token).limit(2).get();
+      return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    },
+    async getUserByEmail(email) {
+      try {
+        const user = await auth.getUserByEmail(email);
+        return { uid: user.uid, email: user.email || email };
+      } catch (err) {
+        if (err && err.code === "auth/user-not-found") return null;
+        throw err;
+      }
+    },
+    async createUser({ email, password, displayName }) {
+      const user = await auth.createUser({ email, password, displayName, emailVerified: false, disabled: false });
+      return { uid: user.uid };
+    },
+    async deleteUser(uid) {
+      await auth.deleteUser(uid);
+    },
+    async setProfile(uid, profile) {
+      await db.collection("users").doc(uid).set(profile);
+    },
+    async deleteProfile(uid) {
+      await db.collection("users").doc(uid).delete();
+    },
+    async claimInvite(id, uid, now) {
+      return db.runTransaction(async tx => {
+        const ref = db.collection("invites").doc(id);
+        const snap = await tx.get(ref);
+        if (!snap.exists) return { ok: false, reason: "invalid" };
+        const invite = snap.data() || {};
+        const status = displayStatus(invite, now);
+        if (status !== "pending") return { ok: false, reason: status === "invalid" ? "invalid" : status };
+        if (!profileFromInvite(invite)) return { ok: false, reason: "invalid" };
+        tx.update(ref, {
+          status: "accepted",
+          acceptedUid: uid,
+          acceptedAt: FieldValue.serverTimestamp(),
+        });
+        const lock = {
+          email: invite.email,
+          status: "accepted",
+          inviteId: id,
+          role: invite.role,
+          expiresAt: invite.expiresAt,
+        };
+        if (invite.tenantId) lock.tenantId = invite.tenantId;
+        tx.set(db.collection("inviteEmails").doc(invite.email), lock, { merge: true });
+        return { ok: true };
+      });
+    },
+  };
+}
+
+async function runInviteCall(fn, data) {
+  try {
+    return await fn(data || {}, inviteBackend());
+  } catch (err) {
+    console.error("staff-invite", err && err.code ? err.code : "failed");
+    throw new HttpsError("internal", "invite-failed");
+  }
+}
+
+export const previewStaffInvite = onCall({ region: INVITE_REGION, invoker: "public", cors: true }, request => {
+  return runInviteCall(previewInvite, request.data);
+});
+
+export const acceptStaffInvite = onCall({ region: INVITE_REGION, invoker: "public", cors: true }, request => {
+  return runInviteCall(acceptInvite, request.data);
+});
+
+export const inviteEmailWorker = onDocumentWritten(
+  { document: "invites/{inviteId}", region: INVITE_REGION },
+  async event => {
+    if (process.env.NODE_TEST_CONTEXT) return;
+    const beforeSnap = event.data && event.data.before;
+    const afterSnap = event.data && event.data.after;
+    const before = beforeSnap && beforeSnap.exists ? beforeSnap.data() : null;
+    const after = afterSnap && afterSnap.exists ? afterSnap.data() : null;
+    if (!shouldQueueInviteEmail(before, after)) return;
+    if (!getApps().length) initializeApp();
+    const db = getFirestore();
+    await queueInviteEmail(after, {
+      env: process.env,
+      allowLiveMail: process.env.INVITE_EMAIL_ENABLED === "true",
+      writeMail: (collectionName, body) => db.collection(collectionName).add({
+        ...body,
+        inviteId: event.params.inviteId,
+        createdAt: FieldValue.serverTimestamp(),
+      }),
+    });
+  },
+);
 
 export const photoInboxWorker = onDocumentCreated(
   { document: "photoInbox/{id}", region: "australia-southeast1" },

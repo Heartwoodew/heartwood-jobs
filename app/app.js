@@ -3,7 +3,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/fireba
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, connectAuthEmulator }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator,
-  collection, doc, getDoc, getDocs, query, where, orderBy, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, serverTimestamp, arrayUnion, runTransaction }
+  collection, doc, getDoc, getDocs, query, where, orderBy, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, serverTimestamp, arrayUnion, runTransaction, Timestamp }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { getStorage, ref as storageRef, uploadBytes, connectStorageEmulator, listAll, getMetadata, getBlob }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
@@ -13,6 +13,10 @@ import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPla
 import { buildOperationalExport, retentionAdminText, retentionView } from "./features/cloud-retention.js";
 import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, lightboxHtml, photoFailureText } from "./features/photo-gallery.js";
 import { installChatApp } from "./features/chat-ui.js";
+import {
+  acceptLoadingHtml, acceptScreenModel, acceptViewHtml, buildInviteDraft, inviteFailureText,
+  newInviteToken, pendingInviteForEmail, staffViewHtml,
+} from "./features/staff-invites.js";
 
 const cfg = useEmulator ? { ...firebaseConfig, apiKey: "demo-key", projectId: "demo-heartwood" } : firebaseConfig;
 const fb = initializeApp(cfg);
@@ -64,7 +68,13 @@ $("#logout").onclick = () => signOut(auth);
 onAuthStateChanged(auth, async user => {
   if (unsub) { unsub(); unsub = null; }
   CHAT.stop();
-  if (!user) { me = null; $("#who").textContent = ""; $("#logout").classList.add("hidden"); return renderLogin(); }
+  const inviteToken = new URLSearchParams(location.search).get("invite") || "";
+  if (!user) {
+    me = null; $("#who").textContent = ""; $("#logout").classList.add("hidden");
+    if (inviteToken || window.HW_INVITE_PREVIEW) return renderInviteAccept(inviteToken);
+    return renderLogin();
+  }
+  if (inviteToken) return renderInviteSignedIn();
   // Admin = UID listed in firestore.rules (Alex, sync, Patrick): detected by being ALLOWED to list users - so if the
   // rules don't (yet) make someone admin they simply fall back to the operator view.
   // users/{uid}.role: "operator" (staff, no $) | "supervisor" (staff shell + canSeeMoney). Patrick is rules-admin with an operator profile (bookable).
@@ -78,6 +88,7 @@ onAuthStateChanged(auth, async user => {
   $("#who").textContent = `${me.name} · ${me.role}`; $("#logout").classList.remove("hidden");
   CHAT.start();
   if (me.role === "admin") {
+    if (window.HW_PREVIEW_VIEW === "staff") ui.view = "staff";
     const logins = users.docs.map(d => ({ uid: d.id, ...d.data() })).filter(u => u.role === "operator" || u.role === "supervisor");
     staff = [{ uid: ALEX_UID, name: "Alex" }, ...logins.filter(u => u.uid !== ALEX_UID)];
     // two weeks back (catch overdue work) to 4 weeks ahead, plus anything undated
@@ -86,7 +97,11 @@ onAuthStateChanged(auth, async user => {
     // Invoicing: every Done job (any date), admin only.
     const u2 = onSnapshot(query(collection(db, "jobs"), where("status", "==", "Done")), s => { ui.done = s.docs.map(d => ({ id: d.id, ...d.data() })); donePill(); if (ui.view === "invoices" || ui.view === "completed" || ui.view === "home") renderAdmin(); });
     const u3 = onSnapshot(collection(db, "incidents"), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); if (ui.view === "safety" || ui.view === "home") renderAdmin(); incRefresh(); }, e => console.warn("incidents", e.code));
-    unsub = () => { u1(); u2(); u3(); CHAT.stop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub();
+    const u4 = onSnapshot(query(collection(db, "invites"), where("tenantId", "==", myTenant())), s => {
+      ui.invites = s.docs.map(d => ({ id: d.id, ...d.data() })); ui.invitesErr = "";
+      if (ui.view === "staff") renderAdmin();
+    }, e => { ui.invites = []; ui.invitesErr = e.code || "permission-denied"; if (ui.view === "staff") renderAdmin(); });
+    unsub = () => { u1(); u2(); u3(); u4(); CHAT.stop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub();
     getDocs(query(collection(db, "jobs"), where("date", "==", ""))).then(s => { ui.undated = s.docs.map(d => ({ id: d.id, ...d.data() })); addNameOnlyStaff(ui.undated); renderAdmin(); });
   } else {
     // Operators may only list jobs assigned to them (enforced by firestore.rules).
@@ -97,6 +112,84 @@ onAuthStateChanged(auth, async user => {
   }
 });
 
+function myTenant() {
+  const profile = me && me.cloudProfile;
+  const id = profile && typeof profile.tenantId === "string" ? profile.tenantId.trim() : "";
+  return id || "heartwood";
+}
+function inviteDisplayNow() {
+  return window.HW_TODAY ? new Date(window.HW_TODAY + "T12:00:00+10:00") : new Date();
+}
+function renderInviteSignedIn() {
+  $("#who").textContent = "";
+  $("#logout").classList.remove("hidden");
+  $("#app").innerHTML = `<form class="card login" id="invitebusy">
+    <h2>Staff invite</h2>
+    <p>This link creates a new login. Sign out, then open it again to set a password.</p>
+    <button class="big primary" type="button" id="invitesignout">Sign out</button>
+  </form>`;
+  $("#invitesignout").onclick = () => signOut(auth);
+}
+async function callInvite(name, data) {
+  const projectId = useEmulator ? "demo-heartwood" : firebaseConfig.projectId;
+  const url = useEmulator
+    ? `http://127.0.0.1:5001/${projectId}/australia-southeast1/${name}`
+    : `https://australia-southeast1-${projectId}.cloudfunctions.net/${name}`;
+  let res;
+  try {
+    res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ data }) });
+  } catch {
+    const err = new Error("unavailable");
+    err.code = "unavailable";
+    throw err;
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || body.error) {
+    const err = new Error("invite-failed");
+    err.code = res.status === 404 ? "unavailable" : "unavailable";
+    throw err;
+  }
+  return body.result || {};
+}
+function renderInviteAccept(token) {
+  const preview = window.HW_INVITE_PREVIEW;
+  if (preview) {
+    $("#app").innerHTML = acceptViewHtml(acceptScreenModel(preview, inviteDisplayNow()));
+    return bindInviteAccept(token, true);
+  }
+  $("#app").innerHTML = acceptLoadingHtml();
+  callInvite("previewStaffInvite", { token }).then(result => {
+    const model = result && result.ok ? acceptScreenModel(result, inviteDisplayNow()) : {
+      ok: false, reason: (result && result.reason) || "invalid", name: result && result.name, email: result && result.email,
+    };
+    $("#app").innerHTML = acceptViewHtml(model);
+    if (model.ok) bindInviteAccept(token, false, model.email);
+  }).catch(() => {
+    $("#app").innerHTML = acceptViewHtml({ ok: false, reason: "unavailable" });
+  });
+}
+function bindInviteAccept(token, previewOnly, email) {
+  const form = $("#acceptf");
+  if (!form || !form.p) return;
+  form.onsubmit = async ev => {
+    ev.preventDefault();
+    const err = $("#aceerr");
+    if (form.p.value !== form.p2.value) { err.textContent = inviteFailureText("mismatch"); return; }
+    if (previewOnly) { err.textContent = "Preview only. No login was created and no email was sent."; return; }
+    err.textContent = "";
+    let created = false;
+    try {
+      const result = await callInvite("acceptStaffInvite", { token, password: form.p.value });
+      if (!result.ok) { err.textContent = inviteFailureText(result.reason); return; }
+      created = true;
+      const address = result.email || email;
+      history.replaceState({}, "", location.pathname);
+      await signInWithEmailAndPassword(auth, address, form.p.value);
+    } catch (e) {
+      err.textContent = created ? "Your login was created. Sign in with that password." : inviteFailureText("unavailable");
+    }
+  };
+}
 function renderLogin() {
   $("#app").innerHTML = `<form id="login" class="card login">
     <h2>Sign in</h2>
@@ -138,20 +231,20 @@ function queueOf(j) {
 const jobNo = j => j.sm8JobNo ? j.sm8JobNo : "HW-" + String(j.id || "").slice(-4).toUpperCase();
 const firstLine = s => String(s || "").split(/\n|\. /)[0];
 const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Unscheduled";
-const NAV = [["home", "⌂", "Home"], ["chat", "💬", "Chat"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["inbox", "✉", "Inbox", 0, 1],
+const NAV = [["home", "⌂", "Home"], ["chat", "💬", "Chat"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["staff", "👥", "Staff"], ["inbox", "✉", "Inbox", 0, 1],
   ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["reimb", "💵", "Reimbursements", 0, 1], ["settings", "⚙", "Settings", 1]];
 ui.view = "home"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
 const PHONE = matchMedia("(max-width:760px)");
 const TOUCH = matchMedia("(pointer:coarse)");
 PHONE.addEventListener?.("change", () => { if (me && me.role === "admin") renderAdmin(); });
 // Grouped side menu: top items, then collapsible groups (open/closed remembered on this device; the group holding the current screen is always open).
-const NAV_TOP = ["home", "chat", "inbox", "clients"];
+const NAV_TOP = ["home", "chat", "inbox", "clients", "staff"];
 const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "jobs", "unscheduled", "quotes", "completed", "myjobs"]], ["money", "$", "Money", ["invoices", "reimb", "timesheet"]], ["safety", "⚠", "Safety", ["safety", "swms"]]];
 const NAV_LBL = { safety: "Incidents" };
 ui.navCol = (() => { try { return JSON.parse(localStorage.getItem("hwNavCol") || "{}"); } catch { return {}; } })();
 function shell(inner) {
   const cur = NAV.find(n => n[0] === ui.view);
-  const item = k => { const x = NAV.find(n => n[0] === k); if (!x || x[3] || (x[4] && !isOwner()) || (k === "invoices" && (!me || me.role !== "admin")) || (k === "quotes" && !canQuote())) return "";
+  const item = k => { const x = NAV.find(n => n[0] === k); if (!x || x[3] || (x[4] && !isOwner()) || ((k === "invoices" || k === "staff") && (!me || me.role !== "admin")) || (k === "quotes" && !canQuote())) return "";
     const badge = k === "chat" ? CHAT.badge("staff") : "";
     return `<button class="sm-nav ${ui.view === k ? "on" : ""}" data-view="${k}" title="${esc(NAV_LBL[k] || x[2])}"><span class="ic">${x[1]}</span><span class="lbl">${esc(NAV_LBL[k] || x[2])}</span>${badge}</button>`; };
   const grp = ([g, ic, n, ks]) => { const has = ks.includes(ui.view), open = has || !ui.navCol[g];
@@ -1029,6 +1122,75 @@ function homeBody(all, admin, btns) {
 function homeView(all) {
   return homeBody(all, true, NAV.filter(x => x[0] !== "home" && !x[3] && (!x[4] || isOwner())).map(([k, ic, n]) => [k, ic, n]));
 }
+async function saveInvite(fields) {
+  const draft = buildInviteDraft({ ...fields, createdBy: me.uid, now: new Date(), token: newInviteToken(), tenantId: myTenant() });
+  if (!draft.ok) return draft.reason;
+  if (pendingInviteForEmail(ui.invites || [], draft.invite.email)) return "already-pending";
+  const inviteRef = doc(collection(db, "invites"));
+  const expiresAt = Timestamp.fromDate(draft.invite.expiresAt);
+  const payload = { ...draft.invite, createdAt: serverTimestamp(), expiresAt };
+  try {
+    await runTransaction(db, async tx => {
+      const lockRef = doc(db, "inviteEmails", payload.email);
+      const existing = await tx.get(lockRef);
+      if (existing.exists() && existing.data().status === "pending") {
+        const err = new Error("already-pending");
+        err.code = "already-pending";
+        throw err;
+      }
+      tx.set(inviteRef, payload);
+      tx.set(lockRef, {
+        email: payload.email, status: "pending", inviteId: inviteRef.id,
+        expiresAt, role: payload.role, tenantId: payload.tenantId,
+      });
+    });
+  } catch (e) {
+    if (e.code === "already-pending") return "already-pending";
+    return e.code === "permission-denied" ? "already-pending" : "permission-denied";
+  }
+  return "";
+}
+async function resendInvite(id) {
+  const row = (ui.invites || []).find(item => item.id === id);
+  if (!row || row.status !== "pending") return;
+  const expiresAt = Timestamp.fromDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
+  const token = newInviteToken();
+  await runTransaction(db, async tx => {
+    tx.update(doc(db, "invites", id), { token, expiresAt, resentAt: serverTimestamp(), resentBy: me.uid });
+    tx.update(doc(db, "inviteEmails", row.email), { expiresAt, status: "pending" });
+  });
+}
+async function cancelInvite(id) {
+  const row = (ui.invites || []).find(item => item.id === id);
+  if (!row || row.status !== "pending") return;
+  await runTransaction(db, async tx => {
+    tx.update(doc(db, "invites", id), { status: "cancelled", cancelledAt: serverTimestamp(), cancelledBy: me.uid });
+    tx.update(doc(db, "inviteEmails", row.email), { status: "cancelled" });
+  });
+}
+function bindStaff(A) {
+  const form = A.querySelector("#invitef");
+  if (form) form.onsubmit = async ev => {
+    ev.preventDefault();
+    const err = A.querySelector("#inviteerr");
+    const reason = await saveInvite({ name: form.name.value, email: form.email.value, role: form.role.value });
+    if (reason) { if (err) err.textContent = inviteFailureText(reason); return; }
+    toast("Invite saved. Copy the link. Mail was not sent.");
+  };
+  A.querySelectorAll("[data-invite-copy]").forEach(b => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.inviteCopy); toast("Link copied. Mail was not sent."); }
+    catch { toast("Select the link to copy it. Mail was not sent."); }
+  });
+  A.querySelectorAll("[data-invite-resend]").forEach(b => b.onclick = async () => {
+    try { await resendInvite(b.dataset.inviteResend); toast("Invite resent. Copy the new link. Mail was not sent."); }
+    catch (e) { toast("Couldn't resend (" + (e.code || "error") + ")."); }
+  });
+  A.querySelectorAll("[data-invite-cancel]").forEach(b => b.onclick = async () => {
+    if (!confirm("Cancel this invite? The link will stop working.")) return;
+    try { await cancelInvite(b.dataset.inviteCancel); toast("Invite cancelled."); }
+    catch (e) { toast("Couldn't cancel (" + (e.code || "error") + ")."); }
+  });
+}
 function renderAdmin() {
   donePill(); reimbPill(); inboxSub();
   if (!me || me.role !== "admin") return;
@@ -1037,11 +1199,13 @@ function renderAdmin() {
   if ($("#dlg").open) return;          // don't redraw under an open job card
   if (ui.view === "timesheet" && ui.tsDirty && $("#tsf")) return;   // don't wipe unsaved hours
   if (ui.view === "chat" && document.activeElement?.closest?.(".chat-compose")) return;
+  if (ui.view === "staff" && document.activeElement?.closest?.("#invitef")) return;
   document.body.className = "admin";
   const fj = filtered(), und = (ui.undated || []).filter(j => (!ui.typeF || j.type === ui.typeF));
   const all = [...fj, ...und.filter(u => !fj.some(j => j.id === u.id))];
   const quotesHtml = ui.view === "quotes" ? adminViewRouter(ui.view, ui, { esc, $$, staff, jobs: all, todayStr, rerender: () => renderAdmin(), canEditQuoteRates }) : null;
-  $("#app").innerHTML = shell(ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : quotesHtml != null ? quotesHtml : jobsView(all));
+  const staffHtml = ui.view === "staff" ? staffViewHtml(ui.invites || [], { now: inviteDisplayNow(), error: ui.invitesErr || "" }) : null;
+  $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : quotesHtml != null ? quotesHtml : jobsView(all));
   const A = $("#app"); inboxBadge();
   CHAT.watch([...(jobs || []), ...(ui.undated || [])]);
   if (ui.view === "chat") CHAT.mount(A);
@@ -1051,6 +1215,7 @@ function renderAdmin() {
   if (ui.view === "reimb") bindReimb(A);
   if (ui.view === "timesheet") bindTs(A, renderAdmin);
   if (ui.view === "quotes") QG.bindAdmin({ ui, A });
+  if (ui.view === "staff") bindStaff(A);
   A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.navOpen = false;
     if (b.dataset.view === "myjobs") { ui.myJobs = true; ui.opSel = null; window.scrollTo(0, 0); return renderAdmin(); }
     ui.view = b.dataset.view; if (ui.view === "invoices" && me.role !== "admin") ui.view = "home"; renderAdmin(); });

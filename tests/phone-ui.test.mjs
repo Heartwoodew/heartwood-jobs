@@ -36,7 +36,7 @@ test("phone shell, quote gate and handlers", async () => {
         returnByValue: true
       });
       const data = JSON.parse(info.result.value);
-      const full = /detail|check-|empty|job-photos|gallery|photos/.test(name);
+      const full = /detail|check-|empty|job-photos|gallery|photos|staff|accept/.test(name);
       const heightPx = full
         ? Math.min(2400, (await page.send("Runtime.evaluate", { expression: "Math.max(document.documentElement.scrollHeight, window.innerHeight)", returnByValue: true })).result.value)
         : height;
@@ -58,6 +58,40 @@ test("phone shell, quote gate and handlers", async () => {
         const calls = await page.send("Runtime.evaluate", { expression: "JSON.stringify((window.__fbCalls||[]).map(c=>c.op))", returnByValue: true });
         assert.doesNotMatch(calls.result.value, /getDownloadURL/, name);
         assert.match(calls.result.value, /getBlob/, name);
+      }
+      if (query.includes("open=staff")) {
+        const text = await page.send("Runtime.evaluate", { expression: "document.querySelector('#invitef')?.innerText || ''", returnByValue: true });
+        assert.match(text.result.value, /Invite staff/, name);
+        assert.match(text.result.value, /Operator/, name);
+        assert.match(text.result.value, /Supervisor/, name);
+        const options = await page.send("Runtime.evaluate", { expression: "[...document.querySelectorAll('#invitef select option')].map(o => o.value).join(',')", returnByValue: true });
+        assert.equal(options.result.value, "operator,supervisor", name);
+        const list = await page.send("Runtime.evaluate", { expression: "document.querySelector('.invitelist')?.innerText || ''", returnByValue: true });
+        assert.match(list.result.value, /Casey Nguyen/, name);
+        assert.match(list.result.value, /Pending/, name);
+        assert.match(list.result.value, /Sam Lee/, name);
+        assert.match(list.result.value, /Accepted/, name);
+        assert.match(list.result.value, /Riley Chen/, name);
+        assert.match(list.result.value, /Expired/, name);
+        assert.match(list.result.value, /Resend/, name);
+        assert.match(list.result.value, /Cancel/, name);
+        assert.match(list.result.value, /https:\/\/jobs\.heartwoodew\.com\/app\?invite=/, name);
+        assert.doesNotMatch(list.result.value, /admin@|alex@heartwoodew/i, name);
+      }
+      if (query.includes("open=accept")) {
+        const text = await page.send("Runtime.evaluate", { expression: "document.querySelector('#acceptf')?.innerText || ''", returnByValue: true });
+        assert.match(text.result.value, /Set your password/, name);
+        assert.match(text.result.value, /Casey Nguyen/, name);
+        assert.match(text.result.value, /casey\.nguyen@example\.com/, name);
+        assert.match(text.result.value, /Operator/, name);
+        const controls = await page.send("Runtime.evaluate", { expression: "document.querySelectorAll('#acceptf select, #acceptf [name=role]').length", returnByValue: true });
+        assert.equal(controls.result.value, 0, name);
+        await page.send("Runtime.evaluate", { expression: "(() => { const f = document.querySelector('#acceptf'); f.p.value = 'preview-pass'; f.p2.value = 'preview-pass'; f.requestSubmit(); })()" });
+        await sleep(50);
+        const err = await page.send("Runtime.evaluate", { expression: "document.querySelector('#aceerr')?.textContent || ''", returnByValue: true });
+        assert.match(err.result.value, /Preview only/, name);
+        const calls = await page.send("Runtime.evaluate", { expression: "JSON.stringify((performance.getEntriesByType('resource')||[]).map(r => r.name))", returnByValue: true });
+        assert.doesNotMatch(calls.result.value, /cloudfunctions|5001|sendgrid|smtp/i, name);
       }
       if (query.includes("open=jobchat")) {
         const text = await page.send("Runtime.evaluate", { expression: "document.querySelector('.job-chat')?.innerText || ''", returnByValue: true });
@@ -138,6 +172,8 @@ test("phone shell, quote gate and handlers", async () => {
     await run("after-phone-photos-error", "?role=operator&open=detail&photos=error", 390, 844);
     await run("after-phone-photos-meta", "?role=operator&open=detail&photos=meta", 390, 844);
     await run("after-phone-more", "?role=operator&open=more", 390, 844);
+    await run("staff-invites-phone", "?role=admin&open=staff", 390, 844);
+    await run("staff-accept-phone", "?open=accept&invite=pendingpreviewtoken00000000000000000000000", 390, 844);
     await run("chat-phone", "?role=operator&open=chat", 390, 844);
     await run("chat-job-phone", "?role=operator&open=jobchat", 390, 844);
     await run("after-desktop-operator", "?role=operator", 1280, 800);
