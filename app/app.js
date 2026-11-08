@@ -32,6 +32,7 @@ import {
   assignmentWarning, cellLeaveText, certificateContentType, certificateObjectName, certificateStoragePath,
   leaveCreateBody, leaveDecisionBody, leaveScreenHtml, newLeaveId, plannerLeaveHtml, saveCertificate, certificateDownloadName, weekLeaveHtml,
 } from "./features/leave.js";
+import { ACCOUNTS_TO, XLSX_MIME, buildHoursReport, exportFileName, newExportId, reportSheets, xlsxBytes } from "./features/hours-export.js";
 import {
   claimCreateBody, claimDecisionBody, claimsScreenHtml, newClaimId, receiptContentType, receiptDownloadName,
   receiptObjectName, receiptStoragePath, RECEIPT_MAX_BYTES,
@@ -954,6 +955,7 @@ const hrs = h => (Math.round((+h || 0) * 100) / 100).toFixed(2).replace(/\.?0+$/
 function tsWeek() { ui.tsWs = ui.tsWs || weekStartOf(todayStr()); return ui.tsWs; }
 function tsIsAdminSheet() { return !!(me && me.role === "admin" && !ui.myJobs && ui.view === "timesheet"); }
 function tsStop() {
+  ui.hxSub?.(); ui.hxSub = null;
   ui.tsSub?.(); ui.tsSub = null; ui.tsSubWs = null; ui.tsAll = null; ui.tsAllWs = null;
   ui.tsWatch?.(); ui.tsWatch = null; ui.tsWatchId = null; ui.tsMine = undefined;
   ui.tsPrev = null; ui.tsPrevFor = "";
@@ -1212,9 +1214,6 @@ const tsDayLbl = (ds, wd) => `${wd} ${+ds.slice(8, 10)} ${TS_MON[+ds.slice(5, 7)
 const tsLong = (ds, wd) => `${tsDayLbl(ds, wd)} ${ds.slice(0, 4)}`;
 const ampm = t => { const m = /^(\d{1,2}):(\d{2})$/.exec(t || ""); if (!m) return t || ""; const h = +m[1]; return `${h % 12 || 12}:${m[2]}${h < 12 ? "am" : "pm"}`; };
 const hr1 = h => { const r = Math.round(h * 100) / 100; return (Number.isInteger(r * 10) ? r.toFixed(1) : String(r)) + " hrs"; };
-const tsGmailUrl = (su, body) => "https://mail.google.com/mail/?view=cm&fs=1&authuser=" + encodeURIComponent("alex@heartwoodew.com") +
-  "&to=" + encodeURIComponent(ACCOUNTS_EMAIL) + "&su=" + encodeURIComponent(su) + "&body=" + encodeURIComponent(body);
-const tsSubject = (t, name) => `Timesheet: ${name}, week of ${tsLong(t.weekStart, "Mon")} · ${orgSettings().name}`;
 function tsText(t, name, eol = "\n") {
   const ws = t.weekStart, entries = sortedEntries(t.entries).map(paidShift);
   const L = ["Hi Nicole,", "", `Here are ${name}'s hours for the week of ${tsLong(ws, "Mon")} to ${tsLong(addDays(ws, 6), "Sun")}.`, ""];
@@ -1267,16 +1266,12 @@ function tsPeople(L) {
 function tsPerson(p, t) {
   const away = tsLeaveFor(p.uid, p.name, t && t.weekStart);
   if (!t) return `<div class="ts-card"><h3>${esc(p.name)}</h3>${away}<p class="sub">No hours entered for this week.</p></div>`;
-  const subj = tsSubject(t, p.name), body = tsText(t, p.name, "\r\n"), plain = tsText(t, p.name);
   const sent = t.sent ? ` <span class="qpill q-comp">Sent ${esc(dmy(String(t.sentAt || "").slice(0, 10)))}</span>` : "";
   const edited = t.sent && String(t.updatedAtIso || "") > String(t.sentAt || "") ? ` <span class="qpill">Edited since sent</span>` : "";
   const legacyTable = `<table class="jt ts-t"><thead><tr><th>Day</th><th>Start</th><th>Finish</th><th>Lunch</th><th>Hours</th><th>Note</th></tr></thead><tbody>${TS_DAYS.map((n, i) => { const ds = addDays(t.weekStart, i), d = (t.days || {})[ds] || {};
     return `<tr><td>${n} ${dmy(ds).slice(0, 5)}</td><td>${esc(d.start || "")}</td><td>${esc(d.finish || "")}</td><td>${tsHours(d) ? "−30m" : ""}</td><td>${tsHours(d) ? hrs(tsHours(d)) : ""}</td><td>${esc(d.note || "")}</td></tr>`; }).join("")}</tbody></table>`;
   const detail = entryList(t.entries).length ? tsCards(t, t.uid === me.uid) : legacyTable;
-  const send = !isOwner() ? "" : `<div class="btns"><a class="sm-btn primary tssend" target="_blank" rel="noopener" href="${esc(tsGmailUrl(subj, plain))}">✉ Send to accounts (Gmail)</a>
-      <a class="tsmailto sub" href="mailto:${ACCOUNTS_EMAIL}?subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(body)}">Other mail app</a>
-      <button type="button" class="sm-btn tscopy">Copy</button>${t.sent ? `<button type="button" class="sm-btn tsunsent">Unmark sent</button>` : ""}</div>
-    <p class="sub">Opens a Gmail draft (alex@heartwoodew.com) to ${ACCOUNTS_EMAIL} (Nicole); you press Send.</p>`;
+  const send = !isOwner() ? "" : `<div class="btns"><button type="button" class="sm-btn tscopy">Copy</button>${t.sent ? `<button type="button" class="sm-btn tsunsent">Unmark sent</button>` : ""}</div>`;
   return `<div class="ts-card" data-tsid="${esc(t.id)}"><h3>${esc(p.name)} · <b>${hrs(sheetHours(t))}</b>${sent}${edited}</h3>${away}${detail}${send}</div>`;
 }
 function tsAdmin() {
@@ -1287,8 +1282,56 @@ function tsAdmin() {
   const sum = shown.reduce((n, p) => n + sheetHours(L.find(t => t.uid === p.uid) || {}), 0);
   const who = ui.tsStaff ? (people.find(p => p.uid === ui.tsStaff) || {}).name || "Staff" : "all staff";
   return `${tsNav()}<h2 class="ts-live">Your shift</h2>${tsClockHtml()}${tsMachineHtml()}${tsManualArea(tsOwnSheet())}<label class="ts-filter">Staff <select id="tsstaff"><option value="">All staff</option>${people.map(p => `<option value="${esc(p.uid)}" ${ui.tsStaff === p.uid ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label>
-    <div class="ts-tot">Total <b>${hrs(sum)}</b> <span class="sub">${esc(who)}</span></div>
+    <div class="ts-tot">Total <b>${hrs(sum)}</b> <span class="sub">${esc(who)}</span></div>${hxPanel(ws)}
     ${shown.map(p => tsPerson(p, L.find(t => t.uid === p.uid) || null)).join("") || `<p class="sub">Nobody matches that filter.</p>`}`;
+}
+// ---- Hours spreadsheet for accounts: build .xlsx in the browser, store it privately, queue one email.
+// tools/hours_export_mailer.py (box routine, Gmail connector as alex@heartwoodew.com) sends it to accounts@ only.
+const hxStatus = x => x.status === "sent" ? `<span class="qpill q-comp">Emailed ${esc(dmy(String(x.sentAt || "").slice(0, 10)))}</span>`
+  : x.status === "failed" ? `<span class="qpill q-warn" title="${esc(x.error || "")}">Send failed${(x.attempts || 0) >= 5 ? " (gave up)" : ", will retry"}</span>`
+  : x.status === "sending" ? `<span class="qpill">Sending…</span>` : `<span class="qpill">Queued, emails within ~15 min</span>`;
+function hxPanel(ws) {
+  if (!me || me.role !== "admin") return "";
+  const L = (ui.hxList || []).filter(x => x.weekStart === ws).slice(0, 3);
+  return `<div class="ts-card hx-card"><h3>Hours spreadsheet for accounts</h3>
+    <p class="sub">Builds an Excel file (.xlsx) of everyone's hours for Mon ${dmy(ws)} – Sun ${dmy(addDays(ws, 6))}, saves it to your phone, and emails it to ${ACCOUNTS_TO} automatically.</p>
+    <div class="btns"><button type="button" class="sm-btn primary" id="hxgo"${ui.hxBusy ? " disabled" : ""}>${ui.hxBusy ? "Building…" : "📊 Make & send hours spreadsheet"}</button>
+    <button type="button" class="sm-btn" id="hxdl"${ui.hxBusy ? " disabled" : ""}>Download only</button></div>
+    ${L.map(x => `<p class="sub hx-row">${esc(x.fileName || "")} · ${esc(String(x.totalHours ?? ""))} h · ${hxStatus(x)}</p>`).join("")}</div>`;
+}
+function hxSubs() {
+  if (ui.hxSub || !me || me.role !== "admin") return;
+  ui.hxSub = onSnapshot(query(collection(db, "hoursExports"), orderBy("createdAt", "desc")), s => {
+    ui.hxList = s.docs.slice(0, 20).map(d => ({ id: d.id, ...d.data() })); if (tsIsAdminSheet() && !ui.tsDirty && !ui.tsEdit) rerender();
+  }, () => { ui.hxList = []; });
+}
+async function hxSave(file) {
+  const iOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  if (iOS && navigator.canShare?.({ files: [file] })) { try { await navigator.share({ files: [file], title: file.name }); } catch (e) { if (e.name !== "AbortError") toast("Share failed: " + e.message); } return; }
+  const url = URL.createObjectURL(file), a = document.createElement("a");
+  a.href = url; a.download = file.name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+async function hxRun(send) {
+  const ws = tsWeek(), L = ui.tsAll && ui.tsAllWs === ws ? ui.tsAll : null;
+  if (!L || ui.hxBusy) return;
+  const company = orgSettings().name || "Heartwood";
+  const rep = buildHoursReport({ weekStart: ws, people: tsPeople(L), sheets: L, leaveText: (p, d) => cellLeaveText(ui.leave || [], { uid: p.uid, name: p.name }, d) });
+  if (send && !rep.people.length && !confirm("No hours entered for this week. Email an empty spreadsheet anyway?")) return;
+  const name = exportFileName(company, ws), bytes = xlsxBytes(reportSheets(rep, { company }));
+  const file = new File([bytes], name, { type: XLSX_MIME });
+  if (!send) return hxSave(file);
+  ui.hxBusy = true; rerender();
+  // Share sheet first, while the tap still counts as a user gesture on iPhone.
+  const shared = hxSave(file);
+  try {
+    const id = newExportId(), path = `hoursExports/${id}/${name}`;
+    await uploadBytes(storageRef(storage, path), bytes, { contentType: XLSX_MIME, customMetadata: { purpose: "hours-export", uploaderUid: me.uid, exportId: id } });
+    await setDoc(doc(db, "hoursExports", id), { weekStart: ws, weekEnd: addDays(ws, 6), to: ACCOUNTS_TO, fileName: name, storagePath: path,
+      people: rep.people.length, totalHours: rep.total, status: "queued", attempts: 0, createdBy: me.uid, createdByName: me.name || "", createdAt: serverTimestamp() });
+    toast("Spreadsheet queued for " + ACCOUNTS_TO);
+  } catch (e) { toast("Not queued: " + (e.code || e.message)); }
+  await shared.catch(() => {});
+  ui.hxBusy = false; rerender();
 }
 function tsView() {
   const admin = me.role === "admin";
@@ -1748,9 +1791,11 @@ function bindTs(A, rerender) {
   const cancel = $("#tsmancancel"); if (cancel) cancel.onclick = () => { ui.tsEdit = null; ui.tsDirty = false; rerender(); };
   const man = $("#tsman"); if (man) { man.oninput = () => { ui.tsDirty = true; }; man.onsubmit = tsSaveManual; }
   if (tsIsAdminSheet()) {
+    hxSubs();
+    const hxg = $("#hxgo"); if (hxg) hxg.onclick = () => hxRun(true);
+    const hxd = $("#hxdl"); if (hxd) hxd.onclick = () => hxRun(false);
     A.querySelectorAll("[data-tsid]").forEach(c => { const t = (ui.tsAll || []).find(x => x.id === c.dataset.tsid); if (!t) return;
       const name = (staff.find(p => p.uid === t.uid) || {}).name || t.name || "?";
-      c.querySelectorAll(".tssend,.tsmailto").forEach(a => a.onclick = () => { updateDoc(doc(db, "timesheets", t.id), { sent: true, sentAt: new Date().toISOString(), sentBy: me.uid }).catch(e => toast("Not marked sent: " + (e.code || e.message))); });
       const copy = c.querySelector(".tscopy"); if (copy) copy.onclick = async () => { const txt = tsText(t, name);
         try { await navigator.clipboard.writeText(txt); } catch { const ta = document.createElement("textarea"); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); }
         toast("Timesheet copied"); };
