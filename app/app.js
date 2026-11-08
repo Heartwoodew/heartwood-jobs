@@ -1,7 +1,7 @@
 // CallUp jobs app. Organisation name and logo come from org-settings.js.
 // This install's customer is Heartwood Earthworx. Firebase ids are unchanged.
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, connectAuthEmulator }
+import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, connectAuthEmulator }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator,
   collection, doc, getDoc, getDocs, query, where, orderBy, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, serverTimestamp, arrayUnion, runTransaction, Timestamp }
@@ -21,9 +21,14 @@ import {
   acceptLoadingHtml, acceptScreenModel, acceptViewHtml, buildInviteDraft, inviteFailureText,
   newInviteToken, pendingInviteForEmail, staffViewHtml,
 } from "./features/staff-invites.js";
-import { PRODUCT_NAME, POWERED_BY, orgSettings, saveOrgSettings } from "./org-settings.js";
+import { PRODUCT_NAME, POWERED_BY, orgSettings, saveOrgSettings, setActiveCompany } from "./org-settings.js";
 import {
-  TS_CONSENT, accuracyText, brisbaneHM, captureFix, coordText, daysForSheet, editList, entryList,
+  buildCompanyCreate, companyDetailPatch, companyIdFromName, hoursBrand, isPlatformOwner,
+  ownerProfile, scopeRecord, trialEnd, validateCompanyInput, masterRow,
+} from "./features/company.js";
+import { companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, signupFormHtml } from "./features/company-ui.js";
+import {
+  accuracyText, brisbaneHM, captureFix, coordText, daysForSheet, editList, entryList, locationConsent,
   locationMap, machineChoicePatch, machinePromptNeeded, mapsHref, needsLocationConsent, newTsId, openClock,
   paidShift, prestartStatus, sheetHours, shiftHours, sortedEntries, stampText,
 } from "./features/timesheet.js";
@@ -77,6 +82,7 @@ function guessType(text) {
 }
 
 let me = null, staff = [], jobs = [], unsub = null;
+let signingUp = false;
 let CHAT = { badge() { return ""; }, teamHtml() { return ""; }, jobHtml() { return ""; }, mount() {}, openJob() {}, start() {}, stop() {}, watch() {}, refresh() {} };
 let COMP = { start() {}, stop() {}, bind() {}, abandon() {}, adminHtml() { return ""; }, staffHtml() { return ""; }, adminBannerHtml() { return ""; }, staffBannerHtml() { return ""; }, canSee() { return false; }, canEdit() { return false; }, canPrestart() { return false; }, canEditService() { return false; } };
 let QG = { bindAdmin() {} }; // Quotes module; filled after helpers load
@@ -87,12 +93,13 @@ const ui = { view: "list", staffF: "", typeF: "", photoLists: {}, photoUrls: {},
 // ------------------------------------------------------------------ auth
 $("#logout").onclick = () => signOut(auth);
 onAuthStateChanged(auth, async user => {
+  if (signingUp) return;
   if (unsub) { unsub(); unsub = null; }
   CHAT.stop();
   COMP.stop();
   const inviteToken = new URLSearchParams(location.search).get("invite") || "";
   if (!user) {
-    me = null; $("#who").textContent = ""; $("#logout").classList.add("hidden");
+    me = null; setActiveCompany(null); $("#who").textContent = ""; $("#logout").classList.add("hidden");
     if (inviteToken || window.HW_INVITE_PREVIEW) return renderInviteAccept(inviteToken);
     return renderLogin();
   }
@@ -105,29 +112,49 @@ onAuthStateChanged(auth, async user => {
   let users = null;
   users = await getDocs(collection(db, "users")).catch(() => null);
   if (!prof && !users) { $("#app").innerHTML = `<p class="pad">No access for ${esc(user.email)}. Ask Alex to add you.</p>`; return; }
-  me = users ? { uid: user.uid, name: (prof && prof.name) || "Alex", role: "admin", staffRole: prof && prof.role } : { uid: user.uid, ...prof };
+  const bootstrapAdmin = user.uid === ALEX_UID || user.uid === "R7t41e54Ykcdk9WPdVZnDd697iI2";
+  const roleAdmin = !!(prof && prof.role === "admin");
+  me = users || bootstrapAdmin || roleAdmin
+    ? { uid: user.uid, name: (prof && prof.name) || (bootstrapAdmin ? "Alex" : "Admin"), role: "admin", staffRole: prof && prof.role }
+    : { uid: user.uid, ...prof };
   me.cloudProfile = prof;
+  const token = await user.getIdTokenResult().catch(() => null);
+  me.platformOwner = isPlatformOwner({
+    uid: user.uid,
+    email: user.email,
+    emailVerified: user.emailVerified === true || token?.claims?.email_verified === true,
+    claims: token?.claims || {},
+  });
+  await loadCompanyBrand();
   $("#who").textContent = `${me.name} · ${me.role}`; $("#logout").classList.remove("hidden");
   CHAT.start();
   if (me.role === "admin") {
     if (window.HW_PREVIEW_VIEW === "staff") ui.view = "staff";
-    const logins = users.docs.map(d => ({ uid: d.id, ...d.data() })).filter(u => u.role === "operator" || u.role === "supervisor");
-    staff = [{ uid: ALEX_UID, name: "Alex" }, ...logins.filter(u => u.uid !== ALEX_UID)];
+    if (window.HW_PREVIEW_VIEW === "settings" || window.HW_PREVIEW_VIEW === "company") ui.view = "settings";
+    if (window.HW_PREVIEW_VIEW === "master" && me.platformOwner) ui.view = "master";
+    const companyId = myCompanyId();
+    const staffSnap = users || await getDocs(query(collection(db, "users"), where("companyId", "==", companyId))).catch(() => null);
+    const logins = (staffSnap ? staffSnap.docs : []).map(d => ({ uid: d.id, ...d.data() }))
+      .filter(u => (u.companyId || u.tenantId || "heartwood") === companyId)
+      .filter(u => u.role === "operator" || u.role === "supervisor");
+    staff = companyId === "heartwood"
+      ? [{ uid: ALEX_UID, name: "Alex" }, ...logins.filter(u => u.uid !== ALEX_UID)]
+      : logins;
     // two weeks back (catch overdue work) to 4 weeks ahead, plus anything undated
-    const q = query(collection(db, "jobs"), where("date", ">=", addDays(todayStr(), -14)), where("date", "<=", addDays(todayStr(), 28)), orderBy("date"));
-    const u1 = onSnapshot(q, s => { jobs = s.docs.map(d => ({ id: d.id, ...d.data() })); addNameOnlyStaff(jobs); renderAdmin(); });
+    const q = companyJobs([where("date", ">=", addDays(todayStr(), -14)), where("date", "<=", addDays(todayStr(), 28)), orderBy("date")]);
+    const u1 = onSnapshot(q, s => { jobs = s.docs.map(d => ({ id: d.id, ...d.data() })); addNameOnlyStaff(jobs); renderAdmin(); }, e => { console.warn("jobs", e.code, e.message); jobs = []; renderAdmin(); });
     // Invoicing: every Done job (any date), admin only.
-    const u2 = onSnapshot(query(collection(db, "jobs"), where("status", "==", "Done")), s => { ui.done = s.docs.map(d => ({ id: d.id, ...d.data() })); donePill(); if (ui.view === "invoices" || ui.view === "completed" || ui.view === "home") renderAdmin(); });
+    const u2 = onSnapshot(companyJobs([where("status", "==", "Done")]), s => { ui.done = s.docs.map(d => ({ id: d.id, ...d.data() })); donePill(); if (ui.view === "invoices" || ui.view === "completed" || ui.view === "home") renderAdmin(); }, e => console.warn("done jobs", e.code || e.message));
     const u3 = onSnapshot(collection(db, "incidents"), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); if (ui.view === "safety" || ui.view === "home") renderAdmin(); incRefresh(); }, e => console.warn("incidents", e.code));
     const u4 = onSnapshot(query(collection(db, "invites"), where("tenantId", "==", myTenant())), s => {
       ui.invites = s.docs.map(d => ({ id: d.id, ...d.data() })); ui.invitesErr = "";
       if (ui.view === "staff") renderAdmin();
     }, e => { ui.invites = []; ui.invitesErr = e.code || "permission-denied"; if (ui.view === "staff") renderAdmin(); });
-    unsub = () => { u1(); u2(); u3(); u4(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start(); leaveStart(); claimsStart();
-    getDocs(query(collection(db, "jobs"), where("date", "==", ""))).then(s => { ui.undated = s.docs.map(d => ({ id: d.id, ...d.data() })); addNameOnlyStaff(ui.undated); renderAdmin(); });
+    unsub = () => { u1(); u2(); u3(); u4(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; }; swmsSub(); COMP.start(); leaveStart(); claimsStart(); if (me.platformOwner) watchMaster();
+    getDocs(companyJobs([where("date", "==", "")])).then(s => { ui.undated = s.docs.map(d => ({ id: d.id, ...d.data() })); addNameOnlyStaff(ui.undated); renderAdmin(); }).catch(e => console.warn("undated", e.code, e.message));
   } else {
     // Operators may only list jobs assigned to them (enforced by firestore.rules).
-    const q = query(collection(db, "jobs"), where("assigned", "array-contains", user.uid));
+    const q = companyJobs([where("assigned", "array-contains", user.uid)]);
     const u1 = onSnapshot(q, s => { jobs = s.docs.map(d => ({ id: d.id, ...d.data() })); renderOperator(); });
     const u3 = onSnapshot(query(collection(db, "incidents"), where("reportedBy", "==", user.uid)), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); if (!ui.opSel && (ui.opTab || "today") === "today") renderOperator(); incRefresh(); }, e => console.warn("incidents", e.code));
     const u4 = canInvite()
@@ -141,10 +168,25 @@ onAuthStateChanged(auth, async user => {
   }
 });
 
-function myTenant() {
+function myCompanyId() {
   const profile = me && me.cloudProfile;
-  const id = profile && typeof profile.tenantId === "string" ? profile.tenantId.trim() : "";
-  return id || "heartwood";
+  const company = profile && typeof profile.companyId === "string" ? profile.companyId.trim() : "";
+  if (company) return company;
+  const tenant = profile && typeof profile.tenantId === "string" ? profile.tenantId.trim() : "";
+  return tenant || "heartwood";
+}
+function myTenant() {
+  return myCompanyId();
+}
+function companyJobs(constraints = []) {
+  return query(collection(db, "jobs"), where("companyId", "==", myCompanyId()), ...constraints);
+}
+async function loadCompanyBrand() {
+  const id = myCompanyId();
+  const snap = await getDoc(doc(db, "companies", id)).catch(() => null);
+  if (snap && snap.exists()) setActiveCompany({ ...snap.data(), companyId: id });
+  else setActiveCompany(id === "heartwood" ? null : { companyId: id, name: "Your company" });
+  paintBrand();
 }
 function inviteDisplayNow() {
   return window.HW_TODAY ? new Date(window.HW_TODAY + "T12:00:00+10:00") : new Date();
@@ -241,42 +283,122 @@ function renderLogin() {
     <p class="sub">CallUp for ${esc(org.legalName)}. Use the email this business gave you.</p>
     <label>Email<input name="e" type="email" autocomplete="username" required></label>
     <label>Password<input name="p" type="password" autocomplete="current-password" required></label>
-    <button class="big primary">Sign in</button><p id="lerr" class="err"></p>
+    <button class="big primary">Sign in</button>
+    <button class="big ghost" type="button" id="opencreate">Create a company</button>
+    <p id="lerr" class="err"></p>
     <p class="powered">${esc(POWERED_BY)}</p></form>`;
   $("#login").onsubmit = async ev => {
     ev.preventDefault(); const f = ev.target;
     try { await signInWithEmailAndPassword(auth, f.e.value.trim(), f.p.value); }
     catch (e) { $("#lerr").textContent = "Sign-in failed: " + (e.code || e.message); }
   };
+  $("#opencreate").onclick = () => renderSignup();
+}
+function renderSignup() {
+  paintBrand();
+  $("#app").innerHTML = signupFormHtml();
+  $("#signupback").onclick = () => renderLogin();
+  $("#signup").onsubmit = async ev => {
+    ev.preventDefault();
+    const f = ev.target;
+    const err = $("#signuperr");
+    const checked = validateCompanyInput({
+      name: f.name.value, legalName: f.legalName.value, abn: f.abn.value, address: f.address.value,
+      phone: f.phone.value, email: f.email.value, accountsEmail: f.accountsEmail.value,
+      hubdocAddress: f.hubdocAddress.value, logoUrl: f.logoUrl.value, signoff: f.name.value,
+    });
+    if (!checked.ok) { err.textContent = companyFailure(checked.reason); return; }
+    if (!f.ownerName.value.trim()) { err.textContent = "Enter your name."; return; }
+    if (f.password.value.length < 8) { err.textContent = companyFailure("weak-password"); return; }
+    signingUp = true;
+    let cred = null;
+    try {
+      cred = await createUserWithEmailAndPassword(auth, f.ownerEmail.value.trim(), f.password.value);
+      const companyId = companyIdFromName(checked.value.name);
+      const signedUpAt = serverTimestamp();
+      await setDoc(doc(db, "companies", companyId), buildCompanyCreate(checked.value, {
+        companyId, ownerUid: cred.user.uid, signedUpAt, trialEndsAt: Timestamp.fromDate(trialEnd(new Date())), lastActivityAt: signedUpAt,
+      }));
+      await setDoc(doc(db, "users", cred.user.uid), { ...ownerProfile(checked.value, companyId, f.ownerName.value.trim()), email: f.ownerEmail.value.trim().toLowerCase() });
+      signingUp = false;
+      location.reload();
+    } catch (e) {
+      signingUp = false;
+      if (cred) { try { await cred.user.delete(); } catch { /* the login may already be signed out */ } }
+      const code = e && e.code === "auth/email-already-in-use" ? "email-in-use"
+        : e && e.code === "auth/weak-password" ? "weak-password"
+        : (e && e.code) || "permission-denied";
+      err.textContent = companyFailure(code) || (e.code || e.message);
+    }
+  };
 }
 function settingsView() {
   const org = orgSettings();
-  return `<div class="sm-head"><h1>Organisation</h1></div>
-    <p class="sub">CallUp is the product. These fields are the business on the header, SWMS, quotes and emails. Saving stays on this phone. The default for every sign-in is in org settings. This does not rename Firebase, job numbers, or jobs.heartwoodew.com.</p>
-    <form id="orgform" class="card jf">
-      <label>Trading name<input name="name" required maxlength="80" value="${esc(org.name)}"></label>
-      <label>Legal name<input name="legalName" required maxlength="120" value="${esc(org.legalName)}"></label>
-      <label>ABN<input name="abn" maxlength="20" value="${esc(org.abn)}"></label>
-      <label>Email sign-off<input name="signoff" required maxlength="80" value="${esc(org.signoff)}"></label>
-      <label>Logo URL<span class="sub">Optional. Leave blank for the trading name as text. A CallUp picture logo is not in this install, so the product mark stays the CallUp wordmark.</span><input name="logoUrl" maxlength="300" value="${esc(org.logoUrl)}" placeholder="https://… or icons/…"></label>
-      <p class="powered">${esc(POWERED_BY)}</p>
-      <div class="btns"><button type="submit" class="primary">Save organisation</button></div>
-    </form>`;
+  return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin") });
 }
 function bindSettings(A) {
   const form = A.querySelector("#orgform");
-  if (!form) return;
-  form.onsubmit = ev => {
+  if (!form || form.querySelector("[disabled]")) return;
+  form.onsubmit = async ev => {
     ev.preventDefault();
-    const typed = form.logoUrl.value.trim();
-    const saved = saveOrgSettings({
-      name: form.name.value, legalName: form.legalName.value, abn: form.abn.value,
-      signoff: form.signoff.value, logoUrl: form.logoUrl.value,
+    const org = orgSettings();
+    const checked = companyDetailPatch(org, {
+      name: form.name.value, legalName: form.legalName.value, abn: form.abn.value, address: form.address.value,
+      phone: form.phone.value, email: form.email.value, accountsEmail: form.accountsEmail.value,
+      hubdocAddress: form.hubdocAddress.value, signoff: form.signoff.value, logoUrl: form.logoUrl.value,
     });
-    paintBrand();
-    toast(typed && !saved.logoUrl ? "Logo needs an http(s) address or an icons/ file. Other fields saved." : "Organisation saved on this phone");
+    if (!checked.ok) { toast(companyFailure(checked.reason)); return; }
+    const typed = form.logoUrl.value.trim();
+    try {
+      if (Object.keys(checked.patch).length) await updateDoc(doc(db, "companies", org.companyId), checked.patch);
+      setActiveCompany({ ...org, ...checked.value, companyId: org.companyId });
+      paintBrand();
+      toast(typed && !orgSettings().logoUrl ? "Logo needs an http(s) address or an icons/ file. Other fields saved." : "Company details saved");
+    } catch (e) {
+      if (org.companyId === "heartwood") {
+        const saved = saveOrgSettings(checked.value);
+        setActiveCompany(null);
+        paintBrand();
+        toast(typed && !saved.logoUrl ? "Logo needs an http(s) address or an icons/ file. Other fields saved on this phone." : "Saved on this phone until the company record is published");
+        return;
+      }
+      toast("Not saved: " + (e.code || e.message));
+    }
+  };
+}
+function masterView() {
+  const rows = ui.masterRows || [];
+  return masterPageHtml(rows, ui.masterFilters || {});
+}
+function bindMaster(A) {
+  const form = A.querySelector("#masterf");
+  if (!form) return;
+  const apply = () => {
+    ui.masterFilters = {
+      q: A.querySelector("#masterq").value,
+      status: A.querySelector("#masterstatus").value,
+      plan: A.querySelector("#masterplan").value,
+    };
     renderAdmin();
   };
+  form.onchange = apply;
+  A.querySelector("#masterq").oninput = apply;
+  A.querySelectorAll(".master-row").forEach(tr => {
+    tr.onclick = () => {
+      const row = (ui.masterRows || []).find(r => r.id === tr.dataset.company);
+      const slot = A.querySelector("#masterdetail");
+      if (slot) slot.innerHTML = masterDetailHtml(row);
+      const close = A.querySelector("#masterclose");
+      if (close) close.onclick = () => { slot.innerHTML = ""; };
+    };
+  });
+}
+function watchMaster() {
+  if (!me || !me.platformOwner || ui.masterUnsub) return;
+  ui.masterUnsub = onSnapshot(collection(db, "companies"), snap => {
+    ui.masterRows = snap.docs.map(d => masterRow(d.id, d.data()));
+    if (ui.view === "master") renderAdmin();
+  }, () => { ui.masterRows = []; if (ui.view === "master") renderAdmin(); });
 }
 
 // ------------------------------------------------------------------ admin
@@ -308,13 +430,13 @@ const jobNo = j => j.sm8JobNo ? j.sm8JobNo : "HW-" + String(j.id || "").slice(-4
 const firstLine = s => String(s || "").split(/\n|\. /)[0];
 const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Unscheduled";
 const NAV = [["home", "⌂", "Home"], ["compliance", "🚐", "Compliance"], ["prestart", "☑", "Prestart"], ["chat", "💬", "Chat"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["staff", "👥", "Staff"], ["inbox", "✉", "Inbox", 0, 1],
-  ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["leave", "🌴", "Leave"], ["claims", "🧾", "Reimbursements"], ["reimb", "💵", "Receipt ledger", 0, 1], ["settings", "⚙", "Organisation"]];
+  ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["leave", "🌴", "Leave"], ["claims", "🧾", "Reimbursements"], ["reimb", "💵", "Receipt ledger", 0, 1], ["settings", "⚙", "Company"], ["master", "▣", "Master"]];
 ui.view = "home"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
 const PHONE = matchMedia("(max-width:760px)");
 const TOUCH = matchMedia("(pointer:coarse)");
 PHONE.addEventListener?.("change", () => { if (me && me.role === "admin") renderAdmin(); });
 // Grouped side menu: top items, then collapsible groups (open/closed remembered on this device; the group holding the current screen is always open).
-const NAV_TOP = ["home", "chat", "inbox", "clients", "staff"];
+const NAV_TOP = ["home", "chat", "inbox", "clients", "staff", "master"];
 const NAV_FOOT = ["settings"];
 const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "jobs", "unscheduled", "quotes", "completed", "myjobs"]], ["money", "$", "Money", ["invoices", "claims", "reimb", "timesheet", "leave"]], ["safety", "⚠", "Safety", ["safety", "swms", "prestart", "compliance"]]];
 const NAV_LBL = { safety: "Incidents" };
@@ -323,6 +445,7 @@ function shell(inner) {
   const cur = NAV.find(n => n[0] === ui.view);
   const item = k => { const x = NAV.find(n => n[0] === k); if (!x || x[3] || (x[4] && !isOwner()) || (k === "invoices" && (!me || me.role !== "admin")) || (k === "staff" && !canInvite()) || (k === "quotes" && !canQuote()) || (k === "compliance" && !COMP.canSee()) || (k === "prestart" && !COMP.canPrestart())) return "";
     const badge = k === "chat" ? CHAT.badge("staff") : "";
+    if (k === "master" && !(me && me.platformOwner)) return "";
     return `<button class="sm-nav ${ui.view === k ? "on" : ""}" data-view="${k}" title="${esc(NAV_LBL[k] || x[2])}"><span class="ic">${x[1]}</span><span class="lbl">${esc(NAV_LBL[k] || x[2])}</span>${badge}</button>`; };
   const grp = ([g, ic, n, ks]) => { const has = ks.includes(ui.view), open = has || !ui.navCol[g];
     return `<div class="sm-grp ${open ? "open" : ""} ${has ? "has" : ""}"><button class="sm-gh" data-grp="${g}" aria-expanded="${open}"><span class="ic">${ic}</span><span class="lbl">${n}</span><span class="car">${open ? "▾" : "▸"}</span></button>
@@ -1057,7 +1180,7 @@ function tsClockHtml() {
   else if (!tsWorkerReady()) return "";
   if (ui.tsAsk) {
     const label = { on: "Agree and clock on", off: "Agree and clock off", "break-start": "Agree and start break", "break-end": "Agree and end break" }[ui.tsAsk] || "Agree and continue";
-    return `<div class="ts-consent" role="dialog" aria-label="Location at clock on and clock off"><p>${esc(TS_CONSENT)}</p>
+    return `<div class="ts-consent" role="dialog" aria-label="Location at clock on and clock off"><p>${esc(locationConsent(orgSettings().name))}</p>
       <button type="button" class="ts-go on" id="tsagree">${label}</button>
       <button type="button" class="sm-btn" id="tsno">Not now</button></div>`;
   }
@@ -1290,14 +1413,14 @@ function hxPanel(ws) {
   if (!me || me.role !== "admin") return "";
   const L = (ui.hxList || []).filter(x => x.weekStart === ws).slice(0, 3);
   return `<div class="ts-card hx-card"><h3>Hours spreadsheet for accounts</h3>
-    <p class="sub">Builds an Excel file (.xlsx) of everyone's hours for Mon ${dmy(ws)} – Sun ${dmy(addDays(ws, 6))}, saves it to your phone, and emails it to ${ACCOUNTS_TO} automatically.</p>
+    <p class="sub">Builds an Excel file (.xlsx) of everyone's hours for Mon ${dmy(ws)} – Sun ${dmy(addDays(ws, 6))}, saves it to your phone, and emails it to ${esc(hoursBrand(orgSettings()).accountsEmail)} automatically.</p>
     <div class="btns"><button type="button" class="sm-btn primary" id="hxgo"${ui.hxBusy ? " disabled" : ""}>${ui.hxBusy ? "Building…" : "📊 Make & send hours spreadsheet"}</button>
     <button type="button" class="sm-btn" id="hxdl"${ui.hxBusy ? " disabled" : ""}>Download only</button></div>
     ${L.map(x => `<p class="sub hx-row">${esc(x.fileName || "")} · ${esc(String(x.totalHours ?? ""))} h · ${hxStatus(x)}</p>`).join("")}</div>`;
 }
 function hxSubs() {
   if (ui.hxSub || !me || me.role !== "admin") return;
-  ui.hxSub = onSnapshot(query(collection(db, "hoursExports"), orderBy("createdAt", "desc")), s => {
+  ui.hxSub = onSnapshot(query(collection(db, "hoursExports"), where("companyId", "==", myCompanyId()), orderBy("createdAt", "desc")), s => {
     ui.hxList = s.docs.slice(0, 20).map(d => ({ id: d.id, ...d.data() })); if (tsIsAdminSheet() && !ui.tsDirty && !ui.tsEdit) rerender();
   }, () => { ui.hxList = []; });
 }
@@ -1310,10 +1433,11 @@ async function hxSave(file) {
 async function hxRun(send) {
   const ws = tsWeek(), L = ui.tsAll && ui.tsAllWs === ws ? ui.tsAll : null;
   if (!L || ui.hxBusy) return;
-  const company = orgSettings().name || "Heartwood";
+  const brand = hoursBrand(orgSettings());
+  const company = brand.titleName;
   const rep = buildHoursReport({ weekStart: ws, people: tsPeople(L), sheets: L, leaveText: (p, d) => cellLeaveText(ui.leave || [], { uid: p.uid, name: p.name }, d) });
   if (send && !rep.people.length && !confirm("No hours entered for this week. Email an empty spreadsheet anyway?")) return;
-  const name = exportFileName(company, ws), bytes = xlsxBytes(reportSheets(rep, { company }));
+  const name = exportFileName(brand.fileName, ws), bytes = xlsxBytes(reportSheets(rep, { company }));
   const file = new File([bytes], name, { type: XLSX_MIME });
   if (!send) return hxSave(file);
   ui.hxBusy = true; rerender();
@@ -1321,10 +1445,11 @@ async function hxRun(send) {
   const shared = hxSave(file);
   try {
     const id = newExportId(), path = `hoursExports/${id}/${name}`;
-    await uploadBytes(storageRef(storage, path), bytes, { contentType: XLSX_MIME, customMetadata: { purpose: "hours-export", uploaderUid: me.uid, exportId: id } });
-    await setDoc(doc(db, "hoursExports", id), { weekStart: ws, weekEnd: addDays(ws, 6), to: ACCOUNTS_TO, fileName: name, storagePath: path,
-      people: rep.people.length, totalHours: rep.total, status: "queued", attempts: 0, createdBy: me.uid, createdByName: me.name || "", createdAt: serverTimestamp() });
-    toast("Spreadsheet queued for " + ACCOUNTS_TO);
+    await uploadBytes(storageRef(storage, path), bytes, { contentType: XLSX_MIME, customMetadata: { purpose: "hours-export", uploaderUid: me.uid, exportId: id, companyId: brand.companyId } });
+    await setDoc(doc(db, "hoursExports", id), { weekStart: ws, weekEnd: addDays(ws, 6), to: brand.accountsEmail, fileName: name, storagePath: path,
+      people: rep.people.length, totalHours: rep.total, status: "queued", attempts: 0, createdBy: me.uid, createdByName: me.name || "", createdAt: serverTimestamp(),
+      companyId: brand.companyId, companyName: brand.subjectName });
+    toast("Spreadsheet queued for " + brand.accountsEmail);
   } catch (e) { toast("Not queued: " + (e.code || e.message)); }
   await shared.catch(() => {});
   ui.hxBusy = false; rerender();
@@ -2072,7 +2197,7 @@ function renderAdmin() {
   const quotesHtml = ui.view === "quotes" ? adminViewRouter(ui.view, ui, { esc, $$, staff, jobs: all, todayStr, rerender: () => renderAdmin(), canEditQuoteRates }) : null;
   const staffHtml = ui.view === "staff" ? staffViewHtml(ui.invites || [], { now: inviteDisplayNow(), error: ui.invitesErr || "" }) : null;
   paintBrand();
-  $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : quotesHtml != null ? quotesHtml : jobsView(all));
+  $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "master" ? masterView() : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : quotesHtml != null ? quotesHtml : jobsView(all));
   const A = $("#app"); inboxBadge();
   CHAT.watch([...(jobs || []), ...(ui.undated || [])]);
   if (ui.view === "chat") CHAT.mount(A);
@@ -2087,6 +2212,7 @@ function renderAdmin() {
   if (ui.view === "staff") bindStaff(A);
   if (ui.view === "compliance" || ui.view === "prestart") COMP.bind(A);
   if (ui.view === "settings") bindSettings(A);
+  if (ui.view === "master") bindMaster(A);
   A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.navOpen = false;
     if (b.dataset.view === "myjobs") { ui.myJobs = true; ui.opSel = null; window.scrollTo(0, 0); return renderAdmin(); }
     if (b.dataset.view !== "compliance") COMP.abandon();
@@ -2199,8 +2325,8 @@ async function splitJob(j, pick) {
   const poToNew = newType === origType && keepType !== origType;
   const hold = new Date(Date.now() + 10 * 60000).toISOString(), at = new Date().toISOString(), lk = { poLookupStatus: "pending", poLookupAt: at, poLookupRequestedBy: me.name + " (split)", poLookupCandidates: [] };
   const base = Object.fromEntries(SPLIT_COPY.filter(k => j[k] !== undefined).map(k => [k, j[k]]));
-  const nj = { ...base, type: newType, description: mv.map(x => x.t).join("\n"), po: poToNew ? (j.po || "") : "", source: "app", log: [],
-    splitFrom: j.id, splitAt: at, splitBy: me.name, splitHoldUntil: hold, editedInApp: false, ...lk, createdAt: serverTimestamp(), updatedAt: serverTimestamp(), updatedBy: me.uid };
+  const nj = scopeRecord({ ...base, type: newType, description: mv.map(x => x.t).join("\n"), po: poToNew ? (j.po || "") : "", source: "app", log: [],
+    splitFrom: j.id, splitAt: at, splitBy: me.name, splitHoldUntil: hold, editedInApp: false, ...lk, createdAt: serverTimestamp(), updatedAt: serverTimestamp(), updatedBy: me.uid }, myCompanyId());
   const ref = await addDoc(collection(db, "jobs"), nj);
   const undo = { description: j.description || "", type: j.type || null, po: j.po || "", poAmount: j.poAmount ?? null, editedInApp: !!j.editedInApp };
   await updateDoc(doc(db, "jobs", j.id), { description: keep.map(x => x.t).join("\n"), type: keepType, ...(poToNew ? { po: "", poAmount: null } : {}),
@@ -2307,7 +2433,7 @@ function editJob(j) {
     if (data.status === "Done" && j.status !== "Done") Object.assign(data, { completedAt: serverTimestamp(), completedBy: me.uid });
     if (!confirmIfOnLeave(data.date, data.assignedNames)) return;
     try {
-      if (n) await addDoc(collection(db, "jobs"), { ...data, source: "app", log: [], createdAt: serverTimestamp() });
+      if (n) await addDoc(collection(db, "jobs"), scopeRecord({ ...data, source: "app", log: [], createdAt: serverTimestamp() }, myCompanyId()));
       else await updateDoc(doc(db, "jobs", j.id), data);
       d.close(); toast("Saved"); renderAdmin(); if (!data.date) location.reload();
     } catch (e) { $("#ferr").textContent = e.message; }
@@ -3468,9 +3594,12 @@ function swmsReminderHtml() {
 }
 function swmsSub() {          // my signatures (everyone); all signatures (admins)
   if (ui.swmsUnsub || !me) return;
-  const u1 = onSnapshot(query(collection(db, "swmsSignatures"), where("uid", "==", me.uid)), s => { ui.mySigs = s.docs.map(d => ({ id: d.id, ...d.data() })); swmsRefresh(); }, e => console.warn("swms", e.code));
+  const ownSwms = myCompanyId() === "heartwood"
+    ? query(collection(db, "swmsSignatures"), where("uid", "==", me.uid))
+    : query(collection(db, "swmsSignatures"), where("uid", "==", me.uid), where("companyId", "==", myCompanyId()));
+  const u1 = onSnapshot(ownSwms, s => { ui.mySigs = s.docs.map(d => ({ id: d.id, ...d.data() })); swmsRefresh(); }, e => console.warn("swms", e.code));
   let u2 = () => {};
-  if (me.role === "admin") u2 = onSnapshot(collection(db, "swmsSignatures"), s => { ui.allSigs = s.docs.map(d => ({ id: d.id, ...d.data() })); swmsRefresh(); }, e => console.warn("swms all", e.code));
+  if (me.role === "admin") u2 = onSnapshot(query(collection(db, "swmsSignatures"), where("companyId", "==", myCompanyId())), s => { ui.allSigs = s.docs.map(d => ({ id: d.id, ...d.data() })); swmsRefresh(); }, e => console.warn("swms all", e.code));
   ui.swmsUnsub = () => { u1(); u2(); ui.swmsUnsub = null; };
 }
 function swmsRefresh() {
@@ -3660,6 +3789,10 @@ async function buildSignedSwmsPdf(id, sigs, jobLabel = "", single = false) {
     pg.drawRectangle({ x: 0, y: H - 6, width: W, height: 6, color: navy });
     pg.drawText(fit(org.legalName, B, 16, W * 0.62), { x: M, y: y - 14, size: 16, font: B, color: navy });
     pg.drawText("ABN " + org.abn, { x: M, y: y - 30, size: 9.5, font: F, color: grey });
+    if (org.companyId && org.companyId !== "heartwood") {
+      const contact = [org.address, [org.phone, org.email].filter(Boolean).join(" · ")].filter(Boolean).join("  ");
+      if (contact) { y -= 12; pg.drawText(fit(contact, F, 8, W - 2 * M), { x: M, y: y - 30, size: 8, font: F, color: grey }); }
+    }
     const r = "SWMS SIGN-OFF SHEET"; pg.drawText(r, { x: W - M - B.widthOfTextAtSize(r, 11), y: y - 14, size: 11, font: B, color: navy });
     const powered = POWERED_BY; pg.drawText(powered, { x: W - M - F.widthOfTextAtSize(powered, 8), y: y - 30, size: 8, font: F, color: grey });
     y -= 44; pg.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: 1, color: navy }); y -= 22;

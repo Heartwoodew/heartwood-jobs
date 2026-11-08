@@ -40,6 +40,27 @@ def hub_address(c):
     return hub
 
 
+def company_of(d):
+    cid = (d.get("companyId") or d.get("tenantId") or "heartwood").strip() or "heartwood"
+    return cid
+
+
+def company_doc(c, cid):
+    if cid == "heartwood": return {}
+    return c.get(f"companies/{cid}") or {}
+
+
+def hub_for(c, d, heartwood_hub):
+    """Heartwood keeps ownerSettings/hubdoc. Another company uses its own hubdocAddress, or is skipped."""
+    cid = company_of(d)
+    if cid == "heartwood": return heartwood_hub, "Heartwood"
+    comp = company_doc(c, cid)
+    hub = (comp.get("hubdocAddress") or "").strip().lower()
+    name = (comp.get("name") or "Company").strip() or "Company"
+    if not re.fullmatch(r"[a-z0-9._+-]+@app\.hubdoc\.com", hub): return "", name
+    return hub, name
+
+
 def storage_get(c, path):
     bucket = os.environ.get("HW_BUCKET", "heartwood-9f37f.firebasestorage.app")
     url = f"https://firebasestorage.googleapis.com/v0/b/{bucket}/o/{urllib.parse.quote(path, safe='')}?alt=media"
@@ -64,6 +85,8 @@ def pending(out):
     for cid, d in c.where("reimbursementClaims", "status", "==", "paid"):
         ok, verify = due(d)
         if not ok: continue
+        dest, brand = hub_for(c, d, hub)
+        if not dest: continue
         if not d.get("receiptPath"):
             b = c.batch(); b.update(f"reimbursementClaims/{cid}", {"hubdocStatus": "no-receipt", "hubdocUpdatedAt": iso()}); b.commit(); continue
         ext = d["receiptPath"].rsplit(".", 1)[-1]
@@ -71,9 +94,10 @@ def pending(out):
         try: data = storage_get(c, d["receiptPath"])
         except Exception as e:
             mark_doc(c, f"reimbursementClaims/{cid}", "failed", err=f"download: {e}"[:300], d=d); continue
-        items.append(item(out, "claim:" + cid, hub, name, MIME[ext], data, verify,
+        via = "Heartwood jobs app" if brand == "Heartwood" else f"{brand} jobs app"
+        items.append(item(out, "claim:" + cid, dest, name, MIME[ext], data, verify,
                           f"Receipt {d.get('supplier', '')} {d.get('date', '')} - {d.get('name', '')} [HW {cid}]",
-                          f"Reimbursement claim paid via Heartwood jobs app.\nStaff: {d.get('name', '')}\nSupplier: {d.get('supplier', '')}\n"
+                          f"Reimbursement claim paid via {via}.\nStaff: {d.get('name', '')}\nSupplier: {d.get('supplier', '')}\n"
                           f"Date: {d.get('date', '')}\nAmount: {money(d.get('amountCents'))} inc GST\nCategory: {d.get('category', '')}\n"
                           + (f"Job: {d.get('jobLabel')}\n" if d.get("jobLabel") else "") + f"Ref: {cid}"))
         lock(c, f"reimbursementClaims/{cid}", d, verify)
@@ -82,14 +106,17 @@ def pending(out):
         if r.get("status") != "queued": continue
         ok, verify = due(r)
         if not ok: continue
+        dest, brand = hub_for(c, r, hub)
+        if not dest: continue
+        via = "Heartwood jobs app" if brand == "Heartwood" else f"{brand} jobs app"
         chunks = sorted(((x.get("i", 0), x.get("data", "")) for _, x in c.where("receiptChunks", "rid", "==", rid)))
         if len(chunks) != r.get("chunks", 0): continue
         data = base64.b64decode("".join(x for _, x in chunks))
         who, sup, job = r.get("byName") or led.get("byName") or "", r.get("supplier") or led.get("supplier") or "", r.get("jobNo") or led.get("jobNo") or ""
         amt = led.get("amountInc") or r.get("amountInc") or ""
-        items.append(item(out, "legacy:" + rid, hub, f"receipt_{slug(sup)}_{slug(who)}_{rid}.jpg", "image/jpeg", data, verify,
+        items.append(item(out, "legacy:" + rid, dest, f"receipt_{slug(sup)}_{slug(who)}_{rid}.jpg", "image/jpeg", data, verify,
                           f"Receipt {sup} job #{job} - {who} [HW {rid}]",
-                          f"Uploaded by {who} via Heartwood jobs app. Amount ${amt} inc GST.\nRef: {rid}"))
+                          f"Uploaded by {who} via {via}. Amount ${amt} inc GST.\nRef: {rid}"))
         lock(c, f"receipts/{rid}", r, verify)
     print(json.dumps(items, indent=1))
 

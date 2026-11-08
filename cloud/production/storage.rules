@@ -25,8 +25,28 @@ service firebase.storage {
     function explicitTenant() {
       return hasProfile() && "tenantId" in profile() && profile().tenantId is string && profile().tenantId.size() > 0;
     }
+    function explicitCompany() {
+      return hasProfile() && "companyId" in profile() && profile().companyId is string && profile().companyId.size() > 0;
+    }
     function callerTenant() {
-      return explicitTenant() ? profile().tenantId : ((hasProfile() || isAlex() || isPatrick()) ? "heartwood" : "");
+      return explicitCompany() ? profile().companyId
+        : (explicitTenant() ? profile().tenantId : ((hasProfile() || isAlex() || isPatrick()) ? "heartwood" : ""));
+    }
+    function storagePlatformOwner() {
+      return signedIn()
+        && request.auth.token.email_verified == true
+        && request.auth.token.email == "alex@heartwoodew.com"
+        && (request.auth.token.platformOwner == true || request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2");
+    }
+    function userCompanyOf(uid) {
+      let path = /databases/(default)/documents/users/$(uid);
+      return !firestore.exists(path)
+        ? "heartwood"
+        : ("companyId" in firestore.get(path).data && firestore.get(path).data.companyId is string && firestore.get(path).data.companyId.size() > 0
+          ? firestore.get(path).data.companyId
+          : ("tenantId" in firestore.get(path).data && firestore.get(path).data.tenantId is string && firestore.get(path).data.tenantId.size() > 0
+            ? firestore.get(path).data.tenantId
+            : "heartwood"));
     }
     function member(tenantId) {
       return signedIn() && tenantId is string && tenantId.size() > 0 && callerTenant() == tenantId;
@@ -222,9 +242,12 @@ service firebase.storage {
     function lvCertIsAlex() { return lvCertSignedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
     function lvCertIsPatrick() { return lvCertSignedIn() && request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"; }
     function lvCertUserPath() { return /databases/(default)/documents/users/$(request.auth.uid); }
-    function lvCertAdmin() {
-      return lvCertIsAlex() || lvCertIsPatrick() || (
-        lvCertSignedIn() && firestore.get(lvCertUserPath()).data.get("role", "") == "admin"
+    function lvCertAdmin(uid) {
+      return ((lvCertIsAlex() || lvCertIsPatrick()) && userCompanyOf(uid) == "heartwood") || (
+        lvCertSignedIn()
+        && firestore.exists(lvCertUserPath())
+        && firestore.get(lvCertUserPath()).data.get("role", "") == "admin"
+        && userCompanyOf(request.auth.uid) == userCompanyOf(uid)
       );
     }
     function lvCertFile(uid, requestId, file) {
@@ -243,7 +266,7 @@ service firebase.storage {
         );
     }
     function lvCertReader(uid) {
-      return lvCertSignedIn() && (request.auth.uid == uid || lvCertAdmin());
+      return lvCertSignedIn() && (request.auth.uid == uid || lvCertAdmin(uid));
     }
 
     match /leaveCertificates/{uid}/{requestId} {
@@ -260,9 +283,12 @@ service firebase.storage {
     function rcFileSignedIn() { return request.auth != null; }
     function rcFileIsAlex() { return rcFileSignedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
     function rcFileIsPatrick() { return rcFileSignedIn() && request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"; }
-    function rcFileAdmin() {
-      return rcFileIsAlex() || rcFileIsPatrick() || (
-        rcFileSignedIn() && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.get("role", "") == "admin"
+    function rcFileAdmin(uid) {
+      return ((rcFileIsAlex() || rcFileIsPatrick()) && userCompanyOf(uid) == "heartwood") || (
+        rcFileSignedIn()
+        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
+        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.get("role", "") == "admin"
+        && userCompanyOf(request.auth.uid) == userCompanyOf(uid)
       );
     }
     function rcFileOk(uid, claimId, file) {
@@ -282,7 +308,7 @@ service firebase.storage {
     }
     function rcFileReader(uid) {
       // 38SU... is the box sync account; it reads receipts only to email paid claims to Hubdoc.
-      return rcFileSignedIn() && (request.auth.uid == uid || rcFileAdmin() || request.auth.uid == "38SU5waAy4f9UI9N6JTqDMaYpQg2");
+      return rcFileSignedIn() && (request.auth.uid == uid || rcFileAdmin(uid) || request.auth.uid == "38SU5waAy4f9UI9N6JTqDMaYpQg2");
     }
 
     match /reimbursements/{uid}/{claimId}/{file} {
@@ -291,5 +317,46 @@ service firebase.storage {
       allow update, delete: if false;
     }
 // END REIMBURSEMENT RECEIPT RULES
+
+// BEGIN HOURS EXPORT FILE RULES
+    function hxFileAdmin() {
+      return signedIn() && (
+        ((isAlex() || isPatrick()) && callerTenant() == "heartwood")
+        || (hasProfile() && profile().get("role", "") == "admin" && callerTenant() != "")
+      );
+    }
+    function hxExportCompany(exportId) {
+      let path = /databases/(default)/documents/hoursExports/$(exportId);
+      return firestore.exists(path) && "companyId" in firestore.get(path).data
+        && firestore.get(path).data.companyId is string
+        ? firestore.get(path).data.companyId
+        : "heartwood";
+    }
+    match /hoursExports/{exportId}/{file} {
+      allow read: if (hxFileAdmin() && hxExportCompany(exportId) == callerTenant())
+        || (signedIn() && request.auth.uid == "38SU5waAy4f9UI9N6JTqDMaYpQg2");
+      allow create: if hxFileAdmin()
+        && exportId.matches('^hx[a-z0-9]{16}$')
+        && file.matches('^[A-Za-z0-9_-]{1,80}[.]xlsx$')
+        && request.resource.size > 0 && request.resource.size <= 5 * 1024 * 1024
+        && request.resource.contentType == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        && request.resource.metadata.purpose == "hours-export"
+        && request.resource.metadata.uploaderUid == request.auth.uid
+        && request.resource.metadata.exportId == exportId
+        && request.resource.metadata.companyId == callerTenant();
+      allow update, delete: if false;
+    }
+// END HOURS EXPORT FILE RULES
+
+    // Company logo only. Not job photos. Platform owner may read the logo.
+    match /companies/{companyId}/logo/{file} {
+      allow read: if signedIn() && (callerTenant() == companyId || storagePlatformOwner());
+      allow create, update: if signedIn() && callerTenant() == companyId
+        && hasProfile() && profile().get("role", "") == "admin"
+        && file.matches('^logo[.](png|jpg|webp)$')
+        && request.resource.size > 0 && request.resource.size <= 2 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+      allow delete: if false;
+    }
   }
 }

@@ -10,6 +10,18 @@ button.primary{background:var(--acc);border-color:var(--acc);color:#fff;font-wei
 main{max-width:1150px;margin:0 auto;padding:12px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px}
 .login{max-width:360px;margin:40px auto;display:grid;gap:12px}
+.signup{max-width:460px}
+.signup h3{margin:8px 0 0;font-size:15px}
+.master-totals{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:8px 0 12px}
+.master-table{width:100%;border-collapse:collapse}
+.master-table th,.master-table td{text-align:left;padding:8px;border-bottom:1px solid var(--line);vertical-align:top}
+.master-row{cursor:pointer}
+.master-row:hover{background:#faf5ee}
+.master-dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+.master-dl dt{font-size:12px;color:var(--mut)}
+.master-dl dd{margin:0;font-weight:650}
+.master-detail{margin-top:12px}
+@media(max-width:760px){.master-totals{grid-template-columns:1fr 1fr}.signup{max-width:none}}
 label{display:grid;gap:4px;font-size:13px;color:var(--mut)}input,select,textarea{font:inherit;padding:9px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);width:100%}
 .big{font-size:18px;padding:14px 16px;border-radius:12px;font-weight:700}
 .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}

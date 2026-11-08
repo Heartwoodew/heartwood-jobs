@@ -3,6 +3,8 @@
 import { entryList, paidShift, shiftHours, sortedEntries } from "./timesheet.js";
 
 export const ACCOUNTS_TO = "accounts@heartwoodew.com";
+// Heartwood's mailbox stays accounts@. Other companies pass their own accountsEmail
+// into the export record. This constant is the Heartwood default.
 const DAYS = 7;
 const addD = (s, n) => { const d = new Date(s + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 const r2 = h => Math.round((+h || 0) * 100) / 100;

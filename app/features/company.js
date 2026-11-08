@@ -1,0 +1,293 @@
+// CallUp companies. Heartwood is company id "heartwood".
+// A new paying customer is another companies/{companyId} document.
+// Stripe is not wired. billing is a hook for a later subscription.
+// This module does not talk to Firestore.
+
+import { DEFAULT_ORG } from "../org-settings.js";
+
+export const HEARTWOOD_COMPANY_ID = "heartwood";
+export const PLATFORM_OWNER_EMAIL = "alex@heartwoodew.com";
+export const PLATFORM_OWNER_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";
+export const HEARTWOOD_ACCOUNTS_EMAIL = "accounts@heartwoodew.com";
+export const HEARTWOOD_OFFICE_EMAIL = "alex@heartwoodew.com";
+export const HEARTWOOD_ADDRESS = "208-220 Holdsworth Rd, Chuwar QLD 4306";
+export const TRIAL_DAYS = 14;
+export const COMPANY_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
+// Later, a Stripe webhook (Admin SDK, not the browser) may set provider to "stripe"
+// and status to "active" | "past_due" | "canceled", plus customerId and subscriptionId.
+// Nothing in this app creates a Stripe customer or reads a card.
+export function billingHook() {
+  return {
+    provider: null,
+    status: "not-configured",
+    customerId: null,
+    subscriptionId: null,
+  };
+}
+
+export const HEARTWOOD_COMPANY = Object.freeze({
+  companyId: HEARTWOOD_COMPANY_ID,
+  name: DEFAULT_ORG.name,
+  legalName: DEFAULT_ORG.legalName,
+  abn: DEFAULT_ORG.abn,
+  signoff: DEFAULT_ORG.signoff,
+  logoUrl: DEFAULT_ORG.logoUrl || "",
+  address: HEARTWOOD_ADDRESS,
+  phone: "",
+  email: HEARTWOOD_OFFICE_EMAIL,
+  accountsEmail: HEARTWOOD_ACCOUNTS_EMAIL,
+  hubdocAddress: "",
+  status: "active",
+  plan: "paid",
+  origin: "heartwood",
+  staffCount: 0,
+  jobCount: 0,
+  billing: Object.freeze(billingHook()),
+});
+
+const EMAIL_RE = /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/;
+const HUBDOC_RE = /^[a-z0-9._+-]+@app\.hubdoc\.com$/;
+
+export function cleanCompanyId(value) {
+  const id = String(value || "").trim().toLowerCase();
+  return COMPANY_ID_RE.test(id) ? id : "";
+}
+
+export function companyIdFromName(name, rand = Math.random) {
+  const slug = String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "company";
+  const n = Math.floor(Math.abs(Number(rand()) || 0) * (36 ** 4));
+  const suffix = n.toString(36).padStart(4, "0").slice(-4);
+  return `${slug}-${suffix}`.slice(0, 40);
+}
+
+function clip(value, max) {
+  return String(value ?? "").trim().slice(0, max);
+}
+
+export function safeLogo(url) {
+  const value = clip(url, 300);
+  if (!value) return "";
+  if (/^icons\/[A-Za-z0-9._/-]+$/.test(value)) return value;
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol === "https:" || parsed.protocol === "http:") return value.slice(0, 300);
+  } catch { /* not a URL */ }
+  return "";
+}
+
+export function validateCompanyInput(input = {}) {
+  const name = clip(input.name, 80);
+  const legalName = clip(input.legalName || input.name, 120);
+  const abn = clip(input.abn, 20);
+  const signoff = clip(input.signoff || name, 80);
+  const address = clip(input.address, 160);
+  const phone = clip(input.phone, 40);
+  const email = clip(input.email, 120).toLowerCase();
+  const accountsEmail = clip(input.accountsEmail, 120).toLowerCase();
+  const hubdocAddress = clip(input.hubdocAddress, 120).toLowerCase();
+  const logoUrl = safeLogo(input.logoUrl);
+  if (!name) return { ok: false, reason: "name" };
+  if (!legalName) return { ok: false, reason: "legalName" };
+  if (!abn) return { ok: false, reason: "abn" };
+  if (abn && !/^[0-9 ]{1,20}$/.test(abn)) return { ok: false, reason: "abn" };
+  if (!address) return { ok: false, reason: "address" };
+  if (phone && !/^[0-9+() ./-]{3,40}$/.test(phone)) return { ok: false, reason: "phone" };
+  if (!EMAIL_RE.test(email)) return { ok: false, reason: "email" };
+  if (!EMAIL_RE.test(accountsEmail)) return { ok: false, reason: "accountsEmail" };
+  if (hubdocAddress && !HUBDOC_RE.test(hubdocAddress)) return { ok: false, reason: "hubdoc" };
+  if (input.logoUrl && String(input.logoUrl).trim() && !logoUrl) return { ok: false, reason: "logo" };
+  return {
+    ok: true,
+    value: { name, legalName, abn, signoff, logoUrl, address, phone, email, accountsEmail, hubdocAddress },
+  };
+}
+
+export function trialEnd(from) {
+  const start = from instanceof Date ? from : new Date(from || Date.now());
+  return new Date(start.getTime() + TRIAL_DAYS * 24 * 60 * 60 * 1000);
+}
+
+// Browser payload for companies/{id}. Timestamps are filled by the caller
+// (server timestamps for signedUpAt and lastActivityAt).
+export function buildCompanyCreate(value, { companyId, ownerUid, signedUpAt, trialEndsAt, lastActivityAt }) {
+  return {
+    ...value,
+    ownerUid,
+    createdBy: ownerUid,
+    status: "active",
+    plan: "trial",
+    origin: "signup",
+    signedUpAt,
+    trialEndsAt,
+    staffCount: 1,
+    jobCount: 0,
+    lastActivityAt,
+    billing: billingHook(),
+  };
+}
+
+export function ownerProfile(value, companyId, ownerName) {
+  return {
+    name: clip(ownerName, 80),
+    email: value.email,
+    role: "admin",
+    companyId,
+    tenantId: companyId,
+  };
+}
+
+// Missing companyId means Heartwood, including records that only have tenantId.
+export function docCompanyId(data) {
+  if (!data || typeof data !== "object") return HEARTWOOD_COMPANY_ID;
+  const company = typeof data.companyId === "string" ? data.companyId.trim() : "";
+  if (company) return company;
+  const tenant = typeof data.tenantId === "string" ? data.tenantId.trim() : "";
+  return tenant || HEARTWOOD_COMPANY_ID;
+}
+
+// New writes carry companyId. Heartwood does not gain a tenantId it never had.
+export function scopeRecord(data, companyId) {
+  const id = cleanCompanyId(companyId) || HEARTWOOD_COMPANY_ID;
+  const next = { ...data, companyId: id };
+  if (id !== HEARTWOOD_COMPANY_ID) next.tenantId = id;
+  return next;
+}
+
+export function isHeartwoodCompany(companyId) {
+  return !companyId || companyId === HEARTWOOD_COMPANY_ID;
+}
+
+// Spreadsheet title, filename and the accounts mailbox.
+// Heartwood keeps the current title name and accounts@heartwoodew.com.
+export function hoursBrand(org) {
+  const heartwood = isHeartwoodCompany(org && org.companyId);
+  const name = (org && org.name) || (heartwood ? "Heartwood" : "Company");
+  return {
+    companyId: heartwood ? HEARTWOOD_COMPANY_ID : org.companyId,
+    titleName: heartwood ? (org && org.name) || "Heartwood" : name,
+    fileName: heartwood ? (org && org.name) || "Heartwood" : name,
+    subjectName: heartwood ? "Heartwood" : name,
+    accountsEmail: heartwood ? HEARTWOOD_ACCOUNTS_EMAIL : (org && org.accountsEmail) || "",
+    heartwood,
+  };
+}
+
+export function isPlatformOwner({ uid, email, emailVerified, claims } = {}) {
+  const verified = emailVerified === true && String(email || "").trim().toLowerCase() === PLATFORM_OWNER_EMAIL;
+  if (!verified) return false;
+  if (claims && claims.platformOwner === true) return true;
+  return uid === PLATFORM_OWNER_UID;
+}
+
+function millis(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value.toDate === "function") return value.toDate().getTime();
+  if (typeof value.seconds === "number") return value.seconds * 1000;
+  const n = new Date(value).getTime();
+  return Number.isNaN(n) ? null : n;
+}
+
+export function companyPlanView(company, now = new Date()) {
+  const plan = company && company.plan === "paid" ? "paid" : "trial";
+  const status = company && company.status === "suspended" ? "suspended" : "active";
+  const end = millis(company && company.trialEndsAt);
+  const at = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  const trialActive = status === "active" && plan === "trial" && end != null && end > at;
+  const trialEnded = plan === "trial" && end != null && end <= at;
+  let planLabel = "Trial";
+  if (plan === "paid") planLabel = "Paying";
+  else if (trialEnded) planLabel = "Trial ended";
+  else if (trialActive) planLabel = "Trial";
+  return { plan, status, trialActive, trialEnded, planLabel, trialEndsAt: end };
+}
+
+// Account-level row only. Job text, photos and money are not copied onto it.
+export function masterRow(id, company, now = new Date()) {
+  const view = companyPlanView(company, now);
+  const signed = millis(company && (company.signedUpAt || company.createdAt));
+  const activity = millis(company && company.lastActivityAt);
+  return {
+    id,
+    name: company.name || "",
+    legalName: company.legalName || "",
+    abn: company.abn || "",
+    email: company.email || "",
+    phone: company.phone || "",
+    address: company.address || "",
+    accountsEmail: company.accountsEmail || "",
+    hubdocAddress: company.hubdocAddress || "",
+    signedUpAt: signed,
+    lastActivityAt: activity,
+    staffCount: Number.isFinite(+company.staffCount) ? +company.staffCount : 0,
+    jobCount: Number.isFinite(+company.jobCount) ? +company.jobCount : 0,
+    status: view.status,
+    plan: view.plan,
+    planLabel: view.planLabel,
+    trialActive: view.trialActive,
+    trialEnded: view.trialEnded,
+    trialEndsAt: view.trialEndsAt,
+    paying: view.plan === "paid" && view.status === "active",
+  };
+}
+
+export function masterTotals(rows) {
+  const list = rows || [];
+  return {
+    companies: list.length,
+    activeTrials: list.filter(r => r.trialActive && r.status === "active").length,
+    paying: list.filter(r => r.paying).length,
+    staff: list.reduce((n, r) => n + (r.staffCount || 0), 0),
+  };
+}
+
+export function filterMaster(rows, { q = "", status = "all", plan = "all" } = {}) {
+  const query = String(q || "").trim().toLowerCase();
+  return (rows || []).filter(row => {
+    if (status === "active" && row.status !== "active") return false;
+    if (status === "suspended" && row.status !== "suspended") return false;
+    if (plan === "trial" && !(row.plan === "trial" && row.trialActive)) return false;
+    if (plan === "trial-ended" && !row.trialEnded) return false;
+    if (plan === "paid" && row.plan !== "paid") return false;
+    if (!query) return true;
+    const hay = [row.name, row.legalName, row.abn, row.email, row.phone, row.id].join(" ").toLowerCase();
+    return hay.includes(query);
+  }).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+}
+
+// Migration planner. Adds companyId only. Never deletes or overwrites a companyId.
+export function planCompanyField(data, pathCompanyId) {
+  if (!data || typeof data !== "object") return { action: "skip", reason: "not-a-document" };
+  if (typeof data.companyId === "string" && data.companyId.trim()) {
+    return { action: "keep", companyId: data.companyId.trim() };
+  }
+  const tenant = typeof data.tenantId === "string" ? data.tenantId.trim() : "";
+  const companyId = cleanCompanyId(pathCompanyId) || cleanCompanyId(tenant) || HEARTWOOD_COMPANY_ID;
+  return { action: "add", companyId, field: "companyId" };
+}
+
+const COMPANY_DETAIL_KEYS = ["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress"];
+
+export function companyDetailPatch(current, input) {
+  const checked = validateCompanyInput({ ...current, ...input });
+  if (!checked.ok) return checked;
+  const patch = {};
+  for (const key of COMPANY_DETAIL_KEYS) {
+    if (checked.value[key] !== (current && current[key])) patch[key] = checked.value[key];
+  }
+  return { ok: true, value: checked.value, patch };
+}
+
+export function heartwoodSeed(now = new Date()) {
+  return {
+    ...HEARTWOOD_COMPANY,
+    billing: billingHook(),
+    signedUpAt: null,
+    trialEndsAt: null,
+    lastActivityAt: now,
+    createdAt: now,
+    ownerUid: PLATFORM_OWNER_UID,
+    createdBy: "migration",
+  };
+}

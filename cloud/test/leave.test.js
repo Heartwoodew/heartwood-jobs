@@ -178,7 +178,7 @@ test("leave rules use the live helpers and match the emulator block", () => {
   assert.match(emu, /match \/xeroQueue\/\{id\}/);
   assert.doesNotMatch(block, /match \/receipts\/|match \/xeroQueue\/|match \/jobs\//);
   const cert = slice(storage, "// BEGIN LEAVE CERTIFICATE RULES", "// END LEAVE CERTIFICATE RULES");
-  assert.match(cert, /request\.auth\.uid == uid \|\| lvCertAdmin\(\)/);
+  assert.match(cert, /request\.auth\.uid == uid \|\| lvCertAdmin\(uid\)/);
   assert.doesNotMatch(cert, /role == "supervisor"/);
   assert.equal(cert.split("firestore.get(").length - 1, 1);
   const doc = readFileSync(new URL("../rules-additions-leave.md", import.meta.url), "utf8");

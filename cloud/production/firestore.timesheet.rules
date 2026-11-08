@@ -154,11 +154,16 @@
     }
 
     match /timesheets/{id} {
-      allow read: if signedIn() && (
-        tsHeartwoodAdmin()
-        || (resource == null && id.matches('^' + request.auth.uid + '_[0-9]{4}-[0-9]{2}-[0-9]{2}$'))
-        || (resource != null && resource.data.uid == request.auth.uid)
+      allow get: if signedIn() && (
+        (resource == null && id.matches('^' + request.auth.uid + '_[0-9]{4}-[0-9]{2}-[0-9]{2}$'))
+        || (tsHeartwoodAdmin() && resource != null && docCompany(resource.data) == "heartwood")
+        || (resource != null && resource.data.uid == request.auth.uid && docCompany(resource.data) == callerCompany())
+        || (callerCompany() != "heartwood" && hasProfile() && profile().role == "admin" && resource != null && resource.data.companyId == callerCompany())
       );
+      allow list: if signedIn() && callerCompany() == "heartwood" && resource.data.uid == request.auth.uid;
+      allow list: if callerCompany() != "heartwood" && resource.data.uid == request.auth.uid && resource.data.companyId == callerCompany();
+      allow list: if tsHeartwoodAdmin() && resource.data.companyId == "heartwood";
+      allow list: if callerCompany() != "heartwood" && hasProfile() && profile().role == "admin" && resource.data.companyId == callerCompany();
       allow create: if tsWorkerCreate(id);
       allow update: if tsWorkerUpdate(id) || tsSentUpdate();
       allow delete: if false;

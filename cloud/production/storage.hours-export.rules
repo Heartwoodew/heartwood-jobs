@@ -1,14 +1,20 @@
 // BEGIN HOURS EXPORT FILE RULES
-    function hxFileSignedIn() { return request.auth != null; }
     function hxFileAdmin() {
-      return hxFileSignedIn() && (
-        request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2" || request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"
-        || firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.get("role", "") == "admin"
+      return signedIn() && (
+        ((isAlex() || isPatrick()) && callerTenant() == "heartwood")
+        || (hasProfile() && profile().get("role", "") == "admin" && callerTenant() != "")
       );
     }
+    function hxExportCompany(exportId) {
+      let path = /databases/(default)/documents/hoursExports/$(exportId);
+      return firestore.exists(path) && "companyId" in firestore.get(path).data
+        && firestore.get(path).data.companyId is string
+        ? firestore.get(path).data.companyId
+        : "heartwood";
+    }
     match /hoursExports/{exportId}/{file} {
-      // 38SU... is the box sync account; it reads the file only to email it to accounts@heartwoodew.com.
-      allow read: if hxFileAdmin() || (hxFileSignedIn() && request.auth.uid == "38SU5waAy4f9UI9N6JTqDMaYpQg2");
+      allow read: if (hxFileAdmin() && hxExportCompany(exportId) == callerTenant())
+        || (signedIn() && request.auth.uid == "38SU5waAy4f9UI9N6JTqDMaYpQg2");
       allow create: if hxFileAdmin()
         && exportId.matches('^hx[a-z0-9]{16}$')
         && file.matches('^[A-Za-z0-9_-]{1,80}[.]xlsx$')
@@ -16,7 +22,8 @@
         && request.resource.contentType == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         && request.resource.metadata.purpose == "hours-export"
         && request.resource.metadata.uploaderUid == request.auth.uid
-        && request.resource.metadata.exportId == exportId;
+        && request.resource.metadata.exportId == exportId
+        && request.resource.metadata.companyId == callerTenant();
       allow update, delete: if false;
     }
 // END HOURS EXPORT FILE RULES
