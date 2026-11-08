@@ -121,7 +121,7 @@ export function onAuthStateChanged(_auth, cb) {
     return () => {};
   }
   const r = role();
-  queueMicrotask(() => cb({ uid: uidFor(r), email: r + "@heartwood.test" }));
+  queueMicrotask(() => cb(r === "signedout" ? null : { uid: uidFor(r), email: r + "@heartwood.test" }));
   return () => {};
 }
 

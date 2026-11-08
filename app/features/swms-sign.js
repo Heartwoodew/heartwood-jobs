@@ -1,3 +1,5 @@
+import { DEFAULT_ORG, POWERED_BY, PRODUCT_NAME } from "../org-settings.js";
+
 // SWMS sign-off maths and the signature document shape.
 // The July 2026 PDFs are not in this repository. Nothing here invents
 // hazards, controls, or work methods. A missing PDF stays a placeholder.
@@ -67,33 +69,36 @@ export function swmsSignatureData({ uid, name, swmsId, swmsTitle, jobId = "", jo
 }
 
 // Shown only when the official PDF is not in swmsChunks. Not a SWMS.
-export function placeholderLines(title) {
+// orgName is the customer, not the CallUp product name.
+export function placeholderLines(title, orgName = DEFAULT_ORG.name) {
   return [
     "PLACEHOLDER - not a SWMS",
     "This page is not a Safe Work Method Statement.",
-    "The official Heartwood Earthworx PDF for this document",
+    "The official " + orgName + " PDF for this document",
     "is not in the jobs app repository and was not found",
     "in the company library (swmsChunks).",
     "Document name: " + String(title || "SWMS"),
     "Set: July 2026",
     "Do not send this file to a client as the SWMS.",
     "No hazards, controls or work methods are written here.",
+    POWERED_BY,
   ];
 }
 
-export async function buildPlaceholderPdf(pdfLib, title) {
+export async function buildPlaceholderPdf(pdfLib, title, org = DEFAULT_ORG) {
   const { PDFDocument, StandardFonts, rgb } = pdfLib;
   const doc = await PDFDocument.create();
   const page = doc.addPage([595.28, 841.89]);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
   const font = await doc.embedFont(StandardFonts.Helvetica);
-  const lines = placeholderLines(title);
+  const lines = placeholderLines(title, org.name || DEFAULT_ORG.name);
   page.drawRectangle({ x: 0, y: 800, width: 595.28, height: 42, color: rgb(0.55, 0.08, 0.08) });
   page.drawText(lines[0], { x: 48, y: 816, size: 16, font: bold, color: rgb(1, 1, 1) });
   lines.slice(1).forEach((line, i) => {
     page.drawText(line, { x: 48, y: 740 - i * 22, size: 12, font, color: rgb(0.1, 0.1, 0.12) });
   });
   doc.setTitle("PLACEHOLDER - not a SWMS");
-  doc.setAuthor("Heartwood Earthworx Pty Ltd");
+  doc.setAuthor(org.legalName || DEFAULT_ORG.legalName);
+  doc.setCreator(PRODUCT_NAME);
   return doc.save();
 }

@@ -1,4 +1,5 @@
-// Heartwood Jobs — Phase 1. Plain ES modules + Firebase modular SDK from the CDN. No build step.
+// CallUp jobs app. Organisation name and logo come from org-settings.js.
+// This install's customer is Heartwood Earthworx. Firebase ids are unchanged.
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, connectAuthEmulator }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
@@ -20,6 +21,7 @@ import {
   acceptLoadingHtml, acceptScreenModel, acceptViewHtml, buildInviteDraft, inviteFailureText,
   newInviteToken, pendingInviteForEmail, staffViewHtml,
 } from "./features/staff-invites.js";
+import { PRODUCT_NAME, POWERED_BY, orgSettings, saveOrgSettings } from "./org-settings.js";
 
 const cfg = useEmulator ? { ...firebaseConfig, apiKey: "demo-key", projectId: "demo-heartwood" } : firebaseConfig;
 const fb = initializeApp(cfg);
@@ -134,6 +136,7 @@ function inviteDisplayNow() {
   return window.HW_TODAY ? new Date(window.HW_TODAY + "T12:00:00+10:00") : new Date();
 }
 function renderInviteSignedIn() {
+  paintBrand();
   $("#who").textContent = "";
   $("#logout").classList.remove("hidden");
   $("#app").innerHTML = `<form class="card login" id="invitebusy">
@@ -165,6 +168,7 @@ async function callInvite(name, data) {
   return body.result || {};
 }
 function renderInviteAccept(token) {
+  paintBrand();
   const preview = window.HW_INVITE_PREVIEW;
   if (preview) {
     $("#app").innerHTML = acceptViewHtml(acceptScreenModel(preview, inviteDisplayNow()));
@@ -203,16 +207,61 @@ function bindInviteAccept(token, previewOnly, email) {
     }
   };
 }
+function orgLogoHtml(org) {
+  if (!org.logoUrl) return "";
+  return `<img class="orglogo" src="${esc(org.logoUrl)}" alt="">`;
+}
+function paintBrand() {
+  const org = orgSettings();
+  const el = document.querySelector(".brand");
+  if (el) el.innerHTML = `<span class="wordmark" aria-label="${esc(PRODUCT_NAME)}">Call<span>Up</span></span><span class="orgline">${orgLogoHtml(org)}${esc(org.name)}</span>`;
+  document.title = `${PRODUCT_NAME} · ${org.name}`;
+}
 function renderLogin() {
+  const org = orgSettings();
+  paintBrand();
   $("#app").innerHTML = `<form id="login" class="card login">
+    <div class="login-brand"><div class="wordmark" aria-label="${esc(PRODUCT_NAME)}">Call<span>Up</span></div>
+      <p class="orgline">${orgLogoHtml(org)}${esc(org.name)}</p></div>
     <h2>Sign in</h2>
+    <p class="sub">CallUp for ${esc(org.legalName)}. Use the email this business gave you.</p>
     <label>Email<input name="e" type="email" autocomplete="username" required></label>
     <label>Password<input name="p" type="password" autocomplete="current-password" required></label>
-    <button class="big primary">Sign in</button><p id="lerr" class="err"></p></form>`;
+    <button class="big primary">Sign in</button><p id="lerr" class="err"></p>
+    <p class="powered">${esc(POWERED_BY)}</p></form>`;
   $("#login").onsubmit = async ev => {
     ev.preventDefault(); const f = ev.target;
     try { await signInWithEmailAndPassword(auth, f.e.value.trim(), f.p.value); }
     catch (e) { $("#lerr").textContent = "Sign-in failed: " + (e.code || e.message); }
+  };
+}
+function settingsView() {
+  const org = orgSettings();
+  return `<div class="sm-head"><h1>Organisation</h1></div>
+    <p class="sub">CallUp is the product. These fields are the business on the header, SWMS, quotes and emails. Saving stays on this phone. The default for every sign-in is in org settings. This does not rename Firebase, job numbers, or jobs.heartwoodew.com.</p>
+    <form id="orgform" class="card jf">
+      <label>Trading name<input name="name" required maxlength="80" value="${esc(org.name)}"></label>
+      <label>Legal name<input name="legalName" required maxlength="120" value="${esc(org.legalName)}"></label>
+      <label>ABN<input name="abn" maxlength="20" value="${esc(org.abn)}"></label>
+      <label>Email sign-off<input name="signoff" required maxlength="80" value="${esc(org.signoff)}"></label>
+      <label>Logo URL<span class="sub">Optional. Leave blank for the trading name as text. A CallUp picture logo is not in this install, so the product mark stays the CallUp wordmark.</span><input name="logoUrl" maxlength="300" value="${esc(org.logoUrl)}" placeholder="https://… or icons/…"></label>
+      <p class="powered">${esc(POWERED_BY)}</p>
+      <div class="btns"><button type="submit" class="primary">Save organisation</button></div>
+    </form>`;
+}
+function bindSettings(A) {
+  const form = A.querySelector("#orgform");
+  if (!form) return;
+  form.onsubmit = ev => {
+    ev.preventDefault();
+    const typed = form.logoUrl.value.trim();
+    const saved = saveOrgSettings({
+      name: form.name.value, legalName: form.legalName.value, abn: form.abn.value,
+      signoff: form.signoff.value, logoUrl: form.logoUrl.value,
+    });
+    paintBrand();
+    toast(typed && !saved.logoUrl ? "Logo needs an http(s) address or an icons/ file. Other fields saved." : "Organisation saved on this phone");
+    renderAdmin();
   };
 }
 
@@ -245,13 +294,14 @@ const jobNo = j => j.sm8JobNo ? j.sm8JobNo : "HW-" + String(j.id || "").slice(-4
 const firstLine = s => String(s || "").split(/\n|\. /)[0];
 const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Unscheduled";
 const NAV = [["home", "⌂", "Home"], ["compliance", "🚐", "Compliance"], ["chat", "💬", "Chat"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["staff", "👥", "Staff"], ["inbox", "✉", "Inbox", 0, 1],
-  ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["reimb", "💵", "Reimbursements", 0, 1], ["settings", "⚙", "Settings", 1]];
+  ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["reimb", "💵", "Reimbursements", 0, 1], ["settings", "⚙", "Organisation"]];
 ui.view = "home"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
 const PHONE = matchMedia("(max-width:760px)");
 const TOUCH = matchMedia("(pointer:coarse)");
 PHONE.addEventListener?.("change", () => { if (me && me.role === "admin") renderAdmin(); });
 // Grouped side menu: top items, then collapsible groups (open/closed remembered on this device; the group holding the current screen is always open).
 const NAV_TOP = ["home", "chat", "inbox", "clients", "staff"];
+const NAV_FOOT = ["settings"];
 const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "jobs", "unscheduled", "quotes", "completed", "myjobs"]], ["money", "$", "Money", ["invoices", "reimb", "timesheet"]], ["safety", "⚠", "Safety", ["safety", "swms", "compliance"]]];
 const NAV_LBL = { safety: "Incidents" };
 ui.navCol = (() => { try { return JSON.parse(localStorage.getItem("hwNavCol") || "{}"); } catch { return {}; } })();
@@ -264,7 +314,7 @@ function shell(inner) {
     return `<div class="sm-grp ${open ? "open" : ""} ${has ? "has" : ""}"><button class="sm-gh" data-grp="${g}" aria-expanded="${open}"><span class="ic">${ic}</span><span class="lbl">${n}</span><span class="car">${open ? "▾" : "▸"}</span></button>
       <div class="sm-gi">${ks.map(item).join("")}</div></div>`; };
   return `<div class="sm-layout ${ui.navOpen ? "navopen" : ""}"><div class="sm-burgerbar"><button class="sm-burger" id="burger" aria-label="Menu">☰</button><b>${esc(cur ? (NAV_LBL[cur[0]] || cur[2]) : "")}</b></div>
-    <nav class="sm-side">${NAV_TOP.map(item).join("")}${NAV_GROUPS.map(grp).join("")}</nav>
+    <nav class="sm-side">${NAV_TOP.map(item).join("")}${NAV_GROUPS.map(grp).join("")}${NAV_FOOT.map(item).join("")}</nav>
     <section class="sm-main">${inner}</section></div>`;
 }
 // ---- Mixed work: a job whose description lines are different task types (spoil vs backslab vs waterproofing vs clean)
@@ -317,7 +367,7 @@ function jobsView(all) {
       <select id="ft"><option value="">All categories</option>${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${ui.typeF === k ? "selected" : ""}>${v}</option>`).join("")}</select>
       <span class="muted sub">Showing 2 weeks back to 4 weeks ahead (unscheduled jobs: see Unscheduled)</span></div>
     <table class="jt"><thead><tr><th></th><th>Job #</th><th>Client / Site</th><th>Description</th><th>Scheduled</th><th>Staff</th><th>Status</th></tr></thead>
-    <tbody>${groupByDate(list).map(([d, js]) => `<tr class="dayhdr"><td colspan="7">${esc(d ? dayLabel(d) : "Unscheduled")} <span class="cnt">${js.length}</span></td></tr>${js.map(jobRow).join("")}`).join("") || `<tr><td colspan="7" class="muted pad">No jobs in this queue</td></tr>`}</tbody></table>`;
+    <tbody>${groupByDate(list).map(([d, js]) => `<tr class="dayhdr"><td colspan="7">${esc(d ? dayLabel(d) : "Unscheduled")} <span class="cnt">${js.length}</span></td></tr>${js.map(jobRow).join("")}`).join("") || `<tr><td colspan="7" class="muted pad">No jobs in this queue for ${esc(orgSettings().name)}.</td></tr>`}</tbody></table>`;
 }
 // Unscheduled screen: open jobs with no booking date, newest first. "Schedule" opens the job card on the date field.
 // (Jobs created in ServiceM8 more than 90 days ago are not imported at all, see tools/sm8_import.py.)
@@ -902,7 +952,7 @@ const hr1 = h => { const r = Math.round(h * 100) / 100; return (Number.isInteger
 // Gmail web compose (desktop; on phones Gmail usually hands off to the Gmail app or mobile Gmail). Newlines -> %0A.
 const tsGmailUrl = (su, body) => "https://mail.google.com/mail/?view=cm&fs=1&authuser=" + encodeURIComponent("alex@heartwoodew.com") +
   "&to=" + encodeURIComponent(ACCOUNTS_EMAIL) + "&su=" + encodeURIComponent(su) + "&body=" + encodeURIComponent(body);
-const tsSubject = (t, name) => `Timesheet: ${name}, week of ${tsLong(t.weekStart, "Mon")}`;
+const tsSubject = (t, name) => `Timesheet: ${name}, week of ${tsLong(t.weekStart, "Mon")} · ${orgSettings().name}`;
 function tsText(t, name, eol = "\n") {
   const ws = t.weekStart, L = ["Hi Nicole,", "", `Here are ${name}'s hours for the week of ${tsLong(ws, "Mon")} to ${tsLong(addDays(ws, 6), "Sun")}.`, ""];
   let worked = 0;
@@ -910,7 +960,7 @@ function tsText(t, name, eol = "\n") {
     if (h) { worked++; L.push(`${tsDayLbl(ds, n)}   ${ampm(d.start)} to ${ampm(d.finish)}   ${hr1(h)}`); if (d.note) L.push(`      ${d.note}`); }
     else if (d.note) L.push(`${tsDayLbl(ds, n)}   not worked (${d.note})`); });
   if (!worked) L.push("No hours entered this week.");
-  L.push("", "A 30-minute lunch break has already been taken off each day.", "", `TOTAL: ${hr1(tsTotal(t.days))}`, "", "Thanks,", "Alex", "Heartwood Earthworx");
+  L.push("", "A 30-minute lunch break has already been taken off each day.", "", `TOTAL: ${hr1(tsTotal(t.days))}`, "", "Thanks,", "Alex", orgSettings().signoff, POWERED_BY);
   return L.join(eol);
 }
 function tsAdmin() {
@@ -1126,8 +1176,8 @@ function homeBody(all, admin, btns) {
   const ready = (ui.done || []).filter(j => !j.invoiceNo && j.invoiceExcluded !== true && !j.doNotInvoice).length;
   const stat = (n, l, cls, go) => `<button class="hstat ${cls}" ${go ? `data-go="${go}"` : ""}><b>${n}</b><span>${l}</span></button>`;
   const sec = (title, d, js) => `<div class="hsec"><div class="hsec-h">${title} <small>${esc(dayLabel(d))}</small> <span class="cnt">${js.length}</span></div>
-    ${js.map(homeRow).join("") || `<p class="muted pad">Nothing booked.</p>`}</div>`;
-  return `<div class="home"><div class="hhead"><h1>${greet()}, ${esc(String(me.name || "").split(" ")[0])}</h1><div class="muted">${esc(dayLabel(t0))}</div></div>
+    ${js.map(homeRow).join("") || `<p class="muted pad">Nothing booked for ${esc(orgSettings().name)}.</p>`}</div>`;
+  return `<div class="home"><div class="hhead"><h1>${greet()}, ${esc(String(me.name || "").split(" ")[0])}</h1><div class="muted">${esc(dayLabel(t0))} · ${esc(orgSettings().name)}</div></div>
     ${admin ? COMP.adminBannerHtml() : ""}${admin ? cloudExpiryNotice(all) : ""}
     ${swmsReminderHtml()}${admin ? attentionHtml(all) + (canXero() ? profitChartHtml() : "") : `<div class="hbtns opbtns"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button><button class="hbtn" data-go="swms"><span class="ic">📋</span>SWMS</button></div>`}
     <div class="hstats hidden">${stat(today.length, "Today", "q-wo")}${stat(ip, "In progress", "ip", admin ? "q-ip" : "")}${admin ? stat(ready, "Ready to invoice", "q-comp", "invoices") + stat(unal, "Unallocated", "q-uns", "dispatch") + (isOwner() && ui.inbox ? stat(inboxUnread(), "Unread builder emails", "q-inbox", "inbox") : "") : stat(tomorrow.length, "Tomorrow", "q-quote")}</div>
@@ -1222,7 +1272,8 @@ function renderAdmin() {
   const all = [...fj, ...und.filter(u => !fj.some(j => j.id === u.id))];
   const quotesHtml = ui.view === "quotes" ? adminViewRouter(ui.view, ui, { esc, $$, staff, jobs: all, todayStr, rerender: () => renderAdmin(), canEditQuoteRates }) : null;
   const staffHtml = ui.view === "staff" ? staffViewHtml(ui.invites || [], { now: inviteDisplayNow(), error: ui.invitesErr || "" }) : null;
-  $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : quotesHtml != null ? quotesHtml : jobsView(all));
+  paintBrand();
+  $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : quotesHtml != null ? quotesHtml : jobsView(all));
   const A = $("#app"); inboxBadge();
   CHAT.watch([...(jobs || []), ...(ui.undated || [])]);
   if (ui.view === "chat") CHAT.mount(A);
@@ -1234,6 +1285,7 @@ function renderAdmin() {
   if (ui.view === "quotes") QG.bindAdmin({ ui, A });
   if (ui.view === "staff") bindStaff(A);
   if (ui.view === "compliance") COMP.bind(A);
+  if (ui.view === "settings") bindSettings(A);
   A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.navOpen = false;
     if (b.dataset.view === "myjobs") { ui.myJobs = true; ui.opSel = null; window.scrollTo(0, 0); return renderAdmin(); }
     if (b.dataset.view !== "compliance") COMP.abandon();
@@ -1716,8 +1768,10 @@ Could you please raise a variation or send an amended PO to cover the difference
 
 Thanks,
 Alex Daly
-Heartwood Earthworx
-0499 802 812`;
+${orgSettings().signoff}
+0499 802 812
+
+${POWERED_BY}`;
   const url = "https://mail.google.com/mail/?authuser=" + encodeURIComponent("alex@heartwoodew.com") + "&view=cm&fs=1&to=" + encodeURIComponent(s.email)
     + "&su=" + encodeURIComponent(`PO exceeded - ${j.address || ""} - PO ${po}`) + "&body=" + encodeURIComponent(body);
   window.HW_LAST_MAILTO = url;      // Gmail compose in a new tab; nothing is sent from here
@@ -2033,6 +2087,7 @@ function withRunOrder(list) {
   return out;
 }
 function renderOperator() {
+  paintBrand();
   document.body.className = "operator";
   ui.runStops = {};
   CHAT.watch(jobs);
@@ -2075,7 +2130,7 @@ function renderOperator() {
     const quoteBtn = canQuote() && me.role !== "admin" ? `<button type="button" class="mob-more" data-go="quotes"><b>Quotes</b><small>Guided pricing for supervisors</small></button>` : "";
     const fleetBtn = COMP.canSee() ? `<button type="button" class="mob-more" data-go="fleet"><b>Compliance</b><small>Registration and COI status</small></button>` : "";
     const staffBtn = canInvite() ? `<button type="button" class="mob-more" data-go="staff"><b>Staff</b><small>Invite operators and supervisors</small></button>` : "";
-    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">More</div><div class="mob-sub">${esc(me.name || "")}</div></div>
+    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">More</div><div class="mob-sub">${esc(me.name || "")} · ${esc(orgSettings().name)}</div></div>
       <div class="mob-menu">
         <button type="button" class="mob-more" data-go="hours"><b>Hours</b><small>Timesheet</small></button>
         <button type="button" class="mob-more" data-go="done"><b>Completed</b><small>Finished in the last 30 days</small></button>
@@ -2085,6 +2140,7 @@ function renderOperator() {
         <button type="button" class="mob-more incbtn" data-inc=""><b>Report incident</b><small>Safety report</small></button>
         ${quoteBtn}
         ${staffBtn}
+        <p class="powered pad">${esc(orgSettings().name)} · ${esc(POWERED_BY)}</p>
       </div>
       ${myIncidentsHtml()}
       ${opTabs("more")}</div>`;
@@ -2115,11 +2171,11 @@ function renderOperator() {
     const todaySheet = readRunSheet(me.uid, t0);
     const n = todayJobs.length;
     $("#app").innerHTML = `<div class="mob">${adminBack()}
-      <div class="mob-intro"><div class="mob-kicker">Today</div><div class="mob-date">${esc(longDate(t0))}</div>
+      <div class="mob-intro"><div class="mob-kicker">Today · ${esc(orgSettings().name)}</div><div class="mob-date">${esc(longDate(t0))}</div>
         <h1 class="mob-hello">${esc(greet())}, ${first}</h1><p class="mob-count">${n} job${n === 1 ? "" : "s"} today</p>${todaySheet ? `<p class="run-note">Approved driving order${todaySheet.returnToDepot ? " · back to the depot" : ""}</p>` : ""}${opSeg("today")}</div>
       ${COMP.staffBannerHtml()}
       ${swmsReminderHtml()}
-      <div class="mob-list">${todayJobs.map(opCard).join("") || `<p class="muted pad">Nothing booked.</p>`}</div>
+      <div class="mob-list">${todayJobs.map(opCard).join("") || `<p class="muted pad">Nothing booked for ${esc(orgSettings().name)}.</p>`}</div>
       ${opTabs("today")}</div>`;
     bindOp(mine); return;
   }
@@ -2132,7 +2188,7 @@ function renderOperator() {
         <h1 class="mob-hello">This week</h1><p class="mob-count">${upcomingN} job${upcomingN === 1 ? "" : "s"}</p>${opSeg("week")}</div>`;
   $("#app").innerHTML = `<div class="mob">${adminBack()}${head}
     ${groups.map(([g, js]) => `<div class="mob-sec mday">${esc(g)} <span>${js.length}</span></div>
-      ${js.map(opCard).join("") || `<p class="muted pad">Nothing booked.</p>`}`).join("") || `<p class="muted pad">${ui.opTab === "done" ? "No completed jobs in the last 30 days." : "Nothing booked this week."}</p>`}
+      ${js.map(opCard).join("") || `<p class="muted pad">Nothing booked for ${esc(orgSettings().name)}.</p>`}`).join("") || `<p class="muted pad">${ui.opTab === "done" ? "No completed jobs in the last 30 days." : "Nothing booked for " + orgSettings().name + " this week."}</p>`}
     ${opTabs(ui.opTab)}</div>`;
   bindOp(mine);
 }
@@ -2144,7 +2200,8 @@ function renderOpDetail(j) {
   const addrLine = [p.street, p.place].filter(Boolean).join(", ") || p.full || j.address || "";
   const onChat = ui.jobPane === "chat";
   $("#app").innerHTML = `<div class="mob"><div class="mob-bar det ${QCLS[q]}"><button class="mback" id="back" type="button">${ICO.back}<span class="sr">Jobs</span></button>
-      <div class="mob-bar-txt"><div class="mob-title">Job details</div>${started ? ipTop(j, "onbar") : ""}<div class="mob-sub">${done ? "Completed" : started ? "In progress" : "Scheduled"} · #${esc(jobNo(j))}</div></div></div>
+      <div class="mob-bar-txt"><div class="mob-title">Job details</div>${started ? ipTop(j, "onbar") : ""}<div class="mob-sub">${done ? "Completed" : started ? "In progress" : "Scheduled"} · #${esc(jobNo(j))}</div>
+        <div class="mob-brandline"><span class="wordmark" aria-label="${esc(PRODUCT_NAME)}">Call<span>Up</span></span><span class="orgbit">${esc(orgSettings().name)}</span></div></div></div>
     <div class="job-switch" role="tablist" aria-label="Job sections">
       <button type="button" data-jtab="job" class="${onChat ? "" : "on"}">Job</button>
       <button type="button" data-jtab="chat" class="${onChat ? "on" : ""}">Chat ${CHAT.badge("job_" + j.id)}</button>
@@ -2224,7 +2281,7 @@ const emailBody = (j, infos, attached) => [`Job #${jobNo(j)}`, `Address: ${j.add
   `Job date: ${j.date ? dayLabel(j.date) : "-"}`, "",
   attached ? `${infos.length} photo${infos.length > 1 ? "s" : ""} attached:` : `Please attach ${infos.length > 1 ? `these ${infos.length} photos` : "this photo"} to this email:`,
   ...infos.map((x, i) => `${i + 1}. ${x.time} (Brisbane) · ${fmtLL(x.gps)}${x.gps ? ` (${x.gps.src === "photo" ? "photo GPS" : "phone location"}) ${mapLink(x.gps)}` : ""}`),
-  "", `From ${me.name}`].join("\n");
+  "", `From ${me.name}`, orgSettings().signoff, POWERED_BY].join("\n");
 // Minimal EXIF reader (JPEG APP1): DateTimeOriginal + GPS. Returns {}, never throws.
 async function readExif(f) {
   try {
@@ -2372,7 +2429,7 @@ function mobileDispatch(all) {
       <div class="mstrip">${strip.map(x => { const n = sched.filter(j => j.date === x).length;
         return `<button class="${x === d ? "on" : ""} ${x === t0 ? "today" : ""}" data-mday="${x}"><small>${new Date(x + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", timeZone: "UTC" })}</small><b>${+x.slice(8)}</b><span class="${n ? "" : "zero"}">${n}</span></button>`; }).join("")}</div></div>
     <button type="button" class="route-open" id="optorder">Optimise order</button>
-    ${groups.map(([r, js]) => `<div class="mgrp">${esc(r.name)} <span class="cnt">${js.length}</span></div>${js.map(card).join("") || `<p class="muted sub pad">Nothing booked.</p>`}`).join("")}
+    ${groups.map(([r, js]) => `<div class="mgrp">${esc(r.name)} <span class="cnt">${js.length}</span></div>${js.map(card).join("") || `<p class="muted sub pad">Nothing booked for ${esc(orgSettings().name)}.</p>`}`).join("")}
     <p class="sub muted pad">Swipe left / right to change day. Tap a card to open the job.</p></div>`;
 }
 function bindMobileDispatch(A, pool) {
@@ -2585,7 +2642,7 @@ const swmsList = (jobId = "") => `<div class="swlistwrap"><div class="swlist">${
     <button type="button" class="swopen" data-swmsf="${id}"><span class="swic">📄</span><span><b>${t}</b><small>${d}</small></span></button>
     <div class="swst"><span class="swpill ${st.cls}" data-swstatus="${st.k}">${st.k === "ok" ? "✔ " : st.k === "due" ? "⏳ " : "✖ "}${esc(st.label)}</span>
       <button type="button" class="swbtn ${st.k === "ok" ? "" : "primary"}" data-swsign="${id}" data-job="${esc(jobId)}">${st.k === "none" ? "Read & sign" : st.k === "ok" ? "Sign again" : "Re-sign"}</button></div></div>`).join("")}</div>
-  <p class="sub muted">Company SWMS · version July 2026 · tap a title to read the PDF. Signatures last 12 months. A signature due within 30 days asks you to sign again.</p></div>`;
+  <p class="sub muted">${esc(orgSettings().name)} SWMS · version July 2026 · tap a title to read the PDF. Signatures last 12 months. A signature due within 30 days asks you to sign again. ${esc(POWERED_BY)}.</p></div>`;
 function swmsView() {
   return `<div class="sm-head"><h1>SWMS</h1></div>${swmsReminderHtml()}<h3 class="swh">My signatures</h3>${swmsList()}${me.role === "admin" ? swmsAdminHtml() : ""}`;
 }
@@ -2711,7 +2768,7 @@ async function swmsBytes(id) {          // official SWMS PDF, or a labelled plac
     else {
       const known = SWMS.find(x => x[0] === id);
       swmsPlaceholder[id] = true;
-      swmsBin[id] = await buildPlaceholderPdf(await loadPdfLib(), known ? known[1] : id);
+      swmsBin[id] = await buildPlaceholderPdf(await loadPdfLib(), known ? known[1] : id, orgSettings());
     }
     swmsCache[id] = URL.createObjectURL(new Blob([swmsBin[id]], { type: "application/pdf" }));
   }
@@ -2730,7 +2787,7 @@ async function openSwms(id) {
 }
 // ---- Signed download (admins): original SWMS pages + a sign-off sheet, built in the browser with pdf-lib
 // (vendor/pdf-lib.min.js, MIT, loaded on first use only — no CDN).
-const COMPANY = "Heartwood Earthworx Pty Ltd", COMPANY_ABN = "31 667 738 098";
+// Organisation legal name and ABN come from org settings. CallUp is the product line.
 let pdfLibP = null;
 const loadPdfLib = () => pdfLibP || (pdfLibP = new Promise((ok, no) => {
   if (window.PDFLib) return ok(window.PDFLib);
@@ -2752,6 +2809,7 @@ async function buildSignedSwmsPdf(id, sigs, jobLabel = "", single = false) {
   const F = await out.embedFont(StandardFonts.Helvetica), B = await out.embedFont(StandardFonts.HelveticaBold);
   const T = x => String(x ?? "").replace(/[\u00a0\u202f\u2009]/g, " ").replace(/[^\x20-\x7e\u00a1-\u00ff\u2013\u2014\u2018\u2019\u201c\u201d\u2022]/g, "?");
   const fit = (t, f, sz, w) => { t = T(t); while (t.length > 1 && f.widthOfTextAtSize(t, sz) > w) t = t.slice(0, -2) + "…"; return t; };
+  const org = orgSettings();
   const W = 595.28, H = 841.89, M = 32, navy = rgb(0.043, 0.122, 0.227), grey = rgb(0.4, 0.42, 0.45), line = rgb(0.75, 0.77, 0.8), red = rgb(0.55, 0.08, 0.08);
   const cols = [[M, 100, "Name"], [M + 100, 118, "Signature"], [M + 218, 108, "Signed"], [M + 326, 128, "Job"], [M + 454, W - M - (M + 454), "Expires"]];
   const RH = 58, gen = swDT(swNow()), ph = !!swmsPlaceholder[id];
@@ -2759,9 +2817,10 @@ async function buildSignedSwmsPdf(id, sigs, jobLabel = "", single = false) {
   const head = () => {
     pg = out.addPage([W, H]); y = H - M; n++;
     pg.drawRectangle({ x: 0, y: H - 6, width: W, height: 6, color: navy });
-    pg.drawText(COMPANY, { x: M, y: y - 14, size: 16, font: B, color: navy });
-    pg.drawText("ABN " + COMPANY_ABN, { x: M, y: y - 30, size: 9.5, font: F, color: grey });
+    pg.drawText(fit(org.legalName, B, 16, W * 0.62), { x: M, y: y - 14, size: 16, font: B, color: navy });
+    pg.drawText("ABN " + org.abn, { x: M, y: y - 30, size: 9.5, font: F, color: grey });
     const r = "SWMS SIGN-OFF SHEET"; pg.drawText(r, { x: W - M - B.widthOfTextAtSize(r, 11), y: y - 14, size: 11, font: B, color: navy });
+    const powered = POWERED_BY; pg.drawText(powered, { x: W - M - F.widthOfTextAtSize(powered, 8), y: y - 30, size: 8, font: F, color: grey });
     y -= 44; pg.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: 1, color: navy }); y -= 22;
     pg.drawText(fit(title, B, 14, W - 2 * M), { x: M, y, size: 14, font: B }); y -= 16;
     pg.drawText(fit(`Safe Work Method Statement · ${desc} · Version ${SWMS_VERSION}`, F, 9.5, W - 2 * M), { x: M, y, size: 9.5, font: F, color: grey }); y -= 14;
@@ -2790,8 +2849,8 @@ async function buildSignedSwmsPdf(id, sigs, jobLabel = "", single = false) {
     void top;
   }
   const pages = out.getPages().slice(-n);
-  pages.forEach((p, i) => { p.drawText(T(`Generated ${gen} (Brisbane time) by ${COMPANY} jobs app · Sign-off page ${i + 1} of ${n}`), { x: M, y: M - 14, size: 8, font: F, color: grey }); });
-  out.setTitle(`${title} SWMS – signed`); out.setAuthor(COMPANY); out.setCreator("Heartwood jobs app");
+  pages.forEach((p, i) => { p.drawText(T(fit(`Generated ${gen} (Brisbane time) · ${POWERED_BY} · Sign-off page ${i + 1} of ${n}`, F, 8, W - 2 * M)), { x: M, y: M - 14, size: 8, font: F, color: grey }); });
+  out.setTitle(`${title} SWMS – signed`); out.setAuthor(org.legalName); out.setCreator(PRODUCT_NAME);
   return out.save();
 }
 function signedFileName(id, job, one) {
