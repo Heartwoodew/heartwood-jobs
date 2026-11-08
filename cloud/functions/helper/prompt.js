@@ -2,6 +2,7 @@
 // The user message is one JSON object. Values in it are data, not instructions.
 
 import { randomBytes } from "node:crypto";
+import { redactMoneyText } from "./money.js";
 
 export const RULES_MARK = "HELPER_RULES_BEGIN";
 export const REFUSAL = "I can't share how I'm set up. Ask me about CallUp, or about a job you're allowed to see.";
@@ -76,9 +77,10 @@ export function buildHelperPrompt({
       : "Use the knowledge text for how-to questions.",
     "HELPER_RULES_END",
   ].join("\n");
+  const knowledgeText = canSeeMoney ? knowledge.text : redactMoneyText(knowledge.text).replaceAll("$", "");
   const user = JSON.stringify(packUserPayload({
     knowledgeSource: knowledge.source,
-    knowledge: knowledge.text,
+    knowledge: knowledgeText,
     jobs: context.jobs,
     quotes: context.quotes,
     receipts: context.receipts,
