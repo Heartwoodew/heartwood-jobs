@@ -31,7 +31,7 @@ import {
   assignmentWarning, cellLeaveText, certificateContentType, certificateObjectName, certificateStoragePath,
   leaveCreateBody, leaveDecisionBody, leaveScreenHtml, newLeaveId, plannerLeaveHtml, saveCertificate, certificateDownloadName, weekLeaveHtml,
 } from "./features/leave.js";
-import { ACCOUNTS_TO, XLSX_MIME, buildHoursReport, exportFileName, newExportId, reportSheets, xlsxBytes } from "./features/hours-export.js";
+import { ACCOUNTS_TO, XLSX_MIME, buildHoursReport, deliverHoursFile, exportFileName, newExportId, reportSheets, xlsxBytes } from "./features/hours-export.js";
 import {
   claimCreateBody, claimDecisionBody, claimsScreenHtml, newClaimId, receiptContentType, receiptDownloadName,
   receiptObjectName, receiptStoragePath, RECEIPT_MAX_BYTES,
@@ -1286,48 +1286,84 @@ function tsAdmin() {
 const hxStatus = x => x.status === "sent" ? `<span class="qpill q-comp">Emailed ${esc(dmy(String(x.sentAt || "").slice(0, 10)))}</span>`
   : x.status === "failed" ? `<span class="qpill q-warn" title="${esc(x.error || "")}">Send failed${(x.attempts || 0) >= 5 ? " (gave up)" : ", will retry"}</span>`
   : x.status === "sending" ? `<span class="qpill">Sending…</span>` : `<span class="qpill">Queued, emails within ~15 min</span>`;
+function hxPaint() { try { if (typeof ui.tsPaint === "function") ui.tsPaint(); } catch (e) { console.warn("hours paint", e); } }
+function hxErrText(e) { return (e && (e.code || e.message)) || "unknown error"; }
 function hxPanel(ws) {
   if (!me || me.role !== "admin") return "";
   const L = (ui.hxList || []).filter(x => x.weekStart === ws).slice(0, 3);
   return `<div class="ts-card hx-card"><h3>Hours spreadsheet for accounts</h3>
-    <p class="sub">Builds an Excel file (.xlsx) of everyone's hours for Mon ${dmy(ws)} – Sun ${dmy(addDays(ws, 6))}, saves it to your phone, and emails it to ${ACCOUNTS_TO} automatically.</p>
+    <p class="sub">Builds an Excel file (.xlsx) of everyone's hours for Mon ${dmy(ws)} – Sun ${dmy(addDays(ws, 6))}, saves it on this device, and emails it to ${ACCOUNTS_TO} automatically.</p>
     <div class="btns"><button type="button" class="sm-btn primary" id="hxgo"${ui.hxBusy ? " disabled" : ""}>${ui.hxBusy ? "Building…" : "📊 Make & send hours spreadsheet"}</button>
     <button type="button" class="sm-btn" id="hxdl"${ui.hxBusy ? " disabled" : ""}>Download only</button></div>
+    ${ui.hxErr ? `<p class="err" role="alert" id="hxerr">${esc(ui.hxErr)}</p>` : ""}
     ${L.map(x => `<p class="sub hx-row">${esc(x.fileName || "")} · ${esc(String(x.totalHours ?? ""))} h · ${hxStatus(x)}</p>`).join("")}</div>`;
 }
 function hxSubs() {
   if (ui.hxSub || !me || me.role !== "admin") return;
+  ui.hxSub = () => {};
   ui.hxSub = onSnapshot(query(collection(db, "hoursExports"), orderBy("createdAt", "desc")), s => {
-    ui.hxList = s.docs.slice(0, 20).map(d => ({ id: d.id, ...d.data() })); if (tsIsAdminSheet() && !ui.tsDirty && !ui.tsEdit) rerender();
-  }, () => { ui.hxList = []; });
-}
-async function hxSave(file) {
-  const iOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-  if (iOS && navigator.canShare?.({ files: [file] })) { try { await navigator.share({ files: [file], title: file.name }); } catch (e) { if (e.name !== "AbortError") toast("Share failed: " + e.message); } return; }
-  const url = URL.createObjectURL(file), a = document.createElement("a");
-  a.href = url; a.download = file.name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 30000);
+    ui.hxList = s.docs.slice(0, 20).map(d => ({ id: d.id, ...d.data() }));
+    if (ui.hxListErr) { ui.hxListErr = ""; if (!ui.hxBusy) ui.hxErr = ""; }
+    if (tsIsAdminSheet() && !ui.tsDirty && !ui.tsEdit) hxPaint();
+  }, e => {
+    ui.hxListErr = hxErrText(e);
+    ui.hxErr = "Hours spreadsheet list not available: " + ui.hxListErr;
+    if (tsIsAdminSheet()) hxPaint();
+  });
 }
 async function hxRun(send) {
   const ws = tsWeek(), L = ui.tsAll && ui.tsAllWs === ws ? ui.tsAll : null;
-  if (!L || ui.hxBusy) return;
-  const company = orgSettings().name || "Heartwood";
-  const rep = buildHoursReport({ weekStart: ws, people: tsPeople(L), sheets: L, leaveText: (p, d) => cellLeaveText(ui.leave || [], { uid: p.uid, name: p.name }, d) });
-  if (send && !rep.people.length && !confirm("No hours entered for this week. Email an empty spreadsheet anyway?")) return;
-  const name = exportFileName(company, ws), bytes = xlsxBytes(reportSheets(rep, { company }));
-  const file = new File([bytes], name, { type: XLSX_MIME });
-  if (!send) return hxSave(file);
-  ui.hxBusy = true; rerender();
-  // Share sheet first, while the tap still counts as a user gesture on iPhone.
-  const shared = hxSave(file);
+  if (ui.hxBusy) return;
+  if (!L) { ui.hxErr = "Timesheets are still loading. Wait a moment and try again."; hxPaint(); return; }
+  let rep, name, bytes;
+  try {
+    const company = orgSettings().name || "Heartwood";
+    rep = buildHoursReport({ weekStart: ws, people: tsPeople(L), sheets: L, leaveText: (p, d) => cellLeaveText(ui.leave || [], { uid: p.uid, name: p.name }, d) });
+    if (send && !rep.people.length && !confirm("No hours entered for this week. Email an empty spreadsheet anyway?")) return;
+    name = exportFileName(company, ws);
+    bytes = xlsxBytes(reportSheets(rep, { company }));
+  } catch (e) {
+    ui.hxErr = "Could not build the spreadsheet: " + hxErrText(e);
+    toast(ui.hxErr);
+    hxPaint();
+    return;
+  }
+  ui.hxErr = "";
+  // Save or open the share sheet before any redraw, while this tap is still a user gesture.
+  const delivered = deliverHoursFile({ bytes, filename: name, mime: XLSX_MIME });
+  if (!send) {
+    try {
+      const saved = await delivered;
+      if (saved.cancelled) return;
+      if (!saved.ok) { ui.hxErr = saved.error || "Download failed"; toast(ui.hxErr); }
+      else toast("Downloaded " + name);
+    } catch (e) { ui.hxErr = "Download failed: " + hxErrText(e); toast(ui.hxErr); }
+    hxPaint();
+    return;
+  }
+  ui.hxBusy = true;
+  hxPaint();
+  let queued = false;
   try {
     const id = newExportId(), path = `hoursExports/${id}/${name}`;
     await uploadBytes(storageRef(storage, path), bytes, { contentType: XLSX_MIME, customMetadata: { purpose: "hours-export", uploaderUid: me.uid, exportId: id } });
     await setDoc(doc(db, "hoursExports", id), { weekStart: ws, weekEnd: addDays(ws, 6), to: ACCOUNTS_TO, fileName: name, storagePath: path,
-      people: rep.people.length, totalHours: rep.total, status: "queued", attempts: 0, createdBy: me.uid, createdByName: me.name || "", createdAt: serverTimestamp() });
+      people: rep.people.length, totalHours: rep.total, status: "queued", attempts: 0, createdBy: me.uid, createdByName: String(me.name || "").slice(0, 80), createdAt: serverTimestamp() });
+    queued = true;
     toast("Spreadsheet queued for " + ACCOUNTS_TO);
-  } catch (e) { toast("Not queued: " + (e.code || e.message)); }
-  await shared.catch(() => {});
-  ui.hxBusy = false; rerender();
+  } catch (e) {
+    ui.hxErr = "Not queued: " + hxErrText(e) + ". The file is still saved on this device if the download or share sheet opened.";
+    toast("Not queued: " + hxErrText(e));
+  }
+  let saveNote = "";
+  try {
+    const saved = await delivered;
+    if (!saved.cancelled && !saved.ok) saveNote = saved.error || "The file was not saved on this device.";
+  } catch (e) { saveNote = "Download failed: " + hxErrText(e); }
+  if (queued && !ui.hxListErr) ui.hxErr = saveNote;
+  else if (saveNote) ui.hxErr = [ui.hxErr, saveNote].filter(Boolean).join(" ");
+  ui.hxBusy = false;
+  hxPaint();
 }
 function tsView() {
   const admin = me.role === "admin";
@@ -1787,9 +1823,9 @@ function bindTs(A, rerender) {
   const cancel = $("#tsmancancel"); if (cancel) cancel.onclick = () => { ui.tsEdit = null; ui.tsDirty = false; rerender(); };
   const man = $("#tsman"); if (man) { man.oninput = () => { ui.tsDirty = true; }; man.onsubmit = tsSaveManual; }
   if (tsIsAdminSheet()) {
+    const hxg = $("#hxgo"); if (hxg) hxg.onclick = () => { hxRun(true).catch(e => { ui.hxBusy = false; ui.hxErr = "Hours spreadsheet failed: " + hxErrText(e); toast(ui.hxErr); hxPaint(); }); };
+    const hxd = $("#hxdl"); if (hxd) hxd.onclick = () => { hxRun(false).catch(e => { ui.hxErr = "Download failed: " + hxErrText(e); toast(ui.hxErr); hxPaint(); }); };
     hxSubs();
-    const hxg = $("#hxgo"); if (hxg) hxg.onclick = () => hxRun(true);
-    const hxd = $("#hxdl"); if (hxd) hxd.onclick = () => hxRun(false);
     A.querySelectorAll("[data-tsid]").forEach(c => { const t = (ui.tsAll || []).find(x => x.id === c.dataset.tsid); if (!t) return;
       const name = (staff.find(p => p.uid === t.uid) || {}).name || t.name || "?";
       const copy = c.querySelector(".tscopy"); if (copy) copy.onclick = async () => { const txt = tsText(t, name);
