@@ -9,7 +9,7 @@
 
 import { CALLUP_BASE, HEARTWOOD_TENANT, resolveMembership } from "./cloud-storage.js";
 import { costPayload, intervalFormHtml, planPayload, serviceAttention, serviceFormHtml, servicePayload, serviceViews, servicingHtml } from "./servicing.js";
-import { itemsFor, openDefects, prestartAdminHtml, prestartFormHtml, prestartHistoryHtml, prestartPayload, templateFormHtml, templatePayload } from "./prestart.js";
+import { PRESTART_KINDS, assetKind, itemsFor, kindMeta, openDefects, prestartAdminHtml, prestartFormHtml, prestartHistoryHtml, prestartPayload, templateFormHtml, templatePayload, templateSeedDocs } from "./prestart.js";
 
 export const DUE_DAYS = 30;
 
@@ -174,9 +174,12 @@ export function assetPayload(input, uid) {
   if (notes.length > 2000) return { ok: false, reason: "Notes are too long." };
   if (!dateOk(regoExpiry) || !dateOk(coiExpiry)) return { ok: false, reason: "Use a date, or leave it blank." };
   if (!uid) return { ok: false, reason: "Sign in again." };
+  const asked = text(input && input.prestartKind);
+  const fallback = type === "trailer" ? "trailer" : type === "plant" ? "other-plant" : "ute";
+  const prestartKind = kindMeta(asked) ? asked : fallback;
   return {
     ok: true,
-    data: { type, name, rego, regoExpiry, coiRequired, coiExpiry: coiRequired ? coiExpiry : "", notes, updatedBy: uid },
+    data: { type, name, rego, regoExpiry, coiRequired, coiExpiry: coiRequired ? coiExpiry : "", notes, prestartKind, updatedBy: uid },
   };
 }
 
@@ -227,7 +230,7 @@ export function fleetCardsHtml(assets, today, { editable = false } = {}) {
       : `<div class="comp-line"><span class="lbl">COI</span><span>Not required</span></div>`;
     const edit = editable ? `<button type="button" class="sm-btn" data-comp-edit="asset" data-comp-id="${esc(a.id)}">Edit</button>` : "";
     return `<article class="comp-card" data-asset="${esc(a.id)}">
-      <div class="comp-top"><div><b>${esc(a.name || "Vehicle")}</b><div class="sub">${esc(typeLabel(ASSET_TYPES, a.type))}${a.rego ? ` · ${esc(a.rego)}` : ""}</div></div>${pill(a.status.k, a.status.label)}</div>
+      <div class="comp-top"><div><b>${esc(a.name || "Vehicle")}</b><div class="sub">${esc(typeLabel(ASSET_TYPES, a.type))} · ${esc((kindMeta(assetKind(a)) || {}).label || "Prestart")}${a.rego ? ` · ${esc(a.rego)}` : ""}</div></div>${pill(a.status.k, a.status.label)}</div>
       <div class="comp-lines"><div class="comp-line"><span class="lbl">Rego</span><span>${esc(a.status.rego.text)}</span>${pill(a.status.rego.k, a.status.rego.label)}</div>${coi}</div>
       ${a.notes ? `<p class="sub">${esc(a.notes)}</p>` : ""}
       ${edit ? `<div class="comp-actions">${edit}</div>` : ""}
@@ -259,7 +262,7 @@ function countLine(n, one, many) {
   return `${n} ${n === 1 ? one : many}`;
 }
 
-export function bannerHtml({ assets, policies, today, includePolicies, error, go, serviceOverdue = 0, serviceDue = 0, serviceNames = [], prestartDefects = 0, prestartNames = [] }) {
+export function bannerHtml({ assets, policies, today, includePolicies, error, go, serviceOverdue = 0, serviceDue = 0, serviceNames = [], prestartDefects = 0, prestartStops = 0, prestartNames = [] }) {
   if (error && !(assets || []).length && !(includePolicies && (policies || []).length)) {
     const title = includePolicies ? "Compliance couldn't load" : "Fleet status couldn't load";
     return `<button type="button" class="swremind sw-due comp-banner" data-go="${esc(go)}"><span class="ic">🚐</span><span><b>${title}</b><small>${esc(error)}</small></span><span class="chev">›</span></button>`;
@@ -273,7 +276,8 @@ export function bannerHtml({ assets, policies, today, includePolicies, error, go
     includePolicies ? countLine(counts.policyDue, "policy due within 30 days", "policies due within 30 days") : "",
     countLine(serviceOverdue, "service overdue", "services overdue"),
     countLine(serviceDue, "service due within 30 days", "services due within 30 days"),
-    countLine(prestartDefects, "defect — check before use", "defects — check before use"),
+    countLine(prestartStops, "do not operate", "do not operate"),
+    countLine(Math.max(0, prestartDefects - prestartStops), "defect — check before use", "defects — check before use"),
   ].filter(Boolean);
   const named = [
     ...sortBySoonest(withStatus(assets, today, "asset")).filter(a => a.status.k !== "ok").map(a => a.name || "Vehicle"),
@@ -297,6 +301,7 @@ function assetFormHtml(asset, editableId) {
     <h2>${editableId ? "Edit vehicle" : "Add vehicle"}</h2>
     <p class="comp-help">Registration and Queensland certificate of inspection (COI) for heavy vehicles and trailers. COI is not insurance. Photos of the paper are not stored in the app.</p>
     <label>Type<select name="type">${options(ASSET_TYPES, a.type || "vehicle")}</select></label>
+    <label>Prestart checklist<select name="prestartKind">${options(PRESTART_KINDS.map(kind => [kind.id, kind.label]), assetKind(a))}</select></label>
     <label>Name<input name="name" required maxlength="80" value="${esc(a.name || "")}" autocomplete="off"></label>
     <label>Plate / rego<input name="rego" maxlength="20" value="${esc(a.rego || "")}" autocomplete="off"></label>
     <label>Rego expiry<input name="regoExpiry" type="date" value="${esc(a.regoExpiry || "")}"></label>
@@ -346,6 +351,7 @@ export function installCompliance(deps) {
     policyError: "",
     serviceError: "",
     prestartError: "",
+    seedTried: false,
     editing: null,
     tab: "fleet",
     unsub: null,
@@ -399,7 +405,23 @@ export function installCompliance(deps) {
     state.policyError = "";
     state.serviceError = "";
     state.prestartError = "";
+    state.seedTried = false;
     state.editing = null;
+  }
+
+  async function maybeSeed() {
+    if (state.seedTried || state.templates.length || !admin() || !viewPrestart()) return;
+    const who = me();
+    const docs = templateSeedDocs(state.templates, who && who.uid);
+    if (!docs.length) return;
+    state.seedTried = true;
+    try {
+      for (const row of docs) {
+        await deps.setDoc(deps.doc(deps.db, "tenants", tenant(), "prestartTemplates", row.id), { ...row.data, updatedAt: deps.serverTimestamp() });
+      }
+    } catch (err) {
+      console.warn("prestart seed", err && (err.code || err.message));
+    }
   }
 
   function start() {
@@ -465,6 +487,7 @@ export function installCompliance(deps) {
       }));
       offs.push(deps.onSnapshot(deps.collection(deps.db, "tenants", tenantId, "prestartTemplates"), snap => {
         state.templates = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        maybeSeed();
         refresh();
       }, err => { console.warn("prestartTemplates", err && err.code); }));
     }
@@ -480,7 +503,7 @@ export function installCompliance(deps) {
       assets: state.assets, policies: state.policies, today: today(),
       includePolicies: canViewPolicies(plan(), "admin"), error: err, go: "compliance",
       serviceOverdue: svc.overdue, serviceDue: svc.due, serviceNames: svc.names,
-      prestartDefects: defects.length, prestartNames: defects.map(row => row.assetName || "Machine"),
+      prestartDefects: defects.length, prestartStops: defects.filter(row => row.doNotOperate).length, prestartNames: defects.map(row => row.assetName || "Machine"),
     });
   }
 
@@ -521,18 +544,19 @@ export function installCompliance(deps) {
   function prestartBlock(adminView) {
     const err = state.prestartError ? `<p class="err">Couldn't load prestarts (${esc(state.prestartError)}).</p>` : "";
     if (state.editing && state.editing.kind === "template") {
-      const type = state.editing.id || "vehicle";
+      const type = state.editing.id || "ute";
       return templateFormHtml(type, itemsFor(type, state.templates));
     }
     const asset = state.assets.find(item => item.id === state.prestartAsset) || state.assets[0];
-    const items = itemsFor((asset && asset.type) || "vehicle", state.templates);
+    const kind = assetKind(asset);
+    const items = itemsFor(kind, state.templates);
     const form = prestartFormHtml({
-      assets: state.assets, assetId: asset && asset.id, items,
+      assets: state.assets, assetId: asset && asset.id, items, kind,
       signerName: me() && me().name, defects: openDefects(state.prestarts),
     });
     if (!adminView) return `${err}${form}<h3 class="swh">History</h3>${prestartHistoryHtml(state.prestarts)}`;
     const jobs = deps.getJobs ? deps.getJobs() : [];
-    const tools = `<div class="comp-actions"><button type="button" class="sm-btn" data-ps-template="vehicle">Vehicle checklist</button><button type="button" class="sm-btn" data-ps-template="trailer">Trailer checklist</button><button type="button" class="sm-btn" data-ps-template="plant">Plant checklist</button></div>`;
+    const tools = `<div class="comp-actions">${PRESTART_KINDS.map(row => `<button type="button" class="sm-btn" data-ps-template="${esc(row.id)}">${esc(row.label)}</button>`).join("")}</div>`;
     return `${err}${form}${tools}${prestartAdminHtml({ assets: state.assets, prestarts: state.prestarts, jobs, today: today(), canResolve: true })}`;
   }
 
@@ -601,14 +625,14 @@ export function installCompliance(deps) {
   async function submitPrestart(form) {
     if (state.saving || !viewPrestart()) return;
     const asset = state.assets.find(item => item.id === form.assetId.value);
-    const items = itemsFor((asset && asset.type) || "vehicle", state.templates);
+    const items = itemsFor(assetKind(asset), state.templates);
     const answers = {};
     for (const item of items) {
       const picked = form.querySelector(`input[name="result-${item.id}"]:checked`);
       answers[item.id] = { result: picked ? picked.value : "", comment: form[`comment-${item.id}`] ? form[`comment-${item.id}`].value : "" };
     }
     const built = prestartPayload({
-      asset, day: today(), reading: form.reading.value, readingUnit: form.readingUnit.value,
+      asset, day: today(), reading: form.reading.value, readingUnit: form.readingUnit.value, odometer: form.odometer ? form.odometer.value : "",
       answers, signerName: form.signerName.value, items,
     }, me().uid);
     if (!built.ok) return deps.toast(built.reason);
@@ -616,7 +640,7 @@ export function installCompliance(deps) {
     try {
       await deps.setDoc(deps.doc(deps.db, "tenants", tenant(), "prestarts", newId()), { ...built.data, signedAt: deps.serverTimestamp() });
       form.reset();
-      deps.toast(built.data.defect ? "Submitted. Defect — check before use." : "Prestart submitted.");
+      deps.toast(built.data.doNotOperate ? "Do not operate. The defect is flagged." : built.data.defect ? "Submitted. Defect — check before use." : "Prestart submitted.");
       rerender();
     } catch (err) {
       deps.toast("Not saved: " + ((err && (err.code || err.message)) || "failed"));
@@ -647,9 +671,10 @@ export function installCompliance(deps) {
     if (kind === "template") {
       if (!admin()) return deps.toast("Only an admin can change the checklist.");
       const picked = {};
-      for (const item of ["fluids", "tyres", "lights", "brakes", "horn", "seatbelt", "hydraulics", "attachments", "extinguisher", "guards", "damage"]) {
-        const box = form[`on-${item}`];
-        picked[item] = { on: !!(box && box.checked), label: form[`label-${item}`] ? form[`label-${item}`].value : "" };
+      for (const item of itemsFor(form.dataset.compId, [])) {
+        const box = form[`on-${item.id}`];
+        const crit = form[`crit-${item.id}`];
+        picked[item.id] = { on: !!(box && box.checked), label: form[`label-${item.id}`] ? form[`label-${item.id}`].value : "", critical: !!(crit && crit.checked) };
       }
       const built = templatePayload(form.dataset.compId, picked, me().uid);
       if (!built.ok) return deps.toast(built.reason);

@@ -60,10 +60,10 @@
   window.HW_PREVIEW_RATES = q.get("rates") || "";
   if (q.get("fleet") === "1") {
     window.HW_FLEET = [
-      { id: "a1", type: "vehicle", name: "Preview tipper", rego: "PRE001", regoExpiry: "2026-10-01", coiRequired: true, coiExpiry: "2026-09-15", notes: "Preview only" },
-      { id: "a4", type: "plant", name: "Preview excavator", rego: "PRE004", regoExpiry: "2026-12-20", coiRequired: true, coiExpiry: "2026-11-10", notes: "" },
-      { id: "a2", type: "trailer", name: "Preview dog trailer", rego: "PRE002", regoExpiry: "2026-11-28", coiRequired: true, coiExpiry: "2027-04-01", notes: "" },
-      { id: "a3", type: "vehicle", name: "Preview ute", rego: "PRE003", regoExpiry: "2027-06-01", coiRequired: false, coiExpiry: "", notes: "" }
+      { id: "a1", type: "vehicle", prestartKind: "tip-truck", name: "Preview tipper", rego: "PRE001", regoExpiry: "2026-10-01", coiRequired: true, coiExpiry: "2026-09-15", notes: "Preview only" },
+      { id: "a4", type: "plant", prestartKind: "excavator", name: "Preview excavator", rego: "PRE004", regoExpiry: "2026-12-20", coiRequired: true, coiExpiry: "2026-11-10", notes: "" },
+      { id: "a2", type: "trailer", prestartKind: "trailer", name: "Preview dog trailer", rego: "PRE002", regoExpiry: "2026-11-28", coiRequired: true, coiExpiry: "2027-04-01", notes: "" },
+      { id: "a3", type: "vehicle", prestartKind: "ute", name: "Preview ute", rego: "PRE003", regoExpiry: "2027-06-01", coiRequired: false, coiExpiry: "", notes: "" }
     ];
     window.HW_POLICIES = [
       { id: "p1", type: "public-liability", insurer: "Preview Mutual", policyNumber: "PL-100", startDate: "2025-09-01", expiry: "2026-09-01", amount: "$20,000,000", notes: "Preview only", assetId: "" },
@@ -90,12 +90,19 @@
   }
   if (q.get("prestart") === "1") {
     window.HW_PRESTARTS = [
-      { id: "ps1", assetId: "a1", assetType: "vehicle", assetName: "Preview tipper", day: "2026-11-06", reading: 1280, readingUnit: "hours", signerUid: "patrick", signerName: "Patrick", defect: true, resolved: false,
+      { id: "ps1", assetId: "a1", assetType: "vehicle", assetName: "Preview tipper", kind: "tip-truck", day: "2026-11-06", reading: 1280, readingUnit: "hours", odometer: 84210, signerUid: "patrick", signerName: "Patrick", defect: true, doNotOperate: true, resolved: false,
         items: [
-          { id: "fluids", result: "pass", comment: "" },
-          { id: "hydraulics", result: "fail", comment: "Weep at the ram" }
+          { id: "tt-oil", result: "pass", comment: "", critical: true },
+          { id: "tt-hyd", result: "fail", comment: "Weep at the ram", critical: true }
         ] }
     ];
+  }
+  const kindShot = q.get("kind");
+  if (kindShot) {
+    const kindName = { "skid-steer": "Skid steer", excavator: "Excavator", "tip-truck": "Tip truck", ute: "Ute", trailer: "Dog trailer", "other-plant": "Other plant" };
+    const kindType = { trailer: "trailer", "tip-truck": "vehicle", ute: "vehicle" };
+    window.HW_FLEET = [{ id: "k1", type: kindType[kindShot] || "plant", prestartKind: kindShot, name: kindName[kindShot] || "Machine", rego: "", regoExpiry: "2027-06-01", coiRequired: false, coiExpiry: "", notes: "" }];
+    window.HW_PRESTARTS = [];
   }
   if (q.get("open") === "prestartadmin") {
     window.HW_JOB_CREW = { j3: { uid: "sam", name: "Sam" } };
@@ -311,16 +318,17 @@ if (q.get("open") === "serviceedit") {
   document.querySelector('[data-comp-edit="service"]')?.click();
   await waitFor("#compform");
 }
-if (q.get("open") === "prestart") {
+if (q.get("open") === "prestart" || q.get("open") === "kind") {
   document.querySelector('[data-tab="more"]')?.click();
   await sleep(40);
   document.querySelector('[data-go="prestart"]')?.click();
   await waitFor("#prestartform");
-  document.querySelector('#prestartform input[name="result-fluids"][value="pass"]')?.click();
-  document.querySelector('#prestartform input[name="result-tyres"][value="pass"]')?.click();
-  document.querySelector('#prestartform input[name="result-hydraulics"][value="fail"]')?.click();
-  const note = document.querySelector('#prestartform input[name="comment-hydraulics"]');
-  if (note) note.value = "Weep at the ram";
+  if (q.get("open") === "prestart") {
+    const crit = document.querySelector("#prestartform .ps-critical");
+    crit?.querySelector('input[value="fail"]')?.click();
+    const note = crit?.querySelector('input[name^="comment"]');
+    if (note) note.value = "Weep at the ram";
+  }
 }
 if (q.get("open") === "prestartadmin") {
   document.querySelector('[data-view="prestart"]')?.click();

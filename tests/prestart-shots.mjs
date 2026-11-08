@@ -7,11 +7,13 @@ import { launchChrome, openPage, waitReady, shot } from "./browse.mjs";
 const PORT = 8786;
 const shots = "/opt/cursor/artifacts";
 mkdirSync(shots, { recursive: true });
+const kinds = ["skid-steer", "excavator", "tip-truck", "ute", "trailer", "other-plant"];
 const pages = [
   ["prestart_safety_menu_phone", "?role=operator&open=more", 390, 844],
   ["prestart_checklist_phone", "?role=operator&fleet=1&prestart=1&open=prestart", 390, 844],
   ["prestart_admin_phone", "?role=admin&fleet=1&prestart=1&open=prestartadmin", 390, 844],
   ["prestart_home_banner_phone", "?role=admin&fleet=1&prestart=1", 390, 844],
+  ...kinds.map(kind => [`prestart_tpl_${kind.replace("-", "_")}_phone`, `?role=operator&fleet=1&prestart=1&open=kind&kind=${kind}`, 390, 844]),
 ];
 
 async function waitServer() {
@@ -32,6 +34,7 @@ try {
     const { page, errors } = await openPage(chrome.port, `http://127.0.0.1:${PORT}/tests/phone-preview.html${query}`);
     await page.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: true });
     await waitReady(page, 12000);
+    await page.send("Runtime.evaluate", { expression: "document.querySelectorAll('.mob-tabs').forEach(el => { el.style.display = 'none'; });", returnByValue: true });
     const info = await page.send("Runtime.evaluate", {
       expression: "JSON.stringify({text:document.body.innerText, errs:window.__errs||[]})",
       returnByValue: true,
@@ -39,12 +42,15 @@ try {
     const data = JSON.parse(info.result.value);
     if (errors.length || data.errs.length) throw new Error(name + " " + [...errors, ...data.errs].join("\n"));
     if (name.includes("menu") && !/Prestart/.test(data.text)) throw new Error("safety menu missing prestart");
-    if (name.includes("checklist") && !/Hydraulics/.test(data.text)) throw new Error("checklist missing\n" + data.text.slice(0, 400));
+    if (name.includes("checklist") && !/Tip truck/.test(data.text)) throw new Error("checklist missing\n" + data.text.slice(0, 400));
     if (name.includes("checklist") && !/History/.test(data.text)) throw new Error("staff history missing");
-    if (name.includes("admin") && !/Defect — check before use/.test(data.text)) throw new Error("defect missing\n" + data.text.slice(0, 500));
+    if (name.includes("tpl_") && !/walk-around/i.test(data.text)) throw new Error("template sections missing\n" + data.text.slice(0, 400));
+    if (name.includes("tpl_") && !/Do not operate/.test(data.text)) throw new Error("critical mark missing");
+    if (name.includes("admin") && !/Do not operate/.test(data.text)) throw new Error("defect missing\n" + data.text.slice(0, 500));
     if (name.includes("admin") && !/Sam/.test(data.text)) throw new Error("missing person not shown");
-    if (name.includes("banner") && !/check before use/i.test(data.text)) throw new Error("home alert missing\n" + data.text.slice(0, 500));
-    const heightPx = Math.min(2600, (await page.send("Runtime.evaluate", {
+    if (name.includes("banner") && !/do not operate/i.test(data.text)) throw new Error("home alert missing\n" + data.text.slice(0, 500));
+    const cap = name.includes("tpl_") || name.includes("checklist") || name.includes("admin") ? 5200 : 2600;
+    const heightPx = Math.min(cap, (await page.send("Runtime.evaluate", {
       expression: "Math.max(document.documentElement.scrollHeight, window.innerHeight)",
       returnByValue: true,
     })).result.value);
