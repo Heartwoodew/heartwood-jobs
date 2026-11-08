@@ -7,7 +7,8 @@ rules_version = '2';
 // and the CHAT block below (also cloud/production/firestore.chat.rules) is the
 // piece to merge into the live rules. The FLEET, SWMS SIGNATURE and RUN SHEET
 // blocks are separate pastes (cloud/production/firestore.fleet.rules,
-// firestore.swms.rules and firestore.runsheets.rules). Do not deploy this whole file.
+// firestore.swms.rules, firestore.runsheets.rules and firestore.servicing.rules).
+// Do not deploy this whole file.
 // CallUp Base does not use xeroQueue. Heartwood's current app still does.
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -270,6 +271,100 @@ service cloud.firestore {
       allow delete: if fleetAdmin(tenantId);
     }
 // END FLEET RULES
+
+// BEGIN SERVICING RULES
+    function svcSignedIn() { return request.auth != null; }
+    function svcIsAlex() { return svcSignedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
+    function svcIsPatrick() { return svcSignedIn() && request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"; }
+    function svcUserPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function svcHasProfile() { return svcSignedIn() && exists(svcUserPath()); }
+    function svcProfile() { return get(svcUserPath()).data; }
+    function svcExplicitTenant() {
+      return svcHasProfile() && "tenantId" in svcProfile() && svcProfile().tenantId is string && svcProfile().tenantId.size() > 0;
+    }
+    function svcCallerTenant() {
+      return svcExplicitTenant()
+        ? svcProfile().tenantId
+        : ((svcHasProfile() || svcIsAlex() || svcIsPatrick()) ? "heartwood" : "");
+    }
+    function svcMember(tenantId) {
+      return svcSignedIn()
+        && tenantId is string
+        && tenantId.matches('^[a-z0-9][a-z0-9-]{0,39}$')
+        && svcCallerTenant() == tenantId;
+    }
+    function svcAdmin(tenantId) {
+      return svcMember(tenantId) && (
+        svcIsAlex() || svcIsPatrick() || (svcHasProfile() && "role" in svcProfile() && svcProfile().role == "admin")
+      );
+    }
+    function svcWriter(tenantId) {
+      return svcAdmin(tenantId)
+        || (svcMember(tenantId) && svcHasProfile() && "role" in svcProfile() && svcProfile().role == "supervisor");
+    }
+    function svcInt(v, max) {
+      return v is int && v >= 0 && v <= max;
+    }
+    function svcUnit(v) {
+      return v == "" || v == "hours" || v == "km";
+    }
+    function svcDate(v) {
+      return v is string && v.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+    function svcRecordOk() {
+      return request.resource.data.keys().hasOnly(["assetId", "doneOn", "reading", "readingUnit", "serviceType", "servicedBy", "notes", "updatedAt", "updatedBy"])
+        && request.resource.data.assetId is string
+        && request.resource.data.assetId.matches('^[A-Za-z0-9_-]{1,80}$')
+        && svcDate(request.resource.data.doneOn)
+        && svcInt(request.resource.data.reading, 10000000)
+        && svcUnit(request.resource.data.readingUnit)
+        && (request.resource.data.reading == 0 || request.resource.data.readingUnit == "hours" || request.resource.data.readingUnit == "km")
+        && (request.resource.data.serviceType == "250hr" || request.resource.data.serviceType == "major" || request.resource.data.serviceType == "repair" || request.resource.data.serviceType == "other")
+        && request.resource.data.servicedBy is string
+        && request.resource.data.servicedBy.size() <= 120
+        && request.resource.data.notes is string
+        && request.resource.data.notes.size() <= 2000
+        && request.resource.data.updatedBy == request.auth.uid
+        && request.resource.data.updatedAt == request.time;
+    }
+    function svcPlanOk() {
+      return request.resource.data.keys().hasOnly(["everyDays", "everyReading", "readingUnit", "currentReading", "updatedAt", "updatedBy"])
+        && svcInt(request.resource.data.everyDays, 3650)
+        && svcInt(request.resource.data.everyReading, 1000000)
+        && svcInt(request.resource.data.currentReading, 10000000)
+        && svcUnit(request.resource.data.readingUnit)
+        && (request.resource.data.everyReading == 0 || request.resource.data.readingUnit == "hours" || request.resource.data.readingUnit == "km")
+        && request.resource.data.updatedBy == request.auth.uid
+        && request.resource.data.updatedAt == request.time;
+    }
+    function svcCostOk() {
+      return request.resource.data.keys().hasOnly(["amount", "updatedAt", "updatedBy"])
+        && request.resource.data.amount is string
+        && request.resource.data.amount.size() > 0
+        && request.resource.data.amount.size() <= 40
+        && request.resource.data.updatedBy == request.auth.uid
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    match /tenants/{tenantId}/servicing/{recordId} {
+      allow read: if svcMember(tenantId);
+      allow create, update: if svcWriter(tenantId) && svcRecordOk();
+      allow delete: if svcWriter(tenantId);
+    }
+
+    match /tenants/{tenantId}/servicePlans/{assetId} {
+      allow read: if svcMember(tenantId);
+      allow create, update: if svcWriter(tenantId) && svcPlanOk();
+      allow delete: if svcWriter(tenantId);
+    }
+
+    match /tenants/{tenantId}/serviceCosts/{recordId} {
+      allow read: if svcWriter(tenantId);
+      allow create, update: if svcWriter(tenantId) && svcCostOk();
+      allow delete: if svcWriter(tenantId);
+    }
+// END SERVICING RULES
+
 
 // BEGIN SWMS SIGNATURE RULES
     function swmsSignedIn() { return request.auth != null; }

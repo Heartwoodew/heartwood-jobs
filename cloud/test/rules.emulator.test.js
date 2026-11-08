@@ -367,3 +367,41 @@ test("SWMS signatures are self-only for staff and readable by admins", async () 
   const signedOut = env.unauthenticatedContext().firestore();
   await assertFails(getDocs(collection(signedOut, "swmsSignatures")));
 });
+
+function serviceRecord(uid, extra = {}) {
+  return {
+    assetId: "tipper", doneOn: "2026-05-01", reading: 1000, readingUnit: "hours",
+    serviceType: "major", servicedBy: "Chuwar Diesel", notes: "",
+    updatedBy: uid, updatedAt: serverTimestamp(), ...extra,
+  };
+}
+
+test("servicing records are staff-readable and costs stay with admins and supervisors", async () => {
+  await assertSucceeds(setDoc(doc(db(ALEX), "tenants", "heartwood", "servicing", "s1"), serviceRecord(ALEX)));
+  await assertSucceeds(setDoc(doc(db(ALEX), "tenants", "heartwood", "servicePlans", "tipper"), {
+    everyDays: 180, everyReading: 250, readingUnit: "hours", currentReading: 1280,
+    updatedBy: ALEX, updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(setDoc(doc(db(ALEX), "tenants", "heartwood", "serviceCosts", "s1"), {
+    amount: "$840", updatedBy: ALEX, updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(getDoc(doc(db("op1"), "tenants", "heartwood", "servicing", "s1")));
+  await assertSucceeds(getDoc(doc(db("op1"), "tenants", "heartwood", "servicePlans", "tipper")));
+  await assertFails(getDoc(doc(db("op1"), "tenants", "heartwood", "serviceCosts", "s1")));
+  await assertFails(getDocs(collection(db("op1"), "tenants", "heartwood", "serviceCosts")));
+  await assertFails(setDoc(doc(db("op1"), "tenants", "heartwood", "servicing", "nope"), serviceRecord("op1")));
+  await assertFails(deleteDoc(doc(db("op1"), "tenants", "heartwood", "servicing", "s1")));
+  await assertSucceeds(setDoc(doc(db("sup1"), "tenants", "heartwood", "servicing", "s2"), serviceRecord("sup1", { serviceType: "repair", reading: 0, readingUnit: "" })));
+  await assertSucceeds(setDoc(doc(db("sup1"), "tenants", "heartwood", "serviceCosts", "s2"), {
+    amount: "$150", updatedBy: "sup1", updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(getDoc(doc(db("sup1"), "tenants", "heartwood", "serviceCosts", "s1")));
+  await assertFails(setDoc(doc(db(ALEX), "tenants", "heartwood", "servicing", "bad"), serviceRecord(ALEX, { serviceType: "oil" })));
+  await assertFails(getDoc(doc(db("op2"), "tenants", "heartwood", "servicing", "s1")));
+  await assertFails(getDoc(doc(db("op1"), "tenants", "otherco", "servicing", "s9")));
+  await assertSucceeds(setDoc(doc(db("finOther"), "tenants", "otherco", "servicing", "s9"), serviceRecord("finOther")));
+  await assertFails(getDoc(doc(db(ALEX), "tenants", "otherco", "serviceCosts", "s9")));
+  await assertFails(setDoc(doc(db(ALEX), "receipts", "from-service"), { uid: ALEX, amountInc: 1 }));
+  await assertSucceeds(deleteDoc(doc(db("sup1"), "tenants", "heartwood", "serviceCosts", "s2")));
+  await assertSucceeds(deleteDoc(doc(db(PATRICK), "tenants", "heartwood", "servicing", "s1")));
+});

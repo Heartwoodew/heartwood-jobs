@@ -70,6 +70,23 @@
       { id: "p2", type: "workcover", insurer: "WorkCover Queensland", policyNumber: "WC-PREVIEW", startDate: "2025-07-01", expiry: "2026-11-25", amount: "Statutory", notes: "", assetId: "" },
       { id: "p3", type: "vehicle", insurer: "Preview Insurance", policyNumber: "VI-9", startDate: "2026-01-01", expiry: "2027-01-15", amount: "$10,000,000", notes: "", assetId: "a1" }
     ];
+    window.HW_SERVICING = [
+      { id: "s1", assetId: "a1", doneOn: "2026-05-01", reading: 1000, readingUnit: "hours", serviceType: "major", servicedBy: "Chuwar Diesel", notes: "Preview only" },
+      { id: "s0", assetId: "a1", doneOn: "2025-11-01", reading: 750, readingUnit: "hours", serviceType: "250hr", servicedBy: "Yard", notes: "" },
+      { id: "s2", assetId: "a2", doneOn: "2026-10-20", reading: 0, readingUnit: "", serviceType: "repair", servicedBy: "On site", notes: "" },
+      { id: "s3", assetId: "a3", doneOn: "2026-08-01", reading: 0, readingUnit: "", serviceType: "major", servicedBy: "Yard", notes: "" }
+    ];
+    window.HW_SERVICE_PLANS = [
+      { id: "a1", everyDays: 180, everyReading: 250, readingUnit: "hours", currentReading: 1280 },
+      { id: "a2", everyDays: 40, everyReading: 0, readingUnit: "", currentReading: 0 },
+      { id: "a3", everyDays: 365, everyReading: 0, readingUnit: "", currentReading: 0 },
+      { id: "a4", everyDays: 90, everyReading: 250, readingUnit: "hours", currentReading: 0 }
+    ];
+    window.HW_SERVICE_COSTS = [
+      { id: "s1", amount: "$840" },
+      { id: "s0", amount: "$220" },
+      { id: "s2", amount: "$150" }
+    ];
   }
   if (q.get("open") === "optimise") {
     window.HW_GEO_BY_ID = {
@@ -271,6 +288,24 @@ if (q.get("open") === "stafffleet") {
   await sleep(40);
   document.querySelector('[data-go="fleet"]')?.click();
   await waitFor(".comp-card");
+}
+if (q.get("open") === "servicing" || q.get("open") === "serviceedit") {
+  document.querySelector('[data-view="compliance"]')?.click();
+  await waitFor('[data-ctab="servicing"]');
+  document.querySelector('[data-ctab="servicing"]')?.click();
+  await waitFor("[data-service-asset]");
+}
+if (q.get("open") === "serviceedit") {
+  document.querySelector('[data-comp-edit="service"]')?.click();
+  await waitFor("#compform");
+}
+if (q.get("open") === "staffservice") {
+  document.querySelector('[data-tab="more"]')?.click();
+  await sleep(40);
+  document.querySelector('[data-go="fleet"]')?.click();
+  await waitFor('[data-ctab="servicing"]');
+  document.querySelector('[data-ctab="servicing"]')?.click();
+  await waitFor("[data-service-asset]");
 }
 if (q.get("open") === "sign") {
   document.querySelector('.mrow[data-id="j2"]')?.click();

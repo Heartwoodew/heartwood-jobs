@@ -26,11 +26,12 @@ export const CALLUP_BASE = Object.freeze({
   staffPermissions: true,
   xero: false,
   invoicing: false,
-  // Registration, Queensland COI, WorkCover and insurance policies are CallUp Pro.
-  // Base stays off. Heartwood turns features.fleet and features.policies on in features/compliance.js.
+  // Registration, Queensland COI, WorkCover, insurance and servicing are CallUp Pro.
+  // Base stays off. Heartwood turns features.fleet, features.policies and features.servicing on in features/compliance.js.
   features: Object.freeze({
     fleet: false,
     policies: false,
+    servicing: false,
   }),
 });
 

@@ -1860,6 +1860,8 @@ function withRunOrder(list) {
   return out;
 }
 function renderOperator() {
+  if (!ui.forceRender && document.querySelector("#compform")) return;
+  ui.forceRender = false;
   document.body.className = "operator";
   ui.runStops = {};
   CHAT.watch(jobs);
@@ -1885,9 +1887,10 @@ function renderOperator() {
     bindOp(mine); bindTs($("#app"), renderOperator); return;
   }
   if (ui.opTab === "fleet" && COMP.canSee()) {
-    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Fleet</div><div class="mob-sub">Registration and COI · read only</div></div>
+    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Compliance</div><div class="mob-sub">${COMP.canEditService() ? "Fleet and servicing" : "Fleet and servicing · read only"}</div></div>
       ${COMP.staffHtml()}${opTabs("fleet")}</div>`;
     bindOp(mine);
+    COMP.bind($("#app"));
     return;
   }
   if (ui.opTab === "fleet") ui.opTab = "more";
@@ -2687,8 +2690,9 @@ CHAT = installChatApp({ db, storage, getMe: () => me, toast });
 COMP = installCompliance({
   db, collection, doc, setDoc, deleteDoc, onSnapshot, serverTimestamp,
   getMe: () => me, getUi: () => ui, today: todayStr, toast,
+  canSeeMoney,
   rerenderAdmin: () => { if (me && me.role === "admin") { ui.forceRender = true; renderAdmin(); } },
-  rerenderOperator: () => renderOperator(),
+  rerenderOperator: () => { ui.forceRender = true; renderOperator(); },
 });
 // ---- Guided Quotes (CallUp, Nov 2026). Rates in meta/quoteRates — never invented. No GPS in this build.
 async function loadRunSheets(date) {
