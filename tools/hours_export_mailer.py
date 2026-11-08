@@ -88,17 +88,21 @@ def pending(out):
             if not ok_to: continue
             tag = f"[HWH {id_[2:10]}]"
             subject = hours_subject(subject_name, dmy(ws), dmy(we), tag)
+            sheets = (
+                "The first sheet is one row per person and one column per day (Mon 02/11). Each cell is the hours worked that day, or Annual, Sick, Other, or Pending on a leave day with no hours. It has a Total column and a grand total.\n"
+                "The Detail sheet lists every day in the pay period. Each day shows the date and weekday, clock on and clock off for every shift, "
+                "break start, break end and minutes, hours for the shift, and the day's total. Job, site and machine are filled in when they were recorded.\n"
+                "A day with no hours is 0. Approved leave shows as annual leave, sick leave, or other leave, with a note when a medical certificate is attached. "
+                "Pending leave shows as Leave requested (pending). A day with no leave and no hours shows as Day off.\n\n"
+            )
             if subject_name == "Heartwood":
                 body = (f"Hi Nicole,\n\nAttached are the timesheet hours for Mon {dmy(ws)} to Sun {dmy(we)} "
                         f"({d.get('people', 0)} staff, {float(d.get('totalHours') or 0):.2f} hours total).\n"
-                        "The Summary sheet has each person's total and any leave; the Detail sheet has every shift.\n\n"
-                        "Thanks,\nAlex\nHeartwood")
+                        + sheets + "Thanks,\nAlex\nHeartwood")
             else:
-                subject = f"Timesheet hours {dmy(ws)} to {dmy(we)} - {subject_name} {tag}"
                 body = (f"Hi,\n\nAttached are the timesheet hours for Mon {dmy(ws)} to Sun {dmy(we)} "
                         f"({d.get('people', 0)} staff, {float(d.get('totalHours') or 0):.2f} hours total).\n"
-                        "The Summary sheet has each person's total and any leave; the Detail sheet has every shift.\n\n"
-                        f"Thanks,\n{subject_name}\n")
+                        + sheets + f"Thanks,\n{subject_name}\n")
             items.append({"key": id_, "to": to, "subject": subject, "body": body, "filename": name, "mimeType": MIME,
                           "attachmentB64File": fpath + ".b64", "attachmentFile": fpath, "verify": verify,
                           "verifyQuery": f'to:{to} subject:"{tag[1:-1]}" in:sent'})

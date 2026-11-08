@@ -72,25 +72,36 @@ export function invoiceCsv(jobs) {
   return table(INVOICE_COLUMNS, rows);
 }
 
+function shiftCsv(name, shift) {
+  return [
+    name,
+    auDate(shift.date),
+    shift.start || "",
+    shift.finish || "",
+    shift.breakMins == null ? "" : String(shift.breakMins),
+    money(shift.hours),
+    shift.job || "",
+    shift.source || "",
+    shift.note || "",
+  ];
+}
+
 export function hoursCsv(report) {
   const headers = ["Staff", "Date", "Start", "Finish", "Break minutes", "Hours", "Job", "Source", "Note"];
   const rows = [];
   for (const person of (report && report.people) || []) {
-    for (const shift of person.rows || []) {
-      rows.push([
-        person.name || "",
-        auDate(shift.date),
-        shift.start || "",
-        shift.finish || "",
-        shift.breakMins == null ? "" : String(shift.breakMins),
-        money(shift.hours),
-        shift.job || "",
-        shift.source || "",
-        shift.note || "",
-      ]);
-    }
-    for (const leave of person.leave || []) {
-      rows.push([person.name || "", auDate(leave.date), "", "", "", "", "", "Leave", leave.label || ""]);
+    const name = person.name || "";
+    if (Array.isArray(person.days)) {
+      for (const day of person.days) {
+        const shifts = day.shifts || [];
+        if (shifts.length) for (const shift of shifts) rows.push(shiftCsv(name, shift));
+        else rows.push([name, auDate(day.date), "", "", "", money(day.total), "", day.leaveText || "", day.note || ""]);
+      }
+    } else {
+      for (const shift of person.rows || []) rows.push(shiftCsv(name, shift));
+      for (const leave of person.leave || []) {
+        rows.push([name, auDate(leave.date), "", "", "", "", "", "Leave", leave.label || ""]);
+      }
     }
   }
   return table(headers, rows);

@@ -50,7 +50,8 @@
           && d.companyName is string && d.companyName.size() > 0 && d.companyName.size() <= 80
           && d.to == hxAccounts()
           && d.to != "accounts@heartwoodew.com"
-          && exists(/databases/$(database)/documents/companies/$(hxCaller())))
+          && exists(/databases/$(database)/documents/companies/$(hxCaller()))
+          && get(/databases/$(database)/documents/companies/$(hxCaller())).data.isTest != true)
       );
     }
     function hxMark() {

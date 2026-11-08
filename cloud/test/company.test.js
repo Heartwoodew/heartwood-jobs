@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_ORG, orgSettings, setActiveCompany } from "../../app/org-settings.js";
+import { parseMigrateArgs, LIVE_PROJECT } from "../scripts/migrate-company-id.mjs";
 import {
   HEARTWOOD_ACCOUNTS_EMAIL, HEARTWOOD_COMPANY_ID, TRIAL_DAYS, billingHook, buildCompanyCreate,
   companyDetailPatch, docCompanyId, filterMaster, heartwoodSeed, hoursBrand, isPlatformOwner,
@@ -102,6 +103,25 @@ test("migration only adds a missing companyId and never replaces one", () => {
   const patch = companyDetailPatch({ name: "Acme Civil", legalName: "Acme Civil Pty Ltd", abn: "12 345 678 901", address: "1 Yard St", email: "office@acme.test", accountsEmail: "accounts@acme.test", signoff: "Acme", phone: "", hubdocAddress: "", logoUrl: "" }, { phone: "0400111222" });
   assert.equal(patch.ok, true);
   assert.deepEqual(patch.patch, { phone: "0400111222" });
+});
+
+test("production migration is explicit, dry-run by default, and add-only in its flags", () => {
+  const emu = parseMigrateArgs(["node", "migrate-company-id.mjs"], { FIRESTORE_EMULATOR_HOST: "127.0.0.1:8080" });
+  assert.equal(emu.ok, true);
+  assert.equal(emu.commit, false);
+  assert.equal(emu.live, false);
+  assert.equal(emu.mode, "dry-run");
+  const liveDry = parseMigrateArgs(["node", "migrate-company-id.mjs", "--project", LIVE_PROJECT], {});
+  assert.equal(liveDry.ok, true);
+  assert.equal(liveDry.commit, false);
+  assert.equal(liveDry.live, true);
+  const liveWrite = parseMigrateArgs(["node", "migrate-company-id.mjs", "--project", LIVE_PROJECT, "--commit"], {});
+  assert.equal(liveWrite.ok, true);
+  assert.equal(liveWrite.commit, true);
+  assert.equal(liveWrite.mode, "commit");
+  assert.equal(parseMigrateArgs(["node", "migrate-company-id.mjs", "--project", LIVE_PROJECT, "--commit"], { FIRESTORE_EMULATOR_HOST: "127.0.0.1:8080" }).ok, false);
+  assert.equal(parseMigrateArgs(["node", "migrate-company-id.mjs"], {}).reason, "emulator-required");
+  assert.equal(parseMigrateArgs(["node", "migrate-company-id.mjs"], { GCLOUD_PROJECT: LIVE_PROJECT }).reason, "explicit-project");
 });
 
 test("mail tools do not send for a test company and still send for Heartwood", () => {

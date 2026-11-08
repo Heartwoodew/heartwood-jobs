@@ -450,7 +450,17 @@ tr.mhead td{background:#eef2f7;font-size:13px;padding:6px 8px}
 .ibld.b-orbit{background:#dbeafe;color:#1e40af}.ibld.b-torsion{background:#fee2e2;color:#991b1b}.ibld.b-silkwood{background:#dcfce7;color:#166534}
 .iside{display:flex;flex-direction:column;gap:4px;align-items:flex-end;flex-shrink:0}.ijob{font-size:12px;padding:4px 8px}
 .hstat.q-inbox b{color:#dc2626}
-@media (max-width:760px){.ilist,.ibar{padding-left:8px;padding-right:8px}.irow{flex-direction:column}.iside{flex-direction:row;align-self:stretch;justify-content:flex-end}}
+.import-banner{background:#f1f6ff;border:1px solid #cfe0ff;border-radius:8px;padding:10px 12px;margin:0 0 12px}
+.import-banner .row,.ireview .row{display:flex;flex-wrap:wrap;gap:8px}
+.import-banner label,.ireview label{display:flex;flex-direction:column;font-size:12px;gap:2px;flex:1;min-width:140px}
+.ireview label.ck,.import-banner label.ck{flex-direction:row;align-items:center;min-width:0;flex:none;font-size:14px;margin:4px 0}
+.import-banner input,.ireview input,.ireview select,.ireview textarea{font:inherit;padding:6px 8px}
+.ireview textarea{width:100%;margin-top:6px}
+.iwarn{color:#9a3412;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:6px 8px;margin:6px 0;font-size:13px}
+.ibulk{cursor:pointer;align-items:flex-start}
+.iimported .isubj{color:var(--sm-mut)}
+.sm-head .headbtns{margin-left:auto}
+@media (max-width:760px){.ilist,.ibar{padding-left:8px;padding-right:8px}.irow{flex-direction:column}.iside{flex-direction:row;align-self:stretch;justify-content:flex-end;flex-wrap:wrap}}
 
 /* ===== iPad / tablet (3/11/2026). Phone (<=760px) and desktop mouse layouts unchanged except where noted. ===== */
 /* Safe areas (notch / home bar / Add-to-Home-Screen with black-translucent status bar) */

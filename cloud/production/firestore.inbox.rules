@@ -1,0 +1,47 @@
+// BEGIN INBOX IMPORT RULES
+    // inbox/{gmailMessageId} is written by the box (tools/sync_inbox.py, admin SDK, or the
+    // same sync UID as hours export). The app only marks read and imported.
+    // Admins and supervisors can read and mark. Operators cannot. No client deletes.
+    function inSignedIn() { return request.auth != null; }
+    function inSync() { return inSignedIn() && request.auth.uid == "38SU5waAy4f9UI9N6JTqDMaYpQg2"; }
+    function inOffice() {
+      return inSignedIn() && (
+        request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"
+        || request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"
+        || (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && (
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("role", "") == "admin"
+            || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("role", "") == "supervisor"
+          )
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("tenantId", "heartwood") == "heartwood"
+        )
+      );
+    }
+    function inMark() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return changed.hasOnly(["read", "readAt", "imported", "importedJobId", "importedAt", "importedBy", "jobIds"])
+        && (!changed.hasAny(["read"]) || request.resource.data.read is bool)
+        && (!changed.hasAny(["readAt"]) || request.resource.data.readAt == request.time)
+        && (!changed.hasAny(["imported"]) || request.resource.data.imported == true)
+        && (!changed.hasAny(["importedJobId"]) || (
+          request.resource.data.importedJobId is string
+          && request.resource.data.importedJobId.size() > 0
+          && request.resource.data.importedJobId.size() <= 128
+          && request.resource.data.importedJobId.matches('^[A-Za-z0-9_-]+$')
+        ))
+        && (!changed.hasAny(["importedBy"]) || request.resource.data.importedBy == request.auth.uid)
+        && (!changed.hasAny(["importedAt"]) || request.resource.data.importedAt == request.time)
+        && (!changed.hasAny(["jobIds"]) || (
+          request.resource.data.jobIds is list && request.resource.data.jobIds.size() <= 20
+        ))
+        && (!changed.hasAny(["imported", "importedJobId", "importedBy", "importedAt"])
+          || (changed.hasAll(["imported", "importedJobId", "importedBy", "importedAt"])));
+    }
+    match /inbox/{id} {
+      allow read: if inOffice() || inSync();
+      allow create: if inSync();
+      allow update: if inSync() || (inOffice() && inMark());
+      allow delete: if false;
+    }
+// END INBOX IMPORT RULES

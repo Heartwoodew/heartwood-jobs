@@ -1149,3 +1149,35 @@ test("test companies, friend invites and billing ids stay with the platform owne
   await assertFails(updateDoc(doc(friendDb, "companies/matecivil"), { plan: "friend" }));
   await assertFails(updateDoc(doc(friendDb, "companies/matecivil"), { billing: { provider: "stripe", status: "active", stripeCustomerId: "cus_friend", stripeSubscriptionId: "sub_friend" } }));
 });
+
+test("inbox import is office-only and fake emails are not created by staff", async () => {
+  const SYNC = "38SU5waAy4f9UI9N6JTqDMaYpQg2";
+  await env.withSecurityRulesDisabled(async ctx => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, "inbox/fake-orbit"), {
+      builder: "Orbit", subject: "PO JOB/900/02 Lot 45", snippet: "Fake email for the emulator. Not a real builder message.",
+      fromEmail: "noreply@example.test", read: false,
+    });
+  });
+  await assertFails(getDoc(doc(db("op1"), "inbox/fake-orbit")));
+  await assertFails(getDocs(collection(db("op1"), "inbox")));
+  await assertSucceeds(getDoc(doc(db(ALEX), "inbox/fake-orbit")));
+  await assertSucceeds(getDoc(doc(db("sup1"), "inbox/fake-orbit")));
+  await assertSucceeds(getDocs(collection(db(PATRICK), "inbox")));
+  await assertFails(setDoc(doc(db("sup1"), "inbox/planted"), { builder: "Orbit", subject: "nope" }));
+  await assertFails(updateDoc(doc(db("op1"), "inbox/fake-orbit"), { read: true, readAt: serverTimestamp() }));
+  await assertSucceeds(updateDoc(doc(db(ALEX), "inbox/fake-orbit"), { read: true, readAt: serverTimestamp() }));
+  await assertSucceeds(updateDoc(doc(db("sup1"), "inbox/fake-orbit"), {
+    imported: true, importedJobId: "job_fake_1", importedAt: serverTimestamp(), importedBy: "sup1",
+    jobIds: ["job_fake_1"], read: true, readAt: serverTimestamp(),
+  }));
+  await assertFails(updateDoc(doc(db("sup1"), "inbox/fake-orbit"), { subject: "rewritten" }));
+  await assertFails(deleteDoc(doc(db(ALEX), "inbox/fake-orbit")));
+  await assertSucceeds(setDoc(doc(db(SYNC), "inbox/fake-torsion"), {
+    builder: "Torsion", subject: "Fake slab clean", snippet: "Emulator only.",
+  }));
+  const saved = await getDoc(doc(db("sup1"), "inbox/fake-orbit"));
+  assert.equal(saved.data().imported, true);
+  assert.equal(saved.data().importedJobId, "job_fake_1");
+  assert.equal(saved.data().builder, "Orbit");
+});

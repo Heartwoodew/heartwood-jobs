@@ -214,6 +214,38 @@ export function cellLeaveText(leaves, person, date) {
   return portion === "all day" ? typeLabel(hit.type) : `${typeLabel(hit.type)} · ${portion}`;
 }
 
+// Spreadsheet wording for one day. Approved leave keeps its type. Pending does not.
+// A medical certificate is only a note that the file is there. Declined leave is ignored.
+export function exportDayLeave(leaves, person, date) {
+  const empty = { text: "", annual: 0, sick: 0, other: 0, pending: 0 };
+  if (!DATE.test(date || "")) return empty;
+  const rows = (leaves || []).filter(leave => leave && samePerson(leave, person) && String(leave.start || "") <= date && String(leave.end || "") >= date);
+  const approved = rows.filter(leave => leave.status === "approved");
+  const pending = rows.some(leave => leave.status === "pending") ? 1 : 0;
+  const parts = [];
+  const units = { annual: 0, sick: 0, other: 0 };
+  for (const type of ["annual", "sick", "other"]) {
+    const hits = approved.filter(leave => leave.type === type);
+    if (!hits.length) continue;
+    let unit = 0;
+    let cert = false;
+    const portions = [];
+    for (const hit of hits) {
+      const portion = portionLabel(hit, date) || "all day";
+      unit = Math.max(unit, portion === "all day" ? 1 : 0.5);
+      if (!portions.includes(portion)) portions.push(portion);
+      if (String(hit.certificatePath || "").trim()) cert = true;
+    }
+    units[type] = unit;
+    let label = typeLabel(type);
+    if (!portions.includes("all day")) label += " · " + portions.join(", ");
+    if (cert) label += " · Medical certificate";
+    parts.push(label);
+  }
+  if (pending) parts.push("Leave requested (pending)");
+  return { text: parts.join(" · "), annual: units.annual, sick: units.sick, other: units.other, pending };
+}
+
 const STATUS_LABEL = { pending: "Pending", approved: "Approved", declined: "Declined" };
 
 function certHtml(row, uid, canOpenCert) {
