@@ -93,7 +93,14 @@ test("payloads match the rules shape and staff html hides policies", () => {
   assert.equal(asset.data.rego, "PRE002");
   assert.equal(asset.data.coiExpiry, "");
   assert.equal(asset.data.prestartKind, "trailer");
-  assert.deepEqual(Object.keys(asset.data).sort(), ["coiExpiry", "coiRequired", "name", "notes", "prestartKind", "rego", "regoExpiry", "type", "updatedBy"]);
+  assert.deepEqual(Object.keys(asset.data).sort(), ["coiExpiry", "coiRequired", "name", "notes", "prestartKind", "reading", "readingUnit", "rego", "regoExpiry", "type", "updatedBy"]);
+  assert.equal(asset.data.readingUnit, "");
+  const dig = assetPayload({ name: "Digger", prestartKind: "excavator", rego: "sn123", reading: "1450", regoExpiry: "", coiExpiry: "", notes: "" }, "sup1");
+  assert.equal(dig.ok, true);
+  assert.equal(dig.data.type, "plant");
+  assert.equal(dig.data.reading, 1450);
+  assert.equal(dig.data.readingUnit, "hours");
+  assert.equal(assetPayload({ name: "X", prestartKind: "ute", reading: "1.5", regoExpiry: "", coiExpiry: "", notes: "" }, "a").ok, false);
   assert.equal(assetPayload({ type: "car", name: "X", rego: "", regoExpiry: "", coiRequired: false, coiExpiry: "", notes: "" }, "admin1").ok, false);
   const policy = policyPayload({
     type: "vehicle", insurer: "Preview Insurance", policyNumber: "VI-9", startDate: "2026-01-01",
