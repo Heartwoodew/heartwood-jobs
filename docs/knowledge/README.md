@@ -39,6 +39,7 @@ Every topic file cites `file`, function or rule name, and line numbers on that c
 | [11-tenancy-cloud-plans.md](11-tenancy-cloud-plans.md) | Tenant boundaries, Base vs Pro, rules, functions |
 | [12-open-and-planned.md](12-open-and-planned.md) | Open PRs vs planned work vs things not found |
 | [13-limitations.md](13-limitations.md) | Precise limits and gaps |
+| [persona-and-voice.md](persona-and-voice.md) | Helper persona and spoken-reply spec. Not built. |
 | [callup-knowledge.md](callup-knowledge.md) | The same topics in one file |
 
 ## Recommended helper integration
@@ -55,7 +56,7 @@ The unmerged staff-invite callables (PR #14, not on `main`) also set `INVITE_REG
 The function should:
 
 1. Require a Firebase Auth user. `onCall` verifies the ID token. If `request.auth` is missing, return an error and no answer. Do not accept a tenant id, role, or “I am admin” flag from the client. `resolveMembership` in `app/features/cloud-storage.js` (lines 49–84) already ignores `requestedTenantId` and `requestedBusinessId`.
-2. Load this pack (bundled with the function, or read from a private file). Answer how-to questions from the pack. Say **GAP** when the pack says the source is missing.
+2. Load this pack (bundled with the function, or read from a private file). Answer how-to questions from the pack. Say **GAP** when the pack says the source is missing. Follow [persona-and-voice.md](persona-and-voice.md) for tone. That file is a spec only. The app has no helper UI and no spoken replies yet.
 3. For a question about a live record (“what is on my run sheet today”), read Firestore **as that user**, not with an Admin SDK client that bypasses rules. The Admin SDK ignores `firestore.rules`. A rules-scoped read means the user’s token and the rules that are actually published. This repository does **not** contain the live Firestore rules (`cloud/MIGRATION.md` lines 99–100; `cloud/emulator/firestore.rules` lines 1–4). Until those live rules are the ones the function uses, do not answer with other people’s jobs, receipts, invoices, or chat.
 4. Apply the same visibility as the page, even after a rules-scoped read:
    - Dollars only when `canSeeMoney()` would be true (`app/app.js` `canSeeMoney`, line 650).

@@ -4,6 +4,7 @@
 
 ## Do not tell a user these things work
 
+- An in-app helper, a Play button, or spoken replies. [persona-and-voice.md](persona-and-voice.md) is a spec. `app/`, `index.html`, and `cloud/` have no `speechSynthesis` and no helper screen on this commit.
 - Settings and Reports. They are hidden nav tuples with no screen (`app/app.js` line 148, `shell` skips `x[3]`).
 - A timesheet clock, geofence, or “clock on at the job”. Hours are typed. Overnight is finish earlier than start, then minus 30 minutes lunch on every day that has both times.
 - GST on a quote, a second operator, or a dual-machine surcharge. That is **OPEN PR #4** only.
