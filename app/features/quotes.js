@@ -1,4 +1,5 @@
 // CallUp guided Quotes (Nov 2026). Prices always ex GST.
+import { orgSettings, POWERED_BY, PRODUCT_NAME } from "../org-settings.js";
 // Rates from meta/quoteRates only — never invent business rates.
 // Draft/Accepted are explicit quoteStatus fields.
 // Admins + supervisors (canQuote / canSeeMoney). Rate *edits* admin-only (canEditQuoteRates).
@@ -265,7 +266,7 @@ async function geocodeAu(address) {
   ui._nomAt = Date.now();
   const url = `${NOMINATIM}?format=json&limit=1&countrycodes=au&q=${encodeURIComponent(address + ", Queensland, Australia")}`;
   try {
-    const res = await fetch(url, { headers: { Accept: "application/json", "User-Agent": "HeartwoodCallUp-Quotes/1.0 (alex@heartwoodew.com)" } });
+    const res = await fetch(url, { headers: { Accept: "application/json", "User-Agent": `${PRODUCT_NAME}-Quotes/1.0 (alex@heartwoodew.com)` } });
     if (!res.ok) return null;
     const arr = await res.json();
     const hit = arr[0] ? { lat: +arr[0].lat, lng: +arr[0].lon } : null;
@@ -317,7 +318,7 @@ export function quotesViewHtml(ui, esc, $$, helpers = {}) {
   return `<div class="sm-head"><h1>Quotes</h1>
     <div class="row gap"><button type="button" class="sm-btn primary" id="newquote">＋ New quote</button>
     ${editRates ? `<button type="button" class="sm-btn" id="editrates">Quote rates &amp; depot</button>` : `<span class="sub pad">Rates are set by an admin · depot ${esc(rates.yardAddress || DEFAULT_DEPOT.yardAddress)}</span>`}</div></div>
-    <p class="pad sub">Three steps: job details, setup (machine and optional labourer), then review. Travel, materials and rubbish sit on the review. Accepting creates an unscheduled job. Admins and supervisors only. Prices stay ex GST and are never invented.</p>
+    <p class="pad sub">Three steps: job details, setup (machine and optional labourer), then review. Travel, materials and rubbish sit on the review. Accepting creates an unscheduled job. Admins and supervisors only. Prices stay ex GST and are never invented. Quotes are for ${esc(orgSettings().legalName)}. ${esc(POWERED_BY)}.</p>
     <p class="pad sub">Depot (travel start): <b>${esc(rates.yardAddress || DEFAULT_DEPOT.yardAddress)}</b>
       · <a href="${esc(rates.yardMapsUrl || DEFAULT_DEPOT.yardMapsUrl)}" target="_blank" rel="noopener">Maps</a></p>
     ${rateWarn ? `<p class="pad warnt">Set plant (incl. operator), labourer, travel, materials and tip rates before accepting — nothing is invented for you.</p>` : ""}

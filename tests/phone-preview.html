@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Heartwood preview</title>
+<title>CallUp preview</title>
 <script type="importmap">
 {
   "imports": {
@@ -19,7 +19,7 @@
 </head>
 <body>
 <header class="top">
-  <div class="brand"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><g fill="#e7c59a"><rect x="13" y="2" width="6" height="12" rx="3"/><rect x="13" y="18" width="6" height="12" rx="3"/><rect x="2" y="13" width="12" height="6" rx="3"/><rect x="18" y="13" width="12" height="6" rx="3"/></g></svg>Heartwood <span>Jobs</span></div>
+  <div class="brand"><span class="wordmark" aria-label="CallUp">Call<span>Up</span></span><span class="orgline">Heartwood Earthworx</span></div>
   <div class="gsearch hidden" id="gsw"><input id="gq" type="search" placeholder="Search lot, street, PO or job #" autocomplete="off" aria-label="Search jobs"><div id="gres" class="gres hidden"></div></div>
   <div id="who" class="who"></div>
   <button id="logout" class="ghost hidden">Sign out</button>
@@ -75,16 +75,52 @@
   window.HW_PREVIEW_RATES = q.get("rates") || "";
   if (q.get("fleet") === "1") {
     window.HW_FLEET = [
-      { id: "a1", type: "vehicle", name: "Preview tipper", rego: "PRE001", regoExpiry: "2026-10-01", coiRequired: true, coiExpiry: "2026-09-15", notes: "Preview only" },
-      { id: "a4", type: "plant", name: "Preview excavator", rego: "PRE004", regoExpiry: "2026-12-20", coiRequired: true, coiExpiry: "2026-11-10", notes: "" },
-      { id: "a2", type: "trailer", name: "Preview dog trailer", rego: "PRE002", regoExpiry: "2026-11-28", coiRequired: true, coiExpiry: "2027-04-01", notes: "" },
-      { id: "a3", type: "vehicle", name: "Preview ute", rego: "PRE003", regoExpiry: "2027-06-01", coiRequired: false, coiExpiry: "", notes: "" }
+      { id: "a1", type: "vehicle", prestartKind: "tip-truck", name: "Preview tipper", rego: "PRE001", regoExpiry: "2026-10-01", coiRequired: true, coiExpiry: "2026-09-15", notes: "Preview only" },
+      { id: "a4", type: "plant", prestartKind: "excavator", name: "Preview excavator", rego: "PRE004", regoExpiry: "2026-12-20", coiRequired: true, coiExpiry: "2026-11-10", notes: "" },
+      { id: "a2", type: "trailer", prestartKind: "trailer", name: "Preview dog trailer", rego: "PRE002", regoExpiry: "2026-11-28", coiRequired: true, coiExpiry: "2027-04-01", notes: "" },
+      { id: "a3", type: "vehicle", prestartKind: "ute", name: "Preview ute", rego: "PRE003", regoExpiry: "2027-06-01", coiRequired: false, coiExpiry: "", notes: "" }
     ];
     window.HW_POLICIES = [
       { id: "p1", type: "public-liability", insurer: "Preview Mutual", policyNumber: "PL-100", startDate: "2025-09-01", expiry: "2026-09-01", amount: "$20,000,000", notes: "Preview only", assetId: "" },
       { id: "p2", type: "workcover", insurer: "WorkCover Queensland", policyNumber: "WC-PREVIEW", startDate: "2025-07-01", expiry: "2026-11-25", amount: "Statutory", notes: "", assetId: "" },
       { id: "p3", type: "vehicle", insurer: "Preview Insurance", policyNumber: "VI-9", startDate: "2026-01-01", expiry: "2027-01-15", amount: "$10,000,000", notes: "", assetId: "a1" }
     ];
+    window.HW_SERVICING = [
+      { id: "s1", assetId: "a1", doneOn: "2026-05-01", reading: 1000, readingUnit: "hours", serviceType: "major", servicedBy: "Chuwar Diesel", notes: "Preview only" },
+      { id: "s0", assetId: "a1", doneOn: "2025-11-01", reading: 750, readingUnit: "hours", serviceType: "250hr", servicedBy: "Yard", notes: "" },
+      { id: "s2", assetId: "a2", doneOn: "2026-10-20", reading: 0, readingUnit: "", serviceType: "repair", servicedBy: "On site", notes: "" },
+      { id: "s3", assetId: "a3", doneOn: "2026-08-01", reading: 0, readingUnit: "", serviceType: "major", servicedBy: "Yard", notes: "" }
+    ];
+    window.HW_SERVICE_PLANS = [
+      { id: "a1", everyDays: 180, everyReading: 250, readingUnit: "hours", currentReading: 1280 },
+      { id: "a2", everyDays: 40, everyReading: 0, readingUnit: "", currentReading: 0 },
+      { id: "a3", everyDays: 365, everyReading: 0, readingUnit: "", currentReading: 0 },
+      { id: "a4", everyDays: 90, everyReading: 250, readingUnit: "hours", currentReading: 0 }
+    ];
+    window.HW_SERVICE_COSTS = [
+      { id: "s1", amount: "$840" },
+      { id: "s0", amount: "$220" },
+      { id: "s2", amount: "$150" }
+    ];
+  }
+  if (q.get("prestart") === "1") {
+    window.HW_PRESTARTS = [
+      { id: "ps1", assetId: "a1", assetType: "vehicle", assetName: "Preview tipper", kind: "tip-truck", day: "2026-11-06", reading: 1280, readingUnit: "hours", odometer: 84210, signerUid: "patrick", signerName: "Patrick", defect: true, doNotOperate: true, resolved: false,
+        items: [
+          { id: "tt-oil", result: "pass", comment: "", critical: true },
+          { id: "tt-hyd", result: "fail", comment: "Weep at the ram", critical: true }
+        ] }
+    ];
+  }
+  const kindShot = q.get("kind");
+  if (kindShot) {
+    const kindName = { "skid-steer": "Skid steer", excavator: "Excavator", "tip-truck": "Tip truck", ute: "Ute", trailer: "Dog trailer", "other-plant": "Other plant" };
+    const kindType = { trailer: "trailer", "tip-truck": "vehicle", ute: "vehicle" };
+    window.HW_FLEET = [{ id: "k1", type: kindType[kindShot] || "plant", prestartKind: kindShot, name: kindName[kindShot] || "Machine", rego: "", regoExpiry: "2027-06-01", coiRequired: false, coiExpiry: "", notes: "" }];
+    window.HW_PRESTARTS = [];
+  }
+  if (q.get("open") === "prestartadmin") {
+    window.HW_JOB_CREW = { j3: { uid: "sam", name: "Sam" } };
   }
   if (q.get("open") === "optimise") {
     window.HW_GEO_BY_ID = {
@@ -286,6 +322,40 @@ if (q.get("open") === "stafffleet") {
   await sleep(40);
   document.querySelector('[data-go="fleet"]')?.click();
   await waitFor(".comp-card");
+}
+if (q.get("open") === "servicing" || q.get("open") === "serviceedit") {
+  document.querySelector('[data-view="compliance"]')?.click();
+  await waitFor('[data-ctab="servicing"]');
+  document.querySelector('[data-ctab="servicing"]')?.click();
+  await waitFor("[data-service-asset]");
+}
+if (q.get("open") === "serviceedit") {
+  document.querySelector('[data-comp-edit="service"]')?.click();
+  await waitFor("#compform");
+}
+if (q.get("open") === "prestart" || q.get("open") === "kind") {
+  document.querySelector('[data-tab="more"]')?.click();
+  await sleep(40);
+  document.querySelector('[data-go="prestart"]')?.click();
+  await waitFor("#prestartform");
+  if (q.get("open") === "prestart") {
+    const crit = document.querySelector("#prestartform .ps-critical");
+    crit?.querySelector('input[value="fail"]')?.click();
+    const note = crit?.querySelector('input[name^="comment"]');
+    if (note) note.value = "Weep at the ram";
+  }
+}
+if (q.get("open") === "prestartadmin") {
+  document.querySelector('[data-view="prestart"]')?.click();
+  await waitFor("#prestartform");
+}
+if (q.get("open") === "staffservice") {
+  document.querySelector('[data-tab="more"]')?.click();
+  await sleep(40);
+  document.querySelector('[data-go="fleet"]')?.click();
+  await waitFor('[data-ctab="servicing"]');
+  document.querySelector('[data-ctab="servicing"]')?.click();
+  await waitFor("[data-service-asset]");
 }
 if (q.get("open") === "sign") {
   document.querySelector('.mrow[data-id="j2"]')?.click();

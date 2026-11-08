@@ -1,0 +1,141 @@
+// Firestore prestart rules to merge into the LIVE ruleset for heartwood-9f37f.
+// Paste this block once, inside the existing:
+//   service cloud.firestore { match /databases/{database}/documents { ... } }
+// Do not deploy this file. It does not change fleet, servicing, jobs, receipts or finance.
+//
+//   tenants/{tenantId}/prestarts/{id}              daily checklist.
+// Create: any signed-in member of the tenant who has a users profile
+// (operators, supervisors, admins, and test accounts such as Test Worker).
+// Alex and Patrick count as Heartwood members even without a profile doc.
+// The machine does not have to be assigned to the signer.
+//   tenants/{tenantId}/prestartTemplates/{type}    checklist per asset type. Admins write.
+// Staff cannot update or delete a submitted checklist.
+// An admin may only mark an open defect resolved.
+// Checklist items are checked in the app. Rules check the list length and the
+// first and last item. Unrolling every index exceeds the rules evaluator limit.
+// Photos are not part of these rules. Do not widen Storage for them.
+
+// BEGIN PRESTART RULES
+    function psSignedIn() { return request.auth != null; }
+    function psIsAlex() { return psSignedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
+    function psIsPatrick() { return psSignedIn() && request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"; }
+    function psUserPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function psHasProfile() { return psSignedIn() && exists(psUserPath()); }
+    function psProfile() { return get(psUserPath()).data; }
+    function psExplicitTenant() {
+      return psHasProfile() && "tenantId" in psProfile() && psProfile().tenantId is string && psProfile().tenantId.size() > 0;
+    }
+    function psCallerTenant() {
+      return psExplicitTenant()
+        ? psProfile().tenantId
+        : ((psHasProfile() || psIsAlex() || psIsPatrick()) ? "heartwood" : "");
+    }
+    function psMember(tenantId) {
+      return psSignedIn()
+        && tenantId is string
+        && tenantId.matches('^[a-z0-9][a-z0-9-]{0,39}$')
+        && psCallerTenant() == tenantId;
+    }
+    function psAdmin(tenantId) {
+      return psMember(tenantId) && (
+        psIsAlex() || psIsPatrick() || (psHasProfile() && "role" in psProfile() && psProfile().role == "admin")
+      );
+    }
+    function psKindOk(kind) {
+      return kind == "skid-steer" || kind == "excavator" || kind == "tip-truck"
+        || kind == "ute" || kind == "trailer" || kind == "other-plant";
+    }
+    function psItem(item) {
+      return item.keys().hasOnly(["id", "result", "comment", "critical"])
+        && item.id is string
+        && item.id.size() > 0
+        && item.id.size() <= 40
+        && (item.result == "pass" || item.result == "fail" || item.result == "na")
+        && item.comment is string
+        && item.comment.size() <= 500
+        && (item.result != "fail" || item.comment.size() > 0)
+        && item.critical is bool;
+    }
+    function psItems(items) {
+      return items is list
+        && items.size() >= 1
+        && items.size() <= 16
+        && psItem(items[0])
+        && psItem(items[items.size() - 1]);
+    }
+    function psTpl(item) {
+      return item.keys().hasOnly(["id", "label", "critical"])
+        && item.id is string && item.id.size() > 0 && item.id.size() <= 40
+        && item.label is string && item.label.size() > 0 && item.label.size() <= 60
+        && item.critical is bool;
+    }
+    function psCreateOk() {
+      return request.resource.data.keys().hasOnly(["assetId", "assetType", "assetName", "kind", "day", "reading", "readingUnit", "odometer", "items", "signerUid", "signerName", "signedAt", "defect", "doNotOperate", "resolved"])
+        && request.resource.data.assetId is string
+        && request.resource.data.assetId.matches('^[A-Za-z0-9_-]{1,80}$')
+        && (request.resource.data.assetType == "vehicle" || request.resource.data.assetType == "trailer" || request.resource.data.assetType == "plant")
+        && psKindOk(request.resource.data.kind)
+        && request.resource.data.assetName is string
+        && request.resource.data.assetName.size() > 0
+        && request.resource.data.assetName.size() <= 80
+        && request.resource.data.day is string
+        && request.resource.data.day.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && request.resource.data.reading is int
+        && request.resource.data.reading >= 0
+        && request.resource.data.reading <= 10000000
+        && (request.resource.data.readingUnit == "" || request.resource.data.readingUnit == "hours" || request.resource.data.readingUnit == "km")
+        && request.resource.data.odometer is int
+        && request.resource.data.odometer >= 0
+        && request.resource.data.odometer <= 10000000
+        && psItems(request.resource.data.items)
+        && request.resource.data.signerUid == request.auth.uid
+        && request.resource.data.signerName is string
+        && request.resource.data.signerName.size() >= 2
+        && request.resource.data.signerName.size() <= 80
+        && request.resource.data.signedAt == request.time
+        && request.resource.data.defect is bool
+        && request.resource.data.doNotOperate is bool
+        && request.resource.data.resolved == false;
+    }
+    function psSame(key) {
+      return request.resource.data[key] == resource.data[key];
+    }
+    function psResolveOk() {
+      return resource.data.defect == true
+        && resource.data.resolved == false
+        && request.resource.data.resolved == true
+        && request.resource.data.resolvedBy == request.auth.uid
+        && request.resource.data.resolvedNote is string
+        && request.resource.data.resolvedNote.size() <= 500
+        && request.resource.data.resolvedAt == request.time
+        && psSame("assetId") && psSame("assetType") && psSame("assetName") && psSame("kind")
+        && psSame("day") && psSame("reading") && psSame("readingUnit") && psSame("odometer")
+        && psSame("items") && psSame("signerUid") && psSame("signerName")
+        && psSame("signedAt") && psSame("defect") && psSame("doNotOperate");
+    }
+    function psTemplateOk() {
+      return request.resource.data.keys().hasOnly(["items", "updatedAt", "updatedBy"])
+        && request.resource.data.items is list
+        && request.resource.data.items.size() >= 1
+        && request.resource.data.items.size() <= 16
+        && psTpl(request.resource.data.items[0])
+        && psTpl(request.resource.data.items[request.resource.data.items.size() - 1])
+        && request.resource.data.updatedBy == request.auth.uid
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    match /tenants/{tenantId}/prestarts/{id} {
+      allow read: if psMember(tenantId);
+      allow create: if psMember(tenantId) && psCreateOk();
+      allow update: if psAdmin(tenantId) && psResolveOk();
+      allow delete: if false;
+    }
+
+    match /tenants/{tenantId}/prestartTemplates/{assetType} {
+      allow read: if psMember(tenantId);
+      allow create, update: if psAdmin(tenantId)
+        && psKindOk(assetType)
+        && psTemplateOk();
+      allow delete: if false;
+    }
+// END PRESTART RULES

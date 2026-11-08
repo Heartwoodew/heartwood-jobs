@@ -3,11 +3,13 @@
 // heavy vehicles and trailers. COI is not insurance.
 // Policies: WorkCover (QLD workers' compensation) and insurance. Admin only.
 //
-// features.fleet and features.policies are on for Heartwood. Base plan stays off.
+// features.fleet, features.policies, features.servicing and features.prestart are on for Heartwood. Base plan stays off.
 // Paper photos are not stored. Storage has no fleet or policy path, and this
 // build does not add one. Real plates are not seeded.
 
 import { CALLUP_BASE, HEARTWOOD_TENANT, resolveMembership } from "./cloud-storage.js";
+import { costPayload, intervalFormHtml, planPayload, serviceAttention, serviceFormHtml, servicePayload, serviceViews, servicingHtml } from "./servicing.js";
+import { PRESTART_KINDS, assetKind, itemsFor, kindMeta, openDefects, prestartAdminHtml, prestartFormHtml, prestartHistoryHtml, prestartPayload, templateFormHtml, templatePayload, templateSeedDocs } from "./prestart.js";
 
 export const DUE_DAYS = 30;
 
@@ -31,11 +33,11 @@ export const LINKED_POLICY_TYPES = Object.freeze(["vehicle", "plant"]);
 export const CALLUP_PLANS = Object.freeze({
   base: Object.freeze({
     plan: "base",
-    features: Object.freeze({ fleet: false, policies: false }),
+    features: Object.freeze({ fleet: false, policies: false, servicing: false, prestart: false }),
   }),
   pro: Object.freeze({
     plan: "pro",
-    features: Object.freeze({ fleet: true, policies: true }),
+    features: Object.freeze({ fleet: true, policies: true, servicing: true, prestart: true }),
   }),
 });
 
@@ -60,6 +62,15 @@ export function canEditCompliance(plan, role) {
 }
 export function canViewPolicies(plan, role) {
   return !!(plan && plan.features && plan.features.policies && role === "admin");
+}
+export function canViewServicing(plan) {
+  return !!(plan && plan.features && plan.features.servicing);
+}
+export function canEditServicing(plan, role, staffRole) {
+  return canViewServicing(plan) && (role === "admin" || role === "supervisor" || staffRole === "supervisor");
+}
+export function canViewPrestart(plan) {
+  return !!(plan && plan.features && plan.features.prestart);
 }
 
 export function addIsoDays(iso, n) {
@@ -163,9 +174,12 @@ export function assetPayload(input, uid) {
   if (notes.length > 2000) return { ok: false, reason: "Notes are too long." };
   if (!dateOk(regoExpiry) || !dateOk(coiExpiry)) return { ok: false, reason: "Use a date, or leave it blank." };
   if (!uid) return { ok: false, reason: "Sign in again." };
+  const asked = text(input && input.prestartKind);
+  const fallback = type === "trailer" ? "trailer" : type === "plant" ? "other-plant" : "ute";
+  const prestartKind = kindMeta(asked) ? asked : fallback;
   return {
     ok: true,
-    data: { type, name, rego, regoExpiry, coiRequired, coiExpiry: coiRequired ? coiExpiry : "", notes, updatedBy: uid },
+    data: { type, name, rego, regoExpiry, coiRequired, coiExpiry: coiRequired ? coiExpiry : "", notes, prestartKind, updatedBy: uid },
   };
 }
 
@@ -216,7 +230,7 @@ export function fleetCardsHtml(assets, today, { editable = false } = {}) {
       : `<div class="comp-line"><span class="lbl">COI</span><span>Not required</span></div>`;
     const edit = editable ? `<button type="button" class="sm-btn" data-comp-edit="asset" data-comp-id="${esc(a.id)}">Edit</button>` : "";
     return `<article class="comp-card" data-asset="${esc(a.id)}">
-      <div class="comp-top"><div><b>${esc(a.name || "Vehicle")}</b><div class="sub">${esc(typeLabel(ASSET_TYPES, a.type))}${a.rego ? ` · ${esc(a.rego)}` : ""}</div></div>${pill(a.status.k, a.status.label)}</div>
+      <div class="comp-top"><div><b>${esc(a.name || "Vehicle")}</b><div class="sub">${esc(typeLabel(ASSET_TYPES, a.type))} · ${esc((kindMeta(assetKind(a)) || {}).label || "Prestart")}${a.rego ? ` · ${esc(a.rego)}` : ""}</div></div>${pill(a.status.k, a.status.label)}</div>
       <div class="comp-lines"><div class="comp-line"><span class="lbl">Rego</span><span>${esc(a.status.rego.text)}</span>${pill(a.status.rego.k, a.status.rego.label)}</div>${coi}</div>
       ${a.notes ? `<p class="sub">${esc(a.notes)}</p>` : ""}
       ${edit ? `<div class="comp-actions">${edit}</div>` : ""}
@@ -248,25 +262,31 @@ function countLine(n, one, many) {
   return `${n} ${n === 1 ? one : many}`;
 }
 
-export function bannerHtml({ assets, policies, today, includePolicies, error, go }) {
+export function bannerHtml({ assets, policies, today, includePolicies, error, go, serviceOverdue = 0, serviceDue = 0, serviceNames = [], prestartDefects = 0, prestartStops = 0, prestartNames = [] }) {
   if (error && !(assets || []).length && !(includePolicies && (policies || []).length)) {
     const title = includePolicies ? "Compliance couldn't load" : "Fleet status couldn't load";
     return `<button type="button" class="swremind sw-due comp-banner" data-go="${esc(go)}"><span class="ic">🚐</span><span><b>${title}</b><small>${esc(error)}</small></span><span class="chev">›</span></button>`;
   }
   const counts = attentionCounts(assets, policies, today, includePolicies);
-  if (!needsAttention(counts)) return "";
+  if (!needsAttention(counts) && !serviceOverdue && !serviceDue && !prestartDefects) return "";
   const parts = [
     countLine(counts.fleetExpired, "fleet item expired", "fleet items expired"),
     countLine(counts.fleetDue, "rego or COI due within 30 days", "regos or COIs due within 30 days"),
     includePolicies ? countLine(counts.policyExpired, "policy expired", "policies expired") : "",
     includePolicies ? countLine(counts.policyDue, "policy due within 30 days", "policies due within 30 days") : "",
+    countLine(serviceOverdue, "service overdue", "services overdue"),
+    countLine(serviceDue, "service due within 30 days", "services due within 30 days"),
+    countLine(prestartStops, "do not operate", "do not operate"),
+    countLine(Math.max(0, prestartDefects - prestartStops), "defect — check before use", "defects — check before use"),
   ].filter(Boolean);
   const named = [
     ...sortBySoonest(withStatus(assets, today, "asset")).filter(a => a.status.k !== "ok").map(a => a.name || "Vehicle"),
     ...(includePolicies ? sortBySoonest(withStatus(policies, today, "policy")).filter(p => p.status.k !== "ok").map(p => typeLabel(POLICY_TYPES, p.type)) : []),
+    ...serviceNames,
+    ...prestartNames,
   ];
   const extra = named.length ? ` — ${named.slice(0, 3).join(", ")}${named.length > 3 ? ` +${named.length - 3}` : ""}` : "";
-  const cls = (counts.fleetExpired || counts.policyExpired) ? "sw-exp" : "sw-due";
+  const cls = (counts.fleetExpired || counts.policyExpired || serviceOverdue || prestartDefects) ? "sw-exp" : "sw-due";
   const title = includePolicies ? "Compliance needs attention" : "Fleet needs attention";
   return `<button type="button" class="swremind ${cls} comp-banner" data-go="${esc(go)}"><span class="ic">🚐</span><span><b>${title}</b><small>${esc(parts.join(" · ") + extra)}</small></span><span class="chev">›</span></button>`;
 }
@@ -281,6 +301,7 @@ function assetFormHtml(asset, editableId) {
     <h2>${editableId ? "Edit vehicle" : "Add vehicle"}</h2>
     <p class="comp-help">Registration and Queensland certificate of inspection (COI) for heavy vehicles and trailers. COI is not insurance. Photos of the paper are not stored in the app.</p>
     <label>Type<select name="type">${options(ASSET_TYPES, a.type || "vehicle")}</select></label>
+    <label>Prestart checklist<select name="prestartKind">${options(PRESTART_KINDS.map(kind => [kind.id, kind.label]), assetKind(a))}</select></label>
     <label>Name<input name="name" required maxlength="80" value="${esc(a.name || "")}" autocomplete="off"></label>
     <label>Plate / rego<input name="rego" maxlength="20" value="${esc(a.rego || "")}" autocomplete="off"></label>
     <label>Rego expiry<input name="regoExpiry" type="date" value="${esc(a.regoExpiry || "")}"></label>
@@ -321,8 +342,16 @@ export function installCompliance(deps) {
   const state = {
     assets: [],
     policies: [],
+    records: [],
+    plans: [],
+    costs: {},
+    prestarts: [],
+    templates: [],
     fleetError: "",
     policyError: "",
+    serviceError: "",
+    prestartError: "",
+    seedTried: false,
     editing: null,
     tab: "fleet",
     unsub: null,
@@ -333,15 +362,32 @@ export function installCompliance(deps) {
   function plan() { return complianceFor(me()); }
   function today() { return deps.today(); }
   function admin() { return !!(me() && me().role === "admin"); }
+  function seeMoney() { return !!(deps.canSeeMoney && deps.canSeeMoney()); }
+  function editService() {
+    const who = me();
+    return canEditServicing(plan(), who && who.role, who && who.staffRole);
+  }
+  function viewService() { return canViewServicing(plan()); }
+  function viewPrestart() { return canViewPrestart(plan()); }
+  function serviceSummary() {
+    if (!viewService()) return { overdue: 0, due: 0, names: [] };
+    return serviceAttention(serviceViews(state.assets, state.records, state.plans, today()));
+  }
+  function rerender() {
+    const who = me();
+    const ui = deps.getUi();
+    if (who && who.role === "admin" && !ui.myJobs) deps.rerenderAdmin();
+    else deps.rerenderOperator();
+  }
 
   function refresh() {
-    if (document.querySelector("#compform")) return;
+    if (document.querySelector("#compform, #prestartform")) return;
     const who = me();
     if (!who) return;
     const ui = deps.getUi();
     if (who.role === "admin" && !ui.myJobs) {
-      if (ui.view === "home" || ui.view === "compliance") deps.rerenderAdmin();
-    } else if (!ui.opSel && (ui.opTab === "fleet" || ui.opTab === "today" || !ui.opTab)) {
+      if (ui.view === "home" || ui.view === "compliance" || ui.view === "prestart") deps.rerenderAdmin();
+    } else if (!ui.opSel && (ui.opTab === "fleet" || ui.opTab === "prestart" || ui.opTab === "today" || !ui.opTab)) {
       deps.rerenderOperator();
     }
   }
@@ -350,16 +396,39 @@ export function installCompliance(deps) {
     if (state.unsub) { state.unsub(); state.unsub = null; }
     state.assets = [];
     state.policies = [];
+    state.records = [];
+    state.plans = [];
+    state.costs = {};
+    state.prestarts = [];
+    state.templates = [];
     state.fleetError = "";
     state.policyError = "";
+    state.serviceError = "";
+    state.prestartError = "";
+    state.seedTried = false;
     state.editing = null;
+  }
+
+  async function maybeSeed() {
+    if (state.seedTried || state.templates.length || !admin() || !viewPrestart()) return;
+    const who = me();
+    const docs = templateSeedDocs(state.templates, who && who.uid);
+    if (!docs.length) return;
+    state.seedTried = true;
+    try {
+      for (const row of docs) {
+        await deps.setDoc(deps.doc(deps.db, "tenants", tenant(), "prestartTemplates", row.id), { ...row.data, updatedAt: deps.serverTimestamp() });
+      }
+    } catch (err) {
+      console.warn("prestart seed", err && (err.code || err.message));
+    }
   }
 
   function start() {
     stop();
     const who = me();
     const entitlement = plan();
-    if (!who || !canViewFleet(entitlement)) return;
+    if (!who || (!canViewFleet(entitlement) && !canViewServicing(entitlement) && !canViewPrestart(entitlement))) return;
     const tenantId = resolveMembership({ uid: who.uid, profile: who.cloudProfile || null }).tenantId;
     const offs = [];
     offs.push(deps.onSnapshot(deps.collection(deps.db, "tenants", tenantId, "fleet"), snap => {
@@ -383,15 +452,58 @@ export function installCompliance(deps) {
         refresh();
       }));
     }
+    if (canViewServicing(entitlement)) {
+      offs.push(deps.onSnapshot(deps.collection(deps.db, "tenants", tenantId, "servicing"), snap => {
+        state.records = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        state.serviceError = "";
+        refresh();
+      }, err => {
+        state.serviceError = err && (err.code || err.message) || "unavailable";
+        console.warn("servicing", state.serviceError);
+        refresh();
+      }));
+      offs.push(deps.onSnapshot(deps.collection(deps.db, "tenants", tenantId, "servicePlans"), snap => {
+        state.plans = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        refresh();
+      }, err => { console.warn("servicePlans", err && err.code); }));
+      if (seeMoney()) {
+        offs.push(deps.onSnapshot(deps.collection(deps.db, "tenants", tenantId, "serviceCosts"), snap => {
+          const costs = {};
+          snap.docs.forEach(d => { costs[d.id] = d.data().amount || ""; });
+          state.costs = costs;
+          refresh();
+        }, err => { state.costs = {}; console.warn("serviceCosts", err && err.code); }));
+      }
+    }
+    if (canViewPrestart(entitlement)) {
+      offs.push(deps.onSnapshot(deps.collection(deps.db, "tenants", tenantId, "prestarts"), snap => {
+        state.prestarts = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        state.prestartError = "";
+        refresh();
+      }, err => {
+        state.prestartError = err && (err.code || err.message) || "unavailable";
+        console.warn("prestarts", state.prestartError);
+        refresh();
+      }));
+      offs.push(deps.onSnapshot(deps.collection(deps.db, "tenants", tenantId, "prestartTemplates"), snap => {
+        state.templates = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        maybeSeed();
+        refresh();
+      }, err => { console.warn("prestartTemplates", err && err.code); }));
+    }
     state.unsub = () => { offs.forEach(fn => fn()); state.unsub = null; };
   }
 
   function adminBannerHtml() {
     if (!canViewFleet(plan()) || !admin()) return "";
-    const err = [state.fleetError, state.policyError].filter(Boolean).join(", ");
+    const err = [state.fleetError, state.policyError, state.serviceError, state.prestartError].filter(Boolean).join(", ");
+    const svc = serviceSummary();
+    const defects = viewPrestart() ? openDefects(state.prestarts) : [];
     return bannerHtml({
       assets: state.assets, policies: state.policies, today: today(),
       includePolicies: canViewPolicies(plan(), "admin"), error: err, go: "compliance",
+      serviceOverdue: svc.overdue, serviceDue: svc.due, serviceNames: svc.names,
+      prestartDefects: defects.length, prestartStops: defects.filter(row => row.doNotOperate).length, prestartNames: defects.map(row => row.assetName || "Machine"),
     });
   }
 
@@ -405,30 +517,99 @@ export function installCompliance(deps) {
     });
   }
 
+  function tabOf(adminView) {
+    const ui = deps.getUi() || {};
+    const showService = viewService();
+    const showPrestart = viewPrestart();
+    const showPolicies = adminView && canViewPolicies(plan(), "admin");
+    if ((ui.view === "prestart" || ui.opTab === "prestart") && showPrestart) return "prestart";
+    if (state.tab === "servicing" && showService) return "servicing";
+    if (state.tab === "prestart" && showPrestart) return "prestart";
+    if (state.tab === "policies" && showPolicies) return "policies";
+    return "fleet";
+  }
+
+  function tabsHtml(tab, adminView) {
+    const showService = viewService();
+    const showPrestart = viewPrestart();
+    const showPolicies = adminView && canViewPolicies(plan(), "admin");
+    return `<div class="qtabs" role="tablist">
+      <button type="button" data-ctab="fleet" class="${tab === "fleet" ? "on" : ""}" role="tab" aria-selected="${tab === "fleet"}">Fleet <span>${state.assets.length}</span></button>
+      ${showService ? `<button type="button" data-ctab="servicing" class="${tab === "servicing" ? "on" : ""}" role="tab" aria-selected="${tab === "servicing"}">Servicing <span>${state.assets.length}</span></button>` : ""}
+      ${showPrestart ? `<button type="button" data-ctab="prestart" class="${tab === "prestart" ? "on" : ""}" role="tab" aria-selected="${tab === "prestart"}">Prestart <span>${state.prestarts.length}</span></button>` : ""}
+      ${showPolicies ? `<button type="button" data-ctab="policies" class="${tab === "policies" ? "on" : ""}" role="tab" aria-selected="${tab === "policies"}">Policies <span>${state.policies.length}</span></button>` : ""}
+    </div>`;
+  }
+
+  function prestartBlock(adminView) {
+    const err = state.prestartError ? `<p class="err">Couldn't load prestarts (${esc(state.prestartError)}).</p>` : "";
+    if (state.editing && state.editing.kind === "template") {
+      const type = state.editing.id || "ute";
+      return templateFormHtml(type, itemsFor(type, state.templates));
+    }
+    const asset = state.assets.find(item => item.id === state.prestartAsset) || state.assets[0];
+    const kind = assetKind(asset);
+    const items = itemsFor(kind, state.templates);
+    const form = prestartFormHtml({
+      assets: state.assets, assetId: asset && asset.id, items, kind,
+      signerName: me() && me().name, defects: openDefects(state.prestarts),
+    });
+    if (!adminView) return `${err}${form}<h3 class="swh">History</h3>${prestartHistoryHtml(state.prestarts)}`;
+    const jobs = deps.getJobs ? deps.getJobs() : [];
+    const tools = `<div class="comp-actions">${PRESTART_KINDS.map(row => `<button type="button" class="sm-btn" data-ps-template="${esc(row.id)}">${esc(row.label)}</button>`).join("")}</div>`;
+    return `${err}${form}${tools}${prestartAdminHtml({ assets: state.assets, prestarts: state.prestarts, jobs, today: today(), canResolve: true })}`;
+  }
+
+  function servicingBlock(editable) {
+    const views = serviceViews(state.assets, state.records, state.plans, today());
+    const err = state.serviceError ? `<p class="err">Couldn't load servicing (${esc(state.serviceError)}).</p>` : "";
+    const who = editable ? "Admins and supervisors can add service records." : "You can see the last service and when the next one is due. Costs are hidden.";
+    return `${err}<p class="comp-help">${who} Invoices and photos are not stored in the app.</p>${servicingHtml(views, { editable, showCost: editable && seeMoney(), costs: state.costs })}`;
+  }
+
+  function editHtml() {
+    const edit = state.editing;
+    if (!edit) return "";
+    if (edit.kind === "service") {
+      const row = state.records.find(r => r.id === edit.id) || null;
+      return serviceFormHtml(row, state.assets, state.costs, { showCost: seeMoney(), presetAsset: edit.assetId || "" });
+    }
+    if (edit.kind === "interval") {
+      const asset = state.assets.find(a => a.id === edit.id);
+      if (!asset) return "";
+      return intervalFormHtml(asset, state.plans.find(p => p.id === asset.id));
+    }
+    if (edit.kind === "policy") {
+      const row = state.policies.find(p => p.id === edit.id) || null;
+      return policyFormHtml(row, state.assets, edit.id);
+    }
+    const row = state.assets.find(a => a.id === edit.id) || null;
+    return assetFormHtml(row, edit.id);
+  }
+
   function staffHtml() {
-    if (!canViewFleet(plan())) return "";
+    if (!canViewFleet(plan()) && !viewService() && !viewPrestart()) return "";
+    if (state.editing && (state.editing.kind === "service" || state.editing.kind === "interval")) return editHtml();
+    const tab = tabOf(false);
+    const tabs = (viewService() || viewPrestart()) ? tabsHtml(tab, false) : "";
+    if (tab === "prestart") return `${tabs}${prestartBlock(false)}`;
+    if (tab === "servicing") return `${tabs}${servicingBlock(editService())}`;
     const err = state.fleetError ? `<p class="muted pad">Fleet status isn't available right now.</p>` : "";
-    return `${err}<p class="comp-help pad-note">Registration and Queensland certificate of inspection (COI). COI is not insurance. You can check a vehicle is roadworthy. Only an admin can change this list.</p>${fleetCardsHtml(state.assets, today(), { editable: false })}`;
+    return `${tabs}${err}<p class="comp-help pad-note">Registration and Queensland certificate of inspection (COI). COI is not insurance. You can check a vehicle is roadworthy. Only an admin can change this list.</p>${fleetCardsHtml(state.assets, today(), { editable: false })}`;
   }
 
   function adminHtml() {
-    if (!canViewFleet(plan())) return `<p class="pad">Compliance is a CallUp Pro feature.</p>`;
-    if (state.editing) {
-      if (state.editing.kind === "policy") {
-        const row = state.policies.find(p => p.id === state.editing.id) || null;
-        return policyFormHtml(row, state.assets, state.editing.id);
-      }
-      const row = state.assets.find(a => a.id === state.editing.id) || null;
-      return assetFormHtml(row, state.editing.id);
-    }
-    const showPolicies = canViewPolicies(plan(), "admin");
-    const tab = state.tab === "policies" && showPolicies ? "policies" : "fleet";
-    const tabs = `<div class="qtabs" role="tablist">
-      <button type="button" data-ctab="fleet" class="${tab === "fleet" ? "on" : ""}" role="tab" aria-selected="${tab === "fleet"}">Fleet <span>${state.assets.length}</span></button>
-      ${showPolicies ? `<button type="button" data-ctab="policies" class="${tab === "policies" ? "on" : ""}" role="tab" aria-selected="${tab === "policies"}">Policies <span>${state.policies.length}</span></button>` : ""}
-    </div>`;
-    const addLabel = tab === "policies" ? "Add policy" : "Add vehicle";
-    const head = `<div class="sm-head"><h1>Compliance <span class="comp-pro">Pro</span></h1><button type="button" class="sm-btn primary comp-add" data-comp-add="${tab}">${addLabel}</button></div>${tabs}`;
+    if (!canViewFleet(plan()) && !viewService() && !viewPrestart()) return `<p class="pad">Compliance is a CallUp Pro feature.</p>`;
+    if (state.editing && state.editing.kind === "template") return prestartBlock(true);
+    if (state.editing) return editHtml();
+    const tab = tabOf(true);
+    const add = tab === "policies" ? `<button type="button" class="sm-btn primary comp-add" data-comp-add="policy">Add policy</button>`
+      : tab === "servicing" ? (editService() ? `<button type="button" class="sm-btn primary comp-add" data-comp-add="service">Add service</button>` : "")
+      : tab === "prestart" ? ""
+      : `<button type="button" class="sm-btn primary comp-add" data-comp-add="asset">Add vehicle</button>`;
+    const head = `<div class="sm-head"><h1>Compliance <span class="comp-pro">Pro</span></h1>${add}</div>${tabsHtml(tab, true)}`;
+    if (tab === "prestart") return `${head}${prestartBlock(true)}`;
+    if (tab === "servicing") return `${head}${servicingBlock(true)}`;
     if (tab === "policies") {
       const err = state.policyError ? `<p class="err">Couldn't load policies (${esc(state.policyError)}).</p>` : "";
       return `${head}${err}<p class="comp-help">WorkCover Queensland, public liability, vehicle and plant insurance, and contract works. Staff cannot see policy details.</p>${policyCardsHtml(state.policies, state.assets, today())}`;
@@ -437,23 +618,106 @@ export function installCompliance(deps) {
     return `${head}${err}<p class="comp-help">Registration and Queensland certificate of inspection (COI) for heavy vehicles and trailers. COI is not insurance. Staff can view status and cannot edit.</p>${fleetCardsHtml(state.assets, today(), { editable: true })}`;
   }
 
-  async function save(form) {
-    if (state.saving) return;
-    if (!canEditCompliance(plan(), me() && me().role)) return deps.toast("Only an admin can change this.");
-    const kind = form.dataset.kind;
-    const raw = Object.fromEntries(new FormData(form).entries());
-    if (kind === "asset") raw.coiRequired = !!form.coiRequired.checked;
-    const built = kind === "policy" ? policyPayload(raw, me().uid) : assetPayload(raw, me().uid);
+  function tenant() {
+    return resolveMembership({ uid: me().uid, profile: me().cloudProfile || null }).tenantId;
+  }
+
+  async function submitPrestart(form) {
+    if (state.saving || !viewPrestart()) return;
+    const asset = state.assets.find(item => item.id === form.assetId.value);
+    const items = itemsFor(assetKind(asset), state.templates);
+    const answers = {};
+    for (const item of items) {
+      const picked = form.querySelector(`input[name="result-${item.id}"]:checked`);
+      answers[item.id] = { result: picked ? picked.value : "", comment: form[`comment-${item.id}`] ? form[`comment-${item.id}`].value : "" };
+    }
+    const built = prestartPayload({
+      asset, day: today(), reading: form.reading.value, readingUnit: form.readingUnit.value, odometer: form.odometer ? form.odometer.value : "",
+      answers, signerName: form.signerName.value, items,
+    }, me().uid);
     if (!built.ok) return deps.toast(built.reason);
-    const tenantId = resolveMembership({ uid: me().uid, profile: me().cloudProfile || null }).tenantId;
-    const col = kind === "policy" ? "policies" : "fleet";
-    const id = form.dataset.compId || newId();
     state.saving = true;
     try {
-      await deps.setDoc(deps.doc(deps.db, "tenants", tenantId, col, id), { ...built.data, updatedAt: deps.serverTimestamp() });
+      await deps.setDoc(deps.doc(deps.db, "tenants", tenant(), "prestarts", newId()), { ...built.data, signedAt: deps.serverTimestamp() });
+      form.reset();
+      deps.toast(built.data.doNotOperate ? "Do not operate. The defect is flagged." : built.data.defect ? "Submitted. Defect — check before use." : "Prestart submitted.");
+      rerender();
+    } catch (err) {
+      deps.toast("Not saved: " + ((err && (err.code || err.message)) || "failed"));
+    } finally {
+      state.saving = false;
+    }
+  }
+
+  async function resolveDefect(id) {
+    if (!admin()) return;
+    const typed = prompt("How was the defect cleared?");
+    if (typed == null) return;
+    const note = String(typed).trim().slice(0, 500);
+    try {
+      await deps.updateDoc(deps.doc(deps.db, "tenants", tenant(), "prestarts", id), {
+        resolved: true, resolvedBy: me().uid, resolvedNote: note, resolvedAt: deps.serverTimestamp(),
+      });
+      deps.toast("Defect marked resolved.");
+      rerender();
+    } catch (err) {
+      deps.toast("Not saved: " + ((err && (err.code || err.message)) || "failed"));
+    }
+  }
+
+  async function save(form) {
+    if (state.saving) return;
+    const kind = form.dataset.kind;
+    if (kind === "template") {
+      if (!admin()) return deps.toast("Only an admin can change the checklist.");
+      const picked = {};
+      for (const item of itemsFor(form.dataset.compId, [])) {
+        const box = form[`on-${item.id}`];
+        const crit = form[`crit-${item.id}`];
+        picked[item.id] = { on: !!(box && box.checked), label: form[`label-${item.id}`] ? form[`label-${item.id}`].value : "", critical: !!(crit && crit.checked) };
+      }
+      const built = templatePayload(form.dataset.compId, picked, me().uid);
+      if (!built.ok) return deps.toast(built.reason);
+      state.saving = true;
+      try {
+        await deps.setDoc(deps.doc(deps.db, "tenants", tenant(), "prestartTemplates", form.dataset.compId), { ...built.data, updatedAt: deps.serverTimestamp() });
+        state.editing = null;
+        state.tab = "prestart";
+        deps.toast("Checklist saved");
+        rerender();
+      } catch (err) {
+        deps.toast("Not saved: " + ((err && (err.code || err.message)) || "failed"));
+      } finally {
+        state.saving = false;
+      }
+      return;
+    }
+    const serviceKind = kind === "service" || kind === "interval";
+    if (serviceKind) {
+      if (!editService()) return deps.toast("Only an admin or supervisor can change servicing.");
+    } else if (!canEditCompliance(plan(), me() && me().role)) return deps.toast("Only an admin can change this.");
+    const raw = Object.fromEntries(new FormData(form).entries());
+    if (kind === "asset") raw.coiRequired = !!form.coiRequired.checked;
+    const built = kind === "policy" ? policyPayload(raw, me().uid)
+      : kind === "service" ? servicePayload(raw, me().uid)
+      : kind === "interval" ? planPayload(raw, me().uid)
+      : assetPayload(raw, me().uid);
+    if (!built.ok) return deps.toast(built.reason);
+    const cost = kind === "service" && seeMoney() ? costPayload(raw, me().uid) : { ok: true, data: null };
+    if (!cost.ok) return deps.toast(cost.reason);
+    const id = kind === "interval" ? form.dataset.compId : (form.dataset.compId || newId());
+    const col = kind === "policy" ? "policies" : kind === "service" ? "servicing" : kind === "interval" ? "servicePlans" : "fleet";
+    state.saving = true;
+    try {
+      await deps.setDoc(deps.doc(deps.db, "tenants", tenant(), col, id), { ...built.data, updatedAt: deps.serverTimestamp() });
+      if (kind === "service" && seeMoney()) {
+        const costRef = deps.doc(deps.db, "tenants", tenant(), "serviceCosts", id);
+        if (cost.data) await deps.setDoc(costRef, { ...cost.data, updatedAt: deps.serverTimestamp() });
+        else if (state.costs[id]) await deps.deleteDoc(costRef);
+      }
       state.editing = null;
       deps.toast("Saved");
-      deps.rerenderAdmin();
+      rerender();
     } catch (err) {
       deps.toast("Not saved: " + ((err && (err.code || err.message)) || "failed"));
     } finally {
@@ -462,17 +726,23 @@ export function installCompliance(deps) {
   }
 
   async function remove(form) {
-    if (!canEditCompliance(plan(), me() && me().role)) return;
-    const kind = form.dataset.kind === "policy" ? "policy" : "vehicle";
+    const kind = form.dataset.kind;
+    const serviceKind = kind === "service";
+    if (serviceKind) {
+      if (!editService()) return;
+    } else if (!canEditCompliance(plan(), me() && me().role)) return;
     if (!form.dataset.compId) return;
-    if (!confirm(`Remove this ${kind}?`)) return;
-    const tenantId = resolveMembership({ uid: me().uid, profile: me().cloudProfile || null }).tenantId;
-    const col = form.dataset.kind === "policy" ? "policies" : "fleet";
+    const label = kind === "policy" ? "policy" : kind === "service" ? "service record" : "vehicle";
+    if (!confirm(`Remove this ${label}?`)) return;
+    const col = kind === "policy" ? "policies" : kind === "service" ? "servicing" : "fleet";
     try {
-      await deps.deleteDoc(deps.doc(deps.db, "tenants", tenantId, col, form.dataset.compId));
+      await deps.deleteDoc(deps.doc(deps.db, "tenants", tenant(), col, form.dataset.compId));
+      if (kind === "service" && seeMoney() && state.costs[form.dataset.compId]) {
+        await deps.deleteDoc(deps.doc(deps.db, "tenants", tenant(), "serviceCosts", form.dataset.compId));
+      }
       state.editing = null;
       deps.toast("Removed");
-      deps.rerenderAdmin();
+      rerender();
     } catch (err) {
       deps.toast("Not removed: " + ((err && (err.code || err.message)) || "failed"));
     }
@@ -483,24 +753,38 @@ export function installCompliance(deps) {
   function bind(root) {
     if (!root) return;
     root.querySelectorAll("[data-ctab]").forEach(b => b.onclick = () => {
-      state.tab = b.dataset.ctab === "policies" ? "policies" : "fleet";
+      state.tab = b.dataset.ctab === "policies" ? "policies" : b.dataset.ctab === "servicing" ? "servicing" : b.dataset.ctab === "prestart" ? "prestart" : "fleet";
       state.editing = null;
-      deps.rerenderAdmin();
+      rerender();
     });
+    root.querySelectorAll("[data-ps-template]").forEach(b => b.onclick = () => {
+      state.tab = "prestart";
+      state.editing = { kind: "template", id: b.dataset.psTemplate };
+      rerender();
+    });
+    root.querySelectorAll("[data-ps-resolve]").forEach(b => b.onclick = () => resolveDefect(b.dataset.psResolve));
+    const prestart = root.querySelector("#prestartform");
+    if (prestart) {
+      prestart.onsubmit = ev => { ev.preventDefault(); submitPrestart(prestart); };
+      const machine = prestart.querySelector("[name=assetId]");
+      if (machine) machine.onchange = () => { state.prestartAsset = machine.value; rerender(); };
+    }
     root.querySelectorAll("[data-comp-add]").forEach(b => b.onclick = () => {
-      state.tab = b.dataset.compAdd === "policies" ? "policies" : "fleet";
-      state.editing = { kind: state.tab === "policies" ? "policy" : "asset", id: "" };
-      deps.rerenderAdmin();
+      const add = b.dataset.compAdd;
+      state.tab = add === "policies" ? "policies" : add === "service" ? "servicing" : "fleet";
+      state.editing = { kind: add === "policy" ? "policy" : add === "service" ? "service" : "asset", id: "", assetId: b.dataset.asset || "" };
+      rerender();
     });
     root.querySelectorAll("[data-comp-edit]").forEach(b => b.onclick = () => {
-      state.editing = { kind: b.dataset.compEdit === "policy" ? "policy" : "asset", id: b.dataset.compId };
-      deps.rerenderAdmin();
+      const kind = b.dataset.compEdit === "policy" ? "policy" : b.dataset.compEdit === "service" ? "service" : b.dataset.compEdit === "interval" ? "interval" : "asset";
+      state.editing = { kind, id: b.dataset.compId, assetId: "" };
+      rerender();
     });
     const form = root.querySelector("#compform");
     if (!form) return;
     form.onsubmit = ev => { ev.preventDefault(); save(form); };
     const cancel = form.querySelector("[data-comp-cancel]");
-    if (cancel) cancel.onclick = () => { state.editing = null; deps.rerenderAdmin(); };
+    if (cancel) cancel.onclick = () => { state.editing = null; rerender(); };
     const del = form.querySelector("[data-comp-delete]");
     if (del) del.onclick = () => remove(form);
     const coi = form.querySelector("[name=coiRequired]");
@@ -513,8 +797,10 @@ export function installCompliance(deps) {
 
   return {
     start, stop, bind, adminHtml, staffHtml, adminBannerHtml, staffBannerHtml,
-    canSee: () => canViewFleet(plan()),
+    canSee: () => canViewFleet(plan()) || viewService() || viewPrestart(),
     canEdit: () => canEditCompliance(plan(), me() && me().role),
+    canEditService: () => editService(),
+    canPrestart: () => viewPrestart(),
     abandon,
     baseFleet: CALLUP_BASE.features.fleet,
   };

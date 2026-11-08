@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { initializeTestEnvironment, assertFails, assertSucceeds } from "@firebase/rules-unit-testing";
 import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, setDoc, updateDoc, serverTimestamp, Timestamp, runTransaction, query, where } from "firebase/firestore";
 import { swmsSignatureData } from "../../app/features/swms-sign.js";
+import { itemsFor, prestartPayload, templateSeedDocs } from "../../app/features/prestart.js";
 import { ref, uploadBytes, getBytes, list, listAll, getMetadata, deleteObject } from "firebase/storage";
 
 const ALEX = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";
@@ -513,4 +514,301 @@ test("a supervisor can invite, resend and cancel; an operator cannot", async () 
   assert.equal(after.data().status, "cancelled");
   assert.equal(after.data().role, "operator");
   assert.notEqual(after.data().role, "admin");
+});
+
+function serviceRecord(uid, extra = {}) {
+  return {
+    assetId: "tipper", doneOn: "2026-05-01", reading: 1000, readingUnit: "hours",
+    serviceType: "major", servicedBy: "Chuwar Diesel", notes: "",
+    updatedBy: uid, updatedAt: serverTimestamp(), ...extra,
+  };
+}
+
+test("servicing records are staff-readable and costs stay with admins and supervisors", async () => {
+  await assertSucceeds(setDoc(doc(db(ALEX), "tenants", "heartwood", "servicing", "s1"), serviceRecord(ALEX)));
+  await assertSucceeds(setDoc(doc(db(ALEX), "tenants", "heartwood", "servicePlans", "tipper"), {
+    everyDays: 180, everyReading: 250, readingUnit: "hours", currentReading: 1280,
+    updatedBy: ALEX, updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(setDoc(doc(db(ALEX), "tenants", "heartwood", "serviceCosts", "s1"), {
+    amount: "$840", updatedBy: ALEX, updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(getDoc(doc(db("op1"), "tenants", "heartwood", "servicing", "s1")));
+  await assertSucceeds(getDoc(doc(db("op1"), "tenants", "heartwood", "servicePlans", "tipper")));
+  await assertFails(getDoc(doc(db("op1"), "tenants", "heartwood", "serviceCosts", "s1")));
+  await assertFails(getDocs(collection(db("op1"), "tenants", "heartwood", "serviceCosts")));
+  await assertFails(setDoc(doc(db("op1"), "tenants", "heartwood", "servicing", "nope"), serviceRecord("op1")));
+  await assertFails(deleteDoc(doc(db("op1"), "tenants", "heartwood", "servicing", "s1")));
+  await assertSucceeds(setDoc(doc(db("sup1"), "tenants", "heartwood", "servicing", "s2"), serviceRecord("sup1", { serviceType: "repair", reading: 0, readingUnit: "" })));
+  await assertSucceeds(setDoc(doc(db("sup1"), "tenants", "heartwood", "serviceCosts", "s2"), {
+    amount: "$150", updatedBy: "sup1", updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(getDoc(doc(db("sup1"), "tenants", "heartwood", "serviceCosts", "s1")));
+  await assertFails(setDoc(doc(db(ALEX), "tenants", "heartwood", "servicing", "bad"), serviceRecord(ALEX, { serviceType: "oil" })));
+  await assertFails(getDoc(doc(db("op2"), "tenants", "heartwood", "servicing", "s1")));
+  await assertFails(getDoc(doc(db("op1"), "tenants", "otherco", "servicing", "s9")));
+  await assertSucceeds(setDoc(doc(db("finOther"), "tenants", "otherco", "servicing", "s9"), serviceRecord("finOther")));
+  await assertFails(getDoc(doc(db(ALEX), "tenants", "otherco", "serviceCosts", "s9")));
+  await assertFails(setDoc(doc(db(ALEX), "receipts", "from-service"), { uid: ALEX, amountInc: 1 }));
+  await assertSucceeds(deleteDoc(doc(db("sup1"), "tenants", "heartwood", "serviceCosts", "s2")));
+  await assertSucceeds(deleteDoc(doc(db(PATRICK), "tenants", "heartwood", "servicing", "s1")));
+});
+
+function prestartBody(uid, extra = {}) {
+  return {
+    assetId: "tipper", assetType: "vehicle", assetName: "Preview tipper", kind: "tip-truck", day: "2026-11-06",
+    reading: 1280, readingUnit: "hours", odometer: 84210,
+    items: [{ id: "tt-hyd", result: "fail", comment: "Weep at the ram", critical: true }],
+    signerUid: uid, signerName: "Sam", signedAt: serverTimestamp(), defect: true, doNotOperate: true, resolved: false,
+    ...extra,
+  };
+}
+
+test("prestarts are create-only for staff and only an admin can resolve a defect", async () => {
+  const created = await assertSucceeds(addDoc(collection(db("op1"), "tenants", "heartwood", "prestarts"), prestartBody("op1")));
+  await assertSucceeds(getDoc(doc(db("sup1"), created.path)));
+  await assertFails(updateDoc(created, { signerName: "Someone else" }));
+  await assertFails(deleteDoc(created));
+  await assertFails(deleteDoc(doc(db(ALEX), created.path)));
+  await assertFails(updateDoc(doc(db("sup1"), created.path), {
+    resolved: true, resolvedBy: "sup1", resolvedNote: "No", resolvedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(updateDoc(doc(db(ALEX), created.path), {
+    resolved: true, resolvedBy: ALEX, resolvedNote: "Hose replaced", resolvedAt: serverTimestamp(),
+  }));
+  await assertFails(addDoc(collection(db("op1"), "tenants", "heartwood", "prestarts"), prestartBody("idle")));
+  await assertFails(getDoc(doc(db("op2"), created.path)));
+  await assertFails(setDoc(doc(db("op1"), "tenants", "heartwood", "prestartTemplates", "tip-truck"), {
+    items: [{ id: "tt-tyres", label: "Tyres", critical: true }], updatedBy: "op1", updatedAt: serverTimestamp(),
+  }));
+  const tip = templateSeedDocs([], ALEX).find(row => row.id === "tip-truck");
+  await assertSucceeds(setDoc(doc(db(ALEX), "tenants", "heartwood", "prestartTemplates", "tip-truck"), {
+    ...tip.data, updatedAt: serverTimestamp(),
+  }));
+  await assertFails(setDoc(doc(db(ALEX), "tenants", "heartwood", "prestartTemplates", "vehicle"), {
+    items: [{ id: "tt-tyres", label: "Tyres", critical: true }], updatedBy: ALEX, updatedAt: serverTimestamp(),
+  }));
+  await assertFails(setDoc(doc(db("op1"), "receipts", "from-prestart"), { uid: "op1", amountInc: 1 }));
+});
+
+test("Test Worker operator can prestart any machine and read the history", async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), "users/testworker"), { role: "operator", name: "Test Worker" });
+  });
+  const worker = db("testworker");
+  const machine = { id: "excavator", type: "plant", name: "Excavator", prestartKind: "excavator" };
+  const checks = itemsFor("excavator", []);
+  const answers = Object.fromEntries(checks.map(item => [item.id, { result: item.id === "ex-hyd" ? "fail" : "pass", comment: item.id === "ex-hyd" ? "Hose weep" : "" }]));
+  const built = prestartPayload({ asset: machine, day: "2026-11-06", reading: "410", readingUnit: "hours", odometer: "", answers, signerName: "Test Worker", items: checks }, "testworker");
+  assert.equal(built.ok, true);
+  const created = await assertSucceeds(addDoc(collection(worker, "tenants", "heartwood", "prestarts"), { ...built.data, signedAt: serverTimestamp() }));
+  const listed = await assertSucceeds(getDocs(collection(worker, "tenants", "heartwood", "prestarts")));
+  assert.equal(listed.docs.some(row => row.data().assetId === "excavator"), true);
+  await assertSucceeds(getDoc(doc(worker, "tenants", "heartwood", "prestarts", created.id)));
+  await assertFails(updateDoc(created, { signerName: "Changed" }));
+  await assertFails(deleteDoc(created));
+  await assertFails(addDoc(collection(db("noprofile"), "tenants", "heartwood", "prestarts"), prestartBody("noprofile", {
+    assetId: "excavator", assetName: "Excavator", signerName: "No Profile",
+  })));
+});
+const TS_WEEK = "2026-11-09";
+const TS_END = "2026-11-15";
+function tsSheet(uid, name, extra = {}) {
+  return {
+    uid, name, weekStart: TS_WEEK, weekEnd: TS_END, days: {}, totalHrs: 0,
+    updatedAt: serverTimestamp(), updatedAtIso: "2026-11-09T21:00:00.000Z", ...extra,
+  };
+}
+function tsClock(uid, name, over = {}) {
+  return {
+    id: "entry0001abcd", source: "clock", status: "open", date: "2026-11-09",
+    start: "06:58", finish: "", breakStart: "", breakEnd: "", note: "", job: "Lot 12",
+    clockOn: { at: serverTimestamp(), fix: "gps", lat: -27.47, lng: 153.025, accuracy: 12 },
+    enteredBy: uid, enteredByName: name, enteredAt: serverTimestamp(), edits: {}, lastEditId: "",
+    ...over, id: over.id || "entry0001abcd",
+  };
+}
+
+test("timesheets stay on the worker's own sheet, and clock stamps cannot be rewritten", async () => {
+  const op = db("op1");
+  const id = "op1_" + TS_WEEK;
+  const ref = doc(op, "timesheets", id);
+  await assertSucceeds(setDoc(doc(op, "timesheets/op1_2026-11-02"), {
+    uid: "op1", name: "Sam", weekStart: "2026-11-02", weekEnd: "2026-11-08",
+    days: { "2026-11-03": { start: "07:00", finish: "15:30", note: "slab" } },
+    totalHrs: 8, updatedAt: serverTimestamp(), updatedAtIso: "2026-11-03T07:00:00.000Z",
+  }));
+  await assertFails(updateDoc(doc(op, "timesheets/op1_2026-11-02"), { sent: true, sentAt: "2026-11-08T00:00:00.000Z", sentBy: "op1" }));
+  await assertSucceeds(updateDoc(doc(db(ALEX), "timesheets/op1_2026-11-02"), { sent: true, sentAt: "2026-11-08T00:00:00.000Z", sentBy: ALEX }));
+  await assertSucceeds(updateDoc(doc(db(ALEX), "timesheets/op1_2026-11-02"), { sent: false, sentAt: null, sentBy: null }));
+
+  const entry = tsClock("op1", "Sam");
+  await assertSucceeds(setDoc(ref, tsSheet("op1", "Sam", {
+    entries: { entry0001abcd: entry }, lastEntryId: entry.id, locationConsentAt: serverTimestamp(),
+  })));
+  await assertSucceeds(getDoc(doc(op, "timesheets/op1_2026-12-07")));
+  await assertFails(getDoc(doc(op, "timesheets/sup1_2026-12-07")));
+  await assertFails(getDoc(doc(db("op2"), "timesheets", id)));
+  await assertFails(getDoc(doc(db("sup1"), "timesheets", id)));
+  await assertFails(getDoc(doc(db("idle"), "timesheets", id)));
+  await assertFails(getDoc(doc(db("finOther"), "timesheets", id)));
+  await assertFails(getDoc(doc(env.unauthenticatedContext().firestore(), "timesheets", id)));
+  await assertSucceeds(getDoc(doc(db(ALEX), "timesheets", id)));
+  await assertSucceeds(getDoc(doc(db(PATRICK), "timesheets", id)));
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), "users/adm1"), { role: "admin", name: "Ada" });
+  });
+  await assertSucceeds(getDoc(doc(db("adm1"), "timesheets", id)));
+  await assertFails(getDocs(query(collection(op, "timesheets"), where("weekStart", "==", TS_WEEK))));
+  await assertSucceeds(getDocs(query(collection(db(ALEX), "timesheets"), where("weekStart", "==", TS_WEEK))));
+  await assertSucceeds(getDocs(query(collection(op, "timesheets"), where("uid", "==", "op1"))));
+  await assertFails(setDoc(doc(op, "timesheets/sup1_" + TS_WEEK), tsSheet("sup1", "Sue")));
+  await assertFails(setDoc(ref, tsSheet("op1", "Sam", {
+    entries: { entry0001abcd: tsClock("op1", "Sam", { clockOn: { at: Timestamp.now(), fix: "gps", lat: 1, lng: 1, accuracy: 1 } }) },
+    lastEntryId: "entry0001abcd", locationConsentAt: serverTimestamp(),
+  })));
+
+  const open = (await getDoc(ref)).data();
+  const on = open.entries.entry0001abcd;
+  await assertSucceeds(updateDoc(ref, {
+    entries: { entry0001abcd: { ...on, status: "break", breakStart: "12:00", breakOn: { at: serverTimestamp(), fix: "no location" } } },
+    lastEntryId: "entry0001abcd", updatedAt: serverTimestamp(), updatedAtIso: "2026-11-09T02:00:00.000Z", totalHrs: 0,
+  }));
+  const broke = (await getDoc(ref)).data().entries.entry0001abcd;
+  await assertSucceeds(updateDoc(ref, {
+    entries: { entry0001abcd: { ...broke, status: "open", breakEnd: "12:30", breakOff: { at: serverTimestamp(), fix: "gps", lat: -27.47, lng: 153.026, accuracy: 20 } } },
+    lastEntryId: "entry0001abcd", updatedAt: serverTimestamp(), updatedAtIso: "2026-11-09T02:30:00.000Z", totalHrs: 0,
+  }));
+  const back = (await getDoc(ref)).data().entries.entry0001abcd;
+  await assertSucceeds(updateDoc(ref, {
+    entries: { entry0001abcd: { ...back, status: "closed", finish: "15:04", clockOff: { at: serverTimestamp(), fix: "no location" } } },
+    lastEntryId: "entry0001abcd", updatedAt: serverTimestamp(), updatedAtIso: "2026-11-09T05:04:00.000Z", totalHrs: 7.5,
+    days: { "2026-11-09": { start: "06:58", finish: "15:04", note: "Lot 12" } },
+  }));
+  const closed = (await getDoc(ref)).data().entries.entry0001abcd;
+  assert.equal(closed.clockOn.lat, -27.47);
+  assert.equal(closed.clockOff.fix, "no location");
+  assert.equal(closed.clockOff.lat, undefined);
+  const editId = "edit0001abcd";
+  await assertSucceeds(updateDoc(ref, {
+    entries: { entry0001abcd: {
+      ...closed, start: "07:00", lastEditId: editId,
+      edits: { [editId]: { at: serverTimestamp(), by: "op1", byName: "Sam", summary: "Start 06:58 → 07:00" } },
+    } },
+    lastEntryId: "entry0001abcd", updatedAt: serverTimestamp(), updatedAtIso: "2026-11-09T06:00:00.000Z", totalHrs: 7.5,
+  }));
+  const edited = (await getDoc(ref)).data().entries.entry0001abcd;
+  assert.equal(edited.clockOn.lat, -27.47);
+  assert.equal(edited.start, "07:00");
+  assert.ok(edited.edits[editId]);
+  await assertFails(updateDoc(ref, {
+    entries: { entry0001abcd: { ...edited, clockOn: { ...edited.clockOn, lat: 0 } } },
+    lastEntryId: "entry0001abcd", updatedAt: serverTimestamp(), updatedAtIso: "2026-11-09T06:01:00.000Z",
+  }));
+  const manualId = "manual0001abcd";
+  await assertSucceeds(updateDoc(ref, {
+    entries: {
+      entry0001abcd: edited,
+      [manualId]: {
+        id: manualId, source: "manual", status: "closed", date: "2026-11-10",
+        start: "07:00", finish: "15:30", breakStart: "", breakEnd: "", note: "yard", job: "Yard",
+        enteredBy: "op1", enteredByName: "Sam", enteredAt: serverTimestamp(), edits: {}, lastEditId: "",
+      },
+    },
+    lastEntryId: manualId, updatedAt: serverTimestamp(), updatedAtIso: "2026-11-10T07:00:00.000Z", totalHrs: 15.5,
+  }));
+  const both = (await getDoc(ref)).data();
+  const manualEdit = "edit0002abcd";
+  await assertSucceeds(updateDoc(ref, {
+    entries: { ...both.entries, [manualId]: {
+      ...both.entries[manualId], finish: "16:00", lastEditId: manualEdit,
+      edits: { [manualEdit]: { at: serverTimestamp(), by: "op1", byName: "Sam", summary: "Finish 15:30 → 16:00" } },
+    } },
+    lastEntryId: manualId, updatedAt: serverTimestamp(), updatedAtIso: "2026-11-10T08:00:00.000Z", totalHrs: 16,
+  }));
+  const kept = (await getDoc(ref)).data().entries[manualId];
+  assert.equal(kept.enteredBy, "op1");
+  assert.equal(kept.source, "manual");
+  await assertFails(updateDoc(ref, {
+    entries: { ...(await getDoc(ref)).data().entries, [manualId]: { ...kept, enteredBy: "idle" } },
+    lastEntryId: manualId, updatedAt: serverTimestamp(), updatedAtIso: "2026-11-10T08:01:00.000Z",
+  }));
+  await assertFails(updateDoc(ref, {
+    entries: { entry0001abcd: edited }, lastEntryId: "entry0001abcd",
+    updatedAt: serverTimestamp(), updatedAtIso: "2026-11-10T08:02:00.000Z",
+  }));
+  await assertFails(deleteDoc(ref));
+  await assertSucceeds(setDoc(doc(db("idle"), "timesheets/idle_" + TS_WEEK), tsSheet("idle", "Idle", {
+    entries: { entry0001abcd: tsClock("idle", "Idle", { clockOn: { at: serverTimestamp(), fix: "no location" } }) },
+    lastEntryId: "entry0001abcd", locationConsentAt: serverTimestamp(),
+  })));
+  const idleFix = (await getDoc(doc(db("idle"), "timesheets/idle_" + TS_WEEK))).data().entries.entry0001abcd.clockOn;
+  assert.equal(idleFix.fix, "no location");
+  assert.equal(idleFix.lat, undefined);
+  await assertFails(getDoc(doc(db("op1"), "timesheets/idle_" + TS_WEEK)));
+  await assertFails(getDoc(doc(db("sup1"), "timesheets/idle_" + TS_WEEK)));
+  await assertFails(setDoc(doc(db("sup1"), "timesheets/sup1_" + TS_WEEK), tsSheet("sup1", "Sue", {
+    entries: { entry0001abcd: { ...tsClock("sup1", "Sue"), clockOn: { at: serverTimestamp(), fix: "gps", lat: 1, lng: 1, accuracy: 1, trail: [1] } } },
+    lastEntryId: "entry0001abcd",
+  })));
+});
+
+test("clock on can record one machine, and fleet reads stay inside the tenant", async () => {
+  const op = db("op1");
+  const ref = doc(op, "timesheets/op1_2026-11-16");
+  const entry = tsClock("op1", "Sam", { id: "entry0008abcd", date: "2026-11-16" });
+  await assertSucceeds(setDoc(ref, {
+    uid: "op1", name: "Sam", weekStart: "2026-11-16", weekEnd: "2026-11-22", days: {}, totalHrs: 0,
+    updatedAt: serverTimestamp(), updatedAtIso: "2026-11-16T21:00:00.000Z",
+    entries: { entry0008abcd: entry }, lastEntryId: "entry0008abcd", locationConsentAt: serverTimestamp(),
+  }));
+  const saved = (await getDoc(ref)).data().entries.entry0008abcd;
+  assert.equal(saved.machineChoice, undefined);
+  await assertSucceeds(updateDoc(ref, {
+    "entries.entry0008abcd": { ...saved, machineChoice: "asset", machineId: "ex1", machineName: "Excavator" },
+    lastEntryId: "entry0008abcd", updatedAt: serverTimestamp(), updatedAtIso: "2026-11-16T21:05:00.000Z", totalHrs: 0,
+  }));
+  const chosen = (await getDoc(ref)).data().entries.entry0008abcd;
+  assert.equal(chosen.machineId, "ex1");
+  assert.equal(chosen.clockOn.lat, -27.47);
+  await assertFails(updateDoc(ref, {
+    "entries.entry0008abcd": { ...chosen, machineId: "other", machineName: "Other" },
+    lastEntryId: "entry0008abcd", updatedAt: serverTimestamp(), updatedAtIso: "2026-11-16T21:06:00.000Z",
+  }));
+  await assertFails(updateDoc(doc(db("op2"), ref.path), {
+    "entries.entry0008abcd": { ...chosen, note: "nope" },
+    lastEntryId: "entry0008abcd", updatedAt: serverTimestamp(), updatedAtIso: "2026-11-16T21:07:00.000Z",
+  }));
+  const skipRef = doc(op, "timesheets/op1_2026-11-23");
+  const skip = tsClock("op1", "Sam", { id: "entry0009abcd", date: "2026-11-23" });
+  await assertSucceeds(setDoc(skipRef, {
+    uid: "op1", name: "Sam", weekStart: "2026-11-23", weekEnd: "2026-11-29", days: {}, totalHrs: 0,
+    updatedAt: serverTimestamp(), updatedAtIso: "2026-11-23T21:00:00.000Z",
+    entries: { entry0009abcd: skip }, lastEntryId: "entry0009abcd",
+  }));
+  const skipSaved = (await getDoc(skipRef)).data().entries.entry0009abcd;
+  await assertSucceeds(updateDoc(skipRef, {
+    "entries.entry0009abcd": { ...skipSaved, machineChoice: "skip", machineId: "", machineName: "" },
+    lastEntryId: "entry0009abcd", updatedAt: serverTimestamp(), updatedAtIso: "2026-11-23T21:02:00.000Z",
+  }));
+  await assertFails(updateDoc(skipRef, {
+    "entries.entry0009abcd": { ...skipSaved, machineChoice: "guess", machineId: "ex1", machineName: "Excavator" },
+    lastEntryId: "entry0009abcd", updatedAt: serverTimestamp(), updatedAtIso: "2026-11-23T21:03:00.000Z",
+  }));
+  await env.withSecurityRulesDisabled(async ctx => {
+    const admin = ctx.firestore();
+    await setDoc(doc(admin, "tenants/heartwood/fleet/ex1"), { type: "plant", name: "Excavator", rego: "EX1" });
+    await setDoc(doc(admin, "tenants/otherco/fleet/ex2"), { type: "plant", name: "Other plant", rego: "" });
+    await setDoc(doc(admin, "tenants/heartwood/prestarts/done1"), {
+      assetId: "ex1", day: "2026-11-16", signerUid: "op1", signerName: "Sam", signedAt: Timestamp.fromDate(new Date("2026-11-16T21:02:00Z")),
+    });
+  });
+  const fleet = await assertSucceeds(getDoc(doc(op, "tenants/heartwood/fleet/ex1")));
+  assert.equal(fleet.data().name, "Excavator");
+  await assertFails(getDoc(doc(op, "tenants/otherco/fleet/ex2")));
+  await assertFails(setDoc(doc(op, "tenants/heartwood/fleet/new1"), { type: "plant", name: "Nope" }));
+  await assertSucceeds(getDoc(doc(op, "tenants/heartwood/prestarts/done1")));
+  await assertFails(setDoc(doc(op, "tenants/heartwood/prestarts/new1"), { assetId: "ex1", day: "2026-11-16", signerUid: "op1" }));
+  await assertSucceeds(getDoc(doc(db("op2"), "tenants/otherco/fleet/ex2")));
+  await assertFails(getDoc(doc(db("op2"), "tenants/heartwood/fleet/ex1")));
 });
