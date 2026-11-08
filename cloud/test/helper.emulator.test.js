@@ -4,6 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { authorizeCallable, handleHelperAsk } from "../functions/helper/ask.js";
+import { firestoreHelperStore } from "../functions/helper/apply.js";
 import { adminReader } from "../functions/helper/reader.js";
 import { sampleStore, TODAY } from "./helper-fixture.js";
 
@@ -108,4 +109,58 @@ test("emulator admin SDK can read another business, and helperAsk still hides it
   const denied = await authorizeCallable({ authorization: "Bearer not-a-real-token-value" }, token => auth.verifyIdToken(token));
   assert.equal(denied.ok, false);
   assert.equal(denied.code, "unauthenticated");
+});
+
+test("emulator confirm writes a note and an audit row, and cancel writes neither", async () => {
+  const sam = await signUp("helper-act-" + Date.now() + "@heartwood.test");
+  const decoded = await auth.verifyIdToken(sam.idToken);
+  const store = rewrite(sampleStore(), decoded.uid);
+  await seed(store);
+  const jobsBefore = (await db.collection("jobs").get()).size;
+  const helper = firestoreHelperStore(db);
+  const reader = adminReader(db);
+  const now = new Date(TODAY + "T02:00:00Z");
+  const preview = await handleHelperAsk({
+    auth: { uid: decoded.uid },
+    data: { question: "Add a note on Ironbark: spoil pile is clear" },
+    reader, store: helper, enabled: false, now,
+    model: { async generate() { throw new Error("no model"); } },
+  });
+  assert.equal(preview.proposal.title, "Add a note");
+  const untouched = await db.collection("jobs").doc("job-iron").get();
+  assert.equal(JSON.stringify(untouched.data().log || []).includes("spoil pile is clear"), false);
+  assert.match(untouched.data().description, /\$4,500\.50/);
+  const cancelled = await handleHelperAsk({
+    auth: { uid: decoded.uid },
+    data: { step: "cancel", proposalId: preview.proposal.id },
+    reader, store: helper, enabled: false, now,
+  });
+  assert.match(cancelled.reply, /Nothing was changed/);
+  assert.equal((await db.collection("helperAudit").get()).size, 0);
+  const again = await handleHelperAsk({
+    auth: { uid: decoded.uid },
+    data: { question: "Add a note on Ironbark: spoil pile is clear" },
+    reader, store: helper, enabled: false, now,
+    model: { async generate() { throw new Error("no model"); } },
+  });
+  await handleHelperAsk({
+    auth: { uid: decoded.uid },
+    data: { step: "confirm", proposalId: again.proposal.id },
+    reader, store: helper, enabled: false, now,
+  });
+  const saved = await db.collection("jobs").doc("job-iron").get();
+  assert.equal(saved.data().log.some(entry => entry.text === "spoil pile is clear"), true);
+  assert.match(saved.data().description, /\$4,500\.50/);
+  const audit = await db.collection("helperAudit").get();
+  assert.equal(audit.size, 1);
+  assert.equal(audit.docs[0].data().via, "helper");
+  assert.equal(audit.docs[0].data().uid, decoded.uid);
+  const blocked = await handleHelperAsk({
+    auth: { uid: decoded.uid },
+    data: { question: "Create a job at 5 Creek Road for Orbit Homes" },
+    reader, store: helper, enabled: false, now,
+    model: { async generate() { throw new Error("no model"); } },
+  });
+  assert.equal(blocked.proposal, null);
+  assert.equal((await db.collection("jobs").get()).size, jobsBefore);
 });

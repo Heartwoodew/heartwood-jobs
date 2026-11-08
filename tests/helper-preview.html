@@ -53,6 +53,7 @@ if (params.get("voice") === "au") window.__voices = [{ name: "Karen", lang: "en-
 if (params.get("voice") === "other") window.__voices = [{ name: "Australian English", lang: "en-GB" }];
 const root = document.getElementById("helper-root");
 class FakeUtterance { constructor(text) { this.text = text; } }
+window.__writes = 0;
 mountHelper(root, {
   signedIn: true,
   startOpen: params.get("open") === "1",
@@ -62,11 +63,16 @@ mountHelper(root, {
   getVoices: () => window.__voices,
   ask(question) {
     const q = question.toLowerCase();
+    if (q.includes("add a note")) {
+      return { ok: true, enabled: true, knowledge: "placeholder", reply: "Here's what I'll change. Nothing is saved until you tap Confirm.", proposal: { id: "hp_demo", title: "Add a note", lines: ["Job: 12 Ironbark Street", "Note: spoil pile is clear"] } };
+    }
     if (q.includes("ironbark")) {
       return { ok: true, enabled: true, knowledge: "placeholder", reply: "G'day Sam. You're on spoil removal at 12 Ironbark Street on Wednesday 12 November 2026. Travel is 12.5 km. Gate code 2468. I can't see prices on your login." };
     }
     return { ok: true, enabled: true, knowledge: "placeholder", reply: "No worries. Helper only looks things up. I can't create a job or send anything. If your login shows New Job, that's the screen for it. I won't invent the taps." };
   },
+  confirm() { window.__writes += 1; return { reply: "Saved. That change is in CallUp now." }; },
+  cancel() { return { reply: "Cancelled. Nothing was changed." }; },
 });
 document.body.dataset.ready = "1";
 </script>

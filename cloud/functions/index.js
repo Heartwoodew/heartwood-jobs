@@ -8,7 +8,8 @@
  * Retention is exported as retentionSweepHandler and is NOT scheduled.
  * Xero processing is not imported. See pro/xero-queue.js.
  *
- * helperAsk is read-only. It stays off unless HELPER_ENABLED=true.
+ * helperAsk may prepare a change, but it writes only on step "confirm".
+ * It stays off for model calls unless HELPER_ENABLED=true.
  * See helper/DECISION.md. Do not deploy it from this branch.
  */
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
@@ -20,6 +21,7 @@ import { handlePhotoIntake } from "./lib/photo-intake.js";
 import { authorizeCallable, handleHelperAsk } from "./helper/ask.js";
 import { adminReader } from "./helper/reader.js";
 import { createModelProvider } from "./helper/provider.js";
+import { firestoreHelperStore } from "./helper/apply.js";
 
 function ensureAdmin() {
   if (!getApps().length) initializeApp();
@@ -41,10 +43,12 @@ export const helperAsk = onCall(
     } catch {
       model = { async generate() { throw new Error("helper-misconfigured"); } };
     }
+    const db = getFirestore();
     const result = await handleHelperAsk({
       auth: { uid: gate.uid },
       data: request.data,
-      reader: adminReader(getFirestore()),
+      reader: adminReader(db),
+      store: firestoreHelperStore(db),
       model,
       enabled: process.env.HELPER_ENABLED === "true",
     });
@@ -52,7 +56,12 @@ export const helperAsk = onCall(
       const code = result.code === "invalid-argument" || result.code === "permission-denied" ? result.code : "permission-denied";
       throw new HttpsError(code, result.reply);
     }
-    return { reply: result.reply, enabled: !!result.enabled, knowledge: result.knowledge || "placeholder" };
+    return {
+      reply: result.reply,
+      enabled: !!result.enabled,
+      knowledge: result.knowledge || "placeholder",
+      proposal: result.proposal || null,
+    };
   },
 );
 

@@ -1,12 +1,12 @@
-// Read-only Helper turn.
-// The callable wrapper verifies the Firebase ID token, then this loads
-// users/{uid} and decides jobs with the server profile. Client role, tenant
-// and job lists are ignored.
+// Helper turn. Answers stay read-only. A change is only a preview until
+// step "confirm". The model cannot start a write. Client role and tenant are ignored.
 
 import { ALEX_UID, PATRICK_UID, resolveMembership } from "../shared/cloud-storage.js";
+import { intentFromQuestion } from "./actions.js";
 import { buildHelperContext } from "./context.js";
 import { loadKnowledge } from "./knowledge.js";
 import { buildHelperPrompt, sanitiseReply } from "./prompt.js";
+import { cancelHelperAction, confirmHelperAction, proposeHelperAction } from "./proposals.js";
 
 export const QUESTION_CAP = 2000;
 export const DISABLED_REPLY = "Helper is switched off, so I didn't ask a model. Nothing was changed.";
@@ -50,8 +50,12 @@ export async function authorizeCallable(request, verify) {
   return { ok: true, uid: decoded.uid };
 }
 
+function named(uid, profile) {
+  return displayName(uid, profile);
+}
+
 export async function handleHelperAsk({
-  auth, data, reader, model, enabled = false, now, knowledge, canary,
+  auth, data, reader, model, store, enabled = false, now, knowledge, canary,
 } = {}) {
   if (!auth || !auth.uid) return { ok: false, code: "unauthenticated", reply: SIGN_IN_REPLY };
   const profile = reader ? await reader.user(auth.uid) : null;
@@ -62,9 +66,35 @@ export async function handleHelperAsk({
     requestedBusinessId: data && data.businessId,
   });
   if (!membership.ok) return { ok: false, code: "permission-denied", reply: DENIED_REPLY };
+  const person = named(auth.uid, profile);
   const pack = knowledge || loadKnowledge();
+  const step = data && data.step;
+  if (step === "confirm") {
+    const confirmed = await confirmHelperAction({
+      membership, proposalId: data.proposalId, reader, store, now, name: person,
+    });
+    return { ...confirmed, enabled: !!enabled, knowledge: pack.source, proposal: null };
+  }
+  if (step === "cancel") {
+    const cancelled = await cancelHelperAction({ membership, proposalId: data.proposalId, store });
+    return { ...cancelled, enabled: !!enabled, knowledge: pack.source, proposal: null };
+  }
+  if (step === "propose") {
+    const proposed = await proposeHelperAction({
+      membership, action: data.action, reader, store, name: person, now,
+    });
+    return { ok: true, enabled: !!enabled, reply: proposed.reply, proposal: proposed.proposal || null, knowledge: pack.source };
+  }
+  const questionEarly = typeof data?.question === "string" ? data.question.trim() : "";
+  const intent = intentFromQuestion(questionEarly);
+  if (intent) {
+    const proposed = await proposeHelperAction({
+      membership, question: questionEarly, reader, store, name: person, now,
+    });
+    return { ok: true, enabled: !!enabled, reply: proposed.reply, proposal: proposed.proposal || null, knowledge: pack.source };
+  }
   if (!enabled) {
-    return { ok: true, enabled: false, reply: DISABLED_REPLY, knowledge: pack.source };
+    return { ok: true, enabled: false, reply: DISABLED_REPLY, knowledge: pack.source, proposal: null };
   }
   const question = typeof data?.question === "string" ? data.question.trim() : "";
   if (!question || question.length > QUESTION_CAP) {
@@ -96,10 +126,14 @@ export async function handleHelperAsk({
   } catch {
     return { ok: true, enabled: true, reply: MODEL_FAILED, knowledge: pack.source };
   }
+  const reply = sanitiseReply(String(raw || "").replace(/HELPER_ACTION[\s\S]*$/g, ""), {
+    canary: prompt.canary, canSeeMoney: membership.canSeeMoney,
+  });
   return {
     ok: true,
     enabled: true,
-    reply: sanitiseReply(raw, { canary: prompt.canary, canSeeMoney: membership.canSeeMoney }),
+    reply,
+    proposal: null,
     knowledge: pack.source,
   };
 }

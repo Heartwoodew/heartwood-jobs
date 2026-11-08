@@ -249,13 +249,17 @@ test("vertex request stays in australia-southeast1 and has no tools or API key",
   assert.equal(fetched, 1);
 });
 
-test("helper code has no write path, no microphone, and no invented key", () => {
+test("helper code has no microphone, no invented key, and writes only from a confirmed action", () => {
   const helperDir = new URL("../functions/helper/", import.meta.url);
-  const server = readdirSync(helperDir).filter(name => name.endsWith(".js")).map(name => readFileSync(new URL(name, helperDir), "utf8")).join("\n");
+  const server = readdirSync(helperDir).filter(name => name.endsWith(".js") && name !== "apply.js").map(name => readFileSync(new URL(name, helperDir), "utf8")).join("\n");
+  const apply = readFileSync(new URL("apply.js", helperDir), "utf8");
   const client = readFileSync(new URL("../../app/features/helper.js", import.meta.url), "utf8")
     + readFileSync(new URL("../../app/features/helper-ui.js", import.meta.url), "utf8");
   const index = readFileSync(new URL("../functions/index.js", import.meta.url), "utf8");
-  assert.doesNotMatch(server, /\.set\(|\.update\(|\.delete\(|\.create\(|addDoc|updateDoc|deleteDoc|writeBatch|bulkWriter|getUserMedia|SpeechRecognition/);
+  assert.doesNotMatch(server, /\.set\(|\.update\(|\.delete\(|addDoc|updateDoc|deleteDoc|writeBatch|bulkWriter|getUserMedia|SpeechRecognition/);
+  assert.doesNotMatch(apply, /\.delete\(|deleteDoc|SCHEDULING_APPROVED|xeroQueue|sendMail|getUserMedia/);
+  assert.match(apply, /helperAudit/);
+  assert.match(client, /step: "confirm", proposalId/);
   assert.doesNotMatch(client, /getUserMedia|SpeechRecognition|webkitSpeechRecognition|addDoc|updateDoc|deleteDoc|setDoc|AIza|apiKey/);
   assert.match(client, /australia-southeast1/);
   assert.match(client, /question/);

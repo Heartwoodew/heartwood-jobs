@@ -64,11 +64,14 @@ export function helperShellHtml(state) {
     const controls = !mine && speech.voice
       ? `<div class="helper-speak"><button type="button" data-act="play" data-i="${index}" aria-pressed="${state.playing === index ? "true" : "false"}">Play</button><button type="button" data-act="stop" data-i="${index}">Stop</button></div>`
       : "";
-    return `<article class="helper-msg ${mine ? "helper-me" : "helper-bot"}${state.playing === index ? " is-playing" : ""}"><p class="helper-text">${esc(message.text)}</p>${controls}</article>`;
+    const card = !mine && message.proposal && !message.proposal.done
+      ? `<section class="helper-card"><h3>${esc(message.proposal.title)}</h3><ul>${(message.proposal.lines || []).map(line => `<li>${esc(line)}</li>`).join("")}</ul><p>Nothing is saved until you tap Confirm.</p><div class="helper-card-btns"><button type="button" data-act="confirm" data-proposal="${esc(message.proposal.id)}">Confirm</button><button type="button" data-act="cancel" data-proposal="${esc(message.proposal.id)}">Cancel</button></div></section>`
+      : "";
+    return `<article class="helper-msg ${mine ? "helper-me" : "helper-bot"}${state.playing === index ? " is-playing" : ""}"><p class="helper-text">${esc(message.text)}</p>${card}${controls}</article>`;
   }).join("");
   return `${launch}<section class="helper-panel" role="dialog" aria-label="Helper" data-open="1">
     <header class="helper-head">
-      <div><h2>Helper</h2><p>Read only. I can't change or send anything.</p>${knowledge}</div>
+      <div><h2>Helper</h2><p>I'll show a preview before I change anything.</p>${knowledge}</div>
       <button type="button" class="helper-x" data-act="close" aria-label="Close helper">×</button>
     </header>
     <label class="helper-opt"><input class="helper-speech" type="checkbox" ${state.speech ? "checked" : ""}> Spoken replies</label>
@@ -134,7 +137,27 @@ export function mountHelper(root, opts = {}) {
     state.pending = false;
     state.knowledge = result && result.knowledge ? result.knowledge : state.knowledge;
     const reply = result && result.reply ? String(result.reply) : UNREACHABLE;
-    state.messages.push({ role: "assistant", text: reply.slice(0, 4000) });
+    const proposal = result && result.proposal && result.proposal.id ? result.proposal : null;
+    state.messages.push({ role: "assistant", text: reply.slice(0, 4000), proposal });
+    paint();
+  }
+
+  async function settle(kind, id) {
+    const message = state.messages.find(item => item.proposal && item.proposal.id === id && !item.proposal.done);
+    if (!message || state.pending) return;
+    message.proposal.done = true;
+    state.pending = true;
+    paint();
+    let result;
+    try {
+      const fn = kind === "confirm" ? opts.confirm : opts.cancel;
+      result = fn ? await fn(id) : { reply: UNREACHABLE };
+    } catch {
+      result = { reply: UNREACHABLE };
+    }
+    state.pending = false;
+    message.proposal = null;
+    state.messages.push({ role: "assistant", text: String(result && result.reply || UNREACHABLE).slice(0, 4000) });
     paint();
   }
 
@@ -181,6 +204,7 @@ export function mountHelper(root, opts = {}) {
       state.playing = null;
       paint();
     }
+    if (act === "confirm" || act === "cancel") settle(act, target.dataset.proposal);
   });
   root.addEventListener("change", event => {
     if (!event.target.matches(".helper-speech")) return;

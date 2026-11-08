@@ -18,17 +18,23 @@ function functionsFor(app, useEmulator) {
   return functionsPromise;
 }
 
-async function askHelper({ app, useEmulator, question }) {
+async function callHelper({ app, useEmulator, payload }) {
   try {
     const { functions, httpsCallable } = await functionsFor(app, useEmulator);
     const call = httpsCallable(functions, "helperAsk");
-    const res = await call({ question });
+    const res = await call(payload);
     const data = res && res.data || {};
+    const proposal = data.proposal && data.proposal.id ? {
+      id: String(data.proposal.id),
+      title: String(data.proposal.title || "Preview"),
+      lines: Array.isArray(data.proposal.lines) ? data.proposal.lines.map(line => String(line)) : [],
+    } : null;
     return {
       ok: true,
       reply: typeof data.reply === "string" ? data.reply : "",
       enabled: data.enabled !== false,
       knowledge: data.knowledge || "",
+      proposal,
     };
   } catch (error) {
     const code = String(error && error.code || "");
@@ -50,7 +56,9 @@ export function installHelperApp({ app, useEmulator, getMe } = {}) {
     synth,
     getVoices: () => synth && synth.getVoices ? synth.getVoices() : [],
     onVoicesChanged(cb) { synth && synth.addEventListener && synth.addEventListener("voiceschanged", cb); },
-    ask: question => askHelper({ app, useEmulator, question }),
+    ask: question => callHelper({ app, useEmulator, payload: { question } }),
+    confirm: proposalId => callHelper({ app, useEmulator, payload: { step: "confirm", proposalId } }),
+    cancel: proposalId => callHelper({ app, useEmulator, payload: { step: "cancel", proposalId } }),
   });
   return {
     start() { ui.setSignedIn(!!(getMe && getMe() && getMe().uid)); },

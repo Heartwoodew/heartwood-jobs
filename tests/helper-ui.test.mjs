@@ -123,6 +123,51 @@ test("phone helper answers, hides prices, and speaks only with an Australian voi
     assert.equal(stoppedAfter, stopped + 1);
     const playShot = await shot(speak.page, { x: 0, y: 0, width: 390, height: 844, scale: 1 });
     writeFileSync(`${shots}/helper-phone-play.png`, playShot);
+
+    const card = await open("?open=1");
+    assert.deepEqual(card.errors, []);
+    await text(card.page, `document.querySelector('.helper-input').value = ${JSON.stringify("Add a note on Ironbark: spoil pile is clear")}`);
+    await click(card.page, ".helper-send");
+    let cardText = "";
+    for (let i = 0; i < 40; i++) {
+      cardText = await text(card.page, "document.querySelector('.helper-card')?.innerText || ''");
+      if (cardText.includes("Confirm")) break;
+      await sleep(50);
+    }
+    assert.match(cardText, /Add a note/);
+    assert.match(cardText, /12 Ironbark Street/);
+    assert.match(cardText, /spoil pile is clear/);
+    assert.match(cardText, /Nothing is saved until you tap Confirm/);
+    assert.equal(cardText.includes("$"), false);
+    assert.equal(await text(card.page, "window.__writes"), 0);
+    const cardShot = await shot(card.page, { x: 0, y: 0, width: 390, height: 844, scale: 1 });
+    writeFileSync(`${shots}/helper-phone-confirm.png`, cardShot);
+    await click(card.page, "[data-act=cancel]");
+    let afterCancel = "";
+    for (let i = 0; i < 40; i++) {
+      afterCancel = await text(card.page, "document.querySelector('.helper-log')?.innerText || ''");
+      if (afterCancel.includes("Nothing was changed")) break;
+      await sleep(50);
+    }
+    assert.match(afterCancel, /Nothing was changed/);
+    assert.equal(await text(card.page, "window.__writes"), 0);
+    assert.equal(await text(card.page, "document.querySelector('.helper-card')"), null);
+    await text(card.page, `document.querySelector('.helper-input').value = ${JSON.stringify("Add a note on Ironbark: spoil pile is clear")}`);
+    await click(card.page, ".helper-send");
+    for (let i = 0; i < 40; i++) {
+      const ready = await text(card.page, "!!document.querySelector('[data-act=confirm]')");
+      if (ready) break;
+      await sleep(50);
+    }
+    await click(card.page, "[data-act=confirm]");
+    let afterSave = "";
+    for (let i = 0; i < 40; i++) {
+      afterSave = await text(card.page, "document.querySelector('.helper-log')?.innerText || ''");
+      if (afterSave.includes("Saved")) break;
+      await sleep(50);
+    }
+    assert.match(afterSave, /Saved/);
+    assert.equal(await text(card.page, "window.__writes"), 1);
   } finally {
     chrome.proc.kill("SIGKILL");
     server.kill("SIGKILL");
