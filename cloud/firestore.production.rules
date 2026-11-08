@@ -1,0 +1,1755 @@
+rules_version = '2';
+// Production Firestore rules for heartwood-9f37f.
+// Reconstructed from the production paste blocks in cloud/production/ and the
+// company-scoped rules exercised on the emulator. This file is not deployed
+// by CI. Publish it only after a human review.
+//
+// Missing companyId means heartwood, including records that only have tenantId.
+// A second company can read and write only its own companyId.
+// Heartwood admins and assigned staff keep the access they already have:
+// jobs, receipts, quotes, inbox, hours exports, reimbursements, chat,
+// SWMS sign-off, leave, and fleet. Job photos stay in Storage rules.
+// The emulator model still closes ordinary job writes. This file opens them.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isAlex() { return signedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
+    function isPatrick() { return signedIn() && request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"; }
+    function isHeartwoodFinance() { return isAlex() || isPatrick(); }
+    function userPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function hasProfile() { return exists(userPath()); }
+    function profile() { return get(userPath()).data; }
+    function isAppAdmin() {
+      return isAlex() || isPatrick() || (hasProfile() && profile().role == "admin" && callerCompany() == "heartwood");
+    }
+
+    // Platform owner is Alex's verified mailbox, plus either his bootstrap uid
+    // or a custom claim platformOwner=true. A company admin cannot set this.
+    function platformOwner() {
+      return signedIn()
+        && "email_verified" in request.auth.token
+        && request.auth.token.email_verified == true
+        && "email" in request.auth.token
+        && request.auth.token.email == "alex@heartwoodew.com"
+        && (("platformOwner" in request.auth.token && request.auth.token.platformOwner == true) || isAlex());
+    }
+    function docCompany(data) {
+      return ("companyId" in data && data.companyId is string && data.companyId.size() > 0)
+        ? data.companyId
+        : (("tenantId" in data && data.tenantId is string && data.tenantId.size() > 0)
+          ? data.tenantId
+          : "heartwood");
+    }
+    function sessionPath() { return /databases/$(database)/documents/platformSessions/$(request.auth.uid); }
+    function sessionCompany() {
+      let id = platformOwner() && exists(sessionPath()) ? get(sessionPath()).data.get("companyId", "") : "";
+      return id is string && id.size() > 1
+        && exists(/databases/$(database)/documents/companies/$(id))
+        && get(/databases/$(database)/documents/companies/$(id)).data.isTest == true
+        && get(/databases/$(database)/documents/companies/$(id)).data.status == "active"
+        ? id : "";
+    }
+    function callerCompany() {
+      let session = sessionCompany();
+      return session != "" ? session
+        : (isAlex() || isPatrick())
+        ? "heartwood"
+        : (hasProfile() && "companyId" in profile() && profile().companyId is string && profile().companyId.size() > 0
+          ? profile().companyId
+          : (hasProfile() && "tenantId" in profile() && profile().tenantId is string && profile().tenantId.size() > 0
+            ? profile().tenantId
+            : (hasProfile() ? "heartwood" : "")));
+    }
+    function companyIdOk(id) {
+      return id is string && id.size() >= 2 && id.size() <= 40 && id.matches('^[a-z0-9][a-z0-9-]{0,39}$');
+    }
+    function companyDetailText(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 80
+        && data.legalName is string && data.legalName.size() > 0 && data.legalName.size() <= 120
+        && data.abn is string && data.abn.size() > 0 && data.abn.size() <= 20
+        && data.signoff is string && data.signoff.size() <= 80
+        && data.logoUrl is string && data.logoUrl.size() <= 300
+        && data.address is string && data.address.size() > 0 && data.address.size() <= 160
+        && data.phone is string && data.phone.size() <= 40
+        && data.email is string && data.email.size() >= 6 && data.email.size() <= 120
+        && data.accountsEmail is string && data.accountsEmail.size() >= 6 && data.accountsEmail.size() <= 120
+        && data.hubdocAddress is string && data.hubdocAddress.size() <= 120
+        && (data.hubdocAddress == "" || data.hubdocAddress.matches('^[a-z0-9._+-]+@app[.]hubdoc[.]com$'));
+    }
+    function companyBillingLocked(data) {
+      return data.billing is map
+        && data.billing.keys().hasOnly(["provider", "status", "stripeCustomerId", "stripeSubscriptionId"])
+        && data.billing.provider == null
+        && data.billing.status == "not-configured"
+        && data.billing.stripeCustomerId == null
+        && data.billing.stripeSubscriptionId == null;
+    }
+    function companyOwnerCreate(companyId) {
+      let d = request.resource.data;
+      return signedIn()
+        && !isAlex() && !isPatrick()
+        && !hasProfile()
+        && companyIdOk(companyId)
+        && companyId != "heartwood"
+        && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing"])
+        && companyDetailText(d)
+        && d.ownerUid == request.auth.uid
+        && d.createdBy == request.auth.uid
+        && d.status == "active"
+        && d.plan == "trial"
+        && d.isTest == false
+        && d.origin == "signup"
+        && d.signedUpAt == request.time
+        && d.trialEndsAt > request.time + duration.value(13, 'd')
+        && d.trialEndsAt < request.time + duration.value(15, 'd')
+        && d.staffCount == 1
+        && d.jobCount == 0
+        && d.lastActivityAt == request.time
+        && companyBillingLocked(d)
+        && !d.keys().hasAny(["platformOwner", "finance"]);
+    }
+    function companyAdminEdit(companyId) {
+      let next = request.resource.data;
+      let diff = next.diff(resource.data).affectedKeys();
+      return signedIn()
+        && companyId == callerCompany()
+        && (isAlex() || isPatrick() || (hasProfile() && profile().role == "admin"))
+        && diff.hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress"])
+        && companyDetailText(next)
+        && next.status == resource.data.status
+        && next.plan == resource.data.plan
+        && next.billing == resource.data.billing
+        && next.ownerUid == resource.data.ownerUid
+        && next.staffCount == resource.data.staffCount
+        && next.jobCount == resource.data.jobCount
+        && next.origin == resource.data.origin
+        && next.get("isTest", false) == resource.data.get("isTest", false)
+        && next.get("plan", "trial") == resource.data.get("plan", "trial")
+        && next.get("friendEndsAt", null) == resource.data.get("friendEndsAt", null);
+    }
+    function testCompanyCreate(companyId) {
+      let d = request.resource.data;
+      return platformOwner()
+        && companyIdOk(companyId)
+        && companyId != "heartwood"
+        && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "demoData", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing"])
+        && companyDetailText(d)
+        && d.isTest == true
+        && d.plan == "trial"
+        && d.origin == "test"
+        && d.status == "active"
+        && d.demoData is bool
+        && d.ownerUid == request.auth.uid
+        && d.createdBy == request.auth.uid
+        && d.signedUpAt == request.time
+        && d.trialEndsAt == null
+        && d.lastActivityAt == request.time
+        && companyBillingLocked(d)
+        && (d.demoData == true ? (d.staffCount == 2 && d.jobCount == 2) : (d.staffCount == 0 && d.jobCount == 0));
+    }
+    function friendInvitePath(code) { return /databases/$(database)/documents/friendInvites/$(code); }
+    function friendCompanyCreate(companyId) {
+      let d = request.resource.data;
+      return signedIn()
+        && !isAlex() && !isPatrick()
+        && !hasProfile()
+        && companyIdOk(companyId)
+        && companyId != "heartwood"
+        && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "demoData", "friendInvite", "friendEndsAt", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing"])
+        && companyDetailText(d)
+        && d.plan == "friend"
+        && d.isTest == false
+        && d.demoData == false
+        && d.origin == "friend"
+        && d.status == "active"
+        && d.friendInvite is string
+        && d.friendInvite == d.friendInvite
+        && exists(friendInvitePath(d.friendInvite))
+        && get(friendInvitePath(d.friendInvite)).data.status == "pending"
+        && existsAfter(friendInvitePath(d.friendInvite))
+        && getAfter(friendInvitePath(d.friendInvite)).data.status == "used"
+        && getAfter(friendInvitePath(d.friendInvite)).data.usedBy == request.auth.uid
+        && getAfter(friendInvitePath(d.friendInvite)).data.companyId == companyId
+        && d.ownerUid == request.auth.uid
+        && d.friendEndsAt == null
+        && d.trialEndsAt == null
+        && d.signedUpAt == request.time
+        && d.lastActivityAt == request.time
+        && d.staffCount == 1
+        && d.jobCount == 0
+        && companyBillingLocked(d);
+    }
+    function ownerPlanEdit(companyId) {
+      let next = request.resource.data;
+      return platformOwner()
+        && resource.data.get("isTest", false) != true
+        && next.get("isTest", false) == resource.data.get("isTest", false)
+        && next.diff(resource.data).affectedKeys().hasOnly(["plan", "friendEndsAt", "trialEndsAt"])
+        && next.plan in ["friend", "trial", "paid"]
+        && next.billing == resource.data.billing
+        && next.status == resource.data.status
+        && (next.friendEndsAt == null || next.friendEndsAt is timestamp)
+        && (next.plan != "trial" || (
+          next.trialEndsAt > request.time + duration.value(13, 'd')
+          && next.trialEndsAt < request.time + duration.value(15, 'd')
+        ));
+    }
+    function testArchive(companyId) {
+      let next = request.resource.data;
+      return platformOwner()
+        && resource.data.isTest == true
+        && resource.data.status == "active"
+        && next.diff(resource.data).affectedKeys().hasOnly(["status", "archivedAt"])
+        && next.status == "archived"
+        && next.archivedAt == request.time
+        && next.isTest == true
+        && next.plan == resource.data.plan
+        && next.billing == resource.data.billing;
+    }
+    function testDemoCounts(companyId) {
+      let next = request.resource.data;
+      return platformOwner()
+        && resource.data.isTest == true
+        && resource.data.status == "active"
+        && next.diff(resource.data).affectedKeys().hasOnly(["demoData", "staffCount", "jobCount", "lastActivityAt"])
+        && next.demoData == true
+        && next.staffCount == 2
+        && next.jobCount == 2
+        && next.lastActivityAt == request.time;
+    }
+    function companyStatsBump(companyId) {
+      let next = request.resource.data;
+      return signedIn()
+        && companyId == callerCompany()
+        && hasProfile()
+        && next.diff(resource.data).affectedKeys().hasOnly(["staffCount", "jobCount", "lastActivityAt"])
+        && next.staffCount is int && next.jobCount is int
+        && next.staffCount >= resource.data.staffCount && next.staffCount <= resource.data.staffCount + 1
+        && next.jobCount >= resource.data.jobCount && next.jobCount <= resource.data.jobCount + 1
+        && next.lastActivityAt == request.time;
+    }
+    function ownerProfileCreate() {
+      let d = request.resource.data;
+      return d.keys().hasOnly(["name", "email", "role", "companyId", "tenantId"])
+        && d.role == "admin"
+        && companyIdOk(d.companyId)
+        && d.companyId != "heartwood"
+        && d.tenantId == d.companyId
+        && d.name is string && d.name.size() > 0 && d.name.size() <= 80
+        && d.email is string && d.email.size() <= 120
+        && exists(/databases/$(database)/documents/companies/$(d.companyId))
+        && get(/databases/$(database)/documents/companies/$(d.companyId)).data.ownerUid == request.auth.uid
+        && !d.keys().hasAny(["platformOwner", "finance", "customerIds"]);
+    }
+
+    function same(key) {
+      return (!(key in request.resource.data) && !(key in resource.data))
+        || ((key in request.resource.data) && (key in resource.data) && request.resource.data[key] == resource.data[key]);
+    }
+    match /users/{uid} {
+      allow get: if signedIn() && (
+        request.auth.uid == uid
+        || platformOwner()
+        || (callerCompany() != "" && docCompany(resource.data) == callerCompany()
+          && (isAlex() || isPatrick() || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor"))))
+      );
+      allow list: if platformOwner();
+      allow list: if signedIn() && callerCompany() != ""
+        && resource.data.companyId == callerCompany()
+        && (isAlex() || isPatrick() || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor")));
+      allow create: if signedIn() && request.auth.uid == uid && (
+        (!request.resource.data.keys().hasAny(["tenantId", "role", "customerIds", "finance", "platformOwner", "companyId"]))
+        || ownerProfileCreate()
+      );
+      allow create, update: if platformOwner()
+        && uid.matches('^demo-[a-z0-9-]{1,80}$')
+        && request.resource.data.keys().hasOnly(["name", "role", "companyId", "tenantId", "demo", "email"])
+        && request.resource.data.demo == true
+        && request.resource.data.role in ["operator", "supervisor"]
+        && request.resource.data.companyId is string
+        && request.resource.data.tenantId == request.resource.data.companyId
+        && exists(/databases/$(database)/documents/companies/$(request.resource.data.companyId))
+        && get(/databases/$(database)/documents/companies/$(request.resource.data.companyId)).data.isTest == true
+        && !request.resource.data.keys().hasAny(["platformOwner", "finance", "isTest"]);
+      allow update: if signedIn() && request.auth.uid == uid
+        && same("tenantId") && same("role") && same("customerIds") && same("finance")
+        && same("companyId") && same("platformOwner");
+      allow delete: if false;
+    }
+
+    match /xeroQueue/{id} {
+      allow read: if isHeartwoodFinance();
+      allow create: if isHeartwoodFinance()
+        && callerCompany() == "heartwood"
+        && request.resource.data.status == "queued"
+        && request.resource.data.by == request.auth.uid
+        && (!("tenantId" in request.resource.data) || request.resource.data.tenantId == "heartwood")
+        && request.resource.data.get("isTest", false) != true;
+      allow update, delete: if false;
+    }
+
+    match /tenants/{id} {
+      allow get: if signedIn() && (id == callerCompany() || platformOwner());
+      allow list: if platformOwner();
+      allow write: if false;
+    }
+
+    // Jobs, receipts and quotes. Missing companyId means heartwood.
+    // Office is an admin or supervisor of the caller's company, plus Alex and Patrick on Heartwood.
+    function office() {
+      return callerCompany() != "" && (
+        isAlex() || isPatrick()
+        || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor"))
+      );
+    }
+    function assignedHere(data) {
+      return data.get("assigned", []).hasAny([request.auth.uid]);
+    }
+    function companyFieldOk(data) {
+      return data.get("companyId", callerCompany()) == callerCompany();
+    }
+    function demoJobWrite(id) {
+      let d = request.resource.data;
+      return platformOwner()
+        && id.matches('^demo-[a-z0-9-]{1,80}$')
+        && d.demo == true
+        && d.companyId is string
+        && d.tenantId == d.companyId
+        && exists(/databases/$(database)/documents/companies/$(d.companyId))
+        && get(/databases/$(database)/documents/companies/$(d.companyId)).data.isTest == true
+        && d.keys().hasOnly(["client", "address", "type", "description", "date", "time", "status", "companyId", "tenantId", "demo", "assigned", "assignedNames"])
+        && d.client is string && d.client.size() <= 80
+        && d.address is string && d.address.size() <= 160
+        && d.description is string && d.description.size() <= 400
+        && !d.keys().hasAny(["invoiceAmount", "invoiceNo", "amountInc", "quoteAmount"]);
+    }
+    match /jobs/{id} {
+      allow get: if signedIn() && docCompany(resource.data) == callerCompany()
+        && (office() || assignedHere(resource.data));
+      allow list: if (isAlex() || isPatrick()) && resource.data.companyId == "heartwood";
+      allow list: if hasProfile() && (profile().role == "admin" || profile().role == "supervisor")
+        && resource.data.companyId == callerCompany();
+      allow list: if signedIn() && resource.data.companyId == callerCompany() && assignedHere(resource.data);
+      allow create: if office() && docCompany(request.resource.data) == callerCompany() && companyFieldOk(request.resource.data);
+      allow update: if office()
+        && docCompany(resource.data) == callerCompany()
+        && docCompany(request.resource.data) == callerCompany()
+        && companyFieldOk(request.resource.data);
+      allow create, update: if demoJobWrite(id);
+      allow delete: if false;
+    }
+    match /receipts/{id} {
+      allow get: if signedIn() && docCompany(resource.data) == callerCompany()
+        && (office() || resource.data.uid == request.auth.uid);
+      allow list: if callerCompany() == "heartwood" && signedIn() && resource.data.uid == request.auth.uid
+        && docCompany(resource.data) == "heartwood";
+      allow list: if office() && callerCompany() == "heartwood" && resource.data.jobId is string
+        && docCompany(resource.data) == "heartwood";
+      allow list: if callerCompany() != "heartwood" && resource.data.companyId == callerCompany()
+        && (office() || resource.data.uid == request.auth.uid);
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid
+        && docCompany(request.resource.data) == callerCompany()
+        && companyFieldOk(request.resource.data);
+      allow update: if office()
+        && docCompany(resource.data) == callerCompany()
+        && docCompany(request.resource.data) == callerCompany();
+      allow delete: if false;
+    }
+    match /receiptChunks/{id} {
+      allow get: if signedIn() && (resource.data.uid == request.auth.uid || (office() && callerCompany() == "heartwood" && docCompany(resource.data) == "heartwood"));
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if false;
+    }
+    match /quotes/{id} {
+      allow get: if office() && docCompany(resource.data) == callerCompany();
+      allow list: if office() && resource.data.companyId == callerCompany();
+      allow create: if office()
+        && request.resource.data.companyId == callerCompany()
+        && docCompany(request.resource.data) == callerCompany();
+      allow update: if office()
+        && docCompany(resource.data) == callerCompany()
+        && docCompany(request.resource.data) == callerCompany()
+        && companyFieldOk(request.resource.data);
+      allow delete: if false;
+    }
+    match /incidents/{id} {
+      allow get: if signedIn() && docCompany(resource.data) == callerCompany()
+        && (office() || resource.data.reportedBy == request.auth.uid);
+      allow list: if office() && resource.data.companyId == callerCompany();
+      allow list: if signedIn() && resource.data.companyId == callerCompany() && resource.data.reportedBy == request.auth.uid;
+      allow create: if signedIn()
+        && request.resource.data.reportedBy == request.auth.uid
+        && request.resource.data.companyId == callerCompany();
+      allow update: if office()
+        && docCompany(resource.data) == callerCompany()
+        && docCompany(request.resource.data) == callerCompany();
+      allow delete: if false;
+    }
+    match /incidentCounter/{id} {
+      allow get, create, update: if office() && (id == callerCompany() || (id == "main" && callerCompany() == "heartwood"));
+      allow delete: if false;
+    }
+    match /meta/{id} {
+      allow get: if office() && callerCompany() == "heartwood";
+      allow list: if false;
+      allow create, update: if callerCompany() == "heartwood" && (
+        isAlex() || isPatrick() || (hasProfile() && profile().role == "admin")
+      );
+      allow delete: if false;
+    }
+
+// BEGIN COMPANY RULES
+    match /companies/{companyId} {
+      allow get: if platformOwner() || (signedIn() && callerCompany() == companyId);
+      allow list: if platformOwner();
+      allow create: if companyOwnerCreate(companyId) || testCompanyCreate(companyId) || friendCompanyCreate(companyId);
+      allow update: if ownerPlanEdit(companyId) || testArchive(companyId) || testDemoCounts(companyId) || companyAdminEdit(companyId) || companyStatsBump(companyId);
+      allow delete: if false;
+    }
+// END COMPANY RULES
+
+    match /platformSessions/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow create, update: if platformOwner() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(["companyId"])
+        && request.resource.data.companyId is string
+        && request.resource.data.companyId.size() <= 40
+        && (request.resource.data.companyId == ""
+          || (exists(/databases/$(database)/documents/companies/$(request.resource.data.companyId))
+            && get(/databases/$(database)/documents/companies/$(request.resource.data.companyId)).data.isTest == true
+            && get(/databases/$(database)/documents/companies/$(request.resource.data.companyId)).data.status == "active"));
+      allow delete: if false;
+    }
+
+    function friendCodeOk(code) { return code.matches('^[a-z0-9]{8}$'); }
+    match /friendInvites/{code} {
+      allow get: if platformOwner()
+        || (signedIn() && resource.data.status == "pending")
+        || (signedIn() && resource.data.usedBy == request.auth.uid);
+      allow list: if platformOwner();
+      allow create: if platformOwner()
+        && friendCodeOk(code)
+        && request.resource.data.keys().hasOnly(["status", "createdBy", "createdAt", "note"])
+        && request.resource.data.status == "pending"
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.note is string
+        && request.resource.data.note.size() <= 80;
+      allow update: if (
+          platformOwner()
+          && resource.data.status == "pending"
+          && request.resource.data.status == "revoked"
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "revokedAt"])
+          && request.resource.data.revokedAt == request.time
+        ) || (
+          signedIn()
+          && resource.data.status == "pending"
+          && request.resource.data.status == "used"
+          && request.resource.data.usedBy == request.auth.uid
+          && request.resource.data.companyId is string
+          && request.resource.data.usedAt == request.time
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "usedBy", "companyId", "usedAt"])
+          && existsAfter(/databases/$(database)/documents/companies/$(request.resource.data.companyId))
+          && getAfter(/databases/$(database)/documents/companies/$(request.resource.data.companyId)).data.ownerUid == request.auth.uid
+          && getAfter(/databases/$(database)/documents/companies/$(request.resource.data.companyId)).data.plan == "friend"
+          && getAfter(/databases/$(database)/documents/companies/$(request.resource.data.companyId)).data.friendInvite == code
+        );
+      allow delete: if false;
+    }
+
+    match /testMailLog/{id} {
+      allow read: if platformOwner();
+      allow create: if platformOwner()
+        && sessionCompany() != ""
+        && request.resource.data.keys().hasOnly(["kind", "status", "companyId", "preview", "createdAt"])
+        && request.resource.data.kind in ["hours", "hubdoc", "xero", "builder"]
+        && request.resource.data.status == "preview"
+        && request.resource.data.companyId == sessionCompany()
+        && request.resource.data.preview is string
+        && request.resource.data.preview.size() <= 2000
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+// BEGIN INVITE RULES
+    function inviteSignedIn() { return request.auth != null; }
+    function inviteIsAlex() { return inviteSignedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
+    function inviteIsPatrick() { return inviteSignedIn() && request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"; }
+    function inviteUserPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function inviteHasProfile() { return inviteSignedIn() && exists(inviteUserPath()); }
+    function inviteProfile() { return get(inviteUserPath()).data; }
+    function inviteAdmin() {
+      return inviteIsAlex() || inviteIsPatrick()
+        || (inviteHasProfile() && "role" in inviteProfile()
+          && (inviteProfile().role == "admin" || inviteProfile().role == "supervisor"));
+    }
+    function inviteCallerTenant() {
+      return inviteIsAlex() || inviteIsPatrick()
+        ? "heartwood"
+        : (inviteHasProfile() && "companyId" in inviteProfile() && inviteProfile().companyId is string && inviteProfile().companyId.size() > 0
+          ? inviteProfile().companyId
+          : (inviteHasProfile() && "tenantId" in inviteProfile() && inviteProfile().tenantId is string && inviteProfile().tenantId.size() > 0
+          ? inviteProfile().tenantId
+          : (inviteHasProfile() ? "heartwood" : "")));
+    }
+    function inviteEmailOk(email) {
+      return email is string
+        && email.size() >= 6
+        && email.size() <= 120
+        && email.matches('^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$');
+    }
+    function inviteRoleOk() {
+      return request.resource.data.role == "operator" || request.resource.data.role == "supervisor";
+    }
+    function inviteSame(key) {
+      return (!(key in request.resource.data) && !(key in resource.data))
+        || ((key in request.resource.data) && (key in resource.data) && request.resource.data[key] == resource.data[key]);
+    }
+    function inviteBaseOk() {
+      return request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80
+        && !request.resource.data.name.matches('.*[\\n\\r\\t<>].*')
+        && inviteEmailOk(request.resource.data.email)
+        && inviteRoleOk()
+        && request.resource.data.tenantId is string
+        && request.resource.data.tenantId == inviteCallerTenant()
+        && request.resource.data.tenantId.matches('^[a-z0-9][a-z0-9-]{0,39}$')
+        && (!("companyId" in request.resource.data) || request.resource.data.companyId == request.resource.data.tenantId)
+        && request.resource.data.token is string
+        && request.resource.data.token.matches('^[A-Za-z0-9_-]{43,128}$')
+        && request.resource.data.createdBy is string
+        && request.resource.data.createdBy.size() > 0
+        && request.resource.data.createdBy.size() <= 128
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.expiresAt is timestamp;
+    }
+    function inviteExpiryWindow() {
+      return request.resource.data.expiresAt > request.time + duration.value(6, 'd')
+        && request.resource.data.expiresAt < request.time + duration.value(8, 'd');
+    }
+    function inviteLockPath(email) { return /databases/$(database)/documents/inviteEmails/$(email); }
+    function invitePath(inviteId) { return /databases/$(database)/documents/invites/$(inviteId); }
+    function inviteLockFree(email) {
+      return !exists(inviteLockPath(email))
+        || get(inviteLockPath(email)).data.status != "pending";
+    }
+    function inviteLockAgrees(email, inviteId) {
+      return existsAfter(inviteLockPath(email))
+        && getAfter(inviteLockPath(email)).data.keys().hasOnly(["email", "status", "inviteId", "expiresAt", "role", "tenantId"])
+        && getAfter(inviteLockPath(email)).data.email == email
+        && getAfter(inviteLockPath(email)).data.inviteId == inviteId
+        && getAfter(inviteLockPath(email)).data.role == request.resource.data.role
+        && getAfter(inviteLockPath(email)).data.tenantId == request.resource.data.tenantId
+        && getAfter(inviteLockPath(email)).data.status == request.resource.data.status
+        && getAfter(inviteLockPath(email)).data.expiresAt == request.resource.data.expiresAt;
+    }
+    function inviteCreateOk(inviteId) {
+      return inviteAdmin()
+        && inviteBaseOk()
+        && request.resource.data.keys().hasOnly(["name", "email", "role", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId", "companyId"])
+        && request.resource.data.status == "pending"
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && inviteExpiryWindow()
+        && inviteLockFree(request.resource.data.email)
+        && inviteLockAgrees(request.resource.data.email, inviteId);
+    }
+    function inviteCancelOk(inviteId) {
+      return resource.data.status == "pending"
+        && request.resource.data.status == "cancelled"
+        && request.resource.data.cancelledBy == request.auth.uid
+        && request.resource.data.cancelledAt == request.time
+        && inviteSame("name") && inviteSame("email") && inviteSame("role") && inviteSame("createdBy")
+        && inviteSame("createdAt") && inviteSame("expiresAt") && inviteSame("token") && inviteSame("tenantId")
+        && inviteSame("resentAt") && inviteSame("resentBy") && inviteSame("companyId")
+        && inviteLockAgrees(request.resource.data.email, inviteId);
+    }
+    function inviteResendOk(inviteId) {
+      return resource.data.status == "pending"
+        && request.resource.data.status == "pending"
+        && request.resource.data.token != resource.data.token
+        && request.resource.data.resentBy == request.auth.uid
+        && request.resource.data.resentAt == request.time
+        && inviteExpiryWindow()
+        && inviteSame("name") && inviteSame("email") && inviteSame("role") && inviteSame("createdBy")
+        && inviteSame("createdAt") && inviteSame("tenantId") && inviteSame("companyId")
+        && inviteSame("cancelledAt") && inviteSame("cancelledBy")
+        && inviteLockAgrees(request.resource.data.email, inviteId);
+    }
+    function inviteUpdateOk(inviteId) {
+      return inviteAdmin()
+        && inviteBaseOk()
+        && request.resource.data.keys().hasOnly(["name", "email", "role", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId", "companyId", "cancelledAt", "cancelledBy", "resentAt", "resentBy"])
+        && (inviteCancelOk(inviteId) || inviteResendOk(inviteId));
+    }
+
+    match /invites/{inviteId} {
+      allow get, list: if inviteAdmin() && resource.data.tenantId == inviteCallerTenant();
+      allow create: if inviteCreateOk(inviteId);
+      allow update: if inviteUpdateOk(inviteId);
+      allow delete: if false;
+    }
+
+    function inviteLockEmailOk(email) {
+      return inviteEmailOk(email)
+        && request.resource.data.email == email
+        && inviteRoleOk()
+        && request.resource.data.tenantId == inviteCallerTenant()
+        && request.resource.data.inviteId is string
+        && request.resource.data.inviteId.size() > 0
+        && request.resource.data.inviteId.size() <= 128
+        && request.resource.data.expiresAt is timestamp
+        && (request.resource.data.status == "pending" || request.resource.data.status == "cancelled")
+        && request.resource.data.keys().hasOnly(["email", "status", "inviteId", "expiresAt", "role", "tenantId"]);
+    }
+    function inviteLockPointsAtInvite(email) {
+      return existsAfter(invitePath(request.resource.data.inviteId))
+        && getAfter(invitePath(request.resource.data.inviteId)).data.email == email
+        && getAfter(invitePath(request.resource.data.inviteId)).data.role == request.resource.data.role
+        && getAfter(invitePath(request.resource.data.inviteId)).data.tenantId == request.resource.data.tenantId
+        && getAfter(invitePath(request.resource.data.inviteId)).data.status == request.resource.data.status
+        && getAfter(invitePath(request.resource.data.inviteId)).data.expiresAt == request.resource.data.expiresAt;
+    }
+    function inviteLockWriteOk(email) {
+      return (
+        !exists(inviteLockPath(email))
+        && request.resource.data.status == "pending"
+      ) || (
+        exists(inviteLockPath(email))
+        && get(inviteLockPath(email)).data.status == "pending"
+        && get(inviteLockPath(email)).data.inviteId == request.resource.data.inviteId
+        && (request.resource.data.status == "pending" || request.resource.data.status == "cancelled")
+      ) || (
+        exists(inviteLockPath(email))
+        && get(inviteLockPath(email)).data.status != "pending"
+        && request.resource.data.status == "pending"
+      );
+    }
+
+    match /inviteEmails/{email} {
+      allow get: if inviteAdmin();
+      allow list: if false;
+      allow create, update: if inviteAdmin()
+        && inviteLockEmailOk(email)
+        && inviteLockPointsAtInvite(email)
+        && inviteLockWriteOk(email);
+      allow delete: if false;
+    }
+
+    match /inviteMail/{id} {
+      allow read, write: if false;
+    }
+    match /mail/{id} {
+      allow read, write: if false;
+    }
+// END INVITE RULES
+
+// BEGIN CHAT RULES
+    function chatSignedIn() { return request.auth != null; }
+    function chatIsAlex() { return chatSignedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
+    function chatIsPatrick() { return chatSignedIn() && request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"; }
+    function chatUserPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function chatHasProfile() { return chatSignedIn() && exists(chatUserPath()); }
+    function chatProfile() { return get(chatUserPath()).data; }
+    function chatExplicitTenant() {
+      return chatHasProfile() && "tenantId" in chatProfile() && chatProfile().tenantId is string && chatProfile().tenantId.size() > 0;
+    }
+    function chatCallerTenant() {
+      return chatExplicitTenant()
+        ? chatProfile().tenantId
+        : ((chatHasProfile() || chatIsAlex() || chatIsPatrick()) ? "heartwood" : "");
+    }
+    function chatMember(tenantId) {
+      return chatSignedIn()
+        && tenantId is string
+        && tenantId.matches('^[a-z0-9][a-z0-9-]{0,39}$')
+        && chatCallerTenant() == tenantId;
+    }
+    function chatJobPath(jobId) { return /databases/$(database)/documents/jobs/$(jobId); }
+    function chatJob(jobId) { return get(chatJobPath(jobId)).data; }
+    function chatJobTenant(jobId) {
+      return "tenantId" in chatJob(jobId) && chatJob(jobId).tenantId is string && chatJob(jobId).tenantId.size() > 0
+        ? chatJob(jobId).tenantId
+        : "heartwood";
+    }
+    function chatAccountTenant() {
+      return chatExplicitTenant() ? chatProfile().tenantId : "heartwood";
+    }
+    function chatAssigned(jobId) {
+      return "assigned" in chatJob(jobId) && chatJob(jobId).assigned is list && request.auth.uid in chatJob(jobId).assigned;
+    }
+    function chatCustomerOk(jobId) {
+      return !chatHasProfile()
+        || !("customerIds" in chatProfile())
+        || !(chatProfile().customerIds is list)
+        || chatProfile().customerIds.size() == 0
+        || ("client" in chatJob(jobId) && chatJob(jobId).client is string && chatJob(jobId).client in chatProfile().customerIds);
+    }
+    function chatAccountCanSee(tenantId, jobId) {
+      return chatHasProfile()
+        && chatAccountTenant() == tenantId
+        && (("role" in chatProfile() && chatProfile().role == "admin") || chatAssigned(jobId))
+        && chatCustomerOk(jobId);
+    }
+    function chatCanSeeJob(tenantId, jobId) {
+      return chatSignedIn()
+        && jobId is string
+        && jobId.size() > 0
+        && jobId.size() <= 200
+        && chatJobTenant(jobId) == tenantId
+        && ((tenantId == "heartwood" && (chatIsAlex() || chatIsPatrick())) || chatAccountCanSee(tenantId, jobId));
+    }
+    function chatThreadOk(threadId) {
+      return threadId == "staff"
+        || (threadId is string && threadId.size() <= 210 && threadId.matches('^job_[A-Za-z0-9_-]{1,200}$'));
+    }
+    function chatJobId(threadId) { return threadId[4:threadId.size()]; }
+    function chatCanAccess(tenantId, threadId) {
+      return chatThreadOk(threadId) && (
+        threadId == "staff"
+          ? chatMember(tenantId)
+          : chatCanSeeJob(tenantId, chatJobId(threadId))
+      );
+    }
+    function chatAdmin(tenantId) {
+      return chatMember(tenantId) && (
+        chatIsAlex() || chatIsPatrick() || (chatHasProfile() && "role" in chatProfile() && chatProfile().role == "admin")
+      );
+    }
+    function chatHasPhoto() { return "photoPath" in request.resource.data; }
+    function chatPhotoPathOk(tenantId, threadId) {
+      return threadId == "staff"
+        ? request.resource.data.photoPath.matches('^tenants/' + tenantId + '/chat/staff/photos/c[A-Za-z0-9]{8,40}$')
+        : request.resource.data.photoPath.matches('^tenants/' + tenantId + '/chat/jobs/' + chatJobId(threadId) + '/photos/c[A-Za-z0-9]{8,40}$');
+    }
+    function chatMessageOk(tenantId, threadId) {
+      return request.resource.data.keys().hasOnly(["senderUid", "senderName", "text", "createdAt", "photoPath", "photoType"])
+        && request.resource.data.senderUid == request.auth.uid
+        && request.resource.data.senderName is string
+        && request.resource.data.senderName.size() > 0
+        && request.resource.data.senderName.size() <= 80
+        && request.resource.data.text is string
+        && request.resource.data.text.size() <= 4000
+        && request.resource.data.createdAt == request.time
+        && (request.resource.data.text.size() > 0 || chatHasPhoto())
+        && (!chatHasPhoto() || (
+          request.resource.data.photoPath is string
+          && request.resource.data.photoPath.size() > 0
+          && request.resource.data.photoPath.size() <= 300
+          && request.resource.data.photoType is string
+          && request.resource.data.photoType.matches('^image/(jpeg|png|webp|gif)$')
+          && chatPhotoPathOk(tenantId, threadId)
+        ))
+        && (chatHasPhoto() || !("photoType" in request.resource.data));
+    }
+    function chatHeadOk() {
+      return request.resource.data.keys().hasOnly(["lastAt", "lastSenderUid", "lastSenderName", "preview"])
+        && request.resource.data.lastSenderUid == request.auth.uid
+        && request.resource.data.lastAt == request.time
+        && request.resource.data.lastSenderName is string
+        && request.resource.data.lastSenderName.size() > 0
+        && request.resource.data.lastSenderName.size() <= 80
+        && request.resource.data.preview is string
+        && request.resource.data.preview.size() <= 140;
+    }
+
+    match /tenants/{tenantId}/chats/{threadId} {
+      allow read: if chatCanAccess(tenantId, threadId);
+      allow create, update: if chatCanAccess(tenantId, threadId) && chatHeadOk();
+      allow delete: if false;
+    }
+
+    match /tenants/{tenantId}/chats/{threadId}/messages/{messageId} {
+      allow read: if chatCanAccess(tenantId, threadId);
+      allow create: if chatCanAccess(tenantId, threadId) && chatMessageOk(tenantId, threadId);
+      allow update: if false;
+      allow delete: if chatCanAccess(tenantId, threadId)
+        && (resource.data.senderUid == request.auth.uid || chatAdmin(tenantId));
+    }
+
+    match /tenants/{tenantId}/chatSeen/{uid}/threads/{threadId} {
+      allow read: if chatSignedIn() && request.auth.uid == uid && chatCanAccess(tenantId, threadId);
+      allow create, update: if chatSignedIn()
+        && request.auth.uid == uid
+        && chatCanAccess(tenantId, threadId)
+        && request.resource.data.keys().hasOnly(["seenAt"])
+        && request.resource.data.seenAt == request.time;
+      allow delete: if false;
+    }
+// END CHAT RULES
+
+// BEGIN FLEET RULES
+    function fleetSignedIn() { return request.auth != null; }
+    function fleetIsAlex() { return fleetSignedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
+    function fleetIsPatrick() { return fleetSignedIn() && request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"; }
+    function fleetUserPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function fleetHasProfile() { return fleetSignedIn() && exists(fleetUserPath()); }
+    function fleetProfile() { return get(fleetUserPath()).data; }
+    function fleetExplicitTenant() {
+      return fleetHasProfile() && "tenantId" in fleetProfile() && fleetProfile().tenantId is string && fleetProfile().tenantId.size() > 0;
+    }
+    function fleetCallerTenant() {
+      return fleetExplicitTenant()
+        ? fleetProfile().tenantId
+        : ((fleetHasProfile() || fleetIsAlex() || fleetIsPatrick()) ? "heartwood" : "");
+    }
+    function fleetMember(tenantId) {
+      return fleetSignedIn()
+        && tenantId is string
+        && tenantId.matches('^[a-z0-9][a-z0-9-]{0,39}$')
+        && fleetCallerTenant() == tenantId;
+    }
+    function fleetAdmin(tenantId) {
+      return fleetMember(tenantId) && (
+        fleetIsAlex() || fleetIsPatrick() || (fleetHasProfile() && "role" in fleetProfile() && fleetProfile().role == "admin")
+      );
+    }
+    function fleetDateOk(v) {
+      return v is string && (v == "" || v.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$'));
+    }
+    function fleetAssetOk() {
+      return request.resource.data.keys().hasOnly(["type", "name", "rego", "regoExpiry", "coiRequired", "coiExpiry", "notes", "prestartKind", "reading", "readingUnit", "readingAt", "readingBy", "readingByName", "updatedAt", "updatedBy"])
+        && (request.resource.data.type == "vehicle" || request.resource.data.type == "trailer" || request.resource.data.type == "plant")
+        && (!("prestartKind" in request.resource.data) || request.resource.data.prestartKind == "skid-steer" || request.resource.data.prestartKind == "excavator" || request.resource.data.prestartKind == "tip-truck" || request.resource.data.prestartKind == "ute" || request.resource.data.prestartKind == "trailer" || request.resource.data.prestartKind == "other-plant")
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80
+        && request.resource.data.rego is string
+        && request.resource.data.rego.size() <= 20
+        && fleetDateOk(request.resource.data.regoExpiry)
+        && request.resource.data.coiRequired is bool
+        && fleetDateOk(request.resource.data.coiExpiry)
+        && request.resource.data.notes is string
+        && request.resource.data.notes.size() <= 2000
+        && (!("reading" in request.resource.data) || (request.resource.data.reading is int && request.resource.data.reading >= 0 && request.resource.data.reading <= 10000000))
+        && (!("readingUnit" in request.resource.data) || request.resource.data.readingUnit == "" || request.resource.data.readingUnit == "hours" || request.resource.data.readingUnit == "km")
+        && request.resource.data.updatedBy == request.auth.uid
+        && request.resource.data.updatedAt == request.time;
+    }
+    function fleetEditor(tenantId) {
+      return fleetAdmin(tenantId)
+        || (fleetMember(tenantId) && fleetHasProfile() && "role" in fleetProfile() && fleetProfile().role == "supervisor");
+    }
+    function fleetPolicyOk() {
+      return request.resource.data.keys().hasOnly(["type", "insurer", "policyNumber", "startDate", "expiry", "amount", "notes", "assetId", "updatedAt", "updatedBy"])
+        && (request.resource.data.type == "workcover" || request.resource.data.type == "public-liability" || request.resource.data.type == "vehicle" || request.resource.data.type == "plant" || request.resource.data.type == "contract-works")
+        && request.resource.data.insurer is string
+        && request.resource.data.insurer.size() > 0
+        && request.resource.data.insurer.size() <= 120
+        && request.resource.data.policyNumber is string
+        && request.resource.data.policyNumber.size() <= 60
+        && fleetDateOk(request.resource.data.startDate)
+        && fleetDateOk(request.resource.data.expiry)
+        && request.resource.data.amount is string
+        && request.resource.data.amount.size() <= 40
+        && request.resource.data.notes is string
+        && request.resource.data.notes.size() <= 2000
+        && request.resource.data.assetId is string
+        && request.resource.data.assetId.size() <= 80
+        && request.resource.data.assetId.matches('^[A-Za-z0-9_-]*$')
+        && request.resource.data.updatedBy == request.auth.uid
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    // Prestart readings: any member of the tenant may move a machine's reading UP (same unit), signed as themselves.
+    // Nothing else on the machine can change this way. A lower reading stays on the prestart only.
+    function fleetReadingOk(tenantId) {
+      return fleetMember(tenantId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["reading", "readingUnit", "readingAt", "readingBy", "readingByName"])
+        && request.resource.data.reading is int
+        && request.resource.data.reading > 0
+        && request.resource.data.reading <= 10000000
+        && (request.resource.data.readingUnit == "hours" || request.resource.data.readingUnit == "km")
+        && (resource.data.get("reading", 0) == 0
+          || resource.data.get("readingUnit", "") == ""
+          || resource.data.get("readingUnit", "") != request.resource.data.readingUnit
+          || request.resource.data.reading > resource.data.get("reading", 0))
+        && request.resource.data.readingBy == request.auth.uid
+        && request.resource.data.readingByName is string
+        && request.resource.data.readingByName.size() <= 80
+        && request.resource.data.readingAt == request.time;
+    }
+
+    match /tenants/{tenantId}/fleet/{assetId} {
+      allow read: if fleetMember(tenantId);
+      allow create: if fleetEditor(tenantId) && fleetAssetOk();
+      allow update: if (fleetEditor(tenantId) && fleetAssetOk()) || fleetReadingOk(tenantId);
+      allow delete: if fleetAdmin(tenantId);
+    }
+
+    match /tenants/{tenantId}/policies/{policyId} {
+      allow read: if fleetAdmin(tenantId);
+      allow create, update: if fleetAdmin(tenantId) && fleetPolicyOk();
+      allow delete: if fleetAdmin(tenantId);
+    }
+// END FLEET RULES
+
+// BEGIN SERVICING RULES
+    function svcSignedIn() { return request.auth != null; }
+    function svcIsAlex() { return svcSignedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
+    function svcIsPatrick() { return svcSignedIn() && request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"; }
+    function svcUserPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function svcHasProfile() { return svcSignedIn() && exists(svcUserPath()); }
+    function svcProfile() { return get(svcUserPath()).data; }
+    function svcExplicitTenant() {
+      return svcHasProfile() && "tenantId" in svcProfile() && svcProfile().tenantId is string && svcProfile().tenantId.size() > 0;
+    }
+    function svcCallerTenant() {
+      return svcExplicitTenant()
+        ? svcProfile().tenantId
+        : ((svcHasProfile() || svcIsAlex() || svcIsPatrick()) ? "heartwood" : "");
+    }
+    function svcMember(tenantId) {
+      return svcSignedIn()
+        && tenantId is string
+        && tenantId.matches('^[a-z0-9][a-z0-9-]{0,39}$')
+        && svcCallerTenant() == tenantId;
+    }
+    function svcAdmin(tenantId) {
+      return svcMember(tenantId) && (
+        svcIsAlex() || svcIsPatrick() || (svcHasProfile() && "role" in svcProfile() && svcProfile().role == "admin")
+      );
+    }
+    function svcWriter(tenantId) {
+      return svcAdmin(tenantId)
+        || (svcMember(tenantId) && svcHasProfile() && "role" in svcProfile() && svcProfile().role == "supervisor");
+    }
+    function svcInt(v, max) {
+      return v is int && v >= 0 && v <= max;
+    }
+    function svcUnit(v) {
+      return v == "" || v == "hours" || v == "km";
+    }
+    function svcDate(v) {
+      return v is string && v.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+    function svcRecordOk() {
+      return request.resource.data.keys().hasOnly(["assetId", "doneOn", "reading", "readingUnit", "serviceType", "servicedBy", "notes", "updatedAt", "updatedBy"])
+        && request.resource.data.assetId is string
+        && request.resource.data.assetId.matches('^[A-Za-z0-9_-]{1,80}$')
+        && svcDate(request.resource.data.doneOn)
+        && svcInt(request.resource.data.reading, 10000000)
+        && svcUnit(request.resource.data.readingUnit)
+        && (request.resource.data.reading == 0 || request.resource.data.readingUnit == "hours" || request.resource.data.readingUnit == "km")
+        && (request.resource.data.serviceType == "250hr" || request.resource.data.serviceType == "major" || request.resource.data.serviceType == "repair" || request.resource.data.serviceType == "other")
+        && request.resource.data.servicedBy is string
+        && request.resource.data.servicedBy.size() <= 120
+        && request.resource.data.notes is string
+        && request.resource.data.notes.size() <= 2000
+        && request.resource.data.updatedBy == request.auth.uid
+        && request.resource.data.updatedAt == request.time;
+    }
+    function svcPlanOk() {
+      return request.resource.data.keys().hasOnly(["everyDays", "everyReading", "readingUnit", "currentReading", "updatedAt", "updatedBy"])
+        && svcInt(request.resource.data.everyDays, 3650)
+        && svcInt(request.resource.data.everyReading, 1000000)
+        && svcInt(request.resource.data.currentReading, 10000000)
+        && svcUnit(request.resource.data.readingUnit)
+        && (request.resource.data.everyReading == 0 || request.resource.data.readingUnit == "hours" || request.resource.data.readingUnit == "km")
+        && request.resource.data.updatedBy == request.auth.uid
+        && request.resource.data.updatedAt == request.time;
+    }
+    function svcCostOk() {
+      return request.resource.data.keys().hasOnly(["amount", "updatedAt", "updatedBy"])
+        && request.resource.data.amount is string
+        && request.resource.data.amount.size() > 0
+        && request.resource.data.amount.size() <= 40
+        && request.resource.data.updatedBy == request.auth.uid
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    match /tenants/{tenantId}/servicing/{recordId} {
+      allow read: if svcMember(tenantId);
+      allow create, update: if svcWriter(tenantId) && svcRecordOk();
+      allow delete: if svcWriter(tenantId);
+    }
+
+    match /tenants/{tenantId}/servicePlans/{assetId} {
+      allow read: if svcMember(tenantId);
+      allow create, update: if svcWriter(tenantId) && svcPlanOk();
+      allow delete: if svcWriter(tenantId);
+    }
+
+    match /tenants/{tenantId}/serviceCosts/{recordId} {
+      allow read: if svcWriter(tenantId);
+      allow create, update: if svcWriter(tenantId) && svcCostOk();
+      allow delete: if svcWriter(tenantId);
+    }
+// END SERVICING RULES
+
+// BEGIN PRESTART RULES
+    function psSignedIn() { return request.auth != null; }
+    function psIsAlex() { return psSignedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
+    function psIsPatrick() { return psSignedIn() && request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"; }
+    function psUserPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function psHasProfile() { return psSignedIn() && exists(psUserPath()); }
+    function psProfile() { return get(psUserPath()).data; }
+    function psExplicitTenant() {
+      return psHasProfile() && "tenantId" in psProfile() && psProfile().tenantId is string && psProfile().tenantId.size() > 0;
+    }
+    function psCallerTenant() {
+      return psExplicitTenant()
+        ? psProfile().tenantId
+        : ((psHasProfile() || psIsAlex() || psIsPatrick()) ? "heartwood" : "");
+    }
+    function psMember(tenantId) {
+      return psSignedIn()
+        && tenantId is string
+        && tenantId.matches('^[a-z0-9][a-z0-9-]{0,39}$')
+        && psCallerTenant() == tenantId;
+    }
+    function psAdmin(tenantId) {
+      return psMember(tenantId) && (
+        psIsAlex() || psIsPatrick() || (psHasProfile() && "role" in psProfile() && psProfile().role == "admin")
+      );
+    }
+    function psKindOk(kind) {
+      return kind == "skid-steer" || kind == "excavator" || kind == "tip-truck"
+        || kind == "ute" || kind == "trailer" || kind == "other-plant";
+    }
+    function psItem(item) {
+      return item.keys().hasOnly(["id", "result", "comment", "critical"])
+        && item.id is string
+        && item.id.size() > 0
+        && item.id.size() <= 40
+        && (item.result == "pass" || item.result == "fail" || item.result == "na")
+        && item.comment is string
+        && item.comment.size() <= 500
+        && (item.result != "fail" || item.comment.size() > 0)
+        && item.critical is bool;
+    }
+    function psItems(items) {
+      return items is list
+        && items.size() >= 1
+        && items.size() <= 16
+        && psItem(items[0])
+        && psItem(items[items.size() - 1]);
+    }
+    function psTpl(item) {
+      return item.keys().hasOnly(["id", "label", "critical"])
+        && item.id is string && item.id.size() > 0 && item.id.size() <= 40
+        && item.label is string && item.label.size() > 0 && item.label.size() <= 60
+        && item.critical is bool;
+    }
+    function psCreateOk() {
+      return request.resource.data.keys().hasOnly(["assetId", "assetType", "assetName", "kind", "day", "reading", "readingUnit", "odometer", "items", "signerUid", "signerName", "signedAt", "defect", "doNotOperate", "resolved"])
+        && request.resource.data.assetId is string
+        && request.resource.data.assetId.matches('^[A-Za-z0-9_-]{1,80}$')
+        && (request.resource.data.assetType == "vehicle" || request.resource.data.assetType == "trailer" || request.resource.data.assetType == "plant")
+        && psKindOk(request.resource.data.kind)
+        && request.resource.data.assetName is string
+        && request.resource.data.assetName.size() > 0
+        && request.resource.data.assetName.size() <= 80
+        && request.resource.data.day is string
+        && request.resource.data.day.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && request.resource.data.reading is int
+        && request.resource.data.reading >= 0
+        && request.resource.data.reading <= 10000000
+        && (request.resource.data.readingUnit == "" || request.resource.data.readingUnit == "hours" || request.resource.data.readingUnit == "km")
+        && request.resource.data.odometer is int
+        && request.resource.data.odometer >= 0
+        && request.resource.data.odometer <= 10000000
+        && psItems(request.resource.data.items)
+        && request.resource.data.signerUid == request.auth.uid
+        && request.resource.data.signerName is string
+        && request.resource.data.signerName.size() >= 2
+        && request.resource.data.signerName.size() <= 80
+        && request.resource.data.signedAt == request.time
+        && request.resource.data.defect is bool
+        && request.resource.data.doNotOperate is bool
+        && request.resource.data.resolved == false;
+    }
+    function psSame(key) {
+      return request.resource.data[key] == resource.data[key];
+    }
+    function psResolveOk() {
+      return resource.data.defect == true
+        && resource.data.resolved == false
+        && request.resource.data.resolved == true
+        && request.resource.data.resolvedBy == request.auth.uid
+        && request.resource.data.resolvedNote is string
+        && request.resource.data.resolvedNote.size() <= 500
+        && request.resource.data.resolvedAt == request.time
+        && psSame("assetId") && psSame("assetType") && psSame("assetName") && psSame("kind")
+        && psSame("day") && psSame("reading") && psSame("readingUnit") && psSame("odometer")
+        && psSame("items") && psSame("signerUid") && psSame("signerName")
+        && psSame("signedAt") && psSame("defect") && psSame("doNotOperate");
+    }
+    function psTemplateOk() {
+      return request.resource.data.keys().hasOnly(["items", "updatedAt", "updatedBy"])
+        && request.resource.data.items is list
+        && request.resource.data.items.size() >= 1
+        && request.resource.data.items.size() <= 16
+        && psTpl(request.resource.data.items[0])
+        && psTpl(request.resource.data.items[request.resource.data.items.size() - 1])
+        && request.resource.data.updatedBy == request.auth.uid
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    match /tenants/{tenantId}/prestarts/{id} {
+      allow read: if psMember(tenantId);
+      allow create: if psMember(tenantId) && psCreateOk();
+      allow update: if psAdmin(tenantId) && psResolveOk();
+      allow delete: if false;
+    }
+
+    match /tenants/{tenantId}/prestartTemplates/{assetType} {
+      allow read: if psMember(tenantId);
+      allow create, update: if psAdmin(tenantId)
+        && psKindOk(assetType)
+        && psTemplateOk();
+      allow delete: if false;
+    }
+// END PRESTART RULES
+
+
+
+
+// BEGIN SWMS SIGNATURE RULES
+    function swmsSignedIn() { return request.auth != null; }
+    function swmsIsAlex() { return swmsSignedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
+    function swmsIsPatrick() { return swmsSignedIn() && request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"; }
+    function swmsUserPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function swmsHasProfile() { return swmsSignedIn() && exists(swmsUserPath()); }
+    function swmsProfile() { return get(swmsUserPath()).data; }
+    function swmsIsAdmin() {
+      return swmsIsAlex() || swmsIsPatrick()
+        || (swmsHasProfile() && "role" in swmsProfile() && swmsProfile().role == "admin");
+    }
+    function swmsCanSign() {
+      return swmsIsAlex() || swmsIsPatrick() || swmsHasProfile();
+    }
+    function swmsIdOk() {
+      return request.resource.data.swmsId is string
+        && request.resource.data.swmsId.matches('^(working-near-roads|mobile-plant|working-with-silica|hazardous-substances|electrical)$');
+    }
+    function swmsSigOk() {
+      return request.resource.data.sig is string
+        && request.resource.data.sig.size() >= 32
+        && request.resource.data.sig.size() <= 90000
+        && request.resource.data.sig.matches('^data:image/png;base64,[A-Za-z0-9+/=]+$');
+    }
+    function swmsCreateOk() {
+      return swmsCanSign()
+        && request.resource.data.keys().hasOnly(["uid", "name", "swmsId", "swmsTitle", "version", "jobId", "jobLabel", "sig", "signedAt", "signedAtMs", "expiresAtMs", "device", "companyId"])
+        && (!("companyId" in request.resource.data) || request.resource.data.companyId == callerCompany())
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 2
+        && request.resource.data.name.size() <= 80
+        && swmsIdOk()
+        && request.resource.data.swmsTitle is string
+        && request.resource.data.swmsTitle.size() > 0
+        && request.resource.data.swmsTitle.size() <= 80
+        && request.resource.data.version is string
+        && request.resource.data.version.matches('^20[0-9]{2}-(0[1-9]|1[0-2])$')
+        && request.resource.data.jobId is string
+        && request.resource.data.jobId.size() <= 200
+        && request.resource.data.jobLabel is string
+        && request.resource.data.jobLabel.size() <= 160
+        && swmsSigOk()
+        && request.resource.data.signedAt == request.time
+        && request.resource.data.signedAtMs is int
+        && request.resource.data.signedAtMs >= request.time.toMillis() - 300000
+        && request.resource.data.signedAtMs <= request.time.toMillis() + 300000
+        && request.resource.data.expiresAtMs is int
+        && request.resource.data.expiresAtMs >= request.resource.data.signedAtMs + 364 * 24 * 60 * 60 * 1000
+        && request.resource.data.expiresAtMs <= request.resource.data.signedAtMs + 367 * 24 * 60 * 60 * 1000
+        && request.resource.data.device is string
+        && request.resource.data.device.size() <= 200;
+    }
+
+    match /swmsSignatures/{id} {
+      allow get: if swmsSignedIn() && resource != null && docCompany(resource.data) == callerCompany()
+        && (resource.data.uid == request.auth.uid || swmsIsAdmin() && callerCompany() == docCompany(resource.data));
+      allow list: if swmsSignedIn() && callerCompany() == "heartwood" && resource.data.uid == request.auth.uid;
+      allow list: if swmsSignedIn() && callerCompany() != "heartwood" && resource.data.uid == request.auth.uid
+        && resource.data.companyId == callerCompany();
+      allow list: if (swmsIsAlex() || swmsIsPatrick() || (swmsHasProfile() && swmsProfile().role == "admin" && callerCompany() == "heartwood"))
+        && resource.data.companyId == "heartwood";
+      allow list: if callerCompany() != "heartwood" && swmsHasProfile() && swmsProfile().role == "admin"
+        && resource.data.companyId == callerCompany();
+      allow create: if swmsCreateOk();
+      allow update, delete: if false;
+    }
+// END SWMS SIGNATURE RULES
+
+// BEGIN RUN SHEET RULES
+    function routeSignedIn() { return request.auth != null; }
+    function routeIsAlex() { return routeSignedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
+    function routeIsPatrick() { return routeSignedIn() && request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"; }
+    function routeUserPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function routeHasProfile() { return routeSignedIn() && exists(routeUserPath()); }
+    function routeProfile() { return get(routeUserPath()).data; }
+    function routeIsAdmin() {
+      return routeIsAlex() || routeIsPatrick()
+        || (routeHasProfile() && "role" in routeProfile() && routeProfile().role == "admin");
+    }
+    function routeSheetIdOk(id) {
+      return id is string && id.matches('^[A-Za-z0-9]{1,128}_[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+    function routeSheetWorker(id) { return id[0:id.size()-11]; }
+    function routeSheetDate(id) { return id[id.size()-10:id.size()]; }
+    function routeCanRead(sheetId) {
+      return routeSignedIn() && routeSheetIdOk(sheetId)
+        && (routeIsAdmin() || request.auth.uid == routeSheetWorker(sheetId));
+    }
+    function routeCanWrite(sheetId) {
+      return routeIsAdmin() && routeSheetIdOk(sheetId)
+        && request.resource.data.keys().hasOnly([
+          "workerUid", "workerName", "date", "jobIds", "returnToDepot", "status", "depot",
+          "method", "provider", "tweaked", "totalMinutes", "totalKm", "currentMinutes", "currentKm",
+          "approvedBy", "approvedByName", "approvedAt"
+        ])
+        && request.resource.data.workerUid == routeSheetWorker(sheetId)
+        && request.resource.data.approvedBy == request.auth.uid
+        && request.resource.data.date == routeSheetDate(sheetId)
+        && request.resource.data.date is string
+        && request.resource.data.status == "approved"
+        && request.resource.data.depot == "208-220 Holdsworth Rd, Chuwar QLD 4306"
+        && request.resource.data.returnToDepot is bool
+        && request.resource.data.tweaked is bool
+        && request.resource.data.jobIds is list
+        && request.resource.data.jobIds.size() > 0
+        && request.resource.data.jobIds.size() <= 40
+        && request.resource.data.workerName is string
+        && request.resource.data.workerName.size() <= 80
+        && request.resource.data.approvedByName is string
+        && request.resource.data.approvedByName.size() > 0
+        && request.resource.data.approvedByName.size() <= 80
+        && request.resource.data.approvedAt == request.time
+        && request.resource.data.method in ["exact", "nearest-neighbour-2opt"]
+        && request.resource.data.provider in ["osrm", "ors", "osrm-fallback"]
+        && request.resource.data.totalMinutes is number
+        && request.resource.data.totalMinutes >= 0
+        && request.resource.data.totalKm is number
+        && request.resource.data.totalKm >= 0
+        && request.resource.data.currentMinutes is number
+        && request.resource.data.currentMinutes >= 0
+        && request.resource.data.currentKm is number
+        && request.resource.data.currentKm >= 0;
+    }
+
+    match /runSheets/{sheetId} {
+      allow read: if routeCanRead(sheetId);
+      allow create, update: if routeCanWrite(sheetId);
+      allow delete: if false;
+    }
+// END RUN SHEET RULES
+// BEGIN TIMESHEET RULES
+    function tsHeartwoodAdmin() {
+      return isAlex() || isPatrick() || (
+        hasProfile() && profile().role == "admin"
+        && (!("tenantId" in profile()) || profile().tenantId == "heartwood")
+      );
+    }
+    function tsMine(id) {
+      return signedIn()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.weekStart is string
+        && request.resource.data.weekStart.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && id == request.auth.uid + "_" + request.resource.data.weekStart;
+    }
+    function tsDocOk() {
+      return request.resource.data.keys().hasOnly(["uid", "name", "weekStart", "weekEnd", "days", "entries", "totalHrs", "updatedAt", "updatedAtIso", "lastEntryId", "locationConsentAt", "sent", "sentAt", "sentBy"])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80
+        && request.resource.data.weekEnd is string
+        && request.resource.data.weekEnd >= request.resource.data.weekStart
+        && request.resource.data.days is map
+        && request.resource.data.days.size() <= 7
+        && request.resource.data.totalHrs is number
+        && request.resource.data.totalHrs >= 0
+        && request.resource.data.totalHrs <= 400
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.updatedAtIso is string
+        && request.resource.data.updatedAtIso.size() <= 40;
+    }
+    function tsFix(m) {
+      return m.keys().hasOnly(["at", "fix", "lat", "lng", "accuracy"])
+        && m.at == request.time
+        && ((m.fix == "no location" && m.keys().hasOnly(["at", "fix"]))
+          || (m.fix == "gps" && m.lat is number && m.lat >= -90 && m.lat <= 90
+            && m.lng is number && m.lng >= -180 && m.lng <= 180
+            && m.accuracy is number && m.accuracy >= 0 && m.accuracy <= 100000));
+    }
+    function tsFixSame(b, a, k) {
+      return a.source == "manual" ? !(k in a)
+        : ((!(k in a) && !(k in b)) || ((k in a) && (k in b) && a[k] == b[k]) || ((k in a) && !(k in b) && tsFix(a[k])));
+    }
+    function tsEntryCore(e) {
+      return e.keys().hasOnly(["id", "source", "status", "date", "start", "finish", "breakStart", "breakEnd", "note", "job", "clockOn", "clockOff", "breakOn", "breakOff", "enteredBy", "enteredByName", "enteredAt", "edits", "lastEditId", "machineChoice", "machineId", "machineName"])
+        && e.id == request.resource.data.lastEntryId
+        && e.id.matches('^[a-z0-9]{8,24}$')
+        && (e.source == "clock" || e.source == "manual")
+        && e.enteredBy == request.auth.uid
+        && e.enteredByName is string && e.enteredByName.size() > 0 && e.enteredByName.size() <= 80
+        && e.enteredAt is timestamp
+        && e.edits is map
+        && e.note is string && e.note.size() <= 200
+        && e.job is string && e.job.size() <= 200
+        && e.date is string && e.date.size() == 10
+        && e.start is string && e.start.size() <= 5
+        && e.finish is string && e.finish.size() <= 5
+        && ((e.source == "clock" && "clockOn" in e) || (e.source == "manual" && !e.keys().hasAny(["clockOn", "clockOff", "breakOn", "breakOff"])));
+    }
+    function tsEntryNew(e) {
+      return tsEntryCore(e) && e.enteredAt == request.time && e.edits.size() == 0 && e.lastEditId == ""
+        && tsFixSame({}, e, "clockOn") && tsFixSame({}, e, "clockOff") && tsFixSame({}, e, "breakOn") && tsFixSame({}, e, "breakOff");
+    }
+    function tsEditOk(b, a) {
+      return a.edits.diff(b.edits).removedKeys().size() == 0
+        && a.edits.diff(b.edits).changedKeys().size() == 0
+        && (a.edits.diff(b.edits).addedKeys().size() == 0
+          || (a.edits.diff(b.edits).addedKeys().hasOnly([a.lastEditId])
+            && a.edits[a.lastEditId].at == request.time
+            && a.edits[a.lastEditId].by == request.auth.uid
+            && a.edits[a.lastEditId].byName is string
+            && a.edits[a.lastEditId].summary is string
+            && a.edits[a.lastEditId].summary.size() > 0
+            && a.edits[a.lastEditId].summary.size() <= 200));
+    }
+    function tsMachineLock(b, a) {
+      return (!("machineChoice" in a) && !("machineChoice" in b))
+        || ("machineChoice" in b && a.machineChoice == b.machineChoice && a.get("machineId", "") == b.get("machineId", "") && a.get("machineName", "") == b.get("machineName", ""))
+        || (!("machineChoice" in b) && (
+          ((a.machineChoice == "none" || a.machineChoice == "skip") && a.machineId == "" && a.machineName is string && a.machineName.size() <= 80)
+          || (a.machineChoice == "asset" && a.machineId.matches('^[A-Za-z0-9_-]{1,80}$') && a.machineName is string && a.machineName.size() > 0 && a.machineName.size() <= 80)
+        ));
+    }
+    function tsEntryNext(b, a) {
+      return tsEntryCore(a) && a.source == b.source && a.enteredBy == b.enteredBy && a.enteredAt == b.enteredAt && a.id == b.id
+        && tsFixSame(b, a, "clockOn") && tsFixSame(b, a, "clockOff") && tsFixSame(b, a, "breakOn") && tsFixSame(b, a, "breakOff")
+        && tsMachineLock(b, a)
+        && tsEditOk(b, a);
+    }
+    function tsFleetReader(tenantId) {
+      return signedIn()
+        && tenantId is string
+        && tenantId.matches('^[a-z0-9][a-z0-9-]{0,39}$')
+        && (
+          ((isAlex() || isPatrick()) && tenantId == "heartwood")
+          || (hasProfile() && (
+            ("tenantId" in profile() && profile().tenantId == tenantId)
+            || (!("tenantId" in profile()) && tenantId == "heartwood")
+          ))
+        );
+    }
+    function tsOneEntry() {
+      return request.resource.data.entries is map
+        && request.resource.data.entries.size() <= 40
+        && request.resource.data.lastEntryId is string
+        && request.resource.data.entries.diff(resource.data.get("entries", {})).removedKeys().size() == 0
+        && request.resource.data.entries.diff(resource.data.get("entries", {})).affectedKeys().size() == 1
+        && request.resource.data.entries.diff(resource.data.get("entries", {})).affectedKeys().hasOnly([request.resource.data.lastEntryId])
+        && (
+          (request.resource.data.lastEntryId in resource.data.get("entries", {})
+            && tsEntryNext(resource.data.entries[request.resource.data.lastEntryId], request.resource.data.entries[request.resource.data.lastEntryId]))
+          || (!(request.resource.data.lastEntryId in resource.data.get("entries", {}))
+            && tsEntryNew(request.resource.data.entries[request.resource.data.lastEntryId]))
+        );
+    }
+    function tsWorkerCreate(id) {
+      return tsMine(id) && tsDocOk()
+        && !("sent" in request.resource.data) && !("sentAt" in request.resource.data) && !("sentBy" in request.resource.data)
+        && (!("locationConsentAt" in request.resource.data) || request.resource.data.locationConsentAt == request.time)
+        && (!("entries" in request.resource.data)
+          || (request.resource.data.entries.size() == 1
+            && request.resource.data.lastEntryId in request.resource.data.entries
+            && tsEntryNew(request.resource.data.entries[request.resource.data.lastEntryId])));
+    }
+    function tsWorkerUpdate(id) {
+      return tsMine(id) && tsDocOk()
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.weekStart == resource.data.weekStart
+        && same("sent") && same("sentAt") && same("sentBy")
+        && (!("locationConsentAt" in resource.data) && !("locationConsentAt" in request.resource.data)
+          || !("locationConsentAt" in resource.data) && request.resource.data.locationConsentAt == request.time
+          || request.resource.data.get("locationConsentAt", null) == resource.data.get("locationConsentAt", null))
+        && (request.resource.data.get("entries", {}) == resource.data.get("entries", {}) || tsOneEntry());
+    }
+    function tsSentUpdate() {
+      return tsHeartwoodAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["sent", "sentAt", "sentBy"])
+        && request.resource.data.sent is bool
+        && (request.resource.data.get("sentAt", null) == null || request.resource.data.sentAt is string)
+        && (request.resource.data.get("sentBy", null) == null || request.resource.data.sentBy == request.auth.uid);
+    }
+
+    match /timesheets/{id} {
+      allow get: if signedIn() && (
+        (resource == null && id.matches('^' + request.auth.uid + '_[0-9]{4}-[0-9]{2}-[0-9]{2}$'))
+        || (tsHeartwoodAdmin() && resource != null && docCompany(resource.data) == "heartwood")
+        || (resource != null && resource.data.uid == request.auth.uid && docCompany(resource.data) == callerCompany())
+        || (callerCompany() != "heartwood" && hasProfile() && profile().role == "admin" && resource != null && resource.data.companyId == callerCompany())
+      );
+      allow list: if signedIn() && callerCompany() == "heartwood" && resource.data.uid == request.auth.uid;
+      allow list: if callerCompany() != "heartwood" && resource.data.uid == request.auth.uid && resource.data.companyId == callerCompany();
+      allow list: if tsHeartwoodAdmin() && resource.data.companyId == "heartwood";
+      allow list: if callerCompany() != "heartwood" && hasProfile() && profile().role == "admin" && resource.data.companyId == callerCompany();
+      allow create: if tsWorkerCreate(id);
+      allow update: if tsWorkerUpdate(id) || tsSentUpdate();
+      allow delete: if false;
+    }
+
+    // Read-only mirror so clock-on can list machines and today's prestart.
+    // Creates and edits stay with the compliance PR. allow write: if false does not veto those rules.
+    match /tenants/{tenantId}/fleet/{assetId} {
+      allow read: if tsFleetReader(tenantId);
+      allow write: if false;
+    }
+    match /tenants/{tenantId}/prestarts/{id} {
+      allow read: if tsFleetReader(tenantId);
+      allow write: if false;
+    }
+// END TIMESHEET RULES
+
+// BEGIN LEAVE RULES
+    function lvSignedIn() { return request.auth != null; }
+    function lvHeartwood() {
+      return lvSignedIn() && (
+        isAlex() || isPatrick() || (hasProfile() && callerCompany() == "heartwood")
+      );
+    }
+    function lvDecider() {
+      return lvSignedIn() && hasProfile() == false && (isAlex() || isPatrick())
+        || lvSignedIn() && (
+          (callerCompany() == "heartwood" && (isAlex() || isPatrick() || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor"))))
+          || (callerCompany() != "heartwood" && hasProfile() && (profile().role == "admin" || profile().role == "supervisor"))
+        );
+    }
+    function lvDate(v) {
+      return v is string && v.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+    function lvHalf(v) {
+      return v == "" || v == "am" || v == "pm";
+    }
+    function lvHalves() {
+      return lvHalf(request.resource.data.startHalf)
+        && lvHalf(request.resource.data.endHalf)
+        && (
+          (request.resource.data.start == request.resource.data.end
+            && request.resource.data.startHalf == request.resource.data.endHalf)
+          || (request.resource.data.start < request.resource.data.end
+            && (request.resource.data.startHalf == "" || request.resource.data.startHalf == "pm")
+            && (request.resource.data.endHalf == "" || request.resource.data.endHalf == "am"))
+        );
+    }
+    function lvCertPath(uid, id) {
+      return request.resource.data.certificatePath == ""
+        || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.pdf"
+        || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.jpg"
+        || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.png"
+        || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.webp";
+    }
+    function lvCreate(id) {
+      return (lvHeartwood() || (callerCompany() != "heartwood" && callerCompany() != "" && hasProfile()))
+        && id.matches('^lv[a-z0-9]{16}$')
+        && request.resource.data.keys().hasOnly(["uid", "name", "type", "start", "end", "startHalf", "endHalf", "reason", "certificatePath", "certificateName", "status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "createdAt", "updatedAt", "companyId"])
+        && (!("companyId" in request.resource.data) || request.resource.data.companyId == callerCompany())
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80
+        && (request.resource.data.type == "annual" || request.resource.data.type == "sick" || request.resource.data.type == "other")
+        && lvDate(request.resource.data.start)
+        && lvDate(request.resource.data.end)
+        && request.resource.data.end >= request.resource.data.start
+        && lvHalves()
+        && request.resource.data.reason is string
+        && request.resource.data.reason.size() > 0
+        && request.resource.data.reason.size() <= 500
+        && lvCertPath(request.auth.uid, id)
+        && request.resource.data.certificateName is string
+        && request.resource.data.certificateName.size() <= 120
+        && (request.resource.data.certificatePath == ""
+          ? request.resource.data.certificateName == ""
+          : request.resource.data.certificateName.size() > 0)
+        && request.resource.data.status == "pending"
+        && request.resource.data.decisionNote == ""
+        && request.resource.data.decidedBy == ""
+        && request.resource.data.decidedByName == ""
+        && request.resource.data.decidedAt == null
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+    }
+    function lvDecision() {
+      return lvDecider()
+        && resource.data.status == "pending"
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "updatedAt"])
+        && (request.resource.data.status == "approved" || request.resource.data.status == "declined")
+        && request.resource.data.decisionNote is string
+        && request.resource.data.decisionNote.size() > 0
+        && request.resource.data.decisionNote.size() <= 500
+        && request.resource.data.decidedBy == request.auth.uid
+        && request.resource.data.decidedByName is string
+        && request.resource.data.decidedByName.size() > 0
+        && request.resource.data.decidedByName.size() <= 80
+        && request.resource.data.decidedAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && same("uid") && same("name") && same("type") && same("start") && same("end")
+        && same("startHalf") && same("endHalf") && same("reason")
+        && same("certificatePath") && same("certificateName") && same("createdAt");
+    }
+
+    match /leaveRequests/{id} {
+      allow get: if (lvHeartwood() && (resource == null && id.matches('^lv[a-z0-9]{16}$')
+          || resource != null && docCompany(resource.data) == "heartwood" && (lvDecider() || resource.data.uid == request.auth.uid)))
+        || (callerCompany() != "heartwood" && resource != null && resource.data.companyId == callerCompany()
+          && (resource.data.uid == request.auth.uid || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor"))));
+      allow list: if lvHeartwood() && resource.data.uid == request.auth.uid;
+      allow list: if lvHeartwood() && lvDecider() && resource.data.companyId == "heartwood";
+      allow list: if callerCompany() != "heartwood" && resource.data.companyId == callerCompany()
+        && (resource.data.uid == request.auth.uid || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor")));
+      allow create: if lvCreate(id) && (lvHeartwood() && callerCompany() == "heartwood" || request.resource.data.companyId == callerCompany());
+      allow update: if lvDecision() && docCompany(resource.data) == callerCompany();
+      allow delete: if false;
+    }
+// END LEAVE RULES
+
+// BEGIN REIMBURSEMENT CLAIM RULES
+    function rcSignedIn() { return request.auth != null; }
+    function rcStaff() {
+      return rcSignedIn() && (
+        isAlex() || isPatrick() || (
+          hasProfile() && callerCompany() == "heartwood"
+        ) || (
+          callerCompany() != "heartwood" && callerCompany() != "" && hasProfile()
+        )
+      );
+    }
+    function rcAdmin() {
+      return rcStaff() && (isAlex() || isPatrick() || (hasProfile() && profile().role == "admin"));
+    }
+    function rcReceiptPath(uid, id) {
+      return request.resource.data.receiptPath == ""
+        || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.pdf"
+        || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.jpg"
+        || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.png"
+        || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.webp";
+    }
+    function rcCreate(id) {
+      return rcStaff()
+        && id.matches('^rc[a-z0-9]{16}$')
+        && request.resource.data.keys().hasOnly(["uid", "name", "date", "amountCents", "supplier", "category", "notes", "paidWith", "jobId", "jobLabel", "receiptPath", "receiptName", "status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "paidAt", "createdAt", "updatedAt", "companyId"])
+        && (!("companyId" in request.resource.data) || request.resource.data.companyId == callerCompany())
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80
+        && request.resource.data.date is string
+        && request.resource.data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && request.resource.data.amountCents is int
+        && request.resource.data.amountCents > 0
+        && request.resource.data.amountCents <= 10000000
+        && request.resource.data.supplier is string
+        && request.resource.data.supplier.size() > 0
+        && request.resource.data.supplier.size() <= 120
+        && (request.resource.data.category == "fuel" || request.resource.data.category == "tip-fees" || request.resource.data.category == "parts" || request.resource.data.category == "tools" || request.resource.data.category == "consumables" || request.resource.data.category == "other")
+        && request.resource.data.notes is string
+        && request.resource.data.notes.size() <= 1000
+        && (request.resource.data.paidWith == "personal-card" || request.resource.data.paidWith == "cash")
+        && request.resource.data.jobId is string
+        && request.resource.data.jobId.matches('^[A-Za-z0-9_-]{0,80}$')
+        && request.resource.data.jobLabel is string
+        && request.resource.data.jobLabel.size() <= 160
+        && rcReceiptPath(request.auth.uid, id)
+        && request.resource.data.receiptName is string
+        && request.resource.data.receiptName.size() <= 120
+        && (request.resource.data.receiptPath == ""
+          ? request.resource.data.receiptName == ""
+          : request.resource.data.receiptName.size() > 0)
+        && request.resource.data.status == "submitted"
+        && request.resource.data.decisionNote == ""
+        && request.resource.data.decidedBy == ""
+        && request.resource.data.decidedByName == ""
+        && request.resource.data.decidedAt == null
+        && request.resource.data.paidAt == null
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+    }
+    function rcStep() {
+      return (resource.data.status == "submitted" && (request.resource.data.status == "approved" || request.resource.data.status == "declined" || request.resource.data.status == "paid"))
+        || (resource.data.status == "approved" && (request.resource.data.status == "paid" || request.resource.data.status == "declined"));
+    }
+    function rcDecision() {
+      return rcAdmin()
+        && rcStep()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "paidAt", "updatedAt", "hubdocStatus"])
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(["hubdocStatus"])
+          || (request.resource.data.status == "paid"
+            && request.resource.data.hubdocStatus == (resource.data.receiptPath == "" ? "no-receipt" : "queued")))
+        && request.resource.data.decisionNote is string
+        && request.resource.data.decisionNote.size() <= 500
+        && request.resource.data.decidedBy == request.auth.uid
+        && request.resource.data.decidedByName is string
+        && request.resource.data.decidedByName.size() > 0
+        && request.resource.data.decidedByName.size() <= 80
+        && request.resource.data.decidedAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && (request.resource.data.status == "paid"
+          ? request.resource.data.paidAt == request.time
+          : request.resource.data.paidAt == null);
+    }
+
+    // Hubdoc filer: the box sync account (tools/hubdoc_filer.py) reads paid claims and records only the Hubdoc
+    // send state. It cannot change the claim itself, and only on claims that are already paid.
+    function rcSync() { return rcSignedIn() && request.auth.uid == "38SU5waAy4f9UI9N6JTqDMaYpQg2"; }
+    function rcHubdoc() {
+      return rcSync()
+        && resource.data.status == "paid"
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["hubdocStatus", "hubdocAttempts", "hubdocUpdatedAt", "hubdocSentAt", "hubdocMessageId", "hubdocVia", "hubdocError"])
+        && request.resource.data.hubdocStatus in ["sending", "sent", "failed", "no-receipt"]
+        && request.resource.data.get("hubdocAttempts", 0) is int
+        && request.resource.data.get("hubdocError", "") is string
+        && request.resource.data.get("hubdocError", "").size() <= 300
+        && request.resource.data.get("hubdocMessageId", "") is string
+        && request.resource.data.get("hubdocMessageId", "").size() <= 100;
+    }
+
+    match /reimbursementClaims/{id} {
+      allow get: if (rcSync() && resource != null && resource.data.status == "paid")
+        || (rcStaff() && callerCompany() == "heartwood" && (
+          (resource == null && id.matches('^rc[a-z0-9]{16}$'))
+          || (resource != null && docCompany(resource.data) == "heartwood" && (rcAdmin() || resource.data.uid == request.auth.uid))
+        ))
+        || (callerCompany() != "heartwood" && resource != null && resource.data.companyId == callerCompany()
+          && (resource.data.uid == request.auth.uid || (hasProfile() && profile().role == "admin")));
+      allow list: if rcStaff() && callerCompany() == "heartwood" && resource.data.uid == request.auth.uid;
+      allow list: if rcAdmin() && callerCompany() == "heartwood" && resource.data.companyId == "heartwood";
+      allow list: if rcSync() && resource.data.status == "paid";
+      allow list: if callerCompany() != "heartwood" && resource.data.companyId == callerCompany()
+        && (resource.data.uid == request.auth.uid || (hasProfile() && profile().role == "admin"));
+      allow create: if rcCreate(id) && (
+        callerCompany() == "heartwood" || request.resource.data.companyId == callerCompany()
+      );
+      allow update: if (rcDecision() && docCompany(resource.data) == callerCompany()) || rcHubdoc();
+      allow delete: if false;
+    }
+// END REIMBURSEMENT CLAIM RULES
+// BEGIN HOURS EXPORT RULES
+    // Heartwood still queues to accounts@heartwoodew.com only.
+    // Another company queues to companies/{id}.accountsEmail, never Heartwood's mailbox.
+    function hxSignedIn() { return request.auth != null; }
+    function hxProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    function hxHasProfile() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+    function hxCaller() {
+      return callerCompany();
+    }
+    function hxAdmin() {
+      return hxSignedIn() && (
+        request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2" || request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"
+        || (hxHasProfile() && hxProfile().get("role", "") == "admin" && hxCaller() != "")
+      );
+    }
+    function hxSync() { return hxSignedIn() && request.auth.uid == "38SU5waAy4f9UI9N6JTqDMaYpQg2"; }
+    function hxAccounts() {
+      return hxCaller() == "heartwood"
+        ? "accounts@heartwoodew.com"
+        : get(/databases/$(database)/documents/companies/$(hxCaller())).data.accountsEmail;
+    }
+    function hxShape(d, id) {
+      return id.matches('^hx[a-z0-9]{16}$')
+        && d.weekStart is string && d.weekStart.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && d.weekEnd is string && d.weekEnd.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && d.fileName is string && d.fileName.matches('^[A-Za-z0-9_-]{1,80}[.]xlsx$')
+        && d.storagePath == "hoursExports/" + id + "/" + d.fileName
+        && d.people is int && d.people >= 0 && d.people <= 500
+        && d.totalHours is number && d.totalHours >= 0 && d.totalHours <= 100000
+        && d.status == "queued" && d.attempts == 0
+        && d.createdBy == request.auth.uid
+        && d.createdByName is string && d.createdByName.size() <= 80
+        && d.createdAt == request.time;
+    }
+    function hxCreate(id) {
+      let d = request.resource.data;
+      return hxAdmin() && hxCaller() != "" && hxShape(d, id) && (
+        (hxCaller() == "heartwood"
+          && d.keys().hasOnly(["weekStart", "weekEnd", "to", "fileName", "storagePath", "people", "totalHours", "status", "attempts", "createdBy", "createdByName", "createdAt", "companyId", "companyName"])
+          && d.companyId == "heartwood"
+          && d.companyName == "Heartwood"
+          && d.to == "accounts@heartwoodew.com")
+        || (hxCaller() != "heartwood"
+          && d.keys().hasOnly(["weekStart", "weekEnd", "to", "fileName", "storagePath", "people", "totalHours", "status", "attempts", "createdBy", "createdByName", "createdAt", "companyId", "companyName"])
+          && d.companyId == hxCaller()
+          && d.companyName is string && d.companyName.size() > 0 && d.companyName.size() <= 80
+          && d.to == hxAccounts()
+          && d.to != "accounts@heartwoodew.com"
+          && exists(/databases/$(database)/documents/companies/$(hxCaller()))
+          && get(/databases/$(database)/documents/companies/$(hxCaller())).data.isTest != true)
+      );
+    }
+    function hxMark() {
+      return hxSync()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "attempts", "updatedAt", "sentAt", "messageId", "error", "via"])
+        && request.resource.data.status in ["sending", "sent", "failed"]
+        && request.resource.data.attempts is int
+        && request.resource.data.get("error", "") is string && request.resource.data.get("error", "").size() <= 300
+        && request.resource.data.get("messageId", "") is string && request.resource.data.get("messageId", "").size() <= 100;
+    }
+    match /hoursExports/{id} {
+      allow get: if (hxAdmin() && docCompany(resource.data) == hxCaller()) || hxSync();
+      allow list: if hxAdmin() && resource.data.companyId == hxCaller();
+      allow list: if hxSync();
+      allow create: if hxCreate(id);
+      allow update: if hxMark();
+      allow delete: if false;
+    }
+// END HOURS EXPORT RULES
+
+// BEGIN INBOX IMPORT RULES
+    // inbox/{gmailMessageId} is written by the box (tools/sync_inbox.py, admin SDK, or the
+    // same sync UID as hours export). The app only marks read and imported.
+    // Admins and supervisors can read and mark. Operators cannot. No client deletes.
+    function inSignedIn() { return request.auth != null; }
+    function inSync() { return inSignedIn() && request.auth.uid == "38SU5waAy4f9UI9N6JTqDMaYpQg2"; }
+    function inOffice() {
+      return inSignedIn() && (
+        request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"
+        || request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"
+        || (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && (
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("role", "") == "admin"
+            || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("role", "") == "supervisor"
+          )
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("tenantId", "heartwood") == "heartwood"
+        )
+      );
+    }
+    function inMark() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return changed.hasOnly(["read", "readAt", "imported", "importedJobId", "importedAt", "importedBy", "jobIds"])
+        && (!changed.hasAny(["read"]) || request.resource.data.read is bool)
+        && (!changed.hasAny(["readAt"]) || request.resource.data.readAt == request.time)
+        && (!changed.hasAny(["imported"]) || request.resource.data.imported == true)
+        && (!changed.hasAny(["importedJobId"]) || (
+          request.resource.data.importedJobId is string
+          && request.resource.data.importedJobId.size() > 0
+          && request.resource.data.importedJobId.size() <= 128
+          && request.resource.data.importedJobId.matches('^[A-Za-z0-9_-]+$')
+        ))
+        && (!changed.hasAny(["importedBy"]) || request.resource.data.importedBy == request.auth.uid)
+        && (!changed.hasAny(["importedAt"]) || request.resource.data.importedAt == request.time)
+        && (!changed.hasAny(["jobIds"]) || (
+          request.resource.data.jobIds is list && request.resource.data.jobIds.size() <= 20
+        ))
+        && (!changed.hasAny(["imported", "importedJobId", "importedBy", "importedAt"])
+          || (changed.hasAll(["imported", "importedJobId", "importedBy", "importedAt"])));
+    }
+    match /inbox/{id} {
+      allow read: if inOffice() || inSync();
+      allow create: if inSync();
+      allow update: if inSync() || (inOffice() && inMark());
+      allow delete: if false;
+    }
+// END INBOX IMPORT RULES
+  }
+}

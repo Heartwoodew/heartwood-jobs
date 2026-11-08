@@ -243,9 +243,10 @@ async function ensureRates(force) {
 }
 
 async function refreshQuotes() {
-  const { getDocs, collection, db, getUi } = api;
+  const { getDocs, collection, query, where, db, getUi } = api;
   try {
-    const s = await getDocs(collection(db, "quotes"));
+    const companyId = orgSettings().companyId || "heartwood";
+    const s = await getDocs(query(collection(db, "quotes"), where("companyId", "==", companyId)));
     getUi().quotes = s.docs.map(d => ({ id: d.id, ...d.data() }));
   } catch (e) {
     console.warn("quotes", e.code || e.message);
@@ -580,7 +581,7 @@ function openQuoteWizard(existing, opts = {}) {
         toast("Already accepted — existing job " + existing.jobId);
         d.close(); renderAdmin(); return;
       }
-      const payload = {
+      const payload = scopeRecord({
         client: data.client, address: data.address, type: data.type, description: data.description,
         travelKm: +data.travelKm || 0, hoursOnSite: +data.hoursOnSite || 0,
         machineDays: Math.max(1, +data.machineDays || 1),
@@ -599,7 +600,7 @@ function openQuoteWizard(existing, opts = {}) {
         },
         quoteStatus: accept ? "Accepted" : "Draft", source: "app",
         updatedAt: serverTimestamp(), updatedBy: me.uid, updatedAtIso: new Date().toISOString()
-      };
+      }, orgSettings().companyId || "heartwood");
       try {
         let qid = existing?.id;
         if (qid) await updateDoc(doc(db, "quotes", qid), payload);
