@@ -8,8 +8,8 @@
 // build does not add one. Real plates are not seeded.
 
 import { CALLUP_BASE, HEARTWOOD_TENANT, resolveMembership } from "./cloud-storage.js";
-import { costPayload, intervalFormHtml, planPayload, serviceAttention, serviceFormHtml, servicePayload, serviceViews, servicingHtml } from "./servicing.js";
-import { PRESTART_KINDS, assetKind, itemsFor, kindMeta, openDefects, prestartAdminHtml, prestartFormHtml, prestartHistoryHtml, prestartPayload, templateFormHtml, templatePayload, templateSeedDocs } from "./prestart.js";
+import { costPayload, intervalFormHtml, planPayload, serviceAfterReading, serviceAttention, serviceFormHtml, servicePayload, serviceViews, servicingHtml } from "./servicing.js";
+import { PRESTART_KINDS, assetKind, itemsFor, kindMeta, openDefects, prestartAdminHtml, prestartFormHtml, prestartHistoryHtml, prestartPayload, fleetReadingUpdate, templateFormHtml, templatePayload, templateSeedDocs } from "./prestart.js";
 
 export const DUE_DAYS = 30;
 
@@ -238,7 +238,7 @@ function typeLabel(list, id) {
   return (list.find(([k]) => k === id) || [id, id])[1];
 }
 
-export function fleetCardsHtml(assets, today, { editable = false } = {}) {
+export function fleetCardsHtml(assets, today, { editable = false, service = null } = {}) {
   const rows = sortBySoonest(withStatus(assets, today, "asset"));
   if (!rows.length) return `<p class="muted pad comp-empty">No machines yet.</p>`;
   return `<div class="comp-list">${rows.map(a => {
@@ -247,7 +247,7 @@ export function fleetCardsHtml(assets, today, { editable = false } = {}) {
       : `<div class="comp-line"><span class="lbl">COI</span><span>Not required</span></div>`;
     const edit = editable ? `<button type="button" class="sm-btn" data-comp-edit="asset" data-comp-id="${esc(a.id)}">Edit</button>` : "";
     return `<article class="comp-card" data-asset="${esc(a.id)}">
-      <div class="comp-top"><div><b>${esc(a.name || "Vehicle")}</b><div class="sub">${esc(typeLabel(ASSET_TYPES, a.type))} · ${esc((kindMeta(assetKind(a)) || {}).label || "Prestart")}${a.rego ? ` · ${esc(a.rego)}` : ""}${a.reading ? ` · ${esc(String(a.reading))} ${a.readingUnit === "km" ? "km" : "hrs"}` : ""}</div></div>${pill(a.status.k, a.status.label)}</div>
+      <div class="comp-top"><div><b>${esc(a.name || "Vehicle")}</b><div class="sub">${esc(typeLabel(ASSET_TYPES, a.type))} · ${esc((kindMeta(assetKind(a)) || {}).label || "Prestart")}${a.rego ? ` · ${esc(a.rego)}` : ""}${a.reading ? ` · ${esc(String(a.reading))} ${a.readingUnit === "km" ? "km" : "hrs"}` : ""}</div></div>${pill(a.status.k, a.status.label)}${service && service[a.id] && (service[a.id].k === "due" || service[a.id].k === "overdue" || service[a.id].k === "ok") ? ` ${pill(service[a.id].k === "overdue" ? "expired" : service[a.id].k, "Service: " + service[a.id].label)}` : ""}</div>
       <div class="comp-lines"><div class="comp-line"><span class="lbl">Rego</span><span>${esc(a.status.rego.text)}</span>${pill(a.status.rego.k, a.status.rego.label)}</div>${coi}</div>
       ${a.notes ? `<p class="sub">${esc(a.notes)}</p>` : ""}
       ${edit ? `<div class="comp-actions">${edit}</div>` : ""}
@@ -292,7 +292,7 @@ export function bannerHtml({ assets, policies, today, includePolicies, error, go
     includePolicies ? countLine(counts.policyExpired, "policy expired", "policies expired") : "",
     includePolicies ? countLine(counts.policyDue, "policy due within 30 days", "policies due within 30 days") : "",
     countLine(serviceOverdue, "service overdue", "services overdue"),
-    countLine(serviceDue, "service due within 30 days", "services due within 30 days"),
+    countLine(serviceDue, "service due soon", "services due soon"),
     countLine(prestartStops, "do not operate", "do not operate"),
     countLine(Math.max(0, prestartDefects - prestartStops), "defect — check before use", "defects — check before use"),
   ].filter(Boolean);
@@ -396,6 +396,48 @@ export function installCompliance(deps) {
     if (!viewService()) return { overdue: 0, due: 0, names: [] };
     return serviceAttention(serviceViews(state.assets, state.records, state.plans, today()));
   }
+  function serviceMap() {
+    if (!viewService()) return null;
+    const out = {};
+    for (const v of serviceViews(state.assets, state.records, state.plans, today())) out[v.asset.id] = v;
+    return out;
+  }
+
+  // In-app pop-up for supervisors and admins when a machine becomes due soon or overdue for a service.
+  // Shown once per machine per due point on this device. The app has no push notifications.
+  function servicePopup() {
+    if (!viewService() || !editService() || typeof document === "undefined") return;
+    if (!state.assets.length || document.querySelector("#svcalert[open], #compform, #prestartform")) return;
+    const fresh = [];
+    for (const v of serviceViews(state.assets, state.records, state.plans, today())) {
+      if (v.k !== "due" && v.k !== "overdue") continue;
+      const key = `hw-svc-alert:${v.asset.id}:${v.k}:${v.nextReading || v.nextDate || "none"}`;
+      try { if (localStorage.getItem(key)) continue; } catch { /* private mode */ }
+      fresh.push({ v, key });
+    }
+    if (!fresh.length) return;
+    showServiceDialog(fresh.map(({ v }) => v), () => fresh.forEach(({ key }) => { try { localStorage.setItem(key, "1"); } catch { /* ignore */ } }));
+  }
+
+  function serviceAlertLine(v) {
+    const unit = v.unit === "km" ? "km" : "hrs";
+    const bits = [`${v.asset.name || "Machine"}: service ${v.k === "overdue" ? "overdue" : "due soon"}`];
+    if (v.nextReading) bits.push(`due at ${v.nextReading.toLocaleString("en-AU")} ${unit}${v.current ? `, now ${v.current.toLocaleString("en-AU")} ${unit}` : ""}`);
+    else if (v.nextDate) bits.push(`due ${v.nextDate}`);
+    return bits.join(" — ");
+  }
+
+  function showServiceDialog(views, onClose) {
+    let d = document.getElementById("svcalert");
+    if (!d) { d = document.createElement("dialog"); d.id = "svcalert"; d.className = "comp-alert"; document.body.appendChild(d); }
+    d.innerHTML = `<form method="dialog"><h2>Service due</h2>${views.map(v => `<p>${esc(serviceAlertLine(v))}</p>`).join("")}<div class="comp-actions"><button class="sm-btn primary" value="ok">OK</button><button class="sm-btn" value="view">View servicing</button></div></form>`;
+    d.onclose = () => {
+      if (onClose) onClose();
+      if (d.returnValue === "view") { const ui = deps.getUi(); state.tab = "servicing"; if (ui) ui.view = admin() && !ui.myJobs ? "compliance" : ui.view; if (!admin() || ui.myJobs) ui.opTab = "fleet"; rerender(); }
+    };
+    if (typeof d.showModal === "function") d.showModal(); else deps.toast(views.map(serviceAlertLine).join(" · "));
+  }
+
   function rerender() {
     const who = me();
     const ui = deps.getUi();
@@ -404,6 +446,7 @@ export function installCompliance(deps) {
   }
 
   function refresh() {
+    servicePopup();
     if (document.querySelector("#compform, #prestartform")) return;
     const who = me();
     if (!who) return;
@@ -532,11 +575,13 @@ export function installCompliance(deps) {
 
   function staffBannerHtml() {
     if (!canViewFleet(plan())) return "";
+    const svc = editService() ? serviceSummary() : { overdue: 0, due: 0, names: [] };
     return bannerHtml({
       assets: state.assets, policies: [], today: today(),
       includePolicies: false,
       error: state.fleetError ? "Fleet status isn't available right now." : "",
       go: "fleet",
+      serviceOverdue: svc.overdue, serviceDue: svc.due, serviceNames: svc.names,
     });
   }
 
@@ -644,7 +689,7 @@ export function installCompliance(deps) {
       return `${head}${err}<p class="comp-help">WorkCover Queensland, public liability, vehicle and plant insurance, and contract works. Staff cannot see policy details.</p>${policyCardsHtml(state.policies, state.assets, today())}`;
     }
     const err = state.fleetError ? `<p class="err">Couldn't load fleet (${esc(state.fleetError)}).</p>` : "";
-    return `${head}${err}<p class="comp-help">Registration and Queensland certificate of inspection (COI) for heavy vehicles and trailers. COI is not insurance. Staff can view status and cannot edit.</p>${fleetCardsHtml(state.assets, today(), { editable: true })}`;
+    return `${head}${err}<p class="comp-help">Registration and Queensland certificate of inspection (COI) for heavy vehicles and trailers. COI is not insurance. Staff can view status and cannot edit.</p>${fleetCardsHtml(state.assets, today(), { editable: true, service: serviceMap() })}`;
   }
 
   function tenant() {
@@ -670,6 +715,23 @@ export function installCompliance(deps) {
       await deps.setDoc(deps.doc(deps.db, "tenants", tenant(), "prestarts", newId()), { ...built.data, signedAt: deps.serverTimestamp() });
       form.reset();
       deps.toast(built.data.doNotOperate ? "Do not operate. The defect is flagged." : built.data.defect ? "Submitted. Defect — check before use." : "Prestart submitted.");
+      const move = fleetReadingUpdate(asset, built.data, me().uid, built.data.signerName);
+      if (move.warn) deps.toast(move.warn);
+      if (move.update) {
+        try {
+          await deps.updateDoc(deps.doc(deps.db, "tenants", tenant(), "fleet", asset.id), { ...move.update, readingAt: deps.serverTimestamp() });
+        } catch (err) {
+          console.warn("fleet reading", err && (err.code || err.message));
+        }
+      }
+      if (viewService() && built.data.reading) {
+        const planRow = state.plans.find(p => p.id === asset.id);
+        const before = serviceAfterReading(asset, state.records, planRow, today(), 0, built.data.readingUnit);
+        const after = serviceAfterReading(asset, state.records, planRow, today(), built.data.reading, built.data.readingUnit);
+        if ((after.k === "due" || after.k === "overdue") && after.k !== before.k) {
+          showServiceDialog([after], null);
+        }
+      }
       rerender();
     } catch (err) {
       deps.toast("Not saved: " + ((err && (err.code || err.message)) || "failed"));

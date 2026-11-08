@@ -57,16 +57,18 @@ test("a fail needs a comment and a critical fail means do not operate", () => {
   const items = itemsFor("tip-truck", []);
   const answers = Object.fromEntries(items.map(item => [item.id, { result: "pass", comment: "" }]));
   answers["tt-lights"] = { result: "fail", comment: "" };
-  assert.equal(prestartPayload({ asset, day: "2026-11-06", reading: "1280", readingUnit: "hours", odometer: "84210", answers, signerName: "Patrick", items }, "patrick").ok, false);
+  assert.equal(prestartPayload({ asset, day: "2026-11-06", reading: "84210", readingUnit: "km", odometer: "", answers, signerName: "Patrick", items }, "patrick").ok, false);
   answers["tt-lights"].comment = "Left indicator out";
-  const minor = prestartPayload({ asset, day: "2026-11-06", reading: "1280", readingUnit: "hours", odometer: "84210", answers, signerName: "Patrick", items }, "patrick");
+  const minor = prestartPayload({ asset, day: "2026-11-06", reading: "84210", readingUnit: "km", odometer: "", answers, signerName: "Patrick", items }, "patrick");
   assert.equal(minor.ok, true);
   assert.equal(minor.data.defect, true);
   assert.equal(minor.data.doNotOperate, false);
   assert.equal(minor.data.kind, "tip-truck");
-  assert.equal(minor.data.odometer, 84210);
+  assert.equal(minor.data.reading, 84210);
+  assert.equal(minor.data.readingUnit, "km");
+  assert.equal(prestartPayload({ asset, day: "2026-11-06", reading: "", readingUnit: "km", odometer: "", answers, signerName: "Patrick", items }, "patrick").reason, "Enter the odometer (km).");
   answers["tt-hyd"] = { result: "fail", comment: "Weep at the ram" };
-  const built = prestartPayload({ asset, day: "2026-11-06", reading: "1280", readingUnit: "hours", odometer: "84210", answers, signerName: "Patrick", items }, "patrick");
+  const built = prestartPayload({ asset, day: "2026-11-06", reading: "84210", readingUnit: "km", odometer: "", answers, signerName: "Patrick", items }, "patrick");
   assert.equal(built.ok, true);
   assert.equal(built.data.doNotOperate, true);
   assert.equal(built.data.resolved, false);
@@ -103,7 +105,7 @@ test("a fail needs a comment and a critical fail means do not operate", () => {
   assert.match(form, /Do not operate/);
   assert.match(form, /Any machine in the fleet/);
   assert.equal(form.includes("assigned to it"), true);
-  assert.match(form, /Engine hours/);
+  assert.match(form, /Hour meter \(hrs\)/);
 });
 
 test("prestart rules are create-only for staff and do not widen storage", () => {
@@ -119,4 +121,22 @@ test("prestart rules are create-only for staff and do not widen storage", () => 
   assert.doesNotMatch(slice, /match \/receipts\/|match \/servicing\/|SCHEDULING_APPROVED/);
   assert.doesNotMatch(readFileSync(new URL("../emulator/storage.rules", import.meta.url), "utf8"), /prestart/);
   assert.equal(SCHEDULING_APPROVED, false);
+});
+
+test("prestart readings are required by unit and only move Fleet up", async () => {
+  const { fleetReadingUpdate, prestartFormHtml: form } = await import("../../app/features/prestart.js");
+  const ex = { id: "ex", type: "plant", prestartKind: "excavator", name: "JCB", reading: 1200, readingUnit: "hours" };
+  const items = itemsFor("excavator", []);
+  const answers = Object.fromEntries(items.map(item => [item.id, { result: "pass", comment: "" }]));
+  assert.equal(prestartPayload({ asset: ex, day: "2026-11-08", reading: "", readingUnit: "hours", odometer: "", answers, signerName: "Sam", items }, "sam").reason, "Enter the hour meter (hrs).");
+  const ok = prestartPayload({ asset: ex, day: "2026-11-08", reading: "1210", readingUnit: "hours", odometer: "", answers, signerName: "Sam", items }, "sam");
+  assert.equal(ok.ok, true);
+  assert.deepEqual(fleetReadingUpdate(ex, ok.data, "sam", "Sam").update, { reading: 1210, readingUnit: "hours", readingBy: "sam", readingByName: "Sam" });
+  const low = fleetReadingUpdate(ex, { reading: 1100, readingUnit: "hours" }, "sam", "Sam");
+  assert.equal(low.update, null);
+  assert.match(low.warn, /lower than the last one/);
+  assert.equal(fleetReadingUpdate(ex, { reading: 1200, readingUnit: "hours" }, "sam", "Sam").update, null);
+  assert.equal(fleetReadingUpdate({ id: "t", type: "trailer" }, { reading: 0, readingUnit: "" }, "sam", "Sam").update, null);
+  const html = form({ assets: [ex], assetId: "ex", items, signerName: "Sam", defects: [], kind: "excavator" });
+  assert.match(html, /Hour meter \(hrs\)<input name="reading"[^>]*required/);
 });

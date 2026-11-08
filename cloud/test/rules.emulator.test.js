@@ -427,6 +427,14 @@ test("fleet is signed-in read and admin write; policies stay admin-only", async 
   await assertSucceeds(getDocs(collection(db("sup1"), "tenants", "heartwood", "fleet")));
   await assertFails(setDoc(doc(db("op1"), "tenants", "heartwood", "fleet", "nope"), fleetBody("op1")));
   await assertFails(updateDoc(doc(db("op1"), "tenants", "heartwood", "fleet", "tipper"), { notes: "changed" }));
+  const tip = doc(db("op1"), "tenants", "heartwood", "fleet", "tipper");
+  const rd = (n, extra = {}) => ({ reading: n, readingUnit: "km", readingAt: serverTimestamp(), readingBy: "op1", readingByName: "Sam", ...extra });
+  await assertSucceeds(updateDoc(tip, rd(84000)));
+  await assertSucceeds(updateDoc(tip, rd(84210)));
+  await assertFails(updateDoc(tip, rd(84100)));
+  await assertFails(updateDoc(tip, rd(84300, { readingBy: "sup1" })));
+  await assertFails(updateDoc(tip, rd(84300, { name: "Renamed" })));
+  await assertFails(updateDoc(doc(db("op2"), "tenants", "heartwood", "fleet", "tipper"), { ...rd(90000), readingBy: "op2" }));
   await assertFails(getDoc(doc(db("op2"), "tenants", "heartwood", "fleet", "tipper")));
   await assertFails(getDocs(collection(env.unauthenticatedContext().firestore(), "tenants", "heartwood", "fleet")));
   await assertFails(setDoc(doc(db(ALEX), "tenants", "heartwood", "fleet", "bad"), fleetBody(ALEX, { type: "insurance" })));

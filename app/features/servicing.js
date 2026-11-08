@@ -30,7 +30,7 @@ function formatAu(iso) {
 const RANK = { overdue: 0, due: 1, ok: 2, none: 3 };
 const LABEL = {
   overdue: "Overdue",
-  due: "Due within 30 days",
+  due: "Due soon",
   ok: "OK",
   none: "No interval",
 };
@@ -110,13 +110,43 @@ function worst(keys) {
   return keys.reduce((a, b) => (RANK[a] <= RANK[b] ? a : b));
 }
 
+/** "Due soon" window for an hours/km interval: 10% of the interval, or 50 hrs / 1,000 km, whichever is smaller. */
+export function dueWindow(everyReading, unit) {
+  if (!(everyReading > 0)) return 0;
+  return Math.max(1, Math.min(Math.round(everyReading * 0.1), unit === "km" ? 1000 : 50));
+}
+
+function readingDate(v) {
+  if (!v) return "";
+  if (typeof v === "string") return v.slice(0, 10);
+  if (typeof v.toDate === "function") return v.toDate().toISOString().slice(0, 10);
+  if (typeof v.seconds === "number") return new Date(v.seconds * 1000).toISOString().slice(0, 10);
+  return "";
+}
+
+/** Service state for one machine after a new reading (used to alert the person submitting a prestart). */
+export function serviceAfterReading(asset, records, plan, today, reading, readingUnit) {
+  const next = { ...asset, reading: Math.max(Number(asset.reading) || 0, Number(reading) || 0), readingUnit: readingUnit || asset.readingUnit || "" };
+  return machineService(next, records, plan, today);
+}
+
 export function machineService(asset, records, plan, today) {
   const mine = (records || []).filter(r => r && r.assetId === asset.id).sort((a, b) => String(b.doneOn).localeCompare(String(a.doneOn)) || String(b.id).localeCompare(String(a.id)));
   const last = mine[0] || null;
   const everyDays = plan && plan.everyDays > 0 ? plan.everyDays : 0;
   const everyReading = plan && plan.everyReading > 0 ? plan.everyReading : 0;
-  const unit = (plan && plan.readingUnit) || (last && last.readingUnit) || "";
-  const current = plan && plan.currentReading > 0 ? plan.currentReading : 0;
+  const unit = (plan && plan.readingUnit) || asset.readingUnit || (last && last.readingUnit) || "";
+  // Latest reading: the higher of the fleet reading (prestarts move it up) and the interval form's "current".
+  const fleetReading = asset.reading > 0 && (!unit || !asset.readingUnit || asset.readingUnit === unit) ? asset.reading : 0;
+  const planReading = plan && plan.currentReading > 0 ? plan.currentReading : 0;
+  const current = Math.max(fleetReading, planReading);
+  const latest = current ? {
+    reading: current,
+    at: fleetReading >= planReading ? readingDate(asset.readingAt) : "",
+    by: fleetReading >= planReading ? String(asset.readingByName || "") : "",
+  } : null;
+  const lastReading = last && last.reading > 0 && (!unit || !last.readingUnit || last.readingUnit === unit) ? last.reading : 0;
+  const sinceService = current && lastReading && current >= lastReading ? current - lastReading : 0;
   const intervalOn = !!(everyDays || everyReading);
   let nextDate = "";
   let dateKey = "none";
@@ -136,7 +166,7 @@ export function machineService(asset, records, plan, today) {
     else {
       nextReading = last.reading + everyReading;
       if (current && current >= nextReading) readKey = "overdue";
-      else if (current && nextReading - current <= Math.max(10, Math.round(everyReading * 0.1))) readKey = "due";
+      else if (current && nextReading - current <= dueWindow(everyReading, unit)) readKey = "due";
       else readKey = "ok";
     }
   }
@@ -144,7 +174,8 @@ export function machineService(asset, records, plan, today) {
   const k = !intervalOn ? "none" : keys.length ? worst(keys) : "none";
   return {
     asset, records: mine, last, plan: plan || null, k, label: LABEL[k],
-    nextDate, nextReading, unit, current, everyDays, everyReading,
+    nextDate, nextReading, unit, current, everyDays, everyReading, latest, lastReading, sinceService,
+    toGo: nextReading && current ? nextReading - current : 0,
     sort: k === "overdue" || k === "due" ? (nextDate || "0000-00-00") : (nextDate || "9999-99-99"),
   };
 }
@@ -207,7 +238,10 @@ export function servicingHtml(views, { editable = false, showCost = false, costs
       <div class="comp-lines">
         <div class="comp-line"><span class="lbl">Last</span><span>${esc(last)}</span></div>
         <div class="comp-line"><span class="lbl">Next</span><span>${esc(nextLine(view))}</span></div>
-        ${view.current ? `<div class="comp-line"><span class="lbl">Now</span><span>${esc(formatReading(view.current, view.unit))}</span></div>` : ""}
+        ${view.latest ? `<div class="comp-line"><span class="lbl">Latest</span><span>${esc([formatReading(view.latest.reading, view.unit), formatAu(view.latest.at), view.latest.by].filter(Boolean).join(" · "))}</span></div>` : ""}
+        ${view.lastReading ? `<div class="comp-line"><span class="lbl">At service</span><span>${esc(formatReading(view.lastReading, view.unit))}</span></div>` : ""}
+        ${view.sinceService ? `<div class="comp-line"><span class="lbl">Since service</span><span>${esc(formatReading(view.sinceService, view.unit))}</span></div>` : ""}
+        ${view.everyReading ? `<div class="comp-line"><span class="lbl">Interval</span><span>Every ${esc(formatReading(view.everyReading, view.unit))}${view.toGo > 0 ? ` · ${esc(formatReading(view.toGo, view.unit))} to go` : ""}</span></div>` : ""}
       </div>
       ${history}
       ${buttons.length ? `<div class="comp-actions">${buttons.join("")}</div>` : ""}
@@ -241,12 +275,13 @@ export function serviceFormHtml(record, assets, costs, { showCost, presetAsset }
 
 export function intervalFormHtml(asset, plan) {
   const p = plan || {};
+  const defaultUnit = asset && (asset.readingUnit === "km" || asset.readingUnit === "hours") ? asset.readingUnit : "";
   return `<form id="compform" class="comp-form" data-kind="interval" data-comp-id="${esc(asset.id)}">
     <h2>Service interval</h2>
-    <p class="comp-help">${esc(asset.name || "This machine")}. Leave a box blank if you do not use that interval. Current hours or km is what it is on now.</p>
+    <p class="comp-help">${esc(asset.name || "This machine")}. For example every 250 hours, or every 10,000 km. Leave a box blank if you do not use that interval. Prestarts keep the current reading up to date.</p>
     <label>Every (days)<input name="everyDays" inputmode="numeric" value="${p.everyDays ? esc(p.everyDays) : ""}" autocomplete="off"></label>
     <label>Every (hours or km)<input name="everyReading" inputmode="numeric" value="${p.everyReading ? esc(p.everyReading) : ""}" autocomplete="off"></label>
-    <label>Unit<select name="readingUnit"><option value=""${!p.readingUnit ? " selected" : ""}>No hours or km interval</option><option value="hours"${p.readingUnit === "hours" ? " selected" : ""}>Hours</option><option value="km"${p.readingUnit === "km" ? " selected" : ""}>Km</option></select></label>
+    <label>Unit<select name="readingUnit"><option value=""${!p.readingUnit ? " selected" : ""}>No hours or km interval</option><option value="hours"${p.readingUnit === "hours" ? " selected" : ""}>Hours</option><option value="km"${p.readingUnit === "km" ? " selected" : ""}>Km</option></select>${defaultUnit ? `<p class="comp-help">This machine reads in ${defaultUnit === "km" ? "km" : "hours"}.</p>` : ""}</label>
     <label>Current hours or km<input name="currentReading" inputmode="numeric" value="${p.currentReading ? esc(p.currentReading) : ""}" autocomplete="off"></label>
     <div class="comp-actions"><button class="sm-btn primary" type="submit">Save</button><button class="sm-btn" type="button" data-comp-cancel>Cancel</button></div>
   </form>`;

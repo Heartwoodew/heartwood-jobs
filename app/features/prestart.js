@@ -18,7 +18,7 @@ const SECTION_LABEL = Object.fromEntries(PRESTART_SECTIONS);
 export const PRESTART_KINDS = Object.freeze([
   Object.freeze({ id: "skid-steer", label: "Skid steer / compact track loader", meter: "hours" }),
   Object.freeze({ id: "excavator", label: "Excavator", meter: "hours" }),
-  Object.freeze({ id: "tip-truck", label: "Tip truck", meter: "both" }),
+  Object.freeze({ id: "tip-truck", label: "Tip truck", meter: "km" }),
   Object.freeze({ id: "ute", label: "Ute / light vehicle", meter: "km" }),
   Object.freeze({ id: "trailer", label: "Trailer", meter: "none" }),
   Object.freeze({ id: "other-plant", label: "Other plant", meter: "hours" }),
@@ -205,8 +205,8 @@ export function templateSeedDocs(existing, uid) {
 
 export function templateReviewMarkdown() {
   const meterLine = {
-    hours: "Record the engine hours.",
-    km: "Record the odometer.",
+    hours: "Enter the hour meter (hrs).",
+    km: "Enter the odometer (km).",
     both: "Record the engine hours and the odometer.",
     none: "No hour meter. Leave the reading blank.",
   };
@@ -235,6 +235,8 @@ export function prestartPayload({ asset, day, reading, readingUnit, odometer, an
   let hours = whole(reading);
   let km = whole(odometer);
   if (hours == null || km == null) return { ok: false, reason: "Hours or km must be a whole number." };
+  if (meta.meter === "km" && !hours) return { ok: false, reason: "Enter the odometer (km)." };
+  if ((meta.meter === "hours" || meta.meter === "both") && !hours) return { ok: false, reason: "Enter the hour meter (hrs)." };
   let unit = "";
   if (meta.meter === "none") {
     hours = 0;
@@ -342,19 +344,19 @@ function meterFields(meter) {
     return `<input type="hidden" name="reading" value=""><input type="hidden" name="readingUnit" value=""><input type="hidden" name="odometer" value="">`;
   }
   if (meter === "km") {
-    return `<label>Odometer (km)<input name="reading" inputmode="numeric" autocomplete="off"></label><input type="hidden" name="readingUnit" value="km"><input type="hidden" name="odometer" value="">`;
+    return `<label>Odometer (km)<input name="reading" type="number" min="1" step="1" required inputmode="numeric" autocomplete="off" placeholder="km"></label><input type="hidden" name="readingUnit" value="km"><input type="hidden" name="odometer" value="">`;
   }
   if (meter === "both") {
     return `<label>Engine hours<input name="reading" inputmode="numeric" autocomplete="off"></label><label>Odometer (km)<input name="odometer" inputmode="numeric" autocomplete="off"></label><input type="hidden" name="readingUnit" value="hours">`;
   }
-  return `<label>Engine hours<input name="reading" inputmode="numeric" autocomplete="off"></label><input type="hidden" name="readingUnit" value="hours"><input type="hidden" name="odometer" value="">`;
+  return `<label>Hour meter (hrs)<input name="reading" type="number" min="1" step="1" required inputmode="numeric" autocomplete="off" placeholder="hrs"></label><input type="hidden" name="readingUnit" value="hours"><input type="hidden" name="odometer" value="">`;
 }
 
 function meterHint(meter) {
-  if (meter === "km") return "Record the odometer.";
+  if (meter === "km") return "Enter the odometer (km).";
   if (meter === "both") return "Record the engine hours and the odometer.";
   if (meter === "none") return "No hour meter on this trailer.";
-  return "Record the engine hours.";
+  return "Enter the hour meter (hrs).";
 }
 
 export function prestartFormHtml({ assets, assetId, items, signerName, defects, kind }) {
@@ -464,4 +466,22 @@ export function prestartAdminHtml({ assets, prestarts, jobs, today, canResolve }
     ${defectCards}
     ${prestartHistoryHtml(prestarts)}
   </div>`;
+}
+
+/**
+ * Fleet reading change after a prestart. Only moves the machine's reading up.
+ * Returns { update: data|null, warn: "" } — a lower reading is saved with the prestart but not on Fleet.
+ */
+export function fleetReadingUpdate(asset, prestart, uid, name) {
+  const reading = Number(prestart && prestart.reading) || 0;
+  const unit = prestart && prestart.readingUnit;
+  if (!asset || !reading || !unit) return { update: null, warn: "" };
+  const prev = Number(asset.reading) || 0;
+  const sameUnit = !asset.readingUnit || asset.readingUnit === unit;
+  if (sameUnit && prev && reading < prev) {
+    const word = unit === "km" ? "km" : "hrs";
+    return { update: null, warn: `That reading (${reading.toLocaleString("en-AU")} ${word}) is lower than the last one on Fleet (${prev.toLocaleString("en-AU")} ${word}). Prestart saved; Fleet not changed. Check the meter.` };
+  }
+  if (sameUnit && reading === prev) return { update: null, warn: "" };
+  return { update: { reading, readingUnit: unit, readingBy: uid, readingByName: String(name || "").slice(0, 80) }, warn: "" };
 }
