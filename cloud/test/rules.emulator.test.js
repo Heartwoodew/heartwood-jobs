@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { initializeTestEnvironment, assertFails, assertSucceeds } from "@firebase/rules-unit-testing";
-import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, query, setDoc, updateDoc, serverTimestamp, Timestamp, where } from "firebase/firestore";
+import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, setDoc, updateDoc, serverTimestamp, Timestamp, runTransaction, query, where } from "firebase/firestore";
 import { swmsSignatureData } from "../../app/features/swms-sign.js";
 import { ref, uploadBytes, getBytes, list, listAll, getMetadata, deleteObject } from "firebase/storage";
 
@@ -289,6 +289,122 @@ test("chat photos stay private to the thread and are not receipt or finance file
   await assertFails(deleteObject(ref(storageOf(ALEX), "tenants/heartwood/jobs/job1/photos/p1.jpg")));
 });
 
+function inviteExpires(days = 7) {
+  return Timestamp.fromMillis(Date.now() + days * 24 * 60 * 60 * 1000);
+}
+
+async function writeInvite(uid, email, fields = {}) {
+  const fire = db(uid);
+  const inviteRef = doc(collection(fire, "invites"));
+  const expiresAt = fields.expiresAt || inviteExpires();
+  const data = {
+    name: fields.name || "Casey Nguyen",
+    email,
+    role: fields.role || "operator",
+    status: fields.status || "pending",
+    createdBy: fields.createdBy || uid,
+    createdAt: serverTimestamp(),
+    expiresAt,
+    token: fields.token || "a".repeat(43),
+    tenantId: fields.tenantId || "heartwood",
+  };
+  await runTransaction(fire, async tx => {
+    const lockRef = doc(fire, "inviteEmails", email);
+    await tx.get(lockRef);
+    tx.set(inviteRef, data);
+    tx.set(lockRef, {
+      email,
+      status: data.status,
+      inviteId: inviteRef.id,
+      expiresAt,
+      role: data.role,
+      tenantId: data.tenantId,
+    });
+  });
+  return inviteRef;
+}
+
+test("rules-admins create operator invites and staff cannot read or self-assign a role", async () => {
+  const email = "casey.rules@example.com";
+  const created = await assertSucceeds(writeInvite(ALEX, email, { token: "c".repeat(43) }));
+  await assertSucceeds(getDoc(created));
+  await assertSucceeds(getDocs(query(collection(db(ALEX), "invites"), where("tenantId", "==", "heartwood"))));
+  await assertFails(getDocs(collection(db(ALEX), "invites")));
+  await assertSucceeds(getDoc(doc(db(ALEX), "inviteEmails", email)));
+  await assertFails(getDocs(collection(db(ALEX), "inviteEmails")));
+  await assertFails(getDoc(doc(db("op1"), "inviteEmails", email)));
+  await assertFails(getDocs(query(collection(db("op1"), "invites"), where("tenantId", "==", "heartwood"))));
+  await assertFails(getDocs(query(collection(env.unauthenticatedContext().firestore(), "invites"), where("tenantId", "==", "heartwood"))));
+  await assertFails(writeInvite("op1", "operator.invite@example.com", { token: "d".repeat(43) }));
+  await assertSucceeds(writeInvite(PATRICK, "patrick.staff@example.com", { token: "f".repeat(43) }));
+  await assertFails(getDoc(doc(db("finOther"), created.path)));
+  await assertFails(writeInvite("finOther", "cross.tenant@example.com", { tenantId: "heartwood", token: "g".repeat(43) }));
+  const other = await assertSucceeds(writeInvite("finOther", "other.staff@example.com", { tenantId: "otherco", token: "h".repeat(43) }));
+  await assertFails(getDoc(doc(db(ALEX), other.path)));
+  await assertFails(setDoc(doc(db("newstaff"), "users/newstaff"), { name: "New", role: "operator" }));
+  await assertFails(setDoc(doc(db("newstaff"), "users/newstaff"), { name: "New", role: "admin" }));
+  await assertSucceeds(setDoc(doc(db("newstaff"), "users/newstaff"), { name: "New" }));
+  const profile = await assertSucceeds(getDoc(doc(db("newstaff"), "users/newstaff")));
+  assert.equal(profile.data().role, undefined);
+  await assertFails(setDoc(doc(db(ALEX), "mail/one"), { to: "casey.rules@example.com", message: { subject: "Hi", text: "link" } }));
+  await assertFails(setDoc(doc(db(ALEX), "inviteMail/one"), { to: "casey.rules@example.com", delivery: "held", link: "https://jobs.heartwoodew.com/app?invite=x" }));
+  await assertFails(deleteDoc(created));
+});
+
+test("invite shape rejects admin, a second pending email, and a client accept", async () => {
+  await assertFails(writeInvite(ALEX, "bad.role@example.com", { role: "admin", token: "i".repeat(43) }));
+  await assertFails(writeInvite(ALEX, "Casey.Upper@example.com", { token: "j".repeat(43) }));
+  await assertFails(writeInvite(ALEX, "soon@example.com", { token: "k".repeat(43), expiresAt: inviteExpires(1) }));
+  await assertFails(writeInvite(ALEX, "newline@example.com", { token: "l".repeat(43), name: "Casey\nNguyen" }));
+  await assertFails(setDoc(doc(db(ALEX), "invites/solo"), {
+    name: "Casey Nguyen", email: "solo@example.com", role: "operator", status: "pending",
+    createdBy: ALEX, createdAt: serverTimestamp(), expiresAt: inviteExpires(), token: "m".repeat(43), tenantId: "heartwood",
+  }));
+  const email = "dup.rules@example.com";
+  const first = await assertSucceeds(writeInvite(ALEX, email, { token: "n".repeat(43) }));
+  await assertFails(writeInvite(ALEX, email, { token: "o".repeat(43) }));
+  await env.withSecurityRulesDisabled(async ctx => {
+    const past = Timestamp.fromMillis(Date.now() - 60 * 1000);
+    await setDoc(doc(ctx.firestore(), "invites/expired-seed"), {
+      name: "Riley Chen", email: "expired.rules@example.com", role: "operator", status: "pending",
+      createdBy: ALEX, createdAt: new Date(), expiresAt: past, token: "p".repeat(43), tenantId: "heartwood",
+    });
+    await setDoc(doc(ctx.firestore(), "inviteEmails/expired.rules@example.com"), {
+      email: "expired.rules@example.com", status: "pending", inviteId: "expired-seed",
+      expiresAt: past, role: "operator", tenantId: "heartwood",
+    });
+  });
+  await assertFails(writeInvite(ALEX, "expired.rules@example.com", { token: "q".repeat(43) }));
+  const alex = db(ALEX);
+  const firstRef = doc(alex, first.path);
+  const lockRef = doc(alex, "inviteEmails", email);
+  await assertFails(updateDoc(firstRef, { status: "accepted", acceptedAt: serverTimestamp(), acceptedUid: "someone" }));
+  await assertFails(updateDoc(firstRef, { status: "cancelled", cancelledAt: serverTimestamp(), cancelledBy: ALEX }));
+  await assertSucceeds(runTransaction(alex, async tx => {
+    tx.update(firstRef, { status: "cancelled", cancelledAt: serverTimestamp(), cancelledBy: ALEX });
+    tx.update(lockRef, { status: "cancelled" });
+  }));
+  const replacement = await assertSucceeds(writeInvite(ALEX, email, { token: "r".repeat(43) }));
+  const nextExpiry = inviteExpires();
+  const replaced = doc(alex, replacement.path);
+  await assertFails(runTransaction(alex, async tx => {
+    tx.update(replaced, {
+      role: "supervisor", token: "s".repeat(43), expiresAt: nextExpiry, resentAt: serverTimestamp(), resentBy: ALEX,
+    });
+    tx.update(lockRef, { role: "supervisor", expiresAt: nextExpiry, status: "pending" });
+  }));
+  await assertSucceeds(runTransaction(alex, async tx => {
+    tx.update(replaced, {
+      token: "t".repeat(43), expiresAt: nextExpiry, resentAt: serverTimestamp(), resentBy: ALEX,
+    });
+    tx.update(lockRef, { expiresAt: nextExpiry, status: "pending" });
+  }));
+  const after = await assertSucceeds(getDoc(replaced));
+  assert.equal(after.data().role, "operator");
+  assert.equal(after.data().token, "t".repeat(43));
+  assert.equal(after.data().email, email);
+});
+
 function fleetBody(uid, extra = {}) {
   return {
     type: "vehicle", name: "Preview tipper", rego: "PRE001", regoExpiry: "2026-10-01",
@@ -366,4 +482,35 @@ test("SWMS signatures are self-only for staff and readable by admins", async () 
   await assertFails(setDoc(doc(db("op1"), "xeroQueue/from-swms"), { status: "queued", by: "op1" }));
   const signedOut = env.unauthenticatedContext().firestore();
   await assertFails(getDocs(collection(signedOut, "swmsSignatures")));
+});
+
+test("a supervisor can invite, resend and cancel; an operator cannot", async () => {
+  const email = "crew.lead@example.com";
+  const created = await assertSucceeds(writeInvite("sup1", email, { token: "u".repeat(43), role: "operator" }));
+  await assertSucceeds(getDocs(query(collection(db("sup1"), "invites"), where("tenantId", "==", "heartwood"))));
+  await assertSucceeds(getDoc(doc(db("sup1"), "inviteEmails", email)));
+  await assertFails(writeInvite("op1", "crew.mate@example.com", { token: "v".repeat(43) }));
+  await assertFails(getDocs(query(collection(db("op1"), "invites"), where("tenantId", "==", "heartwood"))));
+  await assertFails(writeInvite("sup1", "not.admin@example.com", { role: "admin", token: "y".repeat(43) }));
+  const sup = db("sup1");
+  const ref = doc(sup, created.path);
+  const lock = doc(sup, "inviteEmails", email);
+  const nextExpiry = inviteExpires();
+  await assertSucceeds(runTransaction(sup, async tx => {
+    tx.update(ref, { token: "w".repeat(43), expiresAt: nextExpiry, resentAt: serverTimestamp(), resentBy: "sup1" });
+    tx.update(lock, { expiresAt: nextExpiry, status: "pending" });
+  }));
+  const op = db("op1");
+  await assertFails(runTransaction(op, async tx => {
+    tx.update(doc(op, created.path), { status: "cancelled", cancelledAt: serverTimestamp(), cancelledBy: "op1" });
+    tx.update(doc(op, "inviteEmails", email), { status: "cancelled" });
+  }));
+  await assertSucceeds(runTransaction(sup, async tx => {
+    tx.update(ref, { status: "cancelled", cancelledAt: serverTimestamp(), cancelledBy: "sup1" });
+    tx.update(lock, { status: "cancelled" });
+  }));
+  const after = await assertSucceeds(getDoc(ref));
+  assert.equal(after.data().status, "cancelled");
+  assert.equal(after.data().role, "operator");
+  assert.notEqual(after.data().role, "admin");
 });

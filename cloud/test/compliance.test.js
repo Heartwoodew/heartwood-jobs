@@ -159,7 +159,7 @@ test("compliance rules are additive and do not touch receipts, finance, or sched
   assert.doesNotMatch(storage, /fleet|policies/);
   const app = readFileSync(new URL("../../app/app.js", import.meta.url), "utf8");
   assert.match(app, /installCompliance/);
-  assert.match(app, /NAV_TOP = \["home", "chat", "inbox", "clients"\]/);
+  assert.match(app, /NAV_TOP = \["home", "chat", "inbox", "clients", "staff"\]/);
   assert.match(app, /\["safety", "⚠", "Safety", \["safety", "swms", "compliance"\]\]/);
   assert.match(app, /<div class="mob-sec">Safety<\/div>/);
   assert.doesNotMatch(app, /NAV_TOP = \["home", "compliance"/);

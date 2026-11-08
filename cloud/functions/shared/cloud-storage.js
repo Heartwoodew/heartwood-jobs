@@ -24,6 +24,7 @@ export const CALLUP_BASE = Object.freeze({
   receipts: true,
   quotes: true,
   staffPermissions: true,
+  staffInvites: true,
   xero: false,
   invoicing: false,
   // Registration, Queensland COI, WorkCover and insurance policies are CallUp Pro.

@@ -866,6 +866,18 @@ body.operator .job-chat .chat-screen{height:calc(100dvh - 168px - env(safe-area-
   dialog.jobcard .jc-pane[data-pane="chat"] .chat-screen{height:calc(100dvh - 210px)}
   .chat-compose{padding-bottom:calc(8px + env(safe-area-inset-bottom))}
 }
+.invitef{display:grid;gap:10px;margin:0 0 14px}
+.invitef h2{margin:0;font-size:18px}
+.invite-note{margin:0 0 12px}
+.inviterow{display:flex;gap:12px;justify-content:space-between;align-items:flex-start;background:#fff;border:1px solid var(--sm-line);border-radius:8px;padding:12px;margin:0 0 8px}
+.inviteacts{display:flex;gap:6px;flex-wrap:wrap}
+.invite-link{font-size:12px;word-break:break-all;color:var(--sm-mut);margin:6px 0 0;user-select:all}
+.invite-who{margin:0 0 4px}
+@media (max-width:760px){
+  .inviterow{flex-direction:column}
+  .inviteacts{width:100%}
+  .inviteacts button{flex:1;min-height:44px}
+}
 
 /* Compliance: fleet registration / COI, and admin-only policies. */
 .comp-pro{display:inline-block;margin-left:6px;background:#3b2a1a;color:#e7c59a;border-radius:999px;padding:2px 8px;font-size:12px;font-weight:800;letter-spacing:.02em;vertical-align:2px}

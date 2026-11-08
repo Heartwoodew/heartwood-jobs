@@ -142,10 +142,31 @@ Do these in order. Stop if a step is not approved.
 2. Blaze on the existing project `heartwood-9f37f` is approved and billing is enabled. No second Firebase project.
 3. Wait until the default private bucket exists (`heartwood-9f37f.firebasestorage.app`, the name already in `app/firebase-config.js`). Do not apply the lifecycle file. Do not upload old photos.
 4. After that bucket exists, a person can run the reviewed Storage-only command in the Rules section. Do this before the webpage from this branch is published, so the first uploads are checked rather than landing in an open bucket. This agent has not run that command.
-5. Do not deploy Firestore rules or Functions. `cloud/emulator/firestore.rules` is not a production ruleset.
+5. Do not deploy Firestore rules or Functions from this branch. `cloud/emulator/firestore.rules` is not a production ruleset. Staff invites add a separate fragment and functions; those are also not deployed. See "Staff invites" below.
 6. Publish this branch's webpage only after Storage rules are live. Email and receipt chunks keep working. Storage errors are logged and ignored. The webpage in this branch is unchanged by the Storage deploy path.
 7. Leave Functions undeployed until you want `photoInboxWorker`. Deploying it does not enable Gmail and does not delete data.
 8. Retention scheduling, Heartwood historical purge, lifecycle, and Pro Xero are separate later approvals. They are not part of steps 1–7.
+
+## Staff invites
+
+CallUp Base can invite an operator or a supervisor. Admin is not an invite role. The Staff screen is for supervisors and admins. Operators cannot see it or write invites. The invitee opens `https://jobs.heartwoodew.com/app?invite=<token>`, sets a password, and the accept function creates the Auth user and `users/{uid}` with the name and role from the invite. The browser never writes `role`.
+
+`invites/{id}` stores name, lowercased email, role, status `pending`, createdBy, createdAt, expiresAt (7 days), token, and tenantId. `inviteEmails/{email}` is the lock that stops a second pending invite for that email. Pending includes an invite whose link has expired; resend or cancel it. Accepted and cancelled invites stay in the list. Resend rotates the token and moves the expiry. Cancel makes the link stop working.
+
+Mail is not sent by the webpage. `inviteEmailWorker` writes `inviteMail` with `delivery: "held"` unless `INVITE_EMAIL_ENABLED` is the string `true`. When that is set, it writes a `mail` document for the Firebase Trigger Email extension (`firestore-send-email`) and still does not open an SMTP connection itself. Tests refuse to queue that live `mail` document. Leave the flag unset.
+
+Nothing in this section has been deployed. `npm run deploy` in `cloud/` still exits 1.
+
+### Manual steps, in order, when you want this live
+
+Do these yourself. This branch has not run them.
+
+1. In the Firebase console for `heartwood-9f37f`, open Firestore rules. Paste the block in `cloud/production/firestore.invites.rules` once, inside the existing `match /databases/{database}/documents`. Do not upload `cloud/emulator/firestore.rules`. That file would replace jobs, quotes, receipts, and the rest of the live rules.
+2. Read the pasted block. It lets a rules-admin create an operator or supervisor invite and blocks client writes of `mail` and `inviteMail`. It does not change the live `users` match. Confirm the live `users` rules still deny a client write of `role`, `tenantId`, `customerIds`, and `finance`. Publish the rules from the console after that diff.
+3. Deploy these functions to `australia-southeast1` on `heartwood-9f37f` only when you want links to work: `previewStaffInvite`, `acceptStaffInvite`, `inviteEmailWorker`. They need a public invoker because the invitee is not signed in yet. The token is the secret. `cloud/firebase.json` still has a predeploy hook that refuses `firebase deploy` from `cloud/`. Do not remove that hook to deploy the photo or retention workers. A reviewed functions deploy is a separate decision and was not run from here.
+4. Leave `INVITE_EMAIL_ENABLED` unset. Admins copy the link from the Staff screen. To send the email later, install Trigger Email on the `mail` collection, set `INVITE_EMAIL_FROM` to a mailbox that extension is allowed to use, then set `INVITE_EMAIL_ENABLED=true` on `inviteEmailWorker` only. Do not set that flag in tests or on a developer machine that points at production.
+5. Publish this branch's webpage after steps 1 and 3. Until `acceptStaffInvite` is deployed, the link opens and then says acceptance is not deployed. Saving an invite does not send mail.
+6. Email/password sign-in is already how staff log in. No new Firebase project. If an accept call fails after creating the Auth user, delete that user in the console and resend the invite. The function does not attach an invite to an existing login and does not change that login's role.
 
 ## Tests
 
