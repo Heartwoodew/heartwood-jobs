@@ -1,6 +1,21 @@
-// Model provider. Disabled unless HELPER_ENABLED=true.
-// Vertex Gemini uses the Cloud Functions runtime service account.
+// Model provider. The live helper is off.
+// HELPER_ENABLED defaults to "false". HELPER_HARD_OFF ignores the environment,
+// so HELPER_ENABLED=true cannot call Vertex. Turning calls back on takes a
+// deliberate edit of HELPER_HARD_OFF in this file.
+// Vertex Gemini would use the Cloud Functions runtime service account.
 // There is no API key in this file. The region does not fall back overseas.
+
+export const HELPER_ENABLED_DEFAULT = "false";
+export const HELPER_HARD_OFF = true;
+
+export function helperLiveEnabled(env = process.env) {
+  if (HELPER_HARD_OFF) return false;
+  const raw = env && Object.prototype.hasOwnProperty.call(env, "HELPER_ENABLED")
+    ? env.HELPER_ENABLED
+    : undefined;
+  const flag = raw == null || String(raw).trim() === "" ? HELPER_ENABLED_DEFAULT : String(raw).trim();
+  return flag === "true";
+}
 
 const REGION = "australia-southeast1";
 // gemini-2.5-flash retired on Vertex on 20 October 2026.
@@ -93,7 +108,7 @@ export function createVertexProvider(env = process.env, deps = {}) {
 }
 
 export function createModelProvider(env = process.env, deps = {}) {
-  if (env.HELPER_ENABLED !== "true") {
+  if (!helperLiveEnabled(env)) {
     return {
       id: "disabled",
       enabled: false,

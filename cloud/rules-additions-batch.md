@@ -444,4 +444,4 @@ This block also matches `tenants/{tenantId}/fleet/{assetId}` and `tenants/{tenan
 
 ## Helper (#17)
 
-No Firestore rule blocks. `helperAsk` uses the Admin SDK, which bypasses rules. It writes `helperProposals` and `helperAudit` only after Confirm. Do not add a client read or write rule for those collections. `HELPER_ENABLED` unset means the model call stays off. Confirm and Cancel still run in the function; they do not need a new rules block.
+No Firestore rule blocks. `helperAsk` uses the Admin SDK, which bypasses rules. Do not add a client read or write rule for `helperProposals` or `helperAudit`. As of 8 Nov 2026 the callable returns before Confirm, Cancel, or Vertex. `HELPER_ENABLED` defaults to `false`, and `HELPER_HARD_OFF` ignores a `true` value. Existing rows stay. They do not need a new rules block.

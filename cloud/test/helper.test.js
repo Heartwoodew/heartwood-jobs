@@ -1,18 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { ALEX_UID } from "../../app/features/cloud-storage.js";
 import { handleHelperAsk, authorizeCallable, DISABLED_REPLY, DENIED_REPLY, SIGN_IN_REPLY, MODEL_FAILED } from "../functions/helper/ask.js";
 import { buildHelperContext } from "../functions/helper/context.js";
 import { REFUSAL, RULES_MARK } from "../functions/helper/prompt.js";
 import { loadKnowledge } from "../functions/helper/knowledge.js";
-import { buildVertexRequest, createModelProvider } from "../functions/helper/provider.js";
+import { buildVertexRequest, createModelProvider, HELPER_ENABLED_DEFAULT, HELPER_HARD_OFF, helperLiveEnabled } from "../functions/helper/provider.js";
 import { redactMoneyText } from "../functions/helper/money.js";
 import { resolveMembership } from "../functions/shared/cloud-storage.js";
-import {
-  AU_VOICE_MISSING, KNOWLEDGE_PLACEHOLDER_NOTE, dictationSupported, helperShellHtml, openDictation, pickAustralianVoice,
-  shouldAutoRead, speakReply,
-} from "../../app/features/helper.js";
 import { memoryReader, recordingModel, sampleStore, TODAY } from "./helper-fixture.js";
 
 const store = sampleStore();
@@ -266,102 +262,53 @@ test("vertex request stays in australia-southeast1 and has no tools or API key",
     project: "heartwood-9f37f", location: "us-central1", model: "gemini-2.5-flash", system: "s", user: "u",
   }));
   let fetched = 0;
-  const enabled = createModelProvider({
+  const forced = createModelProvider({
     HELPER_ENABLED: "true",
     GCLOUD_PROJECT: "heartwood-9f37f",
   }, {
     token: async () => "test-token",
-    fetch: async (url, options) => {
+    fetch: async () => {
       fetched += 1;
-      assert.match(String(url), /australia-southeast1/);
-      assert.match(String(url), /gemini-3\.5-flash/);
-      assert.equal(String(url).includes("key="), false);
-      assert.match(options.headers.authorization, /^Bearer /);
-      const body = JSON.parse(options.body);
-      assert.equal(body.tools, undefined);
       return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: "G'day" }] } }] }) };
     },
   });
-  assert.equal(await enabled.generate({ system: "rules", user: "{}" }), "G'day");
-  assert.equal(fetched, 1);
+  assert.equal(HELPER_ENABLED_DEFAULT, "false");
+  assert.equal(HELPER_HARD_OFF, true);
+  assert.equal(helperLiveEnabled({}), false);
+  assert.equal(helperLiveEnabled({ HELPER_ENABLED: "true" }), false);
+  assert.equal(helperLiveEnabled({ HELPER_ENABLED: "false" }), false);
+  assert.equal(forced.enabled, false);
+  await assert.rejects(() => forced.generate({ system: "rules", user: "{}" }), /helper-disabled/);
+  assert.equal(fetched, 0);
 });
 
-test("helper stays in australia-southeast1, has a mic fallback, and writes only from a confirmed action", () => {
+test("helper callable is hard-off and the phone has no helper UI", () => {
   const helperDir = new URL("../functions/helper/", import.meta.url);
   const server = readdirSync(helperDir).filter(name => name.endsWith(".js") && name !== "apply.js").map(name => readFileSync(new URL(name, helperDir), "utf8")).join("\n");
   const apply = readFileSync(new URL("apply.js", helperDir), "utf8");
-  const client = readFileSync(new URL("../../app/features/helper.js", import.meta.url), "utf8")
-    + readFileSync(new URL("../../app/features/helper-ui.js", import.meta.url), "utf8");
   const index = readFileSync(new URL("../functions/index.js", import.meta.url), "utf8");
+  const app = readFileSync(new URL("../../app/app.js", import.meta.url), "utf8");
+  const sw = readFileSync(new URL("../../app/sw.js", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../../app/styles.css", import.meta.url), "utf8");
   assert.doesNotMatch(server, /\.set\(|\.update\(|\.delete\(|addDoc|updateDoc|deleteDoc|writeBatch|bulkWriter|getUserMedia|SpeechRecognition/);
   assert.doesNotMatch(apply, /\.delete\(|deleteDoc|SCHEDULING_APPROVED|xeroQueue|sendMail|getUserMedia/);
   assert.match(apply, /helperAudit/);
   assert.match(apply, /leave-create/);
   assert.match(apply, /prestart/);
-  assert.match(client, /step: "confirm", proposalId/);
-  assert.match(client, /step: "status"/);
-  assert.match(client, /SpeechRecognition/);
-  assert.doesNotMatch(client, /getUserMedia|addDoc|updateDoc|deleteDoc|setDoc|AIza|apiKey/);
-  assert.match(client, /australia-southeast1/);
-  assert.match(client, /gemini-3\.5-flash|HELPER_ENABLED|status/);
-  assert.doesNotMatch(client, /httpsCallable\(functions, "helperAsk"\)\(\{[^}]*tenantId/);
+  assert.equal(existsSync(new URL("../../app/features/helper.js", import.meta.url)), false);
+  assert.equal(existsSync(new URL("../../app/features/helper-ui.js", import.meta.url)), false);
+  assert.doesNotMatch(app, /installHelperApp|helper-ui|helperAsk|helper-launch|SpeechRecognition|speechSynthesis/);
+  assert.doesNotMatch(sw, /features\/helper/);
+  assert.match(sw, /callup-shell-v74-no-helper/);
+  assert.doesNotMatch(css, /helper-launch|helper-panel|helper-mic|helper-speech|Ask Helper/);
   assert.match(index, /region: "australia-southeast1"/);
   assert.match(index, /helperAsk/);
+  assert.match(index, /Helper is switched off/);
+  assert.match(index, /HELPER_ENABLED_DEFAULT|helperLiveEnabled/);
+  const body = index.slice(index.indexOf("export const helperAsk"));
+  const gate = body.indexOf("if (!helperLiveEnabled())");
+  const model = body.indexOf("createModelProvider(");
+  assert.ok(gate >= 0 && model > gate);
   assert.doesNotMatch(index, /onSchedule/);
   assert.doesNotMatch(server + index, /AIza|sk-[A-Za-z0-9]{10,}/);
-  assert.equal(dictationSupported({}), false);
-  const heard = [];
-  const session = openDictation({
-    SpeechRecognition: class Fake {
-      start() { this.onresult({ results: [[{ transcript: "annual leave" }]] }); this.onend(); }
-      stop() {}
-    },
-  }, { ontext(text) { heard.push(text); } });
-  assert.equal(session.ok, true);
-  assert.deepEqual(heard, ["annual leave"]);
-  const closed = helperShellHtml({ signedIn: true, available: false, open: true, messages: [] });
-  assert.equal(closed, "");
-  const mic = helperShellHtml({ signedIn: true, available: true, open: true, dictationSupported: false, speech: false, voices: [], messages: [] });
-  assert.match(mic, /helper-mic" disabled/);
-  assert.match(mic, /Type the question instead/);
-});
-
-test("spoken replies use an en-AU voice only and never start by themselves", () => {
-  assert.equal(shouldAutoRead(), false);
-  const aussie = { name: "Karen", lang: "en-AU" };
-  const other = { name: "Australian English", lang: "en-GB" };
-  assert.equal(pickAustralianVoice([other, aussie]), aussie);
-  assert.equal(pickAustralianVoice([other]), null);
-  let spoken = 0;
-  const synth = { cancel() {}, speak() { spoken += 1; } };
-  const refused = speakReply({ synth, voice: other, text: "G'day", Utterance: class U { constructor(text) { this.text = text; } } });
-  assert.equal(refused.spoken, false);
-  assert.equal(refused.notice, AU_VOICE_MISSING);
-  assert.equal(spoken, 0);
-  const ok = speakReply({ synth, voice: aussie, text: "G'day", Utterance: class U { constructor(text) { this.text = text; } } });
-  assert.equal(ok.spoken, true);
-  assert.equal(ok.utterance.lang, "en-AU");
-  assert.equal(spoken, 1);
-  const missing = helperShellHtml({
-    signedIn: true, available: true, open: true, speech: true, voices: [other], knowledge: "placeholder",
-    messages: [{ role: "assistant", text: "No worries." }],
-  });
-  assert.match(missing, new RegExp(AU_VOICE_MISSING));
-  assert.match(missing, new RegExp(KNOWLEDGE_PLACEHOLDER_NOTE.replace(/[.]/g, "\\.")));
-  assert.doesNotMatch(missing, /data-act="play"/);
-  assert.doesNotMatch(missing, /Australian English/);
-  assert.match(missing, /No worries\./);
-  const ready = helperShellHtml({
-    signedIn: true, available: true, open: true, speech: true, voices: [aussie], knowledge: "pack",
-    messages: [{ role: "assistant", text: "On for Wednesday 12 November 2026." }],
-  });
-  assert.match(ready, /data-act="play"/);
-  assert.match(ready, /data-act="stop"/);
-  assert.doesNotMatch(ready, new RegExp(AU_VOICE_MISSING));
-  assert.doesNotMatch(ready, /autoplay|microphone/i);
-  const nasty = helperShellHtml({
-    signedIn: true, available: true, open: true, speech: false, voices: [], messages: [{ role: "user", text: "<img src=x onerror=alert(1)>" }],
-  });
-  assert.equal(nasty.includes("<img"), false);
-  assert.match(nasty, /&lt;img/);
 });
