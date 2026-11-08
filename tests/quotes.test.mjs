@@ -84,7 +84,7 @@ test("zero quantities do not demand a rate", () => {
 
 test("quote module and service worker stay in place", () => {
   const sw = readFileSync(new URL("../app/sw.js", import.meta.url), "utf8");
-  assert.match(sw, /hw-shell-v57-compliance/);
+  assert.match(sw, /hw-shell-v58-safety-nav/);
   assert.match(sw, /features\/compliance\.js/);
   assert.match(sw, /features\/route-order\.js/);
   assert.match(sw, /features\/swms-sign\.js/);

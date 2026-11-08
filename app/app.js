@@ -151,8 +151,8 @@ const PHONE = matchMedia("(max-width:760px)");
 const TOUCH = matchMedia("(pointer:coarse)");
 PHONE.addEventListener?.("change", () => { if (me && me.role === "admin") renderAdmin(); });
 // Grouped side menu: top items, then collapsible groups (open/closed remembered on this device; the group holding the current screen is always open).
-const NAV_TOP = ["home", "compliance", "chat", "inbox", "clients"];
-const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "jobs", "unscheduled", "quotes", "completed", "myjobs"]], ["money", "$", "Money", ["invoices", "reimb", "timesheet"]], ["safety", "⚠", "Safety", ["safety", "swms"]]];
+const NAV_TOP = ["home", "chat", "inbox", "clients"];
+const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "jobs", "unscheduled", "quotes", "completed", "myjobs"]], ["money", "$", "Money", ["invoices", "reimb", "timesheet"]], ["safety", "⚠", "Safety", ["safety", "swms", "compliance"]]];
 const NAV_LBL = { safety: "Incidents" };
 ui.navCol = (() => { try { return JSON.parse(localStorage.getItem("hwNavCol") || "{}"); } catch { return {}; } })();
 function shell(inner) {
@@ -1893,13 +1893,14 @@ function renderOperator() {
   if (ui.opTab === "fleet") ui.opTab = "more";
   if (ui.opTab === "more") {
     const quoteBtn = canQuote() && me.role !== "admin" ? `<button type="button" class="mob-more" data-go="quotes"><b>Quotes</b><small>Guided pricing for supervisors</small></button>` : "";
-    const fleetBtn = COMP.canSee() ? `<button type="button" class="mob-more" data-go="fleet"><b>Fleet</b><small>Registration and COI status</small></button>` : "";
+    const fleetBtn = COMP.canSee() ? `<button type="button" class="mob-more" data-go="fleet"><b>Compliance</b><small>Registration and COI status</small></button>` : "";
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">More</div><div class="mob-sub">${esc(me.name || "")}</div></div>
       <div class="mob-menu">
-        ${fleetBtn}
         <button type="button" class="mob-more" data-go="hours"><b>Hours</b><small>Timesheet</small></button>
         <button type="button" class="mob-more" data-go="done"><b>Completed</b><small>Finished in the last 30 days</small></button>
+        <div class="mob-sec">Safety</div>
         <button type="button" class="mob-more" data-go="swms"><b>SWMS</b><small>Read and sign</small></button>
+        ${fleetBtn}
         <button type="button" class="mob-more incbtn" data-inc=""><b>Report incident</b><small>Safety report</small></button>
         ${quoteBtn}
       </div>
