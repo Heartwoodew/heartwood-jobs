@@ -33,6 +33,28 @@ export function intentFromQuestion(question) {
   if (match) return { type: "job-status", jobHint: match[1].trim(), status: "Done" };
   match = /^set the (.+?) job to (Scheduled|In progress|Done|Cancelled)$/i.exec(q);
   if (match) return { type: "job-status", jobHint: match[1].trim(), status: match[2] };
+  match = /^edit the (.+?) job (date|time|address|client|description|notes) to (.+)$/i.exec(q);
+  if (match) return { type: "job-edit", jobHint: match[1].trim(), field: match[2].toLowerCase(), value: match[3].trim() };
+  match = /^(?:add a timesheet entry on|edit my timesheet for) (\d{4}-\d{2}-\d{2}) from (\d{2}:\d{2}) to (\d{2}:\d{2})(?: note (.+))?$/i.exec(q);
+  if (match) return { type: "timesheet", date: match[1], start: match[2], finish: match[3], note: (match[4] || "").trim() };
+  match = /^start a prestart on (.+?)(?: for (\d{4}-\d{2}-\d{2}))?(?: reading (\d+))?$/i.exec(q);
+  if (match) return { type: "prestart", assetHint: match[1].trim(), day: match[2] || "", reading: match[3] || "" };
+  match = /^request (annual|sick|other) leave from (\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})(?: (morning|afternoon))?: (.+)$/i.exec(q);
+  if (match) {
+    const half = match[4] === "morning" ? "am" : match[4] === "afternoon" ? "pm" : "";
+    const sameDay = match[2] === match[3];
+    return {
+      type: "leave-create",
+      leaveType: match[1].toLowerCase(),
+      start: match[2],
+      end: match[3],
+      startHalf: half,
+      endHalf: sameDay ? half : "",
+      reason: match[5].trim(),
+    };
+  }
+  match = /^(approve|decline) leave (.+?): (.+)$/i.exec(q);
+  if (match) return { type: "leave-decision", status: match[1].toLowerCase() === "approve" ? "approved" : "declined", hint: match[2].trim(), note: match[3].trim() };
   return null;
 }
 
@@ -84,7 +106,7 @@ function deny(reason) {
   return { ok: false, reason };
 }
 
-export async function prepareAction({ membership, intent, reader, name, at }) {
+export async function prepareAction({ membership, intent, reader, name, at, today }) {
   if (!membership?.ok || !intent || BLOCKED.test(intent.type || "")) return deny("not-allowed");
   const hideMoney = !membership.canSeeMoney;
   if (intent.type === "job-note") return prepareNote(membership, intent, reader, name, at, hideMoney);
@@ -93,6 +115,10 @@ export async function prepareAction({ membership, intent, reader, name, at }) {
   if (intent.type === "quote-draft") return prepareQuoteDraft(membership, intent, name);
   if (intent.type === "chat") return prepareChat(membership, intent, reader, name, hideMoney);
   if (intent.type === "job-status") return prepareStatus(membership, intent, reader, name);
+  if (intent.type === "job-edit") return prepareJobEdit(membership, intent, reader);
+  if (intent.type === "prestart") return preparePrestart(membership, intent, reader, name, today);
+  if (intent.type === "leave-create") return prepareLeave(membership, intent, name);
+  if (intent.type === "leave-decision") return prepareLeaveDecision(membership, intent, reader, name);
   return deny("not-allowed");
 }
 
@@ -246,4 +272,126 @@ async function prepareStatus(membership, intent, reader, name) {
 
 export function previewHasMoney(lines) {
   return (lines || []).some(line => /\$\s?\d|poAmount|invoice|totalEx|xero|profit/i.test(String(line)));
+}
+
+const EDIT_FIELDS = ["date", "time", "address", "client", "description", "notes"];
+
+async function prepareJobEdit(membership, intent, reader) {
+  if (!EDIT_FIELDS.includes(intent.field)) return deny("not-allowed");
+  const found = await oneJob(reader, membership, intent.jobId || intent.jobHint);
+  if (!found.ok) return found;
+  const value = cleanText(intent.value, intent.field === "description" || intent.field === "notes" ? 500 : 200, true);
+  if (!value) return deny("invalid");
+  if (intent.field === "date" && !/^\d{4}-\d{2}-\d{2}$/.test(value)) return deny("invalid");
+  if (intent.field === "time" && !clock(value)) return deny("invalid");
+  return {
+    ok: true,
+    action: { type: "job-edit", jobId: found.job.id, field: intent.field, value: intent.field === "time" ? clock(value) : value, updatedBy: membership.uid },
+    title: "Edit a job",
+    lines: [`Job: ${found.job.address}`, `${intent.field}: ${value}`, "No price is changed."],
+  };
+}
+
+async function preparePrestart(membership, intent, reader, name, today) {
+  if (!reader || typeof reader.fleet !== "function") return deny("not-allowed");
+  const hint = String(intent.assetHint || "").trim().toLowerCase();
+  if (hint.length < 2) return deny("invalid");
+  const fleet = await reader.fleet({ limit: 80 });
+  const rows = (fleet || []).filter(asset => {
+    const tenant = asset && asset.tenantId ? asset.tenantId : "heartwood";
+    return tenant === membership.tenantId;
+  });
+  const hits = rows.filter(asset => String(asset.name || "").toLowerCase().includes(hint) || asset.id === intent.assetHint);
+  if (hits.length !== 1) return deny(hits.length ? "which-job" : "not-allowed");
+  const asset = hits[0];
+  const day = intent.day && /^\d{4}-\d{2}-\d{2}$/.test(intent.day) ? intent.day : (/^\d{4}-\d{2}-\d{2}$/.test(today || "") ? today : "");
+  if (!day) return deny("invalid");
+  const reading = intent.reading === "" || intent.reading == null ? 0 : Number(intent.reading);
+  if (!Number.isInteger(reading) || reading < 0 || reading > 10000000) return deny("invalid");
+  const kind = ["skid-steer", "excavator", "tip-truck", "ute", "trailer", "other-plant"].includes(asset.prestartKind) ? asset.prestartKind : "other-plant";
+  const assetType = asset.type === "trailer" || asset.type === "plant" || asset.type === "vehicle" ? asset.type : "plant";
+  return {
+    ok: true,
+    action: {
+      type: "prestart",
+      tenantId: membership.tenantId,
+      assetId: asset.id,
+      assetName: String(asset.name || "Machine").slice(0, 80),
+      assetType,
+      kind,
+      day,
+      reading,
+      readingUnit: reading ? "hours" : "",
+      signerUid: membership.uid,
+      signerName: String(name || "Admin").slice(0, 80),
+    },
+    title: "Start a prestart",
+    lines: [`Machine: ${asset.name}`, `Day: ${day}`, "Checklist starts as passed. You can still open it and mark a fail.", "Nothing is saved until you tap Confirm."],
+  };
+}
+
+function prepareLeave(membership, intent, name) {
+  const type = intent.leaveType;
+  if (!["annual", "sick", "other"].includes(type)) return deny("invalid");
+  const start = String(intent.start || "");
+  const end = String(intent.end || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || end < start) return deny("invalid");
+  const startHalf = intent.startHalf || "";
+  const endHalf = intent.endHalf || "";
+  const same = start === end;
+  if (same ? startHalf !== endHalf : !((startHalf === "" || startHalf === "pm") && (endHalf === "" || endHalf === "am"))) return deny("invalid");
+  const reason = cleanText(intent.reason, 500, !membership.canSeeMoney);
+  if (!reason) return deny("empty");
+  const id = /^lv[a-z0-9]{16}$/.test(intent.id || "") ? intent.id : "lv" + randomLeaveId();
+  return {
+    ok: true,
+    action: {
+      type: "leave-create",
+      id,
+      uid: membership.uid,
+      name: String(name || "Admin").slice(0, 80),
+      leaveType: type,
+      start,
+      end,
+      startHalf,
+      endHalf,
+      reason,
+    },
+    title: "Request leave",
+    lines: [`${type} leave`, `${start} to ${end}`, `Reason: ${reason}`, "Status: pending"],
+  };
+}
+
+function randomLeaveId() {
+  const alphabet = "abcdef0123456789";
+  let out = "";
+  for (let i = 0; i < 16; i++) out += alphabet[Math.floor(Math.random() * alphabet.length)];
+  return out;
+}
+
+async function prepareLeaveDecision(membership, intent, reader, name) {
+  if (intent.status !== "approved" && intent.status !== "declined") return deny("not-allowed");
+  const note = cleanText(intent.note, 500, true);
+  if (!note) return deny("empty");
+  if (!reader || typeof reader.leaveRequests !== "function") return deny("not-allowed");
+  const rows = await reader.leaveRequests({ limit: 80 });
+  const hint = String(intent.hint || intent.id || "").trim().toLowerCase();
+  const pending = (rows || []).filter(row => row && row.status === "pending" && (row.tenantId || "heartwood") === membership.tenantId);
+  const hits = pending.filter(row => row.id === intent.hint || row.id === intent.id || String(row.name || "").toLowerCase().includes(hint));
+  if (hits.length !== 1) return deny(hits.length ? "which-job" : "not-allowed");
+  const row = hits[0];
+  return {
+    ok: true,
+    action: {
+      type: "leave-decision",
+      id: row.id,
+      status: intent.status,
+      note,
+      uid: membership.uid,
+      name: String(name || "Admin").slice(0, 80),
+      who: row.name || "",
+    },
+    title: intent.status === "approved" ? "Approve leave" : "Decline leave",
+    lines: [`${row.name || "Staff"} · ${row.type || "leave"}`, `${row.start} to ${row.end}`, `Note: ${note}`],
+  };
 }

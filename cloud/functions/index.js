@@ -14,9 +14,9 @@
  * INVITE_EMAIL_ENABLED must be the string "true" or the message is held in
  * inviteMail and nothing is sent. This file does not open an SMTP connection.
  *
- * helperAsk may prepare a change, but it writes only on step "confirm".
- * It stays off for model calls unless HELPER_ENABLED=true.
- * See helper/DECISION.md. Do not deploy it from this branch.
+ * helperAsk answers only for an admin, and only calls a model when
+ * HELPER_ENABLED=true. Confirm is the only step that writes.
+ * See helper/DEPLOY.md. Do not deploy it from this branch.
  */
 import { onDocumentCreated, onDocumentWritten } from "firebase-functions/v2/firestore";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
@@ -73,6 +73,7 @@ export const helperAsk = onCall(
     return {
       reply: result.reply,
       enabled: !!result.enabled,
+      admin: !!result.admin,
       knowledge: result.knowledge || "placeholder",
       proposal: result.proposal || null,
     };

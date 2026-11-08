@@ -1,8 +1,10 @@
-// CallUp Helper panel. Read-only chat UI and spoken replies.
-// Speech is output only: browser speechSynthesis, en-AU voices, never automatic.
+// CallUp Helper panel. Chat, spoken replies, and optional voice input.
+// Spoken replies use speechSynthesis and an en-AU voice, and never start by themselves.
+// Voice input uses the Web Speech API when the browser has it. It does not open a media stream.
 // This module does not call Firebase and does not write jobs.
 
 export const AU_VOICE_MISSING = "Australian voice not available on this device";
+export const MIC_MISSING = "Voice input isn't available in this browser. Type the question instead.";
 export const SPEECH_STORAGE_KEY = "hwHelperSpeech";
 export const KNOWLEDGE_PLACEHOLDER_NOTE = "How-to answers use a short placeholder until the CallUp knowledge pack is added.";
 export const UNREACHABLE = "I couldn't reach Helper. Nothing was changed.";
@@ -46,12 +48,39 @@ export function speakReply({ synth, voice, text, onend, Utterance } = {}) {
   return { spoken: true, notice: "", utterance: utter };
 }
 
+export function dictationSupported(scope = globalThis) {
+  return !!(scope && (scope.SpeechRecognition || scope.webkitSpeechRecognition));
+}
+
+export function openDictation(scope, { ontext, onend, onerror, lang = "en-AU" } = {}) {
+  const Ctor = scope && (scope.SpeechRecognition || scope.webkitSpeechRecognition);
+  if (!Ctor) return { ok: false, reason: "unsupported" };
+  let rec;
+  try { rec = new Ctor(); }
+  catch { return { ok: false, reason: "unsupported" }; }
+  rec.lang = lang;
+  rec.interimResults = false;
+  rec.continuous = false;
+  rec.onresult = event => {
+    const text = Array.from(event.results || []).map(row => (row[0] && row[0].transcript) || "").join(" ").trim();
+    if (text && ontext) ontext(text);
+  };
+  rec.onerror = () => { if (onerror) onerror(); };
+  rec.onend = () => { if (onend) onend(); };
+  try { rec.start(); }
+  catch { return { ok: false, reason: "failed" }; }
+  return {
+    ok: true,
+    stop() { try { rec.stop(); } catch { /* already stopped */ } },
+  };
+}
+
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
 }
 
 export function helperShellHtml(state) {
-  if (!state.signedIn) return "";
+  if (!state.signedIn || !state.available) return "";
   const speech = speechStatus(state.voices, state.speech);
   const launch = state.open ? "" : `<button type="button" class="helper-launch" data-act="open">Helper</button>`;
   if (!state.open) return launch;
@@ -81,6 +110,9 @@ export function helperShellHtml(state) {
       <label class="sr" for="helper-q">Ask Helper</label>
       <textarea id="helper-q" class="helper-input" rows="2" maxlength="2000" placeholder="Ask about CallUp, or about your jobs" autocomplete="off"></textarea>
       <button type="submit" class="helper-send" ${state.pending ? "disabled" : ""}>Send</button>
+      ${state.dictationSupported
+        ? `<button type="button" class="helper-mic" data-act="mic" aria-pressed="${state.listening ? "true" : "false"}">${state.listening ? "Stop" : "Mic"}</button>`
+        : `<button type="button" class="helper-mic" disabled title="${esc(MIC_MISSING)}">Mic</button>`}
     </form>
   </section>`;
 }
@@ -103,7 +135,11 @@ export function mountHelper(root, opts = {}) {
     error: "",
     playing: null,
     knowledge: opts.knowledge || "",
+    available: !!opts.available,
+    dictationSupported: opts.dictationSupported != null ? !!opts.dictationSupported : dictationSupported(opts.speechScope || globalThis),
+    listening: false,
   };
+  let dictation = null;
 
   function paint() {
     state.voices = getVoices();
@@ -187,6 +223,48 @@ export function mountHelper(root, opts = {}) {
     paint();
   }
 
+  function toggleMic() {
+    if (!state.dictationSupported) {
+      state.error = MIC_MISSING;
+      paint();
+      return;
+    }
+    if (state.listening) {
+      dictation?.stop?.();
+      state.listening = false;
+      dictation = null;
+      paint();
+      return;
+    }
+    const session = openDictation(opts.speechScope || globalThis, {
+      ontext(text) {
+        state.draft = (state.draft ? state.draft.replace(/\s*$/, " ") : "") + text;
+        state.error = "";
+        paint();
+      },
+      onerror() {
+        state.listening = false;
+        state.error = MIC_MISSING;
+        dictation = null;
+        paint();
+      },
+      onend() {
+        state.listening = false;
+        dictation = null;
+        paint();
+      },
+    });
+    if (!session.ok) {
+      state.error = MIC_MISSING;
+      paint();
+      return;
+    }
+    dictation = session;
+    state.listening = true;
+    state.error = "";
+    paint();
+  }
+
   root.addEventListener("click", event => {
     const target = event.target.closest("[data-act]");
     if (!target || !root.contains(target)) return;
@@ -205,6 +283,7 @@ export function mountHelper(root, opts = {}) {
       paint();
     }
     if (act === "confirm" || act === "cancel") settle(act, target.dataset.proposal);
+    if (act === "mic") toggleMic();
   });
   root.addEventListener("change", event => {
     if (!event.target.matches(".helper-speech")) return;
@@ -231,8 +310,22 @@ export function mountHelper(root, opts = {}) {
       state.signedIn = !!on;
       if (!state.signedIn) {
         state.open = false;
+        state.available = false;
+        state.listening = false;
+        dictation?.stop?.();
+        dictation = null;
         state.playing = null;
         synth?.cancel?.();
+      }
+      paint();
+    },
+    setAvailable(on) {
+      state.available = !!on;
+      if (!state.available) {
+        state.open = false;
+        state.listening = false;
+        dictation?.stop?.();
+        dictation = null;
       }
       paint();
     },

@@ -14,7 +14,11 @@ The model call is behind `HELPER_ENABLED`. That variable is unset, so a how-to q
 
 A change is separate from the model. Helper prepares it from the signed-in person's own sentence, shows a preview, and writes only when they tap Confirm. Cancel writes nothing. The model has no tools. Text in a job note cannot start an action. A model reply that looks like an action is ignored.
 
-If you later set `HELPER_ENABLED=true`, the provider is Vertex AI Gemini through the function's own service account (Application Default Credentials on Cloud Functions). No API key is read from the client or from this repo. The request stays in `australia-southeast1`. The code refuses any other region, including a silent fallback to `us-central1`. The default model id is `gemini-2.5-flash`. Override it with `HELPER_VERTEX_MODEL` only after you confirm that id is enabled in `australia-southeast1`. There is still no tool list on the Vertex request.
+If you later set `HELPER_ENABLED=true`, the provider is Vertex AI Gemini through the function's own service account (Application Default Credentials on Cloud Functions). No API key is read from the client or from this repo. The request stays in `australia-southeast1`. The code refuses any other region, including a silent fallback to `us-central1`. The default model id is `gemini-3.5-flash` because `gemini-2.5-flash` retired on Vertex on 20 October 2026, and `gemini-3.5-flash` runs in `australia-southeast1`. `gemini-3.8-flash` is not used: its endpoints are global, `us`, and `eu` only. Override the model with `HELPER_VERTEX_MODEL` only after you confirm that id is enabled in `australia-southeast1`. There is still no tool list on the Vertex request. Thinking is turned off (`thinkingBudget: 0`) so a short answer is not spent on a hidden draft.
+
+Helper is admin only. `rulesAdmin` (profile role `admin`, or Alex and Patrick) may call it. An operator or supervisor is refused before any job is read into a prompt, and the phone hides the button unless a status call returns `enabled: true`.
+
+The exact enablement, IAM, and deploy commands are in `DEPLOY.md`.
 
 ## Money
 
@@ -56,11 +60,6 @@ Do not treat this as a quote. Check Google's current Vertex AI price card for th
 
 ## When you want this live — later, not in this PR
 
-1. Read this note and the knowledge-pack PR. Do not merge until you are happy with the money rules.
-2. Confirm the project may call Vertex in `australia-southeast1`, and confirm the model id.
-3. Put the reviewed pack at `docs/knowledge/callup-knowledge.md` and copy it to `cloud/functions/knowledge/callup-knowledge.md` if the docs path is outside the functions folder that gets published.
-4. Set `HELPER_ENABLED=true` on the function environment only. Do not put a key in git.
-5. Deploy `helperAsk` from a branch where the deploy guard has been lifted on purpose. Deploying this branch still exits before anything is published.
-6. Do not deploy `cloud/emulator/firestore.rules` from this branch. It is an emulator model, not the live ruleset.
+Follow `DEPLOY.md`. In short: enable the Vertex AI API (`aiplatform.googleapis.com`) plus the Cloud Functions build APIs, grant the runtime service account `roles/aiplatform.user`, set `HELPER_ENABLED=true`, and deploy only `helperAsk` to `australia-southeast1` after the deploy guard is lifted on purpose. Do not deploy the emulator rules files.
 
 Nothing in that list has been done here.

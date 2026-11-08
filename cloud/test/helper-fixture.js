@@ -53,6 +53,28 @@ export function sampleStore() {
       profitHistory: { months: { "2026-10": { netProfit: 123456, income: 9, expenses: 8 } } },
       quoteRates: { travelPerKm: 3.5, materialPerUnit: 11, tipPerLoad: 90 },
     },
+    runSheets: [
+      { id: "op1_2026-11-12", workerUid: "op1", workerName: "Sam", date: "2026-11-12", jobIds: ["job-iron"], status: "approved", totalKm: 18, totalMinutes: 40 },
+      { id: "op2_2026-11-12", workerUid: "op2", workerName: "Riley", date: "2026-11-12", jobIds: ["job-riley"], status: "approved", totalKm: 4 },
+    ],
+    fleet: [
+      { id: "ex1", name: "Excavator", type: "plant", prestartKind: "excavator", rego: "EX1" },
+      { id: "secret-plant", tenantId: "otherco", name: "SECRET-PLANT", type: "plant", rego: "SEC" },
+    ],
+    servicing: [
+      { id: "svc1", assetId: "ex1", doneOn: "2026-10-01", serviceType: "250hr", reading: 1000, readingUnit: "hours" },
+    ],
+    serviceCosts: [
+      { id: "svc1", amount: "440.50" },
+    ],
+    timesheets: [
+      { id: "op1_2026-11-09", uid: "op1", name: "Sam", weekStart: "2026-11-09", totalHrs: 8, days: { "2026-11-10": { start: "07:00", finish: "15:30", note: "Ironbark $50" } } },
+      { id: "op2_2026-11-09", uid: "op2", name: "Riley", weekStart: "2026-11-09", totalHrs: 4, days: {} },
+    ],
+    leaveRequests: [
+      { id: "lv0123456789abcdef", uid: "op1", name: "Sam", type: "annual", status: "approved", start: "2026-11-20", end: "2026-11-20", startHalf: "pm", endHalf: "pm", reason: "Appointment", certificatePath: "leaveCertificates/op1/lv0123456789abcdef/cert.pdf" },
+      { id: "lvabcdef0123456789", uid: "op2", name: "Riley", type: "sick", status: "pending", start: "2026-11-21", end: "2026-11-21", startHalf: "", endHalf: "", reason: "Flu" },
+    ],
   };
 }
 
@@ -86,6 +108,30 @@ export function memoryReader(store, log) {
     async meta(id) {
       note("meta:" + id);
       return store.meta[id] || null;
+    },
+    async runSheets({ limit }) {
+      note("runSheets");
+      return (store.runSheets || []).slice(0, limit);
+    },
+    async fleet({ limit }) {
+      note("fleet");
+      return (store.fleet || []).slice(0, limit);
+    },
+    async servicing({ limit }) {
+      note("servicing");
+      return (store.servicing || []).slice(0, limit);
+    },
+    async serviceCosts({ limit }) {
+      note("serviceCosts");
+      return (store.serviceCosts || []).slice(0, limit);
+    },
+    async timesheets({ limit }) {
+      note("timesheets");
+      return (store.timesheets || []).slice(0, limit);
+    },
+    async leaveRequests({ limit }) {
+      note("leave");
+      return (store.leaveRequests || []).slice(0, limit);
     },
   };
 }

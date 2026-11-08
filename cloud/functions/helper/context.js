@@ -2,7 +2,10 @@
 // Client job ids and tenant ids are hints. canSeeJob is the decision.
 
 import { HEARTWOOD_TENANT, canSeeJob, jobTenantOf } from "../shared/cloud-storage.js";
-import { projectJob, projectProfit, projectQuoteDoc, projectRates, projectReceipt } from "./money.js";
+import {
+  projectFleet, projectJob, projectLeave, projectProfit, projectQuoteDoc, projectRates,
+  projectReceipt, projectRunSheet, projectService, projectTimesheet,
+} from "./money.js";
 
 export const SCAN_CAP = 80;
 export const KEEP_CAP = 12;
@@ -86,5 +89,59 @@ export async function buildHelperContext({ reader, membership, question, jobId, 
     }
     if (membership.finance) profit = projectProfit(await reader.meta("profitHistory"), today);
   }
-  return { jobs: visible, quotes, receipts, rateCard, profit };
+  const runSheets = [];
+  for (const sheet of await optionalRows(reader, "runSheets", { limit: 40 })) {
+    if (!sheet || jobTenantOf(sheet) !== membership.tenantId) continue;
+    if (!membership.rulesAdmin && sheet.workerUid !== membership.uid) continue;
+    const projected = projectRunSheet(sheet);
+    if (projected) runSheets.push(projected);
+    if (runSheets.length >= 8) break;
+  }
+  const fleet = [];
+  for (const asset of await optionalRows(reader, "fleet", { limit: 40 })) {
+    if (!asset || jobTenantOf(asset) !== membership.tenantId) continue;
+    const projected = projectFleet(asset);
+    if (projected) fleet.push(projected);
+    if (fleet.length >= 12) break;
+  }
+  const costs = {};
+  if (membership.canSeeMoney) {
+    for (const cost of await optionalRows(reader, "serviceCosts", { limit: 40 })) {
+      if (cost && cost.id && jobTenantOf(cost) === membership.tenantId) costs[cost.id] = cost;
+    }
+  }
+  const servicing = [];
+  for (const record of await optionalRows(reader, "servicing", { limit: 40 })) {
+    if (!record || jobTenantOf(record) !== membership.tenantId) continue;
+    const projected = projectService(record, costs[record.id], membership.canSeeMoney);
+    if (projected) servicing.push(projected);
+    if (servicing.length >= 8) break;
+  }
+  const timesheets = [];
+  for (const sheet of await optionalRows(reader, "timesheets", { limit: 40 })) {
+    if (!sheet || jobTenantOf(sheet) !== membership.tenantId) continue;
+    if (!membership.rulesAdmin && sheet.uid !== membership.uid) continue;
+    const projected = projectTimesheet(sheet, membership.canSeeMoney);
+    if (projected) timesheets.push(projected);
+    if (timesheets.length >= 8) break;
+  }
+  const leave = [];
+  for (const row of await optionalRows(reader, "leaveRequests", { limit: 40 })) {
+    if (!row || jobTenantOf(row) !== membership.tenantId) continue;
+    if (!membership.rulesAdmin && row.uid !== membership.uid) continue;
+    const projected = projectLeave(row, membership.canSeeMoney);
+    if (projected) leave.push(projected);
+    if (leave.length >= 8) break;
+  }
+  return { jobs: visible, quotes, receipts, rateCard, profit, runSheets, fleet, servicing, timesheets, leave };
+}
+
+async function optionalRows(reader, method, args) {
+  if (!reader || typeof reader[method] !== "function") return [];
+  try {
+    const rows = await reader[method](args);
+    return Array.isArray(rows) ? rows : [];
+  } catch {
+    return [];
+  }
 }

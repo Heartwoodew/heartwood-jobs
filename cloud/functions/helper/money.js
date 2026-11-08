@@ -143,3 +143,79 @@ export function projectRates(rates) {
   }
   return Object.keys(out).length ? out : null;
 }
+
+export function projectRunSheet(sheet) {
+  if (!sheet) return null;
+  return {
+    id: String(sheet.id || ""),
+    workerUid: sheet.workerUid || "",
+    workerName: clipText(sheet.workerName || "", 80),
+    date: sheet.date || "",
+    status: sheet.status || "",
+    jobIds: Array.isArray(sheet.jobIds) ? sheet.jobIds.slice(0, 12).map(id => String(id)) : [],
+    totalMinutes: sheet.totalMinutes ?? null,
+    totalKm: sheet.totalKm ?? null,
+  };
+}
+
+export function projectFleet(asset) {
+  if (!asset) return null;
+  return {
+    id: String(asset.id || ""),
+    name: clipText(asset.name || "", 80),
+    type: asset.type || "",
+    rego: clipText(asset.rego || "", 20),
+    prestartKind: asset.prestartKind || "",
+  };
+}
+
+export function projectService(record, cost, canSeeMoney) {
+  if (!record) return null;
+  const out = {
+    id: String(record.id || ""),
+    assetId: record.assetId || "",
+    doneOn: record.doneOn || "",
+    serviceType: record.serviceType || "",
+    reading: record.reading ?? null,
+    readingUnit: record.readingUnit || "",
+  };
+  if (canSeeMoney && cost && cost.amount != null) out.amount = clipText(cost.amount, 40);
+  return out;
+}
+
+export function projectTimesheet(sheet, canSeeMoney) {
+  if (!sheet) return null;
+  const days = {};
+  for (const [date, day] of Object.entries(sheet.days || {}).slice(0, 7)) {
+    days[date] = {
+      start: day && day.start || "",
+      finish: day && day.finish || "",
+      note: clipText(canSeeMoney ? (day && day.note || "") : redactMoneyText(day && day.note || ""), 200),
+    };
+  }
+  return {
+    id: String(sheet.id || ""),
+    uid: sheet.uid || "",
+    name: clipText(sheet.name || "", 80),
+    weekStart: sheet.weekStart || "",
+    totalHrs: sheet.totalHrs ?? null,
+    days,
+  };
+}
+
+export function projectLeave(row, canSeeMoney) {
+  if (!row) return null;
+  return {
+    id: String(row.id || ""),
+    uid: row.uid || "",
+    name: clipText(row.name || "", 80),
+    type: row.type || "",
+    status: row.status || "",
+    start: row.start || "",
+    end: row.end || "",
+    startHalf: row.startHalf || "",
+    endHalf: row.endHalf || "",
+    reason: clipText(canSeeMoney ? (row.reason || "") : redactMoneyText(row.reason || ""), 500),
+    certificate: !!row.certificatePath,
+  };
+}

@@ -56,6 +56,8 @@ class FakeUtterance { constructor(text) { this.text = text; } }
 window.__writes = 0;
 mountHelper(root, {
   signedIn: true,
+  available: params.get("off") !== "1",
+  dictationSupported: params.get("mic") === "1",
   startOpen: params.get("open") === "1",
   storage: { getItem() { return null; }, setItem() {} },
   synth: window.__synth,

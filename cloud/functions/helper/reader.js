@@ -30,5 +30,29 @@ export function adminReader(db) {
       const snap = await db.collection("meta").doc(id).get();
       return snap.exists ? snap.data() : null;
     },
+    async runSheets({ limit }) {
+      const snap = await db.collection("runSheets").limit(limit).get();
+      return rows(snap);
+    },
+    async fleet({ limit }) {
+      const snap = await db.collectionGroup("fleet").limit(limit).get();
+      return rows(snap);
+    },
+    async servicing({ limit }) {
+      const snap = await db.collectionGroup("servicing").limit(limit).get();
+      return rows(snap);
+    },
+    async serviceCosts({ limit }) {
+      const snap = await db.collectionGroup("serviceCosts").limit(limit).get();
+      return rows(snap);
+    },
+    async timesheets({ limit }) {
+      const snap = await db.collection("timesheets").limit(limit).get();
+      return rows(snap);
+    },
+    async leaveRequests({ limit }) {
+      const snap = await db.collection("leaveRequests").limit(limit).get();
+      return rows(snap);
+    },
   };
 }

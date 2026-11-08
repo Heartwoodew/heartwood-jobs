@@ -32,7 +32,7 @@ async function callHelper({ app, useEmulator, payload }) {
     return {
       ok: true,
       reply: typeof data.reply === "string" ? data.reply : "",
-      enabled: data.enabled !== false,
+      enabled: data.enabled === true,
       knowledge: data.knowledge || "",
       proposal,
     };
@@ -59,9 +59,17 @@ export function installHelperApp({ app, useEmulator, getMe } = {}) {
     ask: question => callHelper({ app, useEmulator, payload: { question } }),
     confirm: proposalId => callHelper({ app, useEmulator, payload: { step: "confirm", proposalId } }),
     cancel: proposalId => callHelper({ app, useEmulator, payload: { step: "cancel", proposalId } }),
+    speechScope: globalThis,
   });
   return {
-    start() { ui.setSignedIn(!!(getMe && getMe() && getMe().uid)); },
+    async start() {
+      const on = !!(getMe && getMe() && getMe().uid);
+      ui.setSignedIn(on);
+      if (!on) return;
+      const status = await callHelper({ app, useEmulator, payload: { step: "status" } });
+      ui.setSignedIn(true);
+      ui.setAvailable(!!(status && status.ok && status.enabled));
+    },
     stop() { ui.setSignedIn(false); },
   };
 }

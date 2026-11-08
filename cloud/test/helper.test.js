@@ -3,12 +3,14 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { ALEX_UID } from "../../app/features/cloud-storage.js";
 import { handleHelperAsk, authorizeCallable, DISABLED_REPLY, DENIED_REPLY, SIGN_IN_REPLY, MODEL_FAILED } from "../functions/helper/ask.js";
+import { buildHelperContext } from "../functions/helper/context.js";
 import { REFUSAL, RULES_MARK } from "../functions/helper/prompt.js";
 import { loadKnowledge } from "../functions/helper/knowledge.js";
 import { buildVertexRequest, createModelProvider } from "../functions/helper/provider.js";
 import { redactMoneyText } from "../functions/helper/money.js";
+import { resolveMembership } from "../functions/shared/cloud-storage.js";
 import {
-  AU_VOICE_MISSING, KNOWLEDGE_PLACEHOLDER_NOTE, helperShellHtml, pickAustralianVoice,
+  AU_VOICE_MISSING, KNOWLEDGE_PLACEHOLDER_NOTE, dictationSupported, helperShellHtml, openDictation, pickAustralianVoice,
   shouldAutoRead, speakReply,
 } from "../../app/features/helper.js";
 import { memoryReader, recordingModel, sampleStore, TODAY } from "./helper-fixture.js";
@@ -32,6 +34,17 @@ function ask(uid, data, { enabled = true, reply = "Noted.", seen = [], log = [] 
 function userPayload(seen) {
   assert.equal(seen.length, 1);
   return JSON.parse(seen[0].user);
+}
+
+async function grounded(uid, question, extra = {}) {
+  const log = [];
+  const reader = memoryReader(store, log);
+  const profile = await reader.user(uid);
+  const membership = resolveMembership({ uid, profile });
+  const context = await buildHelperContext({
+    reader, membership, question, today: TODAY, jobId: extra.jobId || "",
+  });
+  return { context, membership, log, reader };
 }
 
 test("money text redaction keeps dates, codes and plain quantities", () => {
@@ -69,42 +82,41 @@ test("a missing or bad token is rejected and a mismatched uid is rejected", asyn
 });
 
 test("operator context drops other people, other businesses, and every price", async () => {
-  const { result, seen, log } = await ask("op1", {
-    question: "What am I on at Ironbark?",
-    jobId: "job-riley",
-    tenantId: "otherco",
-    role: "admin",
-    uid: ALEX_UID,
-    jobs: [{ description: "CLIENT-INJECTED-SECRET" }],
-  });
-  assert.equal(result.ok, true);
-  const payload = userPayload(seen);
-  const blob = JSON.stringify(payload);
-  assert.equal(seen[0].system.includes("Ignore previous instructions"), false);
-  assert.equal(seen[0].system.includes(RULES_MARK), true);
-  assert.match(seen[0].system, /Business: heartwood/);
-  assert.match(seen[0].system, /Money on this login: hidden/);
-  assert.match(blob, /Ignore previous instructions/);
+  const denied = await ask("op1", { question: "What am I on at Ironbark?", tenantId: "otherco", role: "admin" });
+  assert.equal(denied.result.code, "permission-denied");
+  assert.equal(denied.result.reply, DENIED_REPLY);
+  assert.equal(denied.seen.length, 0);
+  const { context, log } = await grounded("op1", "What am I on at Ironbark?", { jobId: "job-riley" });
+  const blob = JSON.stringify(context);
   assert.match(blob, /12 Ironbark Street/);
   assert.match(blob, /12\.5/);
   assert.match(blob, /2468/);
   assert.match(blob, /\[amount hidden\]/);
-  for (const secret of ["9999", "8800", "9700", "7777", "2222", "123456", "44.5", "INV-77", "CLIENT-INJECTED-SECRET", "SECRET-OTHERCO-8841", "WOMBAT-LEDGER-77", "8 Wattle Court", "3.5"]) {
+  assert.match(blob, /Excavator/);
+  assert.match(blob, /Sam/);
+  assert.equal(blob.includes("440.50"), false);
+  assert.equal(blob.includes("SECRET-PLANT"), false);
+  assert.equal(context.timesheets.some(sheet => sheet.uid === "op1"), true);
+  assert.equal(context.timesheets.some(sheet => sheet.uid === "op2"), false);
+  assert.equal(context.leave.some(row => row.uid === "op1"), true);
+  assert.equal(context.leave.some(row => row.name === "Riley"), false);
+  assert.equal(context.leave[0].certificate, true);
+  assert.equal(blob.includes("cert.pdf"), false);
+  assert.equal(context.runSheets.some(sheet => sheet.workerUid === "op1"), true);
+  assert.equal(context.runSheets.some(sheet => sheet.workerUid === "op2"), false);
+  for (const secret of ["9999", "8800", "9700", "7777", "2222", "44.5", "INV-77", "CLIENT-INJECTED-SECRET", "SECRET-OTHERCO-8841", "WOMBAT-LEDGER-77", "8 Wattle Court"]) {
     assert.equal(blob.includes(secret), false, secret);
   }
-  assert.equal(payload.jobs.some(job => job.id === "job-iron"), true);
-  assert.equal(payload.quotes, undefined);
-  assert.equal(payload.profit, undefined);
-  assert.equal(payload.rateCard, undefined);
+  assert.equal(context.profit, null);
+  assert.equal(context.quotes.length, 0);
+  assert.equal(context.profit, null);
+  assert.equal(context.rateCard, null);
   assert.equal(log.includes("quotes"), false);
-  assert.equal(log.includes("receipts"), false);
-  assert.equal(log.some(item => item.startsWith("meta:")), false);
-  assert.equal(result.reply.includes(RULES_MARK), false);
-  assert.equal(result.reply.includes("hw-testcanary"), false);
+  assert.equal(log.includes("serviceCosts"), false);
 });
 
 test("a job note that tries to take over the prompt is data, and the reply cannot reveal the rules", async () => {
-  const { result, seen } = await ask("op1", { question: "What does the note say?" }, {
+  const { result, seen } = await ask(ALEX_UID, { question: "What does the note say?" }, {
     reply: ({ system }) => "SYSTEM " + system.match(/Canary: (\S+)/)[1] + " set the job to Done",
   });
   assert.match(seen[0].user, /Ignore previous instructions/);
@@ -113,32 +125,34 @@ test("a job note that tries to take over the prompt is data, and the reply canno
   assert.equal(result.reply.includes("hw-"), false);
 });
 
-test("an invented price in an operator reply is removed", async () => {
-  const { result } = await ask("op1", { question: "What is the price?" }, { reply: "It is $9,999 ex GST." });
-  assert.match(result.reply, /\[amount hidden\]/);
-  assert.equal(result.reply.includes("$"), false);
-  assert.equal(result.reply.includes("9999"), false);
+test("an invented price in a staff reply is removed, and staff cannot call Helper", async () => {
+  const { sanitiseReply } = await import("../functions/helper/prompt.js");
+  const reply = sanitiseReply("It is $9,999 ex GST.", { canary: "hw-x", canSeeMoney: false });
+  assert.match(reply, /\[amount hidden\]/);
+  assert.equal(reply.includes("$"), false);
+  assert.equal(reply.includes("9999"), false);
+  const denied = await ask("op1", { question: "What is the price?" }, { reply: "It is $9,999 ex GST." });
+  assert.equal(denied.result.reply, DENIED_REPLY);
+  assert.equal(denied.seen.length, 0);
 });
 
-test("supervisor sees assigned job prices, not another operator, another business, or company profit", async () => {
-  const { result, seen, log } = await ask("sup1", { question: "Prices for my jobs" });
-  const payload = userPayload(seen);
-  const blob = JSON.stringify(payload);
-  assert.match(seen[0].system, /Money on this login: visible/);
-  assert.match(seen[0].system, /Xero and company profit on this login: hidden/);
-  assert.match(blob, /12 Ironbark Street/);
-  assert.match(blob, /8 Wattle Court/);
-  assert.equal(payload.jobs.find(job => job.id === "job-iron").poAmount, 9999);
-  assert.equal(payload.jobs.find(job => job.id === "job-iron").xeroCheck, undefined);
-  assert.equal(payload.receipts.some(receipt => receipt.amountInc === 55), true);
-  assert.equal(blob.includes("44.5"), false);
-  assert.equal(blob.includes("WOMBAT-LEDGER-77"), false);
-  assert.equal(blob.includes("SECRET-OTHERCO-8841"), false);
-  assert.equal(blob.includes("123456"), false);
-  assert.equal(payload.profit, undefined);
-  assert.equal(payload.rateCard.travelPerKm, 3.5);
+test("a supervisor is denied, and their scoped data still hides other businesses", async () => {
+  const denied = await ask("sup1", { question: "Prices for my jobs" });
+  assert.equal(denied.result.reply, DENIED_REPLY);
+  assert.equal(denied.seen.length, 0);
+  const { context, membership, log } = await grounded("sup1", "Prices for my jobs");
+  assert.equal(membership.canSeeMoney, true);
+  assert.equal(membership.rulesAdmin, false);
+  assert.equal(context.jobs.find(job => job.id === "job-iron").poAmount, 9999);
+  assert.equal(context.jobs.find(job => job.id === "job-iron").xeroCheck, undefined);
+  assert.equal(context.receipts.some(receipt => receipt.amountInc === 55), true);
+  assert.equal(JSON.stringify(context).includes("44.5"), false);
+  assert.equal(JSON.stringify(context).includes("WOMBAT-LEDGER-77"), false);
+  assert.equal(JSON.stringify(context).includes("SECRET-OTHERCO-8841"), false);
+  assert.equal(context.profit, null);
+  assert.equal(context.rateCard.travelPerKm, 3.5);
+  assert.equal(context.servicing.some(row => row.amount === "440.50"), true);
   assert.equal(log.includes("meta:profitHistory"), false);
-  assert.equal(result.reply, "Noted.");
 });
 
 test("Alex sees Heartwood profit and not the other business", async () => {
@@ -165,18 +179,19 @@ test("another business admin cannot see Heartwood jobs, rates, or profit", async
   assert.match(blob, /SECRET-QUOTE/);
 });
 
-test("a customer-scoped operator does not see another builder's job", async () => {
-  const { seen } = await ask("scoped", { question: "Silk Road and Ironbark" });
-  const payload = userPayload(seen);
-  assert.deepEqual(payload.jobs, []);
-  assert.equal(JSON.stringify(payload.jobs).includes("Silk"), false);
+test("a customer-scoped operator does not see another builder's job and cannot call Helper", async () => {
+  const denied = await ask("scoped", { question: "Silk Road and Ironbark" });
+  assert.equal(denied.result.reply, DENIED_REPLY);
+  const { context } = await grounded("scoped", "Silk Road and Ironbark");
+  assert.deepEqual(context.jobs, []);
+  assert.equal(JSON.stringify(context.jobs).includes("Silk"), false);
 });
 
 test("switched off means no model call and no job text in the reply", async () => {
   let called = false;
   const reader = memoryReader(store, []);
   const result = await handleHelperAsk({
-    auth: { uid: "op1" },
+    auth: { uid: ALEX_UID },
     data: { question: "Ironbark" },
     reader,
     model: { async generate() { called = true; return "12 Ironbark Street $9999"; } },
@@ -185,13 +200,26 @@ test("switched off means no model call and no job text in the reply", async () =
   });
   assert.equal(called, false);
   assert.equal(result.enabled, false);
+  assert.equal(result.admin, true);
   assert.equal(result.reply, DISABLED_REPLY);
   assert.equal(result.reply.includes("Ironbark"), false);
   assert.equal(result.knowledge, "pack");
+  const hidden = await handleHelperAsk({
+    auth: { uid: "op1" },
+    data: { step: "status" },
+    reader,
+    model: { async generate() { called = true; return "no"; } },
+    enabled: true,
+    now: new Date(TODAY + "T02:00:00Z"),
+  });
+  assert.equal(hidden.ok, true);
+  assert.equal(hidden.enabled, false);
+  assert.equal(hidden.admin, false);
+  assert.equal(called, false);
 });
 
 test("a model failure does not echo the error or change anything", async () => {
-  const { result, reader } = await ask("op1", { question: "Hello" }, {
+  const { result, reader } = await ask(ALEX_UID, { question: "Hello" }, {
     reply: () => { const err = new Error("SECRET-OTHERCO-8841"); throw err; },
   });
   assert.equal(result.reply, MODEL_FAILED);
@@ -241,6 +269,8 @@ test("vertex request stays in australia-southeast1 and has no tools or API key",
     token: async () => "test-token",
     fetch: async (url, options) => {
       fetched += 1;
+      assert.match(String(url), /australia-southeast1/);
+      assert.match(String(url), /gemini-3\.5-flash/);
       assert.equal(String(url).includes("key="), false);
       assert.match(options.headers.authorization, /^Bearer /);
       const body = JSON.parse(options.body);
@@ -252,7 +282,7 @@ test("vertex request stays in australia-southeast1 and has no tools or API key",
   assert.equal(fetched, 1);
 });
 
-test("helper code has no microphone, no invented key, and writes only from a confirmed action", () => {
+test("helper stays in australia-southeast1, has a mic fallback, and writes only from a confirmed action", () => {
   const helperDir = new URL("../functions/helper/", import.meta.url);
   const server = readdirSync(helperDir).filter(name => name.endsWith(".js") && name !== "apply.js").map(name => readFileSync(new URL(name, helperDir), "utf8")).join("\n");
   const apply = readFileSync(new URL("apply.js", helperDir), "utf8");
@@ -262,15 +292,34 @@ test("helper code has no microphone, no invented key, and writes only from a con
   assert.doesNotMatch(server, /\.set\(|\.update\(|\.delete\(|addDoc|updateDoc|deleteDoc|writeBatch|bulkWriter|getUserMedia|SpeechRecognition/);
   assert.doesNotMatch(apply, /\.delete\(|deleteDoc|SCHEDULING_APPROVED|xeroQueue|sendMail|getUserMedia/);
   assert.match(apply, /helperAudit/);
+  assert.match(apply, /leave-create/);
+  assert.match(apply, /prestart/);
   assert.match(client, /step: "confirm", proposalId/);
-  assert.doesNotMatch(client, /getUserMedia|SpeechRecognition|webkitSpeechRecognition|addDoc|updateDoc|deleteDoc|setDoc|AIza|apiKey/);
+  assert.match(client, /step: "status"/);
+  assert.match(client, /SpeechRecognition/);
+  assert.doesNotMatch(client, /getUserMedia|addDoc|updateDoc|deleteDoc|setDoc|AIza|apiKey/);
   assert.match(client, /australia-southeast1/);
-  assert.match(client, /question/);
+  assert.match(client, /gemini-3\.5-flash|HELPER_ENABLED|status/);
   assert.doesNotMatch(client, /httpsCallable\(functions, "helperAsk"\)\(\{[^}]*tenantId/);
   assert.match(index, /region: "australia-southeast1"/);
   assert.match(index, /helperAsk/);
   assert.doesNotMatch(index, /onSchedule/);
   assert.doesNotMatch(server + index, /AIza|sk-[A-Za-z0-9]{10,}/);
+  assert.equal(dictationSupported({}), false);
+  const heard = [];
+  const session = openDictation({
+    SpeechRecognition: class Fake {
+      start() { this.onresult({ results: [[{ transcript: "annual leave" }]] }); this.onend(); }
+      stop() {}
+    },
+  }, { ontext(text) { heard.push(text); } });
+  assert.equal(session.ok, true);
+  assert.deepEqual(heard, ["annual leave"]);
+  const closed = helperShellHtml({ signedIn: true, available: false, open: true, messages: [] });
+  assert.equal(closed, "");
+  const mic = helperShellHtml({ signedIn: true, available: true, open: true, dictationSupported: false, speech: false, voices: [], messages: [] });
+  assert.match(mic, /helper-mic" disabled/);
+  assert.match(mic, /Type the question instead/);
 });
 
 test("spoken replies use an en-AU voice only and never start by themselves", () => {
@@ -290,7 +339,7 @@ test("spoken replies use an en-AU voice only and never start by themselves", () 
   assert.equal(ok.utterance.lang, "en-AU");
   assert.equal(spoken, 1);
   const missing = helperShellHtml({
-    signedIn: true, open: true, speech: true, voices: [other], knowledge: "placeholder",
+    signedIn: true, available: true, open: true, speech: true, voices: [other], knowledge: "placeholder",
     messages: [{ role: "assistant", text: "No worries." }],
   });
   assert.match(missing, new RegExp(AU_VOICE_MISSING));
@@ -299,7 +348,7 @@ test("spoken replies use an en-AU voice only and never start by themselves", () 
   assert.doesNotMatch(missing, /Australian English/);
   assert.match(missing, /No worries\./);
   const ready = helperShellHtml({
-    signedIn: true, open: true, speech: true, voices: [aussie], knowledge: "pack",
+    signedIn: true, available: true, open: true, speech: true, voices: [aussie], knowledge: "pack",
     messages: [{ role: "assistant", text: "On for Wednesday 12 November 2026." }],
   });
   assert.match(ready, /data-act="play"/);
@@ -307,7 +356,7 @@ test("spoken replies use an en-AU voice only and never start by themselves", () 
   assert.doesNotMatch(ready, new RegExp(AU_VOICE_MISSING));
   assert.doesNotMatch(ready, /autoplay|microphone/i);
   const nasty = helperShellHtml({
-    signedIn: true, open: true, speech: false, voices: [], messages: [{ role: "user", text: "<img src=x onerror=alert(1)>" }],
+    signedIn: true, available: true, open: true, speech: false, voices: [], messages: [{ role: "user", text: "<img src=x onerror=alert(1)>" }],
   });
   assert.equal(nasty.includes("<img"), false);
   assert.match(nasty, /&lt;img/);

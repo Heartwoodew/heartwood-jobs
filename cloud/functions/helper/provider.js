@@ -3,7 +3,10 @@
 // There is no API key in this file. The region does not fall back overseas.
 
 const REGION = "australia-southeast1";
-const DEFAULT_MODEL = "gemini-2.5-flash";
+// gemini-2.5-flash retired on Vertex on 20 October 2026.
+// gemini-3.5-flash is GA and its ML processing includes australia-southeast1.
+// gemini-3.8-flash is only on the global, us, and eu endpoints, so it is not used.
+const DEFAULT_MODEL = "gemini-3.5-flash";
 
 function misconfigured(message) {
   const err = new Error(message || "helper-misconfigured");
@@ -33,7 +36,11 @@ export function buildVertexRequest({ project, location, model, system, user }) {
     body: {
       systemInstruction: { parts: [{ text: system }] },
       contents: [{ role: "user", parts: [{ text: user }] }],
-      generationConfig: { temperature: 0.3, maxOutputTokens: 700 },
+      generationConfig: {
+        temperature: 0.3,
+        maxOutputTokens: 1024,
+        thinkingConfig: { thinkingBudget: 0 },
+      },
     },
   };
 }
