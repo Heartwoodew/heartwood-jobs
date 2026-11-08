@@ -15,8 +15,8 @@ import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml,
 import { installChatApp } from "./features/chat-ui.js";
 import {
   TS_CONSENT, accuracyText, brisbaneHM, captureFix, coordText, daysForSheet, editList, entryList,
-  locationMap, mapsHref, needsLocationConsent, newTsId, openClock, paidShift, sheetHours, shiftHours,
-  sortedEntries, stampText,
+  locationMap, machineChoicePatch, machinePromptNeeded, mapsHref, needsLocationConsent, newTsId, openClock,
+  paidShift, prestartStatus, sheetHours, shiftHours, sortedEntries, stampText,
 } from "./features/timesheet.js";
 
 const cfg = useEmulator ? { ...firebaseConfig, apiKey: "demo-key", projectId: "demo-heartwood" } : firebaseConfig;
@@ -780,7 +780,7 @@ function tsStop() {
   ui.tsEdit = null; ui.tsDirty = false; ui.tsBusy = false; ui.tsAsk = null;
 }
 function tsSnapshotBlocked() {
-  if (ui.tsBusy || ui.tsAsk) return true;
+  if (ui.tsBusy || ui.tsAsk || (ui.tsMachineShift && document.getElementById("tsmachine"))) return true;
   if ($("#dlg")?.open) return true;
   return !!((ui.tsDirty || ui.tsEdit) && ($("#tsman") || $("#tsf")));
 }
@@ -850,6 +850,7 @@ function tsEntryCard(raw, canEdit) {
     ${tsFixLine("Clocked off", raw.clockOff)}${tsAdjustedLine(raw, "finish", raw.clockOff)}
     ${tsFixLine("Break start", raw.breakOn)}${tsFixLine("Break end", raw.breakOff)}
     ${audit}${edits}
+    ${tsMachineStatusHtml(raw)}
     ${canEdit ? `<button type="button" class="sm-btn tsedit" data-eid="${esc(raw.id)}">Edit</button>` : ""}</article>`;
 }
 function tsLegacyCards(sheet, canEdit) {
@@ -894,6 +895,100 @@ function tsClockHtml() {
       : `<p class="ts-live">Not clocked on</p><button type="button" class="ts-go on" id="tsclockon">Clock on</button>`;
   return `<div class="ts-clock">${main}<p class="ts-privacy">Location is captured only when you tap Clock on, Clock off, Break start, or Break end.</p></div>`;
 }
+function tsTenant() {
+  const m = cloudMembership();
+  return m && m.ok && m.tenantId ? m.tenantId : "heartwood";
+}
+function tsShiftById(id) {
+  if (!id) return null;
+  const sheets = [tsOwnSheet(), ui.tsPrev];
+  for (const sheet of sheets) {
+    if (sheet && sheet.entries && sheet.entries[id]) return sheet.entries[id];
+  }
+  return null;
+}
+function tsEnsureFleet() {
+  if (ui.tsFleetState) return;
+  ui.tsFleetState = "loading";
+  getDocs(collection(db, "tenants", tsTenant(), "fleet")).then(s => {
+    ui.tsFleet = s.docs.map(d => ({ id: d.id, ...d.data() })).filter(a => a && a.name).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    ui.tsFleetState = "ok";
+    if (ui.tsMachineShift) tsRerender();
+  }).catch(() => { ui.tsFleet = []; ui.tsFleetState = "absent"; if (ui.tsMachineShift) tsRerender(); });
+}
+function tsEnsurePrestarts() {
+  if (ui.tsPrestartState) return;
+  ui.tsPrestartState = "loading";
+  getDocs(collection(db, "tenants", tsTenant(), "prestarts")).then(s => {
+    ui.tsPrestarts = s.docs.map(d => ({ id: d.id, ...d.data() }));
+    ui.tsPrestartState = "ok";
+    tsRerender();
+  }).catch(() => { ui.tsPrestarts = []; ui.tsPrestartState = "absent"; tsRerender(); });
+}
+function tsMachineHtml() {
+  const entry = tsShiftById(ui.tsMachineShift);
+  if (!ui.tsMachineShift || (entry && entry.machineChoice)) return "";
+  if (entry && !machinePromptNeeded(entry, ui.tsMachineShift)) return "";
+  tsEnsureFleet();
+  const assets = ui.tsFleetState === "ok" ? (ui.tsFleet || []) : [];
+  const buttons = assets.map(a => `<button type="button" class="ts-mini tsmach" data-asset="${esc(a.id)}" data-name="${esc(a.name)}">${esc(a.name)}${a.rego ? " · " + esc(a.rego) : ""}</button>`).join("");
+  return `<div class="ts-machine" id="tsmachine"><p><b>Which machine are you on today?</b></p>
+    ${ui.tsFleetState === "loading" ? `<p class="sub">Loading machines…</p>` : ""}
+    <div class="ts-fleet">${buttons}<button type="button" class="ts-mini tsmach" data-asset="">No machine / other work</button>
+    <button type="button" class="sm-btn" id="tsmachskip">Skip</button></div></div>`;
+}
+function tsMachineStatusHtml(entry) {
+  if (!entry || !entry.machineChoice || entry.id === ui.tsMachineShift) return "";
+  const label = entry.machineChoice === "asset" ? entry.machineName : entry.machineChoice === "none" ? "No machine / other work" : "Skipped";
+  const line = `<p class="sub">Machine: ${esc(label || "Skipped")}</p>`;
+  if (entry.machineChoice !== "asset" || !entry.machineId) return line;
+  if (ui.tsPrestartState !== "ok" && ui.tsPrestartState !== "absent") { tsEnsurePrestarts(); return line; }
+  const status = prestartStatus({ available: ui.tsPrestartState === "ok", records: ui.tsPrestarts, assetId: entry.machineId, day: entry.date || todayStr() });
+  if (status.kind === "soon") return line + `<p class="ts-soon">Prestart coming soon</p>`;
+  if (status.kind === "done") {
+    const when = stampText(status.when) || "today";
+    return line + `<p class="ts-prestart">Prestart done (${esc(when)}, ${esc(status.by || "someone")})</p>`;
+  }
+  return line + `<p class="ts-prestart">Prestart isn't done for this machine today.</p><button type="button" class="sm-btn tsprestart" data-asset="${esc(entry.machineId)}">Open prestart</button>`;
+}
+function tsOpenPrestart(assetId) {
+  ui.prestartAsset = assetId;
+  const admin = me.role === "admin" && !ui.myJobs;
+  if (admin) { ui.view = "prestart"; ui.navOpen = false; renderAdmin(); }
+  else { ui.opTab = "prestart"; renderOperator(); }
+  const select = document.querySelector("#prestartform [name=assetId]");
+  if (select) { select.value = assetId; select.dispatchEvent(new Event("change")); return; }
+  if (!document.querySelector("#prestartform, [data-ctab=prestart]")) {
+    ui.tsPrestartState = "absent";
+    if (admin) { ui.view = "timesheet"; renderAdmin(); }
+    else { ui.opTab = "hours"; renderOperator(); }
+  }
+}
+async function tsChooseMachine(choice, asset) {
+  const patch = machineChoicePatch(choice, asset);
+  const id = ui.tsMachineShift;
+  const ws = ui.tsMachineWs || tsWeek();
+  if (!patch || !id) return;
+  try {
+    const sheet = await tsLoad(ws);
+    const prev = sheet && sheet.entries && sheet.entries[id];
+    if (!prev) { toast("You're clocked on. The machine list didn't save."); return; }
+    if (prev.machineChoice) { ui.tsMachineShift = null; tsRerender(); return; }
+    await updateDoc(doc(db, "timesheets", `${me.uid}_${ws}`), {
+      [`entries.${id}.machineChoice`]: patch.machineChoice,
+      [`entries.${id}.machineId`]: patch.machineId,
+      [`entries.${id}.machineName`]: patch.machineName,
+      lastEntryId: id,
+      updatedAt: serverTimestamp(),
+      updatedAtIso: new Date().toISOString(),
+    });
+    ui.tsMachineShift = null;
+    if (patch.machineChoice === "asset") tsEnsurePrestarts();
+  } catch (err) {
+    toast("You're clocked on. The machine wasn't saved.");
+  }
+  tsRerender();
+}
 function tsManualForm(sheet) {
   const legacyDs = String(ui.tsEdit || "").startsWith("legacy:") ? ui.tsEdit.slice(7) : "";
   const existing = ui.tsEdit && ui.tsEdit !== "new" && !legacyDs ? (sheet?.entries || {})[ui.tsEdit] : null;
@@ -930,7 +1025,7 @@ function tsEditor() {
   const sheet = ui.tsMine;
   const has = entryList(sheet?.entries).length > 0;
   const body = !has && !ui.tsEdit ? tsGrid(sheet) : has ? `${tsCards(sheet, true)}${tsWeekTotal(sheet)}` : "";
-  return `${tsNav()}${tsClockHtml()}${tsManualArea(sheet)}${body}`;
+  return `${tsNav()}${tsClockHtml()}${tsMachineHtml()}${tsManualArea(sheet)}${body}`;
 }
 const TS_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const tsDayLbl = (ds, wd) => `${wd} ${+ds.slice(8, 10)} ${TS_MON[+ds.slice(5, 7) - 1]}`;
@@ -1010,7 +1105,7 @@ function tsAdmin() {
   const shown = ui.tsStaff ? people.filter(p => p.uid === ui.tsStaff) : people;
   const sum = shown.reduce((n, p) => n + sheetHours(L.find(t => t.uid === p.uid) || {}), 0);
   const who = ui.tsStaff ? (people.find(p => p.uid === ui.tsStaff) || {}).name || "Staff" : "all staff";
-  return `${tsNav()}<h2 class="ts-live">Your shift</h2>${tsClockHtml()}${tsManualArea(tsOwnSheet())}<label class="ts-filter">Staff <select id="tsstaff"><option value="">All staff</option>${people.map(p => `<option value="${esc(p.uid)}" ${ui.tsStaff === p.uid ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label>
+  return `${tsNav()}<h2 class="ts-live">Your shift</h2>${tsClockHtml()}${tsMachineHtml()}${tsManualArea(tsOwnSheet())}<label class="ts-filter">Staff <select id="tsstaff"><option value="">All staff</option>${people.map(p => `<option value="${esc(p.uid)}" ${ui.tsStaff === p.uid ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label>
     <div class="ts-tot">Total <b>${hrs(sum)}</b> <span class="sub">${esc(who)}</span></div>
     ${shown.map(p => tsPerson(p, L.find(t => t.uid === p.uid) || null)).join("") || `<p class="sub">Nobody matches that filter.</p>`}`;
 }
@@ -1081,6 +1176,8 @@ async function tsPunch(kind) {
         edits: {}, lastEditId: "",
       };
       await tsWrite(ws, sheet, entries, id, { consent: !(sheet && sheet.locationConsentAt) });
+      ui.tsMachineShift = id;
+      ui.tsMachineWs = ws;
       toast(fix.fix === "gps" ? "Clocked on" : "Clocked on · no location");
     } else {
       const e = openClock(entries);
@@ -1190,6 +1287,9 @@ function bindTs(A, rerender) {
   const brk = $("#tsbrk"); if (brk) brk.onclick = () => tsPunch("break-start");
   const brkEnd = $("#tsbrkend"); if (brkEnd) brkEnd.onclick = () => tsPunch("break-end");
   const agree = $("#tsagree"); if (agree) agree.onclick = () => { try { localStorage.setItem(TS_CONSENT_KEY, "1"); } catch { /* ignore */ } const kind = ui.tsAsk; ui.tsAsk = null; tsPunch(kind); };
+  A.querySelectorAll(".tsmach").forEach(b => b.onclick = () => tsChooseMachine(b.dataset.asset ? "asset" : "none", b.dataset.asset ? { id: b.dataset.asset, name: b.dataset.name } : null));
+  const skip = $("#tsmachskip"); if (skip) skip.onclick = () => tsChooseMachine("skip");
+  A.querySelectorAll(".tsprestart").forEach(b => b.onclick = () => tsOpenPrestart(b.dataset.asset));
   const no = $("#tsno"); if (no) no.onclick = () => { ui.tsAsk = null; rerender(); };
   const add = $("#tsadd"); if (add) add.onclick = () => { if (ui.tsDirty && !confirm("Leave the week grid without saving?")) return; ui.tsEdit = "new"; ui.tsDirty = false; rerender(); };
   A.querySelectorAll(".tsedit").forEach(b => b.onclick = () => { ui.tsEdit = b.dataset.eid; ui.tsDirty = false; rerender(); });
@@ -1397,7 +1497,7 @@ function renderAdmin() {
   if (ui.view === "invoices" && me.role !== "admin") ui.view = "home";
   if (ui.myJobs) return renderOperator();
   if ($("#dlg").open) return;          // don't redraw under an open job card
-  if (!ui.tsForce && ui.view === "timesheet" && (ui.tsBusy || ui.tsAsk)) return;
+  if (!ui.tsForce && ui.view === "timesheet" && (ui.tsBusy || ui.tsAsk || (ui.tsMachineShift && document.getElementById("tsmachine")))) return;
   if (!ui.tsForce && ui.view === "timesheet" && (ui.tsDirty || ui.tsEdit) && ($("#tsman") || $("#tsf"))) return;
   if (ui.view === "chat" && document.activeElement?.closest?.(".chat-compose")) return;
   document.body.className = "admin";
@@ -2193,7 +2293,7 @@ function renderOperator() {
     QG.bindAdmin({ ui: { ...ui, view: "quotes" }, A: $("#app") });
     return;
   }
-  if (!ui.tsForce && ui.opTab === "hours" && (ui.tsBusy || ui.tsAsk) && !ui.opSel) return;
+  if (!ui.tsForce && ui.opTab === "hours" && (ui.tsBusy || ui.tsAsk || (ui.tsMachineShift && document.getElementById("tsmachine"))) && !ui.opSel) return;
   if (!ui.tsForce && ui.opTab === "hours" && (ui.tsDirty || ui.tsEdit) && ($("#tsman") || $("#tsf")) && !ui.opSel) return;
   if (ui.opTab === "hours" && !ui.opSel) {
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">My hours</div><div class="mob-sub">Clock on, or enter hours manually</div></div>

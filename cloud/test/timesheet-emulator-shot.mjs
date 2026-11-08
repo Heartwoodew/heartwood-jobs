@@ -107,6 +107,12 @@ async function main() {
       clockOn: { at: at("2026-11-03T21:01:00Z"), fix: "no location" },
       clockOff: { at: at("2026-11-04T05:11:00Z"), fix: "no location" },
     });
+    await setDoc(doc(db, "tenants/heartwood/fleet/ex1"), { type: "plant", name: "Excavator", rego: "EX 101", prestartKind: "excavator" });
+    await setDoc(doc(db, "tenants/heartwood/fleet/ute1"), { type: "vehicle", name: "Colorado ute", rego: "UT 202", prestartKind: "ute" });
+    await setDoc(doc(db, "tenants/heartwood/prestarts/done-ex1"), {
+      assetId: "ex1", assetName: "Excavator", day: "2026-11-08", signerUid: samId, signerName: "Sam",
+      signedAt: at("2026-11-07T21:05:00Z"),
+    });
     await setDoc(doc(db, "timesheets", `${rileyId}_2026-11-02`), {
       uid: rileyId, name: "Riley", weekStart: "2026-11-02", weekEnd: "2026-11-08",
       days: {}, totalHrs: 7.7, updatedAt: at("2026-11-04T05:11:00Z"), updatedAtIso: "2026-11-04T05:11:00.000Z",
@@ -186,6 +192,19 @@ async function main() {
       const v = await page.send("Runtime.evaluate", { expression: "JSON.stringify({ toast: window.__toasts, geo: window.__geo, wrap: window.__geoWrap, live: document.querySelector('.ts-live')?.textContent })", returnByValue: true });
       throw new Error("did not clock on " + v.result?.value + " errors " + errors.join(" | "));
     }
+    await waitFor(page, "Which machine are you on today?");
+    await waitFor(page, "Excavator");
+    await page.send("Runtime.evaluate", { expression: "window.scrollTo(0, 0)" });
+    await shot(page, "timesheet_machine_prompt");
+    const clicked = await page.send("Runtime.evaluate", { expression: "(() => { const b = [...document.querySelectorAll('.tsmach')].find(el => el.textContent.includes('Excavator')); if (!b) return 'missing'; b.click(); return b.dataset.asset + '|' + b.dataset.name; })()", returnByValue: true });
+    console.log("clicked", clicked.result?.value);
+    await sleep(1500);
+    const after = await page.send("Runtime.evaluate", { expression: "document.body.innerText", returnByValue: true });
+    if (!(after.result?.value || "").includes("Prestart done")) {
+      throw new Error("after machine click: " + (after.result?.value || "").slice(0, 1200));
+    }
+    await page.send("Runtime.evaluate", { expression: "document.querySelector('.ts-prestart')?.scrollIntoView({ block: 'center' })" });
+    await shot(page, "timesheet_prestart_done");
     await waitFor(page, "±14 m");
     const geoAfter = await page.send("Runtime.evaluate", { expression: "window.__geo", returnByValue: true });
     if (geoAfter.result?.value !== 1) throw new Error("expected one GPS fix, got " + geoAfter.result?.value);

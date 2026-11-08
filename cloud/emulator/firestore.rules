@@ -232,7 +232,7 @@ service cloud.firestore {
         : ((!(k in a) && !(k in b)) || ((k in a) && (k in b) && a[k] == b[k]) || ((k in a) && !(k in b) && tsFix(a[k])));
     }
     function tsEntryCore(e) {
-      return e.keys().hasOnly(["id", "source", "status", "date", "start", "finish", "breakStart", "breakEnd", "note", "job", "clockOn", "clockOff", "breakOn", "breakOff", "enteredBy", "enteredByName", "enteredAt", "edits", "lastEditId"])
+      return e.keys().hasOnly(["id", "source", "status", "date", "start", "finish", "breakStart", "breakEnd", "note", "job", "clockOn", "clockOff", "breakOn", "breakOff", "enteredBy", "enteredByName", "enteredAt", "edits", "lastEditId", "machineChoice", "machineId", "machineName"])
         && e.id == request.resource.data.lastEntryId
         && e.id.matches('^[a-z0-9]{8,24}$')
         && (e.source == "clock" || e.source == "manual")
@@ -263,10 +263,31 @@ service cloud.firestore {
             && a.edits[a.lastEditId].summary.size() > 0
             && a.edits[a.lastEditId].summary.size() <= 200));
     }
+    function tsMachineLock(b, a) {
+      return (!("machineChoice" in a) && !("machineChoice" in b))
+        || ("machineChoice" in b && a.machineChoice == b.machineChoice && a.get("machineId", "") == b.get("machineId", "") && a.get("machineName", "") == b.get("machineName", ""))
+        || (!("machineChoice" in b) && (
+          ((a.machineChoice == "none" || a.machineChoice == "skip") && a.machineId == "" && a.machineName is string && a.machineName.size() <= 80)
+          || (a.machineChoice == "asset" && a.machineId.matches('^[A-Za-z0-9_-]{1,80}$') && a.machineName is string && a.machineName.size() > 0 && a.machineName.size() <= 80)
+        ));
+    }
     function tsEntryNext(b, a) {
       return tsEntryCore(a) && a.source == b.source && a.enteredBy == b.enteredBy && a.enteredAt == b.enteredAt && a.id == b.id
         && tsFixSame(b, a, "clockOn") && tsFixSame(b, a, "clockOff") && tsFixSame(b, a, "breakOn") && tsFixSame(b, a, "breakOff")
+        && tsMachineLock(b, a)
         && tsEditOk(b, a);
+    }
+    function tsFleetReader(tenantId) {
+      return signedIn()
+        && tenantId is string
+        && tenantId.matches('^[a-z0-9][a-z0-9-]{0,39}$')
+        && (
+          ((isAlex() || isPatrick()) && tenantId == "heartwood")
+          || (hasProfile() && (
+            ("tenantId" in profile() && profile().tenantId == tenantId)
+            || (!("tenantId" in profile()) && tenantId == "heartwood")
+          ))
+        );
     }
     function tsOneEntry() {
       return request.resource.data.entries is map
@@ -318,6 +339,17 @@ service cloud.firestore {
       allow create: if tsWorkerCreate(id);
       allow update: if tsWorkerUpdate(id) || tsSentUpdate();
       allow delete: if false;
+    }
+
+    // Read-only mirror so clock-on can list machines and today's prestart.
+    // Creates and edits stay with the compliance PR. allow write: if false does not veto those rules.
+    match /tenants/{tenantId}/fleet/{assetId} {
+      allow read: if tsFleetReader(tenantId);
+      allow write: if false;
+    }
+    match /tenants/{tenantId}/prestarts/{id} {
+      allow read: if tsFleetReader(tenantId);
+      allow write: if false;
     }
 // END TIMESHEET RULES
   }

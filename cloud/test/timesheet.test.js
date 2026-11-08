@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  accuracyText, captureFix, coordText, daysForSheet, mapsHref, needsLocationConsent, paidShift,
-  sheetHours, shiftHours,
+  accuracyText, captureFix, coordText, daysForSheet, machineChoicePatch, machinePromptNeeded, mapsHref,
+  needsLocationConsent, paidShift, prestartStatus, sheetHours, shiftHours,
 } from "../../app/features/timesheet.js";
 
 test("finished shifts keep the 30-minute lunch unless a break is entered", () => {
@@ -59,6 +59,37 @@ test("location is one fix, and a denied fix is marked no location", async () => 
   assert.deepEqual(hung, { fix: "no location" });
   assert.equal(needsLocationConsent({ stored: false, already: false }), true);
   assert.equal(needsLocationConsent({ stored: true, already: false }), false);
+});
+
+test("the machine question is once per shift and does not guess", () => {
+  const open = { id: "e1", source: "clock", status: "open" };
+  assert.equal(machinePromptNeeded(open, "e1"), true);
+  assert.equal(machinePromptNeeded({ ...open, machineChoice: "skip" }, "e1"), false);
+  assert.equal(machinePromptNeeded(open, "e2"), false);
+  assert.equal(machinePromptNeeded(open, ""), false);
+  assert.deepEqual(machineChoicePatch("skip"), { machineChoice: "skip", machineId: "", machineName: "" });
+  assert.deepEqual(machineChoicePatch("none"), { machineChoice: "none", machineId: "", machineName: "" });
+  assert.equal(machineChoicePatch("asset", null), null);
+  assert.equal(machineChoicePatch("asset", { id: "", name: "Excavator" }), null);
+  assert.deepEqual(machineChoicePatch("asset", { id: "ex1", name: "Excavator" }), { machineChoice: "asset", machineId: "ex1", machineName: "Excavator" });
+});
+
+test("prestart status reads today's checklist and stays quiet when the feature is absent", () => {
+  assert.deepEqual(prestartStatus({ available: false, records: [], assetId: "ex1", day: "2026-11-08" }), { kind: "soon" });
+  assert.deepEqual(prestartStatus({ available: true, records: [], assetId: "ex1", day: "2026-11-08" }), { kind: "reminder", assetId: "ex1" });
+  assert.deepEqual(prestartStatus({ available: true, records: [], assetId: "", day: "2026-11-08" }), { kind: "hidden" });
+  const done = prestartStatus({
+    available: true,
+    records: [
+      { assetId: "ex1", day: "2026-11-07", signerName: "Yesterday", signedAt: "2026-11-07T21:00:00Z" },
+      { assetId: "ex1", day: "2026-11-08", signerName: "Sam", signedAt: "2026-11-07T21:02:00Z" },
+      { assetId: "ex1", day: "2026-11-08", signerName: "Riley", signedAt: "2026-11-07T23:00:00Z" },
+    ],
+    assetId: "ex1",
+    day: "2026-11-08",
+  });
+  assert.equal(done.kind, "done");
+  assert.equal(done.by, "Riley");
 });
 
 test("timesheet code never watches the device location", () => {

@@ -29,6 +29,35 @@ export function openClock(entries) {
   return entryList(entries).find(e => e.source === "clock" && (e.status === "open" || e.status === "break")) || null;
 }
 
+// Ask once, after this session's clock on. A rerender keeps the same shift id; a saved choice ends it.
+export function machinePromptNeeded(entry, sessionShiftId) {
+  return !!(entry && entry.source === "clock" && sessionShiftId && entry.id === sessionShiftId && !entry.machineChoice);
+}
+
+export function machineChoicePatch(choice, asset) {
+  if (choice === "skip") return { machineChoice: "skip", machineId: "", machineName: "" };
+  if (choice === "none") return { machineChoice: "none", machineId: "", machineName: "" };
+  const id = asset && typeof asset.id === "string" ? asset.id.trim() : "";
+  const name = asset && typeof asset.name === "string" ? asset.name.trim() : "";
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(id) || !name || name.length > 80) return null;
+  return { machineChoice: "asset", machineId: id, machineName: name };
+}
+
+export function latestPrestart(records, assetId, day) {
+  const rows = (records || []).filter(row => row && row.assetId === assetId && row.day === day);
+  rows.sort((a, b) => (asDate(a.signedAt)?.getTime() || 0) - (asDate(b.signedAt)?.getTime() || 0));
+  return rows.length ? rows[rows.length - 1] : null;
+}
+
+// available false means the prestart collection or screen is not on this build.
+export function prestartStatus({ available, records, assetId, day }) {
+  if (!assetId) return { kind: "hidden" };
+  if (!available) return { kind: "soon" };
+  const row = latestPrestart(records, assetId, day);
+  if (!row) return { kind: "reminder", assetId };
+  return { kind: "done", assetId, when: row.signedAt, by: row.signerName || "" };
+}
+
 export function asDate(v) {
   if (!v) return null;
   if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v;

@@ -429,3 +429,63 @@ test("timesheets stay on the worker's own sheet, and clock stamps cannot be rewr
     lastEntryId: "entry0001abcd",
   })));
 });
+
+test("clock on can record one machine, and fleet reads stay inside the tenant", async () => {
+  const op = db("op1");
+  const ref = doc(op, "timesheets/op1_2026-11-16");
+  const entry = tsClock("op1", "Sam", { id: "entry0008abcd", date: "2026-11-16" });
+  await assertSucceeds(setDoc(ref, {
+    uid: "op1", name: "Sam", weekStart: "2026-11-16", weekEnd: "2026-11-22", days: {}, totalHrs: 0,
+    updatedAt: serverTimestamp(), updatedAtIso: "2026-11-16T21:00:00.000Z",
+    entries: { entry0008abcd: entry }, lastEntryId: "entry0008abcd", locationConsentAt: serverTimestamp(),
+  }));
+  const saved = (await getDoc(ref)).data().entries.entry0008abcd;
+  assert.equal(saved.machineChoice, undefined);
+  await assertSucceeds(updateDoc(ref, {
+    "entries.entry0008abcd": { ...saved, machineChoice: "asset", machineId: "ex1", machineName: "Excavator" },
+    lastEntryId: "entry0008abcd", updatedAt: serverTimestamp(), updatedAtIso: "2026-11-16T21:05:00.000Z", totalHrs: 0,
+  }));
+  const chosen = (await getDoc(ref)).data().entries.entry0008abcd;
+  assert.equal(chosen.machineId, "ex1");
+  assert.equal(chosen.clockOn.lat, -27.47);
+  await assertFails(updateDoc(ref, {
+    "entries.entry0008abcd": { ...chosen, machineId: "other", machineName: "Other" },
+    lastEntryId: "entry0008abcd", updatedAt: serverTimestamp(), updatedAtIso: "2026-11-16T21:06:00.000Z",
+  }));
+  await assertFails(updateDoc(doc(db("op2"), ref.path), {
+    "entries.entry0008abcd": { ...chosen, note: "nope" },
+    lastEntryId: "entry0008abcd", updatedAt: serverTimestamp(), updatedAtIso: "2026-11-16T21:07:00.000Z",
+  }));
+  const skipRef = doc(op, "timesheets/op1_2026-11-23");
+  const skip = tsClock("op1", "Sam", { id: "entry0009abcd", date: "2026-11-23" });
+  await assertSucceeds(setDoc(skipRef, {
+    uid: "op1", name: "Sam", weekStart: "2026-11-23", weekEnd: "2026-11-29", days: {}, totalHrs: 0,
+    updatedAt: serverTimestamp(), updatedAtIso: "2026-11-23T21:00:00.000Z",
+    entries: { entry0009abcd: skip }, lastEntryId: "entry0009abcd",
+  }));
+  const skipSaved = (await getDoc(skipRef)).data().entries.entry0009abcd;
+  await assertSucceeds(updateDoc(skipRef, {
+    "entries.entry0009abcd": { ...skipSaved, machineChoice: "skip", machineId: "", machineName: "" },
+    lastEntryId: "entry0009abcd", updatedAt: serverTimestamp(), updatedAtIso: "2026-11-23T21:02:00.000Z",
+  }));
+  await assertFails(updateDoc(skipRef, {
+    "entries.entry0009abcd": { ...skipSaved, machineChoice: "guess", machineId: "ex1", machineName: "Excavator" },
+    lastEntryId: "entry0009abcd", updatedAt: serverTimestamp(), updatedAtIso: "2026-11-23T21:03:00.000Z",
+  }));
+  await env.withSecurityRulesDisabled(async ctx => {
+    const admin = ctx.firestore();
+    await setDoc(doc(admin, "tenants/heartwood/fleet/ex1"), { type: "plant", name: "Excavator", rego: "EX1" });
+    await setDoc(doc(admin, "tenants/otherco/fleet/ex2"), { type: "plant", name: "Other plant", rego: "" });
+    await setDoc(doc(admin, "tenants/heartwood/prestarts/done1"), {
+      assetId: "ex1", day: "2026-11-16", signerUid: "op1", signerName: "Sam", signedAt: Timestamp.fromDate(new Date("2026-11-16T21:02:00Z")),
+    });
+  });
+  const fleet = await assertSucceeds(getDoc(doc(op, "tenants/heartwood/fleet/ex1")));
+  assert.equal(fleet.data().name, "Excavator");
+  await assertFails(getDoc(doc(op, "tenants/otherco/fleet/ex2")));
+  await assertFails(setDoc(doc(op, "tenants/heartwood/fleet/new1"), { type: "plant", name: "Nope" }));
+  await assertSucceeds(getDoc(doc(op, "tenants/heartwood/prestarts/done1")));
+  await assertFails(setDoc(doc(op, "tenants/heartwood/prestarts/new1"), { assetId: "ex1", day: "2026-11-16", signerUid: "op1" }));
+  await assertSucceeds(getDoc(doc(db("op2"), "tenants/otherco/fleet/ex2")));
+  await assertFails(getDoc(doc(db("op2"), "tenants/heartwood/fleet/ex1")));
+});

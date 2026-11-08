@@ -353,6 +353,12 @@ tr.mhead td{background:#eef2f7;font-size:13px;padding:6px 8px}
 .ts-man{display:flex;flex-direction:column;gap:8px;background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:12px;margin:0 0 12px}
 .ts-man label,.ts-filter{display:flex;flex-direction:column;gap:4px;font-size:13px;color:#64748b}
 .ts-man input,.ts-man select,.ts-filter select{font:inherit;font-size:16px;min-height:44px;padding:8px;border:1px solid #cfd8e3;border-radius:8px;color:#1e293b}
+.ts-machine{background:#fffdf9;border:1px solid #eadfd3;border-radius:14px;padding:12px;margin:0 0 12px}
+.ts-machine p{margin:0 0 8px}
+.ts-fleet{display:flex;flex-direction:column;gap:8px}
+.ts-fleet .ts-mini{width:100%;text-align:left;padding:12px 14px}
+.ts-soon{color:#7a6a5a;font-size:14px;margin:4px 0}
+.ts-prestart{font-size:15px;margin:4px 0}
 .ts-keep{background:#f8fafc;border-radius:10px;padding:8px 10px}
 .ts-keep p{margin:0 0 4px}
 .ts-filter{margin:0 0 10px}
