@@ -5,32 +5,21 @@ import { readFileSync } from "node:fs";
 function read(name) {
   return readFileSync(new URL(name, import.meta.url), "utf8");
 }
-function slice(text, start, end) {
-  const i = text.indexOf(start);
-  const j = text.indexOf(end);
-  assert.ok(i >= 0 && j > i, start);
-  return text.slice(i, j + end.length);
-}
 
-const BLOCKS = [
-  ["../production/firestore.inbox.rules", "// BEGIN INBOX IMPORT RULES", "// END INBOX IMPORT RULES"],
-  ["../production/firestore.hours-export.rules", "// BEGIN HOURS EXPORT RULES", "// END HOURS EXPORT RULES"],
-  ["../production/firestore.reimbursements.rules", "// BEGIN REIMBURSEMENT CLAIM RULES", "// END REIMBURSEMENT CLAIM RULES"],
-  ["../production/firestore.chat.rules", "// BEGIN CHAT RULES", "// END CHAT RULES"],
-  ["../production/firestore.swms.rules", "// BEGIN SWMS SIGNATURE RULES", "// END SWMS SIGNATURE RULES"],
-  ["../production/firestore.leave.rules", "// BEGIN LEAVE RULES", "// END LEAVE RULES"],
-  ["../production/firestore.fleet.rules", "// BEGIN FLEET RULES", "// END FLEET RULES"],
-];
-
-test("production rules keep the live blocks and open company-scoped jobs", () => {
+test("every live match path is in the production rules", () => {
+  const snap = read("../production/live-snapshot-20261108.rules");
   const rules = read("../firestore.production.rules");
-  for (const [file, start, end] of BLOCKS) {
-    assert.equal(slice(rules, start, end), slice(read(file), start, end), file);
-  }
-  assert.match(rules, /function docCompany/);
-  assert.match(rules, /: "heartwood"/);
-  assert.match(rules, /match \/jobs\/\{id\}/);
-  assert.match(rules, /match \/quotes\/\{id\}/);
-  assert.doesNotMatch(slice(rules, "match /jobs/{id}", "match /receipts/{id}"), /allow write: if false/);
-  assert.match(rules, /Missing companyId means heartwood/);
+  const paths = [...snap.matchAll(/^\s*match\s+(\S+)\s*\{/gm)].map(m => m[1]);
+  assert.ok(paths.includes("/jobs/{jobId}"));
+  assert.ok(paths.includes("/clients/{cid}"));
+  assert.ok(paths.includes("/ownerSettings/{id}"));
+  assert.ok(paths.includes("/poLookups/{docId}"));
+  assert.ok(paths.includes("/reimbursements/{id}"));
+  assert.ok(paths.includes("/swmsChunks/{cid}"));
+  assert.ok(paths.includes("/meta/profitHistory"));
+  assert.ok(paths.includes("/{document=**}"));
+  const missing = paths.filter(path => !rules.includes(`match ${path}`));
+  assert.deepEqual(missing, []);
+  assert.match(rules, /A missing companyId means heartwood/);
+  assert.match(rules, /live ruleset f6f1fb5c/);
 });
