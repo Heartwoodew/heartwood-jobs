@@ -190,6 +190,66 @@ service cloud.firestore {
     }
 // END CHAT RULES
 
+// BEGIN SWMS SIGNATURE RULES
+    function swmsSignedIn() { return request.auth != null; }
+    function swmsIsAlex() { return swmsSignedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
+    function swmsIsPatrick() { return swmsSignedIn() && request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"; }
+    function swmsUserPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function swmsHasProfile() { return swmsSignedIn() && exists(swmsUserPath()); }
+    function swmsProfile() { return get(swmsUserPath()).data; }
+    function swmsIsAdmin() {
+      return swmsIsAlex() || swmsIsPatrick()
+        || (swmsHasProfile() && "role" in swmsProfile() && swmsProfile().role == "admin");
+    }
+    function swmsCanSign() {
+      return swmsIsAlex() || swmsIsPatrick() || swmsHasProfile();
+    }
+    function swmsIdOk() {
+      return request.resource.data.swmsId is string
+        && request.resource.data.swmsId.matches('^(working-near-roads|mobile-plant|working-with-silica|hazardous-substances|electrical)$');
+    }
+    function swmsSigOk() {
+      return request.resource.data.sig is string
+        && request.resource.data.sig.size() >= 32
+        && request.resource.data.sig.size() <= 90000
+        && request.resource.data.sig.matches('^data:image/png;base64,[A-Za-z0-9+/=]+$');
+    }
+    function swmsCreateOk() {
+      return swmsCanSign()
+        && request.resource.data.keys().hasOnly(["uid", "name", "swmsId", "swmsTitle", "version", "jobId", "jobLabel", "sig", "signedAt", "signedAtMs", "expiresAtMs", "device"])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 2
+        && request.resource.data.name.size() <= 80
+        && swmsIdOk()
+        && request.resource.data.swmsTitle is string
+        && request.resource.data.swmsTitle.size() > 0
+        && request.resource.data.swmsTitle.size() <= 80
+        && request.resource.data.version is string
+        && request.resource.data.version.matches('^20[0-9]{2}-(0[1-9]|1[0-2])$')
+        && request.resource.data.jobId is string
+        && request.resource.data.jobId.size() <= 200
+        && request.resource.data.jobLabel is string
+        && request.resource.data.jobLabel.size() <= 160
+        && swmsSigOk()
+        && request.resource.data.signedAt == request.time
+        && request.resource.data.signedAtMs is int
+        && request.resource.data.signedAtMs >= request.time.toMillis() - 300000
+        && request.resource.data.signedAtMs <= request.time.toMillis() + 300000
+        && request.resource.data.expiresAtMs is int
+        && request.resource.data.expiresAtMs >= request.resource.data.signedAtMs + 364 * 24 * 60 * 60 * 1000
+        && request.resource.data.expiresAtMs <= request.resource.data.signedAtMs + 367 * 24 * 60 * 60 * 1000
+        && request.resource.data.device is string
+        && request.resource.data.device.size() <= 200;
+    }
+
+    match /swmsSignatures/{id} {
+      allow read: if swmsSignedIn() && (resource.data.uid == request.auth.uid || swmsIsAdmin());
+      allow create: if swmsCreateOk();
+      allow update, delete: if false;
+    }
+// END SWMS SIGNATURE RULES
+
 // BEGIN RUN SHEET RULES
     function routeSignedIn() { return request.auth != null; }
     function routeIsAlex() { return routeSignedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }

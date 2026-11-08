@@ -53,7 +53,31 @@ const FILLED_RATES = {
   labourerRate: 55, labourerUnit: "hour"
 };
 
-const SWMS_IDS = ["working-near-roads", "mobile-plant", "working-with-silica", "hazardous-substances", "electrical"];
+const TINY_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+function swmsPreviewRows() {
+  const sig = (typeof window !== "undefined" && window.HW_SWMS_SIG) || TINY_PNG;
+  const at = iso => Date.parse(iso);
+  const row = (uid, name, swmsId, swmsTitle, when, extra = {}) => ({
+    id: uid + "-" + swmsId,
+    uid, name, swmsId, swmsTitle,
+    version: extra.version || "2026-07",
+    signedAtMs: at(when),
+    sig,
+    jobId: extra.jobId || "",
+    jobLabel: extra.jobLabel || "",
+  });
+  // Preview clock is window.HW_NOW (6 Nov 2026). These rows are not production data.
+  return [
+    row("patrick", "Patrick", "working-near-roads", "Working near roads", "2026-06-01T09:00:00+10:00", {
+      jobId: "j2", jobLabel: "#2402 · Lot 88 · 14 Brightvale Street, Redbank Plains QLD 4301",
+    }),
+    row("patrick", "Patrick", "mobile-plant", "Mobile plant", "2025-11-20T09:00:00+10:00"),
+    row("patrick", "Patrick", "working-with-silica", "Working with silica", "2025-10-01T09:00:00+10:00"),
+    row("patrick", "Patrick", "hazardous-substances", "Hazardous substances", "2026-08-01T09:00:00+10:00", { version: "2025-07" }),
+    row("sam", "Sam", "electrical", "Electrical & underground services", "2026-09-01T09:00:00+10:00"),
+    row("sam", "Sam", "mobile-plant", "Mobile plant", "2025-11-10T09:00:00+10:00"),
+  ];
+}
 
 function role() {
   return (typeof window !== "undefined" && window.HW_PREVIEW_ROLE) || "operator";
@@ -102,8 +126,11 @@ export function doc(a, ...parts) {
   }
   return { _col: parts.length >= 2 ? parts[parts.length - 2] : parts[0], _id: parts[parts.length - 1], _path: parts.join("/") };
 }
-export function query(ref) { return { _col: ref && ref._col, _path: ref && ref._path, _id: ref && ref._id, _q: true }; }
-export function where() { return {}; }
+export function query(ref, ...extras) {
+  const wheres = extras.filter(x => x && x._where).map(x => x._where);
+  return { _col: ref && ref._col, _path: ref && ref._path, _id: ref && ref._id, _q: true, _wheres: wheres };
+}
+export function where(field, op, value) { return { _where: { field, op, value } }; }
 export function orderBy() { return {}; }
 export function limitToLast() { return {}; }
 export function serverTimestamp() { return { _server: true }; }
@@ -202,10 +229,10 @@ export function onSnapshot(ref, onNext) {
         });
       } else if (col === "jobs") onNext(snap(JOBS.map(withGeo)));
       else if (col === "swmsSignatures") {
-        const uid = uidFor(role());
-        onNext(snap(SWMS_IDS.map(id => ({
-          id: uid + "-" + id, uid, swmsId: id, version: "2026-07", signedAtMs: Date.now(), name: "Patrick"
-        }))));
+        let rows = swmsPreviewRows();
+        const uidEq = (ref._wheres || []).find(w => w.field === "uid" && w.op === "==");
+        if (uidEq) rows = rows.filter(r => r.uid === uidEq.value);
+        onNext(snap(rows));
       } else onNext(snap([]));
     } catch (e) {
       if (typeof window !== "undefined") {
@@ -231,7 +258,8 @@ export function setDoc(ref, data) {
   return Promise.resolve();
 }
 export function addDoc(ref, data) {
-  record("addDoc", { col: ref && ref._col });
+  const brief = data && typeof data.sig === "string" ? { ...data, sig: "png:" + data.sig.length } : data;
+  record("addDoc", { col: ref && ref._col, data: brief });
   return Promise.resolve({ id: "new-" + (ref && ref._col || "x") });
 }
 function storageObjects() {
