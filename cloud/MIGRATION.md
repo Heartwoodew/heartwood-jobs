@@ -98,6 +98,8 @@ Region, if these are ever deployed: `australia-southeast1`.
 
 `cloud/emulator/firestore.rules` is an **emulator model only**. The live Firestore rules are not in this repository. Do not deploy that file, and do not deploy Functions.
 
+`cloud/production/firestore.timesheet.rules` is the clock on / clock off block to paste into the live rules after Alex approves it. It is not deployed. A worker can read and write only `timesheets/{their uid}_{week}`, including the single location fix taken at that tap. Heartwood admins can read every sheet. Deploying the emulator rules file would replace the live jobs, quotes and receipts rules.
+
 The sync admin UID mentioned in `app.js` is not in this repository. It is not guessed. Storage rules do not grant that account access. Add the real UID before a rules deploy if that account must read Storage.
 
 `cloud/.firebaserc` also points at `demo-heartwood`. `cloud/firebase.json` is the emulator and capture config. Its Storage and Functions `predeploy` hooks run `node scripts/refuse-live-deploy.js`, which exits 1. `npm run deploy` in `cloud/` also exits 1. Those guards stay. The production config is separate and has no hook, so the command below is the only prepared Storage path.
