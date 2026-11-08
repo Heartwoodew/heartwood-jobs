@@ -49,6 +49,9 @@ test("admins approve, decline, or mark paid; paid and declined are final", () =>
   assert.equal(canMoveTo("declined", "approved"), false);
   assert.equal(claimDecisionBody({ from: "submitted", status: "declined", note: "", uid: "a", name: "Alex" }).ok, false);
   assert.equal(claimDecisionBody({ from: "submitted", status: "approved", note: "", uid: "a", name: "Alex" }).ok, true);
+  assert.equal(claimDecisionBody({ from: "submitted", status: "approved", note: "", uid: "a", name: "Alex" }).data.hubdocStatus, undefined);
+  assert.equal(claimDecisionBody({ from: "approved", status: "paid", note: "", uid: "a", name: "Alex", receiptPath: "reimbursements/a/rc1/receipt.jpg" }).data.hubdocStatus, "queued");
+  assert.equal(claimDecisionBody({ from: "approved", status: "paid", note: "", uid: "a", name: "Alex", receiptPath: "" }).data.hubdocStatus, "no-receipt");
 });
 
 test("owed per person counts approved and waiting, not paid or declined", () => {

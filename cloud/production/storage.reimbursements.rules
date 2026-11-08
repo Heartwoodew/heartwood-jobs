@@ -23,7 +23,8 @@
         );
     }
     function rcFileReader(uid) {
-      return rcFileSignedIn() && (request.auth.uid == uid || rcFileAdmin());
+      // 38SU... is the box sync account; it reads receipts only to email paid claims to Hubdoc.
+      return rcFileSignedIn() && (request.auth.uid == uid || rcFileAdmin() || request.auth.uid == "38SU5waAy4f9UI9N6JTqDMaYpQg2");
     }
 
     match /reimbursements/{uid}/{claimId}/{file} {
