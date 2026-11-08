@@ -107,7 +107,7 @@ export function signOut() { return Promise.resolve(); }
 export function signInWithEmailAndPassword() { return Promise.resolve({ user: { uid: uidFor(role()) } }); }
 export function onAuthStateChanged(_auth, cb) {
   const r = role();
-  queueMicrotask(() => cb({ uid: uidFor(r), email: r + "@heartwood.test" }));
+  queueMicrotask(() => cb(r === "signedout" ? null : { uid: uidFor(r), email: r + "@heartwood.test" }));
   return () => {};
 }
 

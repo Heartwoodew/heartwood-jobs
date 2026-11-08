@@ -6,6 +6,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { ref as storageRef, uploadBytes, getBlob, deleteObject } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
 import { resolveMembership } from "./cloud-storage.js";
+import { orgSettings } from "../org-settings.js";
 import {
   STAFF_THREAD, badgeMarkup, canDeleteMessage, canUseJobChat, canUseTeamChat, chatDeniedHtml, chatPhotoPath,
   chatShellHtml, headPayload, headUnread, jobThreadId, messageMillis, messagePayload, messagesHtml,
@@ -371,11 +372,12 @@ function bindScreen(screen, threadId, job) {
 }
 
 function teamHtml() {
-  if (!canUseTeamChat(state.membership)) return chatDeniedHtml("Team chat is for signed-in Heartwood staff.");
+  const orgName = orgSettings().name;
+  if (!canUseTeamChat(state.membership)) return chatDeniedHtml(`Team chat is for signed-in ${orgName} staff.`);
   return chatShellHtml({
     threadId: STAFF_THREAD,
     title: "Team chat",
-    subtitle: "Everyone signed in at Heartwood",
+    subtitle: `Everyone signed in at ${orgName}`,
   });
 }
 

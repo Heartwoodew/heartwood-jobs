@@ -528,7 +528,7 @@ html{-webkit-text-size-adjust:100%}
 .gr:hover{background:var(--sm-bg)}.gr-a{font-weight:600;color:var(--sm-ink)}.gr-m{font-size:12px;color:var(--sm-mut)}.gr.none{color:var(--sm-mut);font-size:14px}
 @media (max-width:760px){.top{flex-wrap:wrap}.gsearch{order:5;flex-basis:100%;max-width:none;margin:6px 0 0}.who{display:none}}
 @media (max-width:760px){#logout{margin-left:auto}}
-@media (max-width:760px){.top{flex-wrap:nowrap;gap:8px;padding-left:10px;padding-right:10px}.brand{font-size:16px}.brand span{display:none}
+@media (max-width:760px){.top{flex-wrap:nowrap;gap:8px;padding-left:10px;padding-right:10px}.brand{font-size:16px}
  .gsearch{order:0;flex:1;flex-basis:auto;margin:0;min-width:0}.gsearch input{padding:6px 10px;min-height:36px}#logout{margin-left:0;padding:6px 10px}
  .gres{position:fixed;top:52px;left:8px;right:8px}}
 .top{z-index:45}#logout{white-space:nowrap}
@@ -641,7 +641,7 @@ body.operator .swremind { margin: 4px 16px 12px; width: calc(100% - 32px); }
 :root{--bg:#f6f1ea;--cream:#f6f1ea;--card:#fffdf9;--ink:#2b2118;--mut:#7a6a5a;--br:#3b2a1a;--acc:#8a5a2b;--line:#e4d9cc;--caramel:#8a5a2b}
 body,body.admin,body.operator{background:var(--cream);color:var(--ink)}
 .mark{width:26px;height:26px;margin-right:8px;vertical-align:-6px;flex:none}
-.top,body.admin .top,body.operator .top{background:#3b2a1a;color:#f6f1ea;border-bottom:none;box-shadow:none;height:auto;min-height:56px;padding:10px 16px}
+.top,body.admin .top,body.operator .top{background:#142033;color:#f6f1ea;border-bottom:none;box-shadow:none;height:auto;min-height:56px;padding:10px 16px}
 .brand,body.admin .brand,body.operator .brand{color:#f6f1ea;display:flex;align-items:center;gap:8px}
 .brand span,body.admin .brand span,body.operator .brand span{color:#e7c59a!important;font-weight:650;margin-left:0}
 .top button.ghost,.top #logout,body.admin .top #logout,body.operator .top #logout{color:#f6f1ea;border-color:#8a7058;background:transparent}
@@ -924,3 +924,32 @@ body.admin .mdisp .route-open{display:block;width:calc(100% - 24px);margin:10px 
 .route-skip{color:#5c4e42;font-size:14px}
 .run-stop{display:inline-block;background:#efe6da;color:#3b2a1a;font-size:12px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;border-radius:999px;padding:3px 8px;margin:0 0 6px}
 .run-note{margin:8px 0 0;color:#5c4e42;font-weight:700}
+
+/* CallUp wordmark. Organisation name sits under it. No picture logo shipped. */
+.brand,body.admin .brand,body.operator .brand{flex:0 0 auto;flex-direction:column;align-items:flex-start;gap:1px;line-height:1.05;min-width:0}
+.brand .wordmark,body.admin .brand .wordmark,body.operator .brand .wordmark{color:#f7f4ef!important;font-weight:800;font-size:20px;letter-spacing:-0.045em;line-height:1}
+.brand .wordmark span{color:#f0b429!important;font-weight:800;display:inline!important}
+.brand .orgline,body.admin .brand .orgline,body.operator .brand .orgline{display:flex!important;align-items:center;gap:4px;overflow:visible;white-space:nowrap;font-size:11px;font-weight:650;letter-spacing:0;color:#e7d7b8!important}
+.orglogo{height:14px;width:auto;display:block;border-radius:2px}
+.login-brand{display:grid;gap:2px;justify-items:start;margin-bottom:2px}
+.login-brand .wordmark{color:#142033;font-size:36px;font-weight:800;letter-spacing:-0.045em;line-height:1}
+.login-brand .wordmark span{color:#c47a12}
+.login-brand .orgline{display:flex;align-items:center;gap:6px;color:#5c4e42;font-size:15px;font-weight:700;margin:4px 0 0}
+.login .powered{margin-top:4px}
+.powered{font-size:12px;color:#7a6a5a;margin:0}
+.mob-brandline{display:flex;align-items:baseline;gap:8px;margin-top:2px}
+.mob-brandline .wordmark{color:#142033;font-size:15px;font-weight:800;letter-spacing:-0.04em}
+.mob-brandline .wordmark span{color:#c47a12}
+.mob-brandline .orgbit{font-size:12px;font-weight:650;color:#5c4e42}
+.det-powered{margin:4px 0 8px}
+@media (max-width:760px){
+  .top,body.admin .top,body.operator .top{
+    display:grid;grid-template-columns:auto minmax(0,1fr) auto;
+    grid-template-areas:"mark search out" "org org org";
+    align-items:center;column-gap:8px;row-gap:1px}
+  .brand,body.admin .brand,body.operator .brand{display:contents}
+  .brand .wordmark{grid-area:mark}
+  .brand .orgline,body.admin .brand .orgline,body.operator .brand .orgline{grid-area:org;padding:0 0 2px}
+  .top .gsearch{grid-area:search;margin:0;max-width:none;min-width:0;flex:none}
+  .top #logout{grid-area:out;margin-left:0}
+}
