@@ -14,10 +14,9 @@
  * INVITE_EMAIL_ENABLED must be the string "true" or the message is held in
  * inviteMail and nothing is sent. This file does not open an SMTP connection.
  *
- * helperAsk answers for every signed-in Heartwood member when
- * HELPER_ENABLED=true. What they can hear and change follows their role.
- * Confirm is the only step that writes.
- * See helper/DEPLOY.md. Do not deploy it from this branch.
+ * helperAsk stays deployed and refuses every request. HELPER_ENABLED defaults
+ * to "false", and HELPER_HARD_OFF returns before Auth, Firestore, or Vertex.
+ * An environment change cannot turn it back on. See helper/DEPLOY.md.
  */
 import { onDocumentCreated, onDocumentWritten } from "firebase-functions/v2/firestore";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
@@ -35,7 +34,7 @@ import {
 } from "./shared/staff-invites.js";
 import { authorizeCallable, handleHelperAsk } from "./helper/ask.js";
 import { adminReader } from "./helper/reader.js";
-import { createModelProvider } from "./helper/provider.js";
+import { createModelProvider, helperLiveEnabled } from "./helper/provider.js";
 import { firestoreHelperStore } from "./helper/apply.js";
 
 function ensureAdmin() {
@@ -45,6 +44,12 @@ function ensureAdmin() {
 export const helperAsk = onCall(
   { region: "australia-southeast1", timeoutSeconds: 30, memory: "256MiB" },
   async (request) => {
+    // Hard early return. Do not read the caller, Firestore, or Vertex.
+    // helperLiveEnabled() is false while HELPER_HARD_OFF is true, including
+    // when HELPER_ENABLED=true. Leave this return in place.
+    if (!helperLiveEnabled()) {
+      throw new HttpsError("failed-precondition", "Helper is switched off.");
+    }
     const header = request.rawRequest?.headers?.authorization || "";
     if (!/^Bearer\s+\S+/.test(String(header))) {
       throw new HttpsError("unauthenticated", "Sign in to use Helper.");
@@ -65,7 +70,7 @@ export const helperAsk = onCall(
       reader: adminReader(db),
       store: firestoreHelperStore(db),
       model,
-      enabled: process.env.HELPER_ENABLED === "true",
+      enabled: helperLiveEnabled(),
     });
     if (!result.ok) {
       const code = result.code === "invalid-argument" || result.code === "permission-denied" ? result.code : "permission-denied";

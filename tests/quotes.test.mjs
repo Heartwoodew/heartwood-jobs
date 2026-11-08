@@ -90,8 +90,10 @@ test("quote module and service worker stay in place", () => {
   assert.match(sw, /features\/leave\.js/);
   assert.match(sw, /features\/prestart\.js/);
   assert.match(sw, /features\/timesheet\.js/);
-  assert.match(sw, /features\/helper\.js/);
-  assert.match(sw, /features\/helper-ui\.js/);
+  assert.match(sw, /features\/claims\.js/);
+  assert.match(sw, /features\/hours-export\.js/);
+  assert.match(sw, /callup-shell-v74-no-helper/);
+  assert.doesNotMatch(sw, /features\/helper/);
   assert.match(sw, /features\/compliance\.js/);
   assert.match(sw, /features\/route-order\.js/);
   assert.match(sw, /features\/swms-sign\.js/);

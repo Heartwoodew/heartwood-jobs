@@ -2,23 +2,17 @@
 
 This pull request does not deploy, does not enable a model, and does not create a billing account, an API key, or a Vertex quota. `cloud/scripts/refuse-live-deploy.js` still refuses `firebase deploy`.
 
+As of 8 Nov 2026 the live helper is hard-off. `helperAsk` refuses every request before Vertex. `HELPER_ENABLED` defaults to `false`, and `HELPER_HARD_OFF` ignores a `true` environment value. See `DEPLOY.md`.
+
 ## What is already in the repo
 
 There is no configured LLM provider. Nothing references Firebase AI Logic, Vertex, Gemini, or an API key for a model. The Firebase web config in `app/firebase-config.js` is the existing client config for project `heartwood-9f37f`. It is not a model credential, and Helper does not add one.
 
 ## What this change does
 
-`helperAsk` is a callable Cloud Function in `australia-southeast1`. It checks the Firebase ID token, loads `users/{uid}` with the Admin SDK, and then applies the same membership rules as `resolveMembership` / `canSeeJob` / `canSeeMoney`. The Admin SDK bypasses Firestore rules, so those checks are in the function.
+`helperAsk` is still a callable Cloud Function in `australia-southeast1`. The live handler returns `failed-precondition` ("Helper is switched off.") before it checks a token, loads `users/{uid}`, writes a proposal, or calls Vertex. `HELPER_HARD_OFF` is what enforces that. `HELPER_ENABLED=true` does not get past it.
 
-The model call is behind `HELPER_ENABLED`. That variable is unset, so a how-to question does not call a model and no job text is sent to one.
-
-A change is separate from the model. Helper prepares it from the signed-in person's own sentence, shows a preview, and writes only when they tap Confirm. Cancel writes nothing. The model has no tools. Text in a job note cannot start an action. A model reply that looks like an action is ignored.
-
-If you later set `HELPER_ENABLED=true`, the provider is Vertex AI Gemini through the function's own service account (Application Default Credentials on Cloud Functions). No API key is read from the client or from this repo. The request stays in `australia-southeast1`. The code refuses any other region, including a silent fallback to `us-central1`. The default model id is `gemini-3.5-flash` because `gemini-2.5-flash` retired on Vertex on 20 October 2026, and `gemini-3.5-flash` runs in `australia-southeast1`. `gemini-3.8-flash` is not used: its endpoints are global, `us`, and `eu` only. Override the model with `HELPER_VERTEX_MODEL` only after you confirm that id is enabled in `australia-southeast1`. There is still no tool list on the Vertex request. Thinking is turned off (`thinkingBudget: 0`) so a short answer is not spent on a hidden draft.
-
-Every signed-in member can open Helper when `HELPER_ENABLED=true`. The phone still hides the button unless a status call returns `enabled: true`. What they can hear and change is their role: an operator gets their own jobs, run sheets, timesheets, leave, and fleet without costs; a supervisor also gets the jobs, quotes, leave decisions, and invites their role already allows; an admin keeps the full set. A stored proposal is checked again on Confirm against that same role. The model cannot widen it.
-
-The exact enablement, IAM, and deploy commands are in `DEPLOY.md`.
+The library underneath still describes the old membership checks (`resolveMembership` / `canSeeJob` / `canSeeMoney`). The callable does not reach them. The phone no longer has a Helper button, chat panel, or speech input.
 
 ## Money
 
@@ -58,8 +52,6 @@ There is no instance kept warm (`minInstances` is not set). A question is one `g
 
 Do not treat this as a quote. Check Google's current Vertex AI price card for the model you enable in `australia-southeast1` before switching the flag on. Short Flash replies are usually a fraction of a US cent each, but the price card is the source of truth and it changes.
 
-## When you want this live — later, not in this PR
+## Live state
 
-Follow `DEPLOY.md`. In short: enable the Vertex AI API (`aiplatform.googleapis.com`) plus the Cloud Functions build APIs, grant the runtime service account `roles/aiplatform.user`, set `HELPER_ENABLED=true`, and deploy only `helperAsk` to `australia-southeast1` after the deploy guard is lifted on purpose. Do not deploy the emulator rules files.
-
-Nothing in that list has been done here.
+Do not enable Vertex or set `HELPER_ENABLED=true` to bring Helper back. That environment value is ignored while `HELPER_HARD_OFF` stays true. `DEPLOY.md` is the current instruction. Do not deploy the emulator rules files.
