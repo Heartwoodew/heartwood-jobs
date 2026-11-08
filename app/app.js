@@ -159,7 +159,7 @@ onAuthStateChanged(auth, async user => {
     const u1 = onSnapshot(q, s => { jobs = s.docs.map(d => ({ id: d.id, ...d.data() })); addNameOnlyStaff(jobs); renderAdmin(); }, e => { console.warn("jobs", e.code, e.message); jobs = []; renderAdmin(); });
     // Invoicing: every Done job (any date), admin only.
     const u2 = onSnapshot(companyJobs([where("status", "==", "Done")]), s => { ui.done = s.docs.map(d => ({ id: d.id, ...d.data() })); donePill(); if (ui.view === "invoices" || ui.view === "completed" || ui.view === "home") renderAdmin(); }, e => console.warn("done jobs", e.code || e.message));
-    const u3 = onSnapshot(collection(db, "incidents"), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); if (ui.view === "safety" || ui.view === "home") renderAdmin(); incRefresh(); }, e => console.warn("incidents", e.code));
+    const u3 = onSnapshot(query(collection(db, "incidents"), where("companyId", "==", myCompanyId())), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); if (ui.view === "safety" || ui.view === "home") renderAdmin(); incRefresh(); }, e => console.warn("incidents", e.code));
     const u4 = onSnapshot(query(collection(db, "invites"), where("tenantId", "==", myTenant())), s => {
       ui.invites = s.docs.map(d => ({ id: d.id, ...d.data() })); ui.invitesErr = "";
       if (ui.view === "staff") renderAdmin();
@@ -170,7 +170,7 @@ onAuthStateChanged(auth, async user => {
     // Operators may only list jobs assigned to them (enforced by firestore.rules).
     const q = companyJobs([where("assigned", "array-contains", user.uid)]);
     const u1 = onSnapshot(q, s => { jobs = s.docs.map(d => ({ id: d.id, ...d.data() })); renderOperator(); });
-    const u3 = onSnapshot(query(collection(db, "incidents"), where("reportedBy", "==", user.uid)), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); if (!ui.opSel && (ui.opTab || "today") === "today") renderOperator(); incRefresh(); }, e => console.warn("incidents", e.code));
+    const u3 = onSnapshot(query(collection(db, "incidents"), where("companyId", "==", myCompanyId()), where("reportedBy", "==", user.uid)), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); if (!ui.opSel && (ui.opTab || "today") === "today") renderOperator(); incRefresh(); }, e => console.warn("incidents", e.code));
     const u4 = canInvite()
       ? onSnapshot(query(collection(db, "invites"), where("tenantId", "==", myTenant())), s => {
         ui.invites = s.docs.map(d => ({ id: d.id, ...d.data() })); ui.invitesErr = "";
@@ -3990,10 +3990,11 @@ function incidentForm(j) {
     const data = { type: f.type.value, occurredAt: f.occurredAt.value, jobId: j ? j.id : "", jobNo: f.jobNo.value.trim(), location: f.location.value.trim(),
       people: f.people.value.trim(), what: f.what.value.trim(), injury: f.type.value === "Injury" ? f.injury.value.trim() : "", action: f.action.value.trim(),
       reportedBy: me.uid, reportedByName: me.name, reportedAt: new Date().toISOString(), createdAt: serverTimestamp(), status: "Open",
+      companyId: myCompanyId(), ...(myCompanyId() === "heartwood" ? {} : { tenantId: myCompanyId() }),
       rootCause: "", actions: [], history: [{ at: stamp(), by: me.name, text: "Reported" }] };
     try {
       const no = await runTransaction(db, async tx => {
-        const cref = doc(db, "incidentCounter", "main"), c = await tx.get(cref);
+        const cref = doc(db, "incidentCounter", myCompanyId() === "heartwood" ? "main" : myCompanyId()), c = await tx.get(cref);
         const n = (c.exists() ? c.data().n : 0) + 1, reportNo = incPad(n);
         tx.set(cref, { n }); tx.set(doc(db, "incidents", reportNo), { ...data, seq: n, reportNo }); return reportNo;
       });
