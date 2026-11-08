@@ -14,8 +14,9 @@ rules_version = '2';
 // (cloud/production/firestore.timesheet.rules), the LEAVE block
 // (cloud/production/firestore.leave.rules), the REIMBURSEMENT block
 // (cloud/production/firestore.reimbursements.rules), the HOURS EXPORT block
-// (cloud/production/firestore.hours-export.rules), and the INBOX IMPORT block
-// (cloud/production/firestore.inbox.rules). Paste those blocks into the live rules.
+// (cloud/production/firestore.hours-export.rules), the INBOX IMPORT block
+// (cloud/production/firestore.inbox.rules), and the JOB CHECK block
+// (cloud/production/firestore.job-checks.rules). Paste those blocks into the live rules.
 // Do not deploy this whole file.
 // CallUp Base does not use xeroQueue. Heartwood's current app still does.
 service cloud.firestore {
@@ -1683,5 +1684,40 @@ service cloud.firestore {
       allow delete: if false;
     }
 // END INBOX IMPORT RULES
+
+// BEGIN JOB CHECK RULES
+    // jobChecks/{id} is written by requestJobCheck with the Admin SDK.
+    // Heartwood admins (Alex, Patrick) and Heartwood admin or supervisor
+    // profiles can read. A missing companyId on the profile means heartwood.
+    // Nobody can write from the client. Test and friend companies are not
+    // heartwood, so their staff cannot read these rows.
+    function jcSignedIn() { return request.auth != null; }
+    function jcUser() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    function jcCompanyId() {
+      return jcUser().keys().hasAny(["companyId"]) && jcUser().companyId is string && jcUser().companyId.size() > 0
+        ? jcUser().companyId
+        : (jcUser().keys().hasAny(["tenantId"]) && jcUser().tenantId is string && jcUser().tenantId.size() > 0
+          ? jcUser().tenantId
+          : "heartwood");
+    }
+    function jcOffice() {
+      return jcSignedIn() && (
+        request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"
+        || request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"
+        || (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && (jcUser().get("role", "") == "admin" || jcUser().get("role", "") == "supervisor")
+          && jcCompanyId() == "heartwood"
+        )
+      );
+    }
+    match /jobChecks/{id} {
+      allow get: if jcOffice() && resource.data.companyId == "heartwood";
+      allow list: if jcOffice() && resource.data.companyId == "heartwood";
+      allow create, update, delete: if false;
+    }
+// END JOB CHECK RULES
   }
 }

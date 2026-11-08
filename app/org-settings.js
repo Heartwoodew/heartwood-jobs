@@ -70,6 +70,7 @@ export function setActiveCompany(company) {
     companyId: typeof company.companyId === "string" && company.companyId ? company.companyId : DEFAULT_ORG.companyId,
     isTest: company.isTest === true,
     plan: typeof company.plan === "string" ? company.plan : "",
+    origin: typeof company.origin === "string" ? company.origin : "",
     billing: billing ? {
       provider: billing.provider === "stripe" ? "stripe" : null,
       status: ["active", "past_due", "canceled", "not-configured"].includes(billing.status) ? billing.status : "not-configured",

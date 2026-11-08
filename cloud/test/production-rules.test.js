@@ -23,3 +23,22 @@ test("every live match path is in the production rules", () => {
   assert.match(rules, /A missing companyId means heartwood/);
   assert.match(rules, /live ruleset f6f1fb5c/);
 });
+
+function slice(text, start, end) {
+  const i = text.indexOf(start);
+  const j = text.indexOf(end);
+  assert.ok(i >= 0 && j > i, start);
+  return text.slice(i, j + end.length);
+}
+
+test("jobChecks rules match in production, the paste block, and the emulator", () => {
+  const start = "// BEGIN JOB CHECK RULES";
+  const end = "// END JOB CHECK RULES";
+  const block = slice(read("../production/firestore.job-checks.rules"), start, end);
+  assert.equal(slice(read("../firestore.production.rules"), start, end), block);
+  assert.equal(slice(read("../emulator/firestore.rules"), start, end), block);
+  assert.match(block, /match \/jobChecks\/\{id\}/);
+  assert.match(block, /allow create, update, delete: if false/);
+  assert.match(block, /companyId == "heartwood"/);
+  assert.match(read("../firestore.production.rules"), /match \/\{document=\*\*\}/);
+});
