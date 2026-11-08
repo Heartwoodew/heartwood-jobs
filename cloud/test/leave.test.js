@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  CERT_MAX_BYTES, addDays, assignmentWarning, approvedOn, cellLeaveText, certificateContentType,
+  CERT_MAX_BYTES, addDays, assignmentWarning, approvedOn, cellLeaveText, certificateContentType, exportDayLeave,
   certificateObjectName, certificateStoragePath, halvesOk, leaveCreateBody, leaveDecisionBody,
   leaveScreenHtml, leaveSpan, newLeaveId, plannerLeaveHtml, portionLabel, saveCertificate, certificateDownloadName, weekLeaveHtml, weekLeaves,
 } from "../../app/features/leave.js";
@@ -89,6 +89,30 @@ test("approved leave shows on the week and warns on a job that day", () => {
   assert.equal(cellLeaveText(leaves, { name: "Sue" }, "2026-11-11"), "Sick leave · morning only");
   assert.equal(cellLeaveText(leaves, { name: "Riley" }, "2026-11-10"), "");
   assert.match(leaveSpan(leaves[2]), /morning only/);
+});
+
+test("the hours sheet uses approved leave, a certificate note, and pending wording", () => {
+  const leaves = [
+    { uid: "op1", name: "Sam", status: "approved", type: "sick", start: "2026-11-10", end: "2026-11-10", startHalf: "am", endHalf: "am", certificatePath: "leaveCertificates/op1/lv0123456789abcdef/cert.pdf", certificateName: "secret-scan.pdf" },
+    { uid: "op1", name: "Sam", status: "pending", type: "annual", start: "2026-11-11", end: "2026-11-11", startHalf: "", endHalf: "" },
+    { uid: "op1", name: "Sam", status: "declined", type: "other", start: "2026-11-12", end: "2026-11-12", startHalf: "", endHalf: "", reason: "No" },
+    { uid: "op1", name: "Sam", status: "approved", type: "annual", start: "2026-11-10", end: "2026-11-12", startHalf: "pm", endHalf: "am" },
+  ];
+  const person = { uid: "op1", name: "Sam" };
+  const sick = exportDayLeave(leaves, person, "2026-11-10");
+  assert.equal(sick.text, "Annual leave · from the afternoon · Sick leave · morning only · Medical certificate");
+  assert.equal(sick.annual, 0.5);
+  assert.equal(sick.sick, 0.5);
+  assert.equal(sick.pending, 0);
+  const pending = exportDayLeave(leaves, person, "2026-11-11");
+  assert.equal(pending.text, "Annual leave · Leave requested (pending)");
+  assert.equal(pending.annual, 1);
+  assert.equal(pending.pending, 1);
+  const declined = exportDayLeave(leaves, person, "2026-11-12");
+  assert.equal(declined.text, "Annual leave · until midday");
+  assert.equal(declined.other, 0);
+  assert.equal(declined.text.includes("secret-scan"), false);
+  assert.equal(exportDayLeave(leaves, { uid: "other", name: "Pat" }, "2026-11-11").text, "");
 });
 
 test("the screen lets staff request leave and hides the file from a supervisor", () => {

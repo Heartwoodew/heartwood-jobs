@@ -1292,7 +1292,7 @@ function hxPanel(ws) {
   if (!me || me.role !== "admin") return "";
   const L = (ui.hxList || []).filter(x => x.weekStart === ws).slice(0, 3);
   return `<div class="ts-card hx-card"><h3>Hours spreadsheet for accounts</h3>
-    <p class="sub">Builds an Excel file (.xlsx) of everyone's hours for Mon ${dmy(ws)} – Sun ${dmy(addDays(ws, 6))}, saves it on this device, and emails it to ${ACCOUNTS_TO} automatically.</p>
+    <p class="sub">Builds an Excel file (.xlsx) of everyone's hours for Mon ${dmy(ws)} – Sun ${dmy(addDays(ws, 6))}. Each day is listed, with clock times, breaks, and that day's total. Days with no hours show approved leave, a pending request, or Day off. It saves on this device and emails ${ACCOUNTS_TO}.</p>
     <div class="btns"><button type="button" class="sm-btn primary" id="hxgo"${ui.hxBusy ? " disabled" : ""}>${ui.hxBusy ? "Building…" : "📊 Make & send hours spreadsheet"}</button>
     <button type="button" class="sm-btn" id="hxdl"${ui.hxBusy ? " disabled" : ""}>Download only</button></div>
     ${ui.hxErr ? `<p class="err" role="alert" id="hxerr">${esc(ui.hxErr)}</p>` : ""}
@@ -1318,7 +1318,7 @@ async function hxRun(send) {
   let rep, name, bytes;
   try {
     const company = orgSettings().name || "Heartwood";
-    rep = buildHoursReport({ weekStart: ws, people: tsPeople(L), sheets: L, leaveText: (p, d) => cellLeaveText(ui.leave || [], { uid: p.uid, name: p.name }, d) });
+    rep = buildHoursReport({ weekStart: ws, people: tsPeople(L), sheets: L, leaves: ui.leave || [], jobs });
     if (send && !rep.people.length && !confirm("No hours entered for this week. Email an empty spreadsheet anyway?")) return;
     name = exportFileName(company, ws);
     bytes = xlsxBytes(reportSheets(rep, { company }));
