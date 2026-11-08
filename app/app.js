@@ -28,6 +28,10 @@ import {
   locationMap, machineChoicePatch, machinePromptNeeded, mapsHref, needsLocationConsent, newTsId, openClock,
   paidShift, prestartStatus, sheetHours, shiftHours, sortedEntries, stampText,
 } from "./features/timesheet.js";
+import {
+  assignmentWarning, cellLeaveText, certificateContentType, certificateObjectName, certificateStoragePath,
+  leaveCreateBody, leaveDecisionBody, leaveScreenHtml, newLeaveId, plannerLeaveHtml, weekLeaveHtml,
+} from "./features/leave.js";
 
 const cfg = useEmulator ? { ...firebaseConfig, apiKey: "demo-key", projectId: "demo-heartwood" } : firebaseConfig;
 const fb = initializeApp(cfg);
@@ -118,7 +122,7 @@ onAuthStateChanged(auth, async user => {
       ui.invites = s.docs.map(d => ({ id: d.id, ...d.data() })); ui.invitesErr = "";
       if (ui.view === "staff") renderAdmin();
     }, e => { ui.invites = []; ui.invitesErr = e.code || "permission-denied"; if (ui.view === "staff") renderAdmin(); });
-    unsub = () => { u1(); u2(); u3(); u4(); CHAT.stop(); COMP.stop(); tsStop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start();
+    unsub = () => { u1(); u2(); u3(); u4(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start(); leaveStart();
     getDocs(query(collection(db, "jobs"), where("date", "==", ""))).then(s => { ui.undated = s.docs.map(d => ({ id: d.id, ...d.data() })); addNameOnlyStaff(ui.undated); renderAdmin(); });
   } else {
     // Operators may only list jobs assigned to them (enforced by firestore.rules).
@@ -132,7 +136,7 @@ onAuthStateChanged(auth, async user => {
       }, e => { ui.invites = []; ui.invitesErr = e.code || "permission-denied"; if ((ui.opTab || "today") === "staff") renderOperator(); })
       : () => {};
     if (canInvite() && window.HW_PREVIEW_VIEW === "staff") ui.opTab = "staff";
-    unsub = () => { u1(); u3(); u4(); CHAT.stop(); COMP.stop(); tsStop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start();
+    unsub = () => { u1(); u3(); u4(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start(); leaveStart();
   }
 });
 
@@ -303,7 +307,7 @@ const jobNo = j => j.sm8JobNo ? j.sm8JobNo : "HW-" + String(j.id || "").slice(-4
 const firstLine = s => String(s || "").split(/\n|\. /)[0];
 const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Unscheduled";
 const NAV = [["home", "⌂", "Home"], ["compliance", "🚐", "Compliance"], ["prestart", "☑", "Prestart"], ["chat", "💬", "Chat"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["staff", "👥", "Staff"], ["inbox", "✉", "Inbox", 0, 1],
-  ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["reimb", "💵", "Reimbursements", 0, 1], ["settings", "⚙", "Organisation"]];
+  ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["leave", "🌴", "Leave"], ["reimb", "💵", "Reimbursements", 0, 1], ["settings", "⚙", "Organisation"]];
 ui.view = "home"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
 const PHONE = matchMedia("(max-width:760px)");
 const TOUCH = matchMedia("(pointer:coarse)");
@@ -311,7 +315,7 @@ PHONE.addEventListener?.("change", () => { if (me && me.role === "admin") render
 // Grouped side menu: top items, then collapsible groups (open/closed remembered on this device; the group holding the current screen is always open).
 const NAV_TOP = ["home", "chat", "inbox", "clients", "staff"];
 const NAV_FOOT = ["settings"];
-const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "jobs", "unscheduled", "quotes", "completed", "myjobs"]], ["money", "$", "Money", ["invoices", "reimb", "timesheet"]], ["safety", "⚠", "Safety", ["safety", "swms", "prestart", "compliance"]]];
+const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "jobs", "unscheduled", "quotes", "completed", "myjobs"]], ["money", "$", "Money", ["invoices", "reimb", "timesheet", "leave"]], ["safety", "⚠", "Safety", ["safety", "swms", "prestart", "compliance"]]];
 const NAV_LBL = { safety: "Incidents" };
 ui.navCol = (() => { try { return JSON.parse(localStorage.getItem("hwNavCol") || "{}"); } catch { return {}; } })();
 function shell(inner) {
@@ -452,25 +456,35 @@ function dispatchView(all) {
   const days = ui.dview === "week" ? [...Array(7)].map((_, i) => addDays(wk0, i)) : [dayD];
   const sched = all.filter(j => j.date && queueOf(j) !== "Unsuccessful");
   const rows = rowsFor(all);
-  const chip = j => `<div class="dchip ${QCLS[queueOf(j)]} t-${j.type} ${j.status === "In progress" ? "inprog" : ""}" draggable="true" data-id="${j.id}" title="${esc(j.client)} – ${esc(j.description)}">${ipTop(j, "sm")}
+  const chip = j => {
+    const away = assignmentWarning(ui.leave || [], j.date, leavePeople(namesOf(j)));
+    return `<div class="dchip ${QCLS[queueOf(j)]} t-${j.type} ${j.status === "In progress" ? "inprog" : ""} ${away ? "on-leave" : ""}" draggable="true" data-id="${j.id}" title="${esc(j.client)} – ${esc(j.description)}${away ? " · " + away : ""}">${ipTop(j, "sm")}
       <b>${esc(j.time || "")}</b> ${esc((j.address || "").split(",")[0])}<div class="sub">${esc(TYPES[j.type] || "")} · #${esc(jobNo(j))}</div></div>`;
+  };
+  const cellAway = (row, day) => {
+    if (!row.raw) return "";
+    const person = staff.find(s => skey(s) === row.key);
+    return cellLeaveText(ui.leave || [], { uid: person && person.uid || "", name: row.raw }, day);
+  };
   let grid;
   if (ui.dview === "week") {
     grid = `<div class="dgrid" style="grid-template-columns:150px repeat(7,minmax(0,1fr))"><div class="dh"></div>${days.map(d => `<div class="dh ${d === t0 ? "today" : ""}">${shortDate(d)}</div>`).join("")}
-      ${rows.map(r => `<div class="dname">${esc(r.name)}</div>${days.map(d => `<div class="dcell drop ${d === t0 ? "today" : ""}" data-date="${d}" data-staff="${esc(r.key)}">
-        ${sched.filter(j => j.date === d && r.has(j)).sort((a, b) => (a.time || "").localeCompare(b.time || "")).map(chip).join("")}</div>`).join("")}`).join("")}</div>`;
+      ${rows.map(r => `<div class="dname">${esc(r.name)}</div>${days.map(d => { const away = cellAway(r, d); return `<div class="dcell drop ${d === t0 ? "today" : ""}" data-date="${d}" data-staff="${esc(r.key)}">
+        ${away ? `<div class="leave-chip">${esc(away)}</div>` : ""}${sched.filter(j => j.date === d && r.has(j)).sort((a, b) => (a.time || "").localeCompare(b.time || "")).map(chip).join("")}</div>`; }).join("")}`).join("")}</div>`;
   } else {
     const hrs = [...Array(13)].map((_, i) => 6 + i);
     grid = `<div class="dgrid" style="grid-template-columns:150px repeat(13,minmax(0,1fr))"><div class="dh"></div>${hrs.map(h => `<div class="dh">${h > 12 ? h - 12 + "pm" : h + (h === 12 ? "pm" : "am")}</div>`).join("")}
       ${rows.map(r => `<div class="dname">${esc(r.name)}</div>${hrs.map(h => `<div class="dcell drop" data-date="${dayD}" data-hour="${h}" data-staff="${esc(r.key)}">
-        ${sched.filter(j => j.date === dayD && r.has(j) && parseInt(j.time || "7") === h).map(chip).join("")}</div>`).join("")}`).join("")}</div>`;
+        ${h === 6 && cellAway(r, dayD) ? `<div class="leave-chip">${esc(cellAway(r, dayD))}</div>` : ""}${sched.filter(j => j.date === dayD && r.has(j) && parseInt(j.time || "7") === h).map(chip).join("")}</div>`).join("")}`).join("")}</div>`;
   }
+  const leaveBanner = plannerLeaveHtml(ui.leave || [], days, staff.map(s => ({ uid: s.uid || "", name: s.name })));
   return `<div class="sm-head"><h1>Dispatch Board</h1>
       <div class="seg"><button data-dv="day" class="${ui.dview === "day" ? "on" : ""}">Day</button><button data-dv="week" class="${ui.dview === "week" ? "on" : ""}">Week</button></div>
       <button class="sm-btn" data-wk="-1">‹</button><button class="sm-btn" data-wk="0">Today</button><button class="sm-btn" data-wk="1">›</button>
       <span class="drange">${ui.dview === "week" ? shortDate(days[0]) + " – " + shortDate(days[6]) : dayLabel(dayD)}</span>
       <button type="button" class="sm-btn route-open" id="optorder">Optimise order</button>
       <button id="new" class="sm-btn primary">+ New Job</button></div>
+    ${leaveBanner}
     <div class="dwrap"><div class="dboard"><p class="touchhint">Tap a job to open it. Press and hold a job to move it to another day or staff member.</p><div class="dgrid-scroll">${grid}</div><p class="sub muted">Drag a job to another day or staff member to reschedule (saved in the app, sent to ServiceM8 by the next sync).</p></div>
       </div>`;
 }
@@ -1187,7 +1201,7 @@ function tsEditor() {
   const sheet = ui.tsMine;
   const has = entryList(sheet?.entries).length > 0;
   const body = !has && !ui.tsEdit ? tsGrid(sheet) : has ? `${tsCards(sheet, true)}${tsWeekTotal(sheet)}` : "";
-  return `${tsNav()}${tsClockHtml()}${tsMachineHtml()}${tsManualArea(sheet)}${body}`;
+  return `${tsNav()}${tsLeaveFor(me.uid, me.name)}${tsClockHtml()}${tsMachineHtml()}${tsManualArea(sheet)}${body}`;
 }
 const TS_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const tsDayLbl = (ds, wd) => `${wd} ${+ds.slice(8, 10)} ${TS_MON[+ds.slice(5, 7) - 1]}`;
@@ -1247,7 +1261,8 @@ function tsPeople(L) {
   return people;
 }
 function tsPerson(p, t) {
-  if (!t) return `<div class="ts-card"><h3>${esc(p.name)}</h3><p class="sub">No hours entered for this week.</p></div>`;
+  const away = tsLeaveFor(p.uid, p.name, t && t.weekStart);
+  if (!t) return `<div class="ts-card"><h3>${esc(p.name)}</h3>${away}<p class="sub">No hours entered for this week.</p></div>`;
   const subj = tsSubject(t, p.name), body = tsText(t, p.name, "\r\n"), plain = tsText(t, p.name);
   const sent = t.sent ? ` <span class="qpill q-comp">Sent ${esc(dmy(String(t.sentAt || "").slice(0, 10)))}</span>` : "";
   const edited = t.sent && String(t.updatedAtIso || "") > String(t.sentAt || "") ? ` <span class="qpill">Edited since sent</span>` : "";
@@ -1258,7 +1273,7 @@ function tsPerson(p, t) {
       <a class="tsmailto sub" href="mailto:${ACCOUNTS_EMAIL}?subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(body)}">Other mail app</a>
       <button type="button" class="sm-btn tscopy">Copy</button>${t.sent ? `<button type="button" class="sm-btn tsunsent">Unmark sent</button>` : ""}</div>
     <p class="sub">Opens a Gmail draft (alex@heartwoodew.com) to ${ACCOUNTS_EMAIL} (Nicole); you press Send.</p>`;
-  return `<div class="ts-card" data-tsid="${esc(t.id)}"><h3>${esc(p.name)} · <b>${hrs(sheetHours(t))}</b>${sent}${edited}</h3>${detail}${send}</div>`;
+  return `<div class="ts-card" data-tsid="${esc(t.id)}"><h3>${esc(p.name)} · <b>${hrs(sheetHours(t))}</b>${sent}${edited}</h3>${away}${detail}${send}</div>`;
 }
 function tsAdmin() {
   const ws = tsWeek(), L = ui.tsAll && ui.tsAllWs === ws ? ui.tsAll : null;
@@ -1274,6 +1289,136 @@ function tsAdmin() {
 function tsView() {
   const admin = me.role === "admin";
   return `<div class="sm-head"><h1>Timesheet</h1><span class="sub">${admin ? "Clocked and manual hours" : "Clock on, or enter your hours"}</span></div><div class="ts-wrap">${admin ? tsAdmin() : tsEditor()}</div>`;
+}
+function tsLeaveFor(uid, name, week) {
+  return weekLeaveHtml(ui.leave || [], week || tsWeek(), { uid, name });
+}
+function leaveCanDecide() {
+  return !!(me && (me.role === "admin" || me.role === "supervisor" || me.staffRole === "supervisor"));
+}
+function leaveCanOpen() {
+  return !!(me && me.role === "admin");
+}
+function leaveStop() {
+  ui.leaveUnsub?.();
+  ui.leaveUnsub = null;
+}
+function leaveStart() {
+  leaveStop();
+  if (!me) { ui.leave = []; return; }
+  const src = leaveCanDecide()
+    ? collection(db, "leaveRequests")
+    : query(collection(db, "leaveRequests"), where("uid", "==", me.uid));
+  ui.leaveUnsub = onSnapshot(src, snap => {
+    ui.leave = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const jobForm = document.getElementById("jf");
+    if (jobForm) refreshJobLeaveWarn(jobForm);
+    if (document.activeElement?.closest?.("#leaveform, .lv-decide")) return;
+    const admin = me.role === "admin" && !ui.myJobs;
+    if (admin && (ui.view === "leave" || ui.view === "timesheet" || ui.view === "dispatch")) renderAdmin();
+    else if (!admin && (ui.opTab === "leave" || ui.opTab === "hours")) renderOperator();
+  }, () => { ui.leave = []; });
+}
+function leavePeople(names) {
+  return (names || []).map(name => {
+    const row = staff.find(s => String(s.name).toLowerCase() === String(name).toLowerCase());
+    return { uid: row && row.uid || "", name };
+  });
+}
+function confirmIfOnLeave(date, names) {
+  const text = assignmentWarning(ui.leave || [], date, leavePeople(names));
+  if (!text) return true;
+  return confirm(text + " Save this job anyway?");
+}
+function refreshJobLeaveWarn(form) {
+  const el = form.querySelector("#leavewarn");
+  if (!el || !form.date) return;
+  const picked = [...form.querySelectorAll("[name=assigned]:checked")].map(x => staff.find(s => skey(s) === x.value)).filter(Boolean);
+  const text = assignmentWarning(ui.leave || [], form.date.value, picked.map(s => ({ uid: s.uid || "", name: s.name })));
+  el.hidden = !text;
+  el.textContent = text ? text + " Saving still assigns them." : "";
+}
+function leaveView() {
+  return `<div class="sm-head"><h1>Leave</h1><span class="sub">Annual, sick, or other</span></div><div class="lv-wrap">${leaveScreenHtml({
+    requests: ui.leave || [], uid: me.uid, canDecide: leaveCanDecide(), canOpenCert: leaveCanOpen(), error: ui.leaveErr || "",
+  })}</div>`;
+}
+async function openLeaveCert(id) {
+  const row = (ui.leave || []).find(item => item.id === id);
+  if (!row || !row.certificatePath) return;
+  if (row.uid !== me.uid && !leaveCanOpen()) { toast("Only that person and an admin can open the certificate."); return; }
+  try {
+    const blob = await getBlob(storageRef(storage, row.certificatePath));
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.download = row.certificateName || "certificate";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (e) {
+    toast("Certificate not opened (" + (e.code || "storage") + ").");
+  }
+}
+function bindLeave(A) {
+  const form = A.querySelector("#leaveform");
+  if (form) form.onsubmit = async ev => {
+    ev.preventDefault();
+    const err = A.querySelector("#leaveerr");
+    const file = form.certificate.files[0];
+    const id = newLeaveId();
+    let certificatePath = "";
+    let certificateName = "";
+    if (file) {
+      const objectName = certificateObjectName(file.type);
+      const contentType = certificateContentType(file.type);
+      if (!objectName) { if (err) err.textContent = "Use a photo (JPEG, PNG, WebP) or a PDF."; return; }
+      if (file.size > 8 * 1024 * 1024) { if (err) err.textContent = "The certificate must be 8 MB or smaller."; return; }
+      certificatePath = certificateStoragePath(me.uid, id, objectName);
+      certificateName = String(file.name || objectName).slice(0, 120);
+      try {
+        await uploadBytes(storageRef(storage, certificatePath), file, {
+          contentType,
+          customMetadata: { purpose: "leave-certificate", uploaderUid: me.uid, requestId: id },
+        });
+      } catch (e) {
+        if (err) err.textContent = "The certificate was not saved (" + (e.code || "storage") + "). Nothing was requested.";
+        return;
+      }
+    }
+    const built = leaveCreateBody({
+      id, uid: me.uid, name: me.name, type: form.type.value, start: form.start.value, end: form.end.value,
+      startHalf: form.startHalf.value, endHalf: form.endHalf.value, reason: form.reason.value, certificatePath, certificateName,
+    });
+    if (!built.ok) { if (err) err.textContent = built.reason; return; }
+    try {
+      await setDoc(doc(db, "leaveRequests", id), { ...built.data, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+      form.reset();
+      if (err) err.textContent = "";
+      toast("Leave request sent");
+    } catch (e) {
+      if (err) err.textContent = "Not saved: " + (e.code || e.message);
+    }
+  };
+  A.querySelectorAll(".lv-decide").forEach(decide => {
+    decide.onsubmit = async ev => {
+      ev.preventDefault();
+      const status = ev.submitter && ev.submitter.value;
+      const built = leaveDecisionBody({ status, note: decide.note.value, uid: me.uid, name: me.name });
+      const msg = decide.querySelector(".lv-msg");
+      if (!built.ok) { if (msg) msg.textContent = built.reason; return; }
+      try {
+        await updateDoc(doc(db, "leaveRequests", decide.dataset.id), { ...built.data, decidedAt: serverTimestamp(), updatedAt: serverTimestamp() });
+        toast(status === "approved" ? "Leave approved" : "Leave declined");
+      } catch (e) {
+        if (msg) msg.textContent = "Not saved: " + (e.code || e.message);
+      }
+    };
+  });
+  A.querySelectorAll(".lv-cert").forEach(btn => { btn.onclick = () => openLeaveCert(btn.dataset.cert); });
 }
 async function tsLoad(ws) {
   const snap = await getDoc(doc(db, "timesheets", `${me.uid}_${ws}`));
@@ -1732,6 +1877,7 @@ function renderAdmin() {
   if (!force && (ui.view === "compliance" || ui.view === "prestart") && document.querySelector("#compform, #prestartform")) return;
   if (!ui.tsForce && ui.view === "timesheet" && (ui.tsBusy || ui.tsAsk || (ui.tsMachineShift && document.getElementById("tsmachine")))) return;
   if (!ui.tsForce && ui.view === "timesheet" && (ui.tsDirty || ui.tsEdit) && ($("#tsman") || $("#tsf"))) return;
+  if (ui.view === "leave" && document.activeElement?.closest?.("#leaveform, .lv-decide")) return;
   if (ui.view === "chat" && document.activeElement?.closest?.(".chat-compose")) return;
   if (ui.view === "staff" && document.activeElement?.closest?.("#invitef")) return;
   document.body.className = "admin";
@@ -1740,7 +1886,7 @@ function renderAdmin() {
   const quotesHtml = ui.view === "quotes" ? adminViewRouter(ui.view, ui, { esc, $$, staff, jobs: all, todayStr, rerender: () => renderAdmin(), canEditQuoteRates }) : null;
   const staffHtml = ui.view === "staff" ? staffViewHtml(ui.invites || [], { now: inviteDisplayNow(), error: ui.invitesErr || "" }) : null;
   paintBrand();
-  $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : quotesHtml != null ? quotesHtml : jobsView(all));
+  $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : quotesHtml != null ? quotesHtml : jobsView(all));
   const A = $("#app"); inboxBadge();
   CHAT.watch([...(jobs || []), ...(ui.undated || [])]);
   if (ui.view === "chat") CHAT.mount(A);
@@ -1749,6 +1895,7 @@ function renderAdmin() {
   if (ui.view === "inbox") bindInbox(A);
   if (ui.view === "reimb") bindReimb(A);
   if (ui.view === "timesheet") bindTs(A, renderAdmin);
+  if (ui.view === "leave") bindLeave(A);
   if (ui.view === "quotes") QG.bindAdmin({ ui, A });
   if (ui.view === "staff") bindStaff(A);
   if (ui.view === "compliance" || ui.view === "prestart") COMP.bind(A);
@@ -1827,6 +1974,8 @@ async function dispatchMove(j, date, fromKey, toKey, hour) {
     u.assigned = names.map(n => (staff.find(s => s.name.toLowerCase() === n.toLowerCase()) || {}).uid).filter(Boolean);
   }
   if (j.date === date && !u.assignedNames && !u.time) return;
+  const names = u.assignedNames || namesOf(j);
+  if (!confirmIfOnLeave(date, names)) return;
   try { await updateDoc(doc(db, "jobs", j.id), u); } catch (e) { return toast("Not saved: " + (e.code || e.message)); }
   if (ui.undated) ui.undated = ui.undated.filter(x => x.id !== j.id);
   toast(`Rescheduled to ${shortDate(date)}${u.time ? " " + u.time : ""}${u.assignedNames ? " · " + (u.assignedNames.join(", ") || "Unallocated") : ""}`);
@@ -1847,6 +1996,7 @@ const armBtn = (b, label, armed, ms = 4000) => { if (b.classList.contains("arm")
   b.classList.add("arm"); const o = b.textContent; b.textContent = armed; clearTimeout(b._t);
   b._t = setTimeout(() => { b.classList.remove("arm"); b.textContent = label || o; }, ms); return false; };
 async function moveJob(j, date) {
+  if (!confirmIfOnLeave(date, namesOf(j))) return;
   await updateDoc(doc(db, "jobs", j.id), { date, editedInApp: true, updatedAt: serverTimestamp(), updatedBy: me.uid });
   if (ui.undated) ui.undated = ui.undated.filter(x => x.id !== j.id);
   toast(`Moved to ${dayLabel(date)}`);
@@ -1924,6 +2074,7 @@ function editJob(j) {
         <label>Hours<input type="number" step="0.5" min="0" name="durationHrs" value="${esc(j.durationHrs)}"></label></div>
       ${!n && j.date && !["Done", "Cancelled"].includes(j.status) ? `<div class="row"><button type="button" id="unschbtn" class="btn">✕ Remove from dispatch board</button><span class="sub">Back to Unscheduled; the ServiceM8 booking is removed at the next sync (the job stays).</span></div>` : ""}
       <fieldset class="staffs">${staff.map(s => `<label class="ck"><input type="checkbox" name="assigned" value="${esc(skey(s))}" ${namesOf(j).map(x => x.toLowerCase()).includes(s.name.toLowerCase()) ? "checked" : ""}> <span class="av">${esc(s.name[0])}</span>${esc(label(s.name))}</label>`).join("")}</fieldset>
+      <p id="leavewarn" class="leave-warn" hidden></p>
       <h4>Notes</h4>
       <textarea name="notes" rows="2" placeholder="Office notes">${esc(j.notes)}</textarea>
       <h4>Diary</h4>
@@ -1951,6 +2102,8 @@ function editJob(j) {
   if (!n && $("#splitundo")) $("#splitundo").onclick = () => undoSplit(j).catch(e => toast("Undo failed: " + (e.code || e.message)));
   const f = $("#jf");
   f.description.oninput = () => { if (n) f.type.value = guessType(f.description.value); };
+  f.addEventListener("change", () => refreshJobLeaveWarn(f));
+  refreshJobLeaveWarn(f);
   f.onsubmit = async ev => {
     if (ev.submitter?.value !== "save") return;
     ev.preventDefault();
@@ -1965,6 +2118,7 @@ function editJob(j) {
       loads: f.loads.value === "" ? null : +f.loads.value, editedInApp: true,
       ...(String(j.poAmount ?? "") !== f.poAmount.value ? { poAmount: f.poAmount.value === "" ? null : Math.round(+f.poAmount.value * 100) / 100, poAmountBasis: f.poAmount.value === "" ? null : "entered in app (ex GST)", poAmountSource: "app" } : {}), updatedAt: serverTimestamp(), updatedBy: me.uid };
     if (data.status === "Done" && j.status !== "Done") Object.assign(data, { completedAt: serverTimestamp(), completedBy: me.uid });
+    if (!confirmIfOnLeave(data.date, data.assignedNames)) return;
     try {
       if (n) await addDoc(collection(db, "jobs"), { ...data, source: "app", log: [], createdAt: serverTimestamp() });
       else await updateDoc(doc(db, "jobs", j.id), data);
@@ -2582,6 +2736,12 @@ function renderOperator() {
       <div class="pad">${tsEditor()}</div>${opTabs("hours")}</div>`;
     bindOp(mine); bindTs($("#app"), renderOperator); return;
   }
+  if (ui.opTab === "leave" && document.activeElement?.closest?.("#leaveform, .lv-decide")) return;
+  if (ui.opTab === "leave" && !ui.opSel) {
+    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Leave</div><div class="mob-sub">Annual, sick, or other</div></div>
+      <div class="pad">${leaveScreenHtml({ requests: ui.leave || [], uid: me.uid, canDecide: leaveCanDecide(), canOpenCert: leaveCanOpen() })}</div>${opTabs("more")}</div>`;
+    bindOp(mine); bindLeave($("#app")); return;
+  }
   if (ui.opTab === "prestart" && COMP.canPrestart()) {
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Prestart</div><div class="mob-sub">Any machine · before you use it</div></div>
       ${COMP.staffHtml()}${opTabs("prestart")}</div>`;
@@ -2612,6 +2772,7 @@ function renderOperator() {
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">More</div><div class="mob-sub">${esc(me.name || "")} · ${esc(orgSettings().name)}</div></div>
       <div class="mob-menu">
         <button type="button" class="mob-more" data-go="hours"><b>Hours</b><small>Clock on, or add hours manually</small></button>
+        <button type="button" class="mob-more" data-go="leave"><b>Leave</b><small>Annual, sick, or other</small></button>
         <button type="button" class="mob-more" data-go="done"><b>Completed</b><small>Finished in the last 30 days</small></button>
         <div class="mob-sec">Safety</div>
         <button type="button" class="mob-more" data-go="swms"><b>SWMS</b><small>Read and sign</small></button>
@@ -2894,13 +3055,17 @@ function mobileDispatch(all) {
   const sched = all.filter(j => j.date && queueOf(j) !== "Unsuccessful");
   const wk0 = addDays(d, -dowMon(d)), strip = [...Array(7)].map((_, i) => addDays(wk0, i));
   const dayJobs = sched.filter(j => j.date === d).sort((a, b) => (a.time || "").localeCompare(b.time || ""));
-  const card = j => `<div class="mdc ${QCLS[queueOf(j)]}" data-id="${j.id}">
+  const card = j => {
+    const away = assignmentWarning(ui.leave || [], j.date, leavePeople(namesOf(j)));
+    return `<div class="mdc ${QCLS[queueOf(j)]} ${away ? "on-leave" : ""}" data-id="${j.id}">
       <div class="mdc-top"><b class="mdc-time">${esc(j.time || "--:--")}</b><span class="mdc-no">#${esc(jobNo(j))}</span><span class="pstack">${ipPill(j, "sm")}<span class="qpill ${QCLS[queueOf(j)]}">${esc(queueOf(j))}</span></span></div>
       <div class="mdc-cl">${esc(j.client || "")}</div>
       <a class="mdc-addr" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener">📍 ${esc(j.address || "-")}</a>
       <div class="mdc-desc">${esc(firstLine(j.description))}</div>
+      ${away ? `<p class="leave-chip">${esc(away)}</p>` : ""}
       <div class="mdc-foot"><span class="sub">${j.po ? "PO " + esc(j.po) : "No PO"}${j.durationHrs ? " · " + esc(j.durationHrs) + "h" : ""}</span>
         <span><button type="button" class="sm-btn mdc-unsch" data-unsch="${j.id}" title="Remove from dispatch board (back to Unscheduled)">✕ Off board</button> <button type="button" class="sm-btn mdc-move" data-move="${j.id}">⇄ Move</button></span></div></div>`;
+  };
   const groups = rowsFor(all).map(r => [r, dayJobs.filter(r.has)]);
   return `<div class="mdisp" id="mdisp"><div class="mdh">
       <div class="mdh-row"><button class="sm-btn" data-md="-1" aria-label="Previous day">‹</button>
@@ -2909,6 +3074,7 @@ function mobileDispatch(all) {
       <div class="mstrip">${strip.map(x => { const n = sched.filter(j => j.date === x).length;
         return `<button class="${x === d ? "on" : ""} ${x === t0 ? "today" : ""}" data-mday="${x}"><small>${new Date(x + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", timeZone: "UTC" })}</small><b>${+x.slice(8)}</b><span class="${n ? "" : "zero"}">${n}</span></button>`; }).join("")}</div></div>
     <button type="button" class="route-open" id="optorder">Optimise order</button>
+    ${plannerLeaveHtml(ui.leave || [], [d], staff.map(s => ({ uid: s.uid || "", name: s.name })))}
     ${groups.map(([r, js]) => `<div class="mgrp">${esc(r.name)} <span class="cnt">${js.length}</span></div>${js.map(card).join("") || `<p class="muted sub pad">Nothing booked for ${esc(orgSettings().name)}.</p>`}`).join("")}
     <p class="sub muted pad">Swipe left / right to change day. Tap a card to open the job.</p></div>`;
 }
@@ -2943,6 +3109,7 @@ function moveSheet(j) {
     const picked = [...f.querySelectorAll("[name=st]:checked")].map(x => staff.find(s => skey(s) === x.value)).filter(Boolean);
     const u = { date: f.date.value, time: f.time.value, assignedNames: picked.map(s => s.name), assigned: picked.filter(s => s.uid).map(s => s.uid),
       editedInApp: true, updatedAt: serverTimestamp(), updatedBy: me.uid };
+    if (!confirmIfOnLeave(u.date, u.assignedNames)) return;
     try { await updateDoc(doc(db, "jobs", j.id), u); } catch (err) { return toast("Not saved: " + (err.code || err.message)); }
     v.remove(); ui.mday = u.date; toast(`Moved to ${shortDate(u.date)} ${u.time} · ${u.assignedNames.join(", ") || "Unallocated"}`); renderAdmin();
   };

@@ -10,8 +10,9 @@ rules_version = '2';
 // (cloud/production/firestore.servicing.rules), the PRESTART block
 // (cloud/production/firestore.prestart.rules), the SWMS SIGNATURE and
 // RUN SHEET blocks (cloud/production/firestore.swms.rules and
-// firestore.runsheets.rules), and the TIMESHEET block
-// (cloud/production/firestore.timesheet.rules). Paste those blocks into the live rules.
+// firestore.runsheets.rules), the TIMESHEET block
+// (cloud/production/firestore.timesheet.rules), and the LEAVE block
+// (cloud/production/firestore.leave.rules). Paste those blocks into the live rules.
 // Do not deploy this whole file.
 // CallUp Base does not use xeroQueue. Heartwood's current app still does.
 service cloud.firestore {
@@ -954,5 +955,106 @@ service cloud.firestore {
       allow write: if false;
     }
 // END TIMESHEET RULES
+
+// BEGIN LEAVE RULES
+    function lvSignedIn() { return request.auth != null; }
+    function lvHeartwood() {
+      return lvSignedIn() && (
+        isAlex() || isPatrick() || (
+          hasProfile() && (!("tenantId" in profile()) || profile().tenantId == "heartwood")
+        )
+      );
+    }
+    function lvDecider() {
+      return lvHeartwood() && (
+        isAlex() || isPatrick() || (
+          hasProfile() && (profile().role == "admin" || profile().role == "supervisor")
+        )
+      );
+    }
+    function lvDate(v) {
+      return v is string && v.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+    function lvHalf(v) {
+      return v == "" || v == "am" || v == "pm";
+    }
+    function lvHalves() {
+      return lvHalf(request.resource.data.startHalf)
+        && lvHalf(request.resource.data.endHalf)
+        && (
+          (request.resource.data.start == request.resource.data.end
+            && request.resource.data.startHalf == request.resource.data.endHalf)
+          || (request.resource.data.start < request.resource.data.end
+            && (request.resource.data.startHalf == "" || request.resource.data.startHalf == "pm")
+            && (request.resource.data.endHalf == "" || request.resource.data.endHalf == "am"))
+        );
+    }
+    function lvCertPath(uid, id) {
+      return request.resource.data.certificatePath == ""
+        || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.pdf"
+        || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.jpg"
+        || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.png"
+        || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.webp";
+    }
+    function lvCreate(id) {
+      return lvHeartwood()
+        && id.matches('^lv[a-z0-9]{16}$')
+        && request.resource.data.keys().hasOnly(["uid", "name", "type", "start", "end", "startHalf", "endHalf", "reason", "certificatePath", "certificateName", "status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "createdAt", "updatedAt"])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80
+        && (request.resource.data.type == "annual" || request.resource.data.type == "sick" || request.resource.data.type == "other")
+        && lvDate(request.resource.data.start)
+        && lvDate(request.resource.data.end)
+        && request.resource.data.end >= request.resource.data.start
+        && lvHalves()
+        && request.resource.data.reason is string
+        && request.resource.data.reason.size() > 0
+        && request.resource.data.reason.size() <= 500
+        && lvCertPath(request.auth.uid, id)
+        && request.resource.data.certificateName is string
+        && request.resource.data.certificateName.size() <= 120
+        && (request.resource.data.certificatePath == ""
+          ? request.resource.data.certificateName == ""
+          : request.resource.data.certificateName.size() > 0)
+        && request.resource.data.status == "pending"
+        && request.resource.data.decisionNote == ""
+        && request.resource.data.decidedBy == ""
+        && request.resource.data.decidedByName == ""
+        && request.resource.data.decidedAt == null
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+    }
+    function lvDecision() {
+      return lvDecider()
+        && resource.data.status == "pending"
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "updatedAt"])
+        && (request.resource.data.status == "approved" || request.resource.data.status == "declined")
+        && request.resource.data.decisionNote is string
+        && request.resource.data.decisionNote.size() > 0
+        && request.resource.data.decisionNote.size() <= 500
+        && request.resource.data.decidedBy == request.auth.uid
+        && request.resource.data.decidedByName is string
+        && request.resource.data.decidedByName.size() > 0
+        && request.resource.data.decidedByName.size() <= 80
+        && request.resource.data.decidedAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && same("uid") && same("name") && same("type") && same("start") && same("end")
+        && same("startHalf") && same("endHalf") && same("reason")
+        && same("certificatePath") && same("certificateName") && same("createdAt");
+    }
+
+    match /leaveRequests/{id} {
+      allow read: if lvHeartwood() && (
+        lvDecider()
+        || (resource != null && resource.data.uid == request.auth.uid)
+        || (resource == null && id.matches('^lv[a-z0-9]{16}$'))
+      );
+      allow create: if lvCreate(id);
+      allow update: if lvDecision();
+      allow delete: if false;
+    }
+// END LEAVE RULES
   }
 }

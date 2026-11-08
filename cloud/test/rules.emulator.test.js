@@ -812,3 +812,80 @@ test("clock on can record one machine, and fleet reads stay inside the tenant", 
   await assertSucceeds(getDoc(doc(db("op2"), "tenants/otherco/fleet/ex2")));
   await assertFails(getDoc(doc(db("op2"), "tenants/heartwood/fleet/ex1")));
 });
+
+const LEAVE_ID = "lv0123456789abcdef";
+function leaveBody(uid, name, extra = {}) {
+  return {
+    uid, name, type: "sick", start: "2026-11-10", end: "2026-11-12", startHalf: "pm", endHalf: "am",
+    reason: "Flu", certificatePath: "", certificateName: "", status: "pending",
+    decisionNote: "", decidedBy: "", decidedByName: "", decidedAt: null,
+    createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    ...extra,
+  };
+}
+
+test("leave requests stay with the person, and a certificate is only for them and an admin", async () => {
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), "users/adm1"), { role: "admin", name: "Ada" });
+  });
+  const op = db("op1");
+  const id = LEAVE_ID;
+  await assertFails(setDoc(doc(op, "leaveRequests", id), leaveBody("sup1", "Sue")));
+  await assertFails(setDoc(doc(op, "leaveRequests", id), leaveBody("op1", "Sam", { status: "approved" })));
+  await assertFails(setDoc(doc(op, "leaveRequests", id), leaveBody("op1", "Sam", { startHalf: "am", endHalf: "" })));
+  await assertSucceeds(setDoc(doc(op, "leaveRequests", id), leaveBody("op1", "Sam")));
+  await assertSucceeds(getDoc(doc(op, "leaveRequests", id)));
+  await assertFails(getDoc(doc(db("idle"), "leaveRequests", id)));
+  await assertFails(getDocs(collection(op, "leaveRequests")));
+  await assertSucceeds(getDocs(query(collection(op, "leaveRequests"), where("uid", "==", "op1"))));
+  await assertSucceeds(getDocs(collection(db("sup1"), "leaveRequests")));
+  await assertFails(getDoc(doc(db("op2"), "leaveRequests", id)));
+  await assertFails(getDoc(doc(db("finOther"), "leaveRequests", id)));
+  await assertFails(updateDoc(doc(op, "leaveRequests", id), {
+    status: "approved", decisionNote: "ok", decidedBy: "op1", decidedByName: "Sam",
+    decidedAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  }));
+  await assertFails(updateDoc(doc(db("sup1"), "leaveRequests", id), {
+    status: "approved", decisionNote: "", decidedBy: "sup1", decidedByName: "Sue",
+    decidedAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  }));
+  await assertFails(updateDoc(doc(db("sup1"), "leaveRequests", id), {
+    status: "approved", decisionNote: "Rest up", decidedBy: "sup1", decidedByName: "Sue", reason: "Changed",
+    decidedAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(updateDoc(doc(db("sup1"), "leaveRequests", id), {
+    status: "approved", decisionNote: "Rest up", decidedBy: "sup1", decidedByName: "Sue",
+    decidedAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  }));
+  await assertFails(updateDoc(doc(db(ALEX), "leaveRequests", id), {
+    status: "declined", decisionNote: "Changed my mind", decidedBy: ALEX, decidedByName: "Alex",
+    decidedAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  }));
+  await assertFails(deleteDoc(doc(db(ALEX), "leaveRequests", id)));
+  const saved = await assertSucceeds(getDoc(doc(db("adm1"), "leaveRequests", id)));
+  assert.equal(saved.data().status, "approved");
+  assert.equal(saved.data().reason, "Flu");
+
+  const cert = `leaveCertificates/op1/${id}/cert.jpg`;
+  const meta = { contentType: "image/jpeg", customMetadata: { purpose: "leave-certificate", uploaderUid: "op1", requestId: id } };
+  await assertSucceeds(uploadBytes(ref(storageOf("op1"), cert), jpeg, meta));
+  await assertSucceeds(getBytes(ref(storageOf("op1"), cert)));
+  await assertSucceeds(getBytes(ref(storageOf(ALEX), cert)));
+  await assertSucceeds(getBytes(ref(storageOf(PATRICK), cert)));
+  await assertSucceeds(getBytes(ref(storageOf("adm1"), cert)));
+  await assertFails(getBytes(ref(storageOf("sup1"), cert)));
+  await assertFails(getBytes(ref(storageOf("idle"), cert)));
+  await assertFails(getBytes(ref(storageOf("op2"), cert)));
+  await assertFails(getBytes(ref(env.unauthenticatedContext().storage(), cert)));
+  await assertFails(uploadBytes(ref(storageOf("sup1"), `leaveCertificates/sup1/${id}/cert.jpg`), jpeg, {
+    contentType: "image/jpeg", customMetadata: { purpose: "leave-certificate", uploaderUid: "op1", requestId: id },
+  }));
+  await assertFails(uploadBytes(ref(storageOf("op1"), `leaveCertificates/op1/${id}/note.txt`), new Uint8Array([1]), {
+    contentType: "text/plain", customMetadata: { purpose: "leave-certificate", uploaderUid: "op1", requestId: id },
+  }));
+  await assertSucceeds(uploadBytes(ref(storageOf("op1"), `leaveCertificates/op1/${id}/cert.pdf`), new Uint8Array([37, 80, 68, 70]), {
+    contentType: "application/pdf", customMetadata: { purpose: "leave-certificate", uploaderUid: "op1", requestId: id },
+  }));
+  await assertFails(deleteObject(ref(storageOf("op1"), cert)));
+  await assertFails(deleteObject(ref(storageOf(ALEX), cert)));
+});

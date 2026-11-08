@@ -1,0 +1,48 @@
+// Storage rules for a medical certificate on a leave request.
+// Paste this block once, inside the existing:
+//   service firebase.storage { match /b/{bucket}/o { ... } }
+// Do not deploy cloud/emulator/storage.rules as a substitute for the live rules.
+//
+// This block defines its own checks. It does not call signedIn, isAlex,
+// member, rulesAdmin, or canSeeJob. An admin who is not Alex or Patrick
+// costs one Firestore get of users/{uid}. The owner path does not read Firestore.
+// Supervisors can approve the request and cannot read the file.
+
+// BEGIN LEAVE CERTIFICATE RULES
+    function lvCertSignedIn() { return request.auth != null; }
+    function lvCertIsAlex() { return lvCertSignedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
+    function lvCertIsPatrick() { return lvCertSignedIn() && request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"; }
+    function lvCertUserPath() { return /databases/(default)/documents/users/$(request.auth.uid); }
+    function lvCertAdmin() {
+      return lvCertIsAlex() || lvCertIsPatrick() || (
+        lvCertSignedIn() && firestore.get(lvCertUserPath()).data.get("role", "") == "admin"
+      );
+    }
+    function lvCertFile(uid, requestId, file) {
+      return request.auth.uid == uid
+        && requestId.matches('^lv[a-z0-9]{16}$')
+        && request.resource.size > 0
+        && request.resource.size <= 8 * 1024 * 1024
+        && request.resource.metadata.purpose == "leave-certificate"
+        && request.resource.metadata.uploaderUid == request.auth.uid
+        && request.resource.metadata.requestId == requestId
+        && (
+          (file == "cert.pdf" && request.resource.contentType == "application/pdf")
+          || (file == "cert.jpg" && request.resource.contentType == "image/jpeg")
+          || (file == "cert.png" && request.resource.contentType == "image/png")
+          || (file == "cert.webp" && request.resource.contentType == "image/webp")
+        );
+    }
+    function lvCertReader(uid) {
+      return lvCertSignedIn() && (request.auth.uid == uid || lvCertAdmin());
+    }
+
+    match /leaveCertificates/{uid}/{requestId} {
+      allow list: if lvCertReader(uid);
+    }
+    match /leaveCertificates/{uid}/{requestId}/{file} {
+      allow read: if lvCertReader(uid);
+      allow create: if lvCertSignedIn() && lvCertFile(uid, requestId, file);
+      allow update, delete: if false;
+    }
+// END LEAVE CERTIFICATE RULES
