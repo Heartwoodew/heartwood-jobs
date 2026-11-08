@@ -66,6 +66,10 @@ export function canViewPolicies(plan, role) {
 export function canViewServicing(plan) {
   return !!(plan && plan.features && plan.features.servicing);
 }
+export function canEditFleet(plan, role, staffRole) {
+  return canViewFleet(plan) && (role === "admin" || role === "supervisor" || staffRole === "supervisor");
+}
+
 export function canEditServicing(plan, role, staffRole) {
   return canViewServicing(plan) && (role === "admin" || role === "supervisor" || staffRole === "supervisor");
 }
@@ -160,8 +164,18 @@ function text(value) {
   return String(value ?? "").trim();
 }
 
+function typeForKind(kind) {
+  return kind === "trailer" ? "trailer" : (kind === "ute" || kind === "tip-truck") ? "vehicle" : "plant";
+}
+
+function unitForKind(kind) {
+  const meta = kindMeta(kind);
+  return !meta || meta.meter === "none" ? "" : meta.meter === "km" ? "km" : "hours";
+}
+
 export function assetPayload(input, uid) {
-  const type = input && input.type;
+  const askedKind = text(input && input.prestartKind);
+  const type = (input && input.type) || (kindMeta(askedKind) ? typeForKind(askedKind) : "");
   const name = text(input && input.name);
   const rego = text(input && input.rego).toUpperCase();
   const regoExpiry = text(input && input.regoExpiry);
@@ -173,13 +187,16 @@ export function assetPayload(input, uid) {
   if (rego.length > 20) return { ok: false, reason: "Plate / rego is too long." };
   if (notes.length > 2000) return { ok: false, reason: "Notes are too long." };
   if (!dateOk(regoExpiry) || !dateOk(coiExpiry)) return { ok: false, reason: "Use a date, or leave it blank." };
+  const readingText = text(input && input.reading);
+  const reading = readingText === "" ? 0 : Number(readingText);
+  if (!Number.isInteger(reading) || reading < 0 || reading > 10000000) return { ok: false, reason: "Hours / odometer must be a whole number." };
   if (!uid) return { ok: false, reason: "Sign in again." };
-  const asked = text(input && input.prestartKind);
+  const asked = askedKind;
   const fallback = type === "trailer" ? "trailer" : type === "plant" ? "other-plant" : "ute";
   const prestartKind = kindMeta(asked) ? asked : fallback;
   return {
     ok: true,
-    data: { type, name, rego, regoExpiry, coiRequired, coiExpiry: coiRequired ? coiExpiry : "", notes, prestartKind, updatedBy: uid },
+    data: { type, name, rego, regoExpiry, coiRequired, coiExpiry: coiRequired ? coiExpiry : "", notes, prestartKind, reading, readingUnit: unitForKind(prestartKind), updatedBy: uid },
   };
 }
 
@@ -223,14 +240,14 @@ function typeLabel(list, id) {
 
 export function fleetCardsHtml(assets, today, { editable = false } = {}) {
   const rows = sortBySoonest(withStatus(assets, today, "asset"));
-  if (!rows.length) return `<p class="muted pad comp-empty">No vehicles yet.</p>`;
+  if (!rows.length) return `<p class="muted pad comp-empty">No machines yet.</p>`;
   return `<div class="comp-list">${rows.map(a => {
     const coi = a.status.coiOn
       ? `<div class="comp-line"><span class="lbl">COI</span><span>${esc(a.status.coi.text)}</span>${pill(a.status.coi.k, a.status.coi.label)}</div>`
       : `<div class="comp-line"><span class="lbl">COI</span><span>Not required</span></div>`;
     const edit = editable ? `<button type="button" class="sm-btn" data-comp-edit="asset" data-comp-id="${esc(a.id)}">Edit</button>` : "";
     return `<article class="comp-card" data-asset="${esc(a.id)}">
-      <div class="comp-top"><div><b>${esc(a.name || "Vehicle")}</b><div class="sub">${esc(typeLabel(ASSET_TYPES, a.type))} · ${esc((kindMeta(assetKind(a)) || {}).label || "Prestart")}${a.rego ? ` · ${esc(a.rego)}` : ""}</div></div>${pill(a.status.k, a.status.label)}</div>
+      <div class="comp-top"><div><b>${esc(a.name || "Vehicle")}</b><div class="sub">${esc(typeLabel(ASSET_TYPES, a.type))} · ${esc((kindMeta(assetKind(a)) || {}).label || "Prestart")}${a.rego ? ` · ${esc(a.rego)}` : ""}${a.reading ? ` · ${esc(String(a.reading))} ${a.readingUnit === "km" ? "km" : "hrs"}` : ""}</div></div>${pill(a.status.k, a.status.label)}</div>
       <div class="comp-lines"><div class="comp-line"><span class="lbl">Rego</span><span>${esc(a.status.rego.text)}</span>${pill(a.status.rego.k, a.status.rego.label)}</div>${coi}</div>
       ${a.notes ? `<p class="sub">${esc(a.notes)}</p>` : ""}
       ${edit ? `<div class="comp-actions">${edit}</div>` : ""}
@@ -295,21 +312,22 @@ function options(list, selected) {
   return list.map(([id, label]) => `<option value="${esc(id)}"${id === selected ? " selected" : ""}>${esc(label)}</option>`).join("");
 }
 
-function assetFormHtml(asset, editableId) {
+function assetFormHtml(asset, editableId, canRemove = true) {
   const a = asset || {};
   return `<form id="compform" class="comp-form" data-kind="asset" data-comp-id="${esc(editableId || "")}">
-    <h2>${editableId ? "Edit vehicle" : "Add vehicle"}</h2>
+    <h2>${editableId ? "Edit machine" : "Add machine"}</h2>
     <p class="comp-help">Registration and Queensland certificate of inspection (COI) for heavy vehicles and trailers. COI is not insurance. Photos of the paper are not stored in the app.</p>
-    <label>Type<select name="type">${options(ASSET_TYPES, a.type || "vehicle")}</select></label>
-    <label>Prestart checklist<select name="prestartKind">${options(PRESTART_KINDS.map(kind => [kind.id, kind.label]), assetKind(a))}</select></label>
     <label>Name<input name="name" required maxlength="80" value="${esc(a.name || "")}" autocomplete="off"></label>
-    <label>Plate / rego<input name="rego" maxlength="20" value="${esc(a.rego || "")}" autocomplete="off"></label>
+    <label>Type<select name="prestartKind">${options(PRESTART_KINDS.map(kind => [kind.id, kind.label]), asset ? assetKind(a) : "excavator")}</select></label>
+    <p class="comp-help">The type picks the prestart checklist.</p>
+    <label>Rego / serial<input name="rego" maxlength="20" value="${esc(a.rego || "")}" autocomplete="off"></label>
+    <label>Hours / odometer<input name="reading" type="number" inputmode="numeric" min="0" max="10000000" step="1" value="${a.reading ? esc(String(a.reading)) : ""}" placeholder="Engine hours, or km for road vehicles"></label>
     <label>Rego expiry<input name="regoExpiry" type="date" value="${esc(a.regoExpiry || "")}"></label>
     <label class="comp-check"><input name="coiRequired" type="checkbox" ${a.coiRequired ? "checked" : ""}> COI required</label>
     <p class="comp-help">COI is the Queensland certificate of inspection. Leave this off for a light vehicle that does not need one.</p>
     <label data-coi-date ${a.coiRequired ? "" : "hidden"}>COI expiry<input name="coiExpiry" type="date" value="${esc(a.coiExpiry || "")}"></label>
     <label>Notes<textarea name="notes" rows="3" maxlength="2000">${esc(a.notes || "")}</textarea></label>
-    <div class="comp-actions"><button class="sm-btn primary" type="submit">Save</button><button class="sm-btn" type="button" data-comp-cancel>Cancel</button>${editableId ? `<button class="sm-btn" type="button" data-comp-delete>Remove</button>` : ""}</div>
+    <div class="comp-actions"><button class="sm-btn primary" type="submit">Save</button><button class="sm-btn" type="button" data-comp-cancel>Cancel</button>${editableId && canRemove ? `<button class="sm-btn" type="button" data-comp-delete>Remove</button>` : ""}</div>
   </form>`;
 }
 
@@ -367,6 +385,11 @@ export function installCompliance(deps) {
     const who = me();
     return canEditServicing(plan(), who && who.role, who && who.staffRole);
   }
+  function editFleet() {
+    const who = me();
+    return canEditFleet(plan(), who && who.role, who && who.staffRole);
+  }
+  function addMachineBtn() { return `<button type="button" class="sm-btn primary comp-add" data-comp-add="asset">Add machine</button>`; }
   function viewService() { return canViewServicing(plan()); }
   function viewPrestart() { return canViewPrestart(plan()); }
   function serviceSummary() {
@@ -547,6 +570,10 @@ export function installCompliance(deps) {
       const type = state.editing.id || "ute";
       return templateFormHtml(type, itemsFor(type, state.templates));
     }
+    if (!state.assets.length) {
+      const help = editFleet() ? "No machines yet. Add one to start a prestart." : "No machines yet. Ask a supervisor or admin to add one.";
+      return `${err}<p class="muted pad comp-empty">${help}</p>${editFleet() ? `<div class="comp-actions">${addMachineBtn()}</div>` : ""}`;
+    }
     const asset = state.assets.find(item => item.id === state.prestartAsset) || state.assets[0];
     const kind = assetKind(asset);
     const items = itemsFor(kind, state.templates);
@@ -584,18 +611,20 @@ export function installCompliance(deps) {
       return policyFormHtml(row, state.assets, edit.id);
     }
     const row = state.assets.find(a => a.id === edit.id) || null;
-    return assetFormHtml(row, edit.id);
+    return assetFormHtml(row, edit.id, admin());
   }
 
   function staffHtml() {
     if (!canViewFleet(plan()) && !viewService() && !viewPrestart()) return "";
-    if (state.editing && (state.editing.kind === "service" || state.editing.kind === "interval")) return editHtml();
+    if (state.editing && (state.editing.kind === "service" || state.editing.kind === "interval" || (state.editing.kind === "asset" && editFleet()))) return editHtml();
     const tab = tabOf(false);
     const tabs = (viewService() || viewPrestart()) ? tabsHtml(tab, false) : "";
     if (tab === "prestart") return `${tabs}${prestartBlock(false)}`;
     if (tab === "servicing") return `${tabs}${servicingBlock(editService())}`;
     const err = state.fleetError ? `<p class="muted pad">Fleet status isn't available right now.</p>` : "";
-    return `${tabs}${err}<p class="comp-help pad-note">Registration and Queensland certificate of inspection (COI). COI is not insurance. You can check a vehicle is roadworthy. Only an admin can change this list.</p>${fleetCardsHtml(state.assets, today(), { editable: false })}`;
+    const canAdd = editFleet();
+    const note = canAdd ? "Supervisors and admins can add and edit machines." : "Only a supervisor or admin can change this list.";
+    return `${tabs}${err}${canAdd ? `<div class="comp-actions">${addMachineBtn()}</div>` : ""}<p class="comp-help pad-note">Registration and Queensland certificate of inspection (COI). COI is not insurance. You can check a vehicle is roadworthy. ${note}</p>${fleetCardsHtml(state.assets, today(), { editable: canAdd })}`;
   }
 
   function adminHtml() {
@@ -606,7 +635,7 @@ export function installCompliance(deps) {
     const add = tab === "policies" ? `<button type="button" class="sm-btn primary comp-add" data-comp-add="policy">Add policy</button>`
       : tab === "servicing" ? (editService() ? `<button type="button" class="sm-btn primary comp-add" data-comp-add="service">Add service</button>` : "")
       : tab === "prestart" ? ""
-      : `<button type="button" class="sm-btn primary comp-add" data-comp-add="asset">Add vehicle</button>`;
+      : addMachineBtn();
     const head = `<div class="sm-head"><h1>Compliance <span class="comp-pro">Pro</span></h1>${add}</div>${tabsHtml(tab, true)}`;
     if (tab === "prestart") return `${head}${prestartBlock(true)}`;
     if (tab === "servicing") return `${head}${servicingBlock(true)}`;
@@ -695,7 +724,7 @@ export function installCompliance(deps) {
     const serviceKind = kind === "service" || kind === "interval";
     if (serviceKind) {
       if (!editService()) return deps.toast("Only an admin or supervisor can change servicing.");
-    } else if (!canEditCompliance(plan(), me() && me().role)) return deps.toast("Only an admin can change this.");
+    } else if (kind === "asset" ? !editFleet() : !canEditCompliance(plan(), me() && me().role)) return deps.toast(kind === "asset" ? "Only a supervisor or admin can change machines." : "Only an admin can change this.");
     const raw = Object.fromEntries(new FormData(form).entries());
     if (kind === "asset") raw.coiRequired = !!form.coiRequired.checked;
     const built = kind === "policy" ? policyPayload(raw, me().uid)
