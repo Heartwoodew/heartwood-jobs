@@ -279,6 +279,12 @@ export function onSnapshot(ref, onNext) {
         const uidEq = (ref._wheres || []).find(w => w.field === "uid" && w.op === "==");
         if (uidEq) rows = rows.filter(r => r.uid === uidEq.value);
         onNext(snap(rows));
+      } else if (col === "inbox") {
+        if (typeof window !== "undefined") {
+          window.__inboxListeners = window.__inboxListeners || [];
+          window.__inboxListeners.push(onNext);
+        }
+        onNext(snap((typeof window !== "undefined" && window.HW_INBOX) || []));
       } else onNext(snap([]));
     } catch (e) {
       if (typeof window !== "undefined") {
@@ -292,6 +298,17 @@ export function onSnapshot(ref, onNext) {
 
 export function updateDoc(ref, data) {
   record("updateDoc", { col: ref && ref._col, id: ref && ref._id, status: data && data.status, keys: data ? Object.keys(data) : [] });
+  if (typeof window !== "undefined" && ref && ref._col === "inbox" && Array.isArray(window.HW_INBOX)) {
+    const row = window.HW_INBOX.find(r => r.id === ref._id);
+    if (row && data) {
+      Object.entries(data).forEach(([k, v]) => {
+        if (v && v._union) row[k] = [...new Set([...(row[k] || []), ...v._union])];
+        else if (v && v._server) row[k] = "2026-11-08T00:00:00.000Z";
+        else row[k] = v;
+      });
+    }
+    (window.__inboxListeners || []).forEach(fn => fn(snap(window.HW_INBOX)));
+  }
   return Promise.resolve();
 }
 export function setDoc(ref, data) {

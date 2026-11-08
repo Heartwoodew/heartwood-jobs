@@ -36,6 +36,10 @@ import {
   claimCreateBody, claimDecisionBody, claimsScreenHtml, newClaimId, receiptContentType, receiptDownloadName,
   receiptObjectName, receiptStoragePath, RECEIPT_MAX_BYTES,
 } from "./features/claims.js";
+import {
+  addressWithSuburb, bulkCandidates, canImportInbox, composeAddress, defaultImportMode, duplicateWarning,
+  findExistingJob, isImported, parseInboxEmail,
+} from "./features/inbox-import.js";
 
 const cfg = useEmulator ? { ...firebaseConfig, apiKey: "demo-key", projectId: "demo-heartwood" } : firebaseConfig;
 const fb = initializeApp(cfg);
@@ -321,7 +325,7 @@ const NAV_LBL = { safety: "Incidents" };
 ui.navCol = (() => { try { return JSON.parse(localStorage.getItem("hwNavCol") || "{}"); } catch { return {}; } })();
 function shell(inner) {
   const cur = NAV.find(n => n[0] === ui.view);
-  const item = k => { const x = NAV.find(n => n[0] === k); if (!x || x[3] || (x[4] && !isOwner()) || (k === "invoices" && (!me || me.role !== "admin")) || (k === "staff" && !canInvite()) || (k === "quotes" && !canQuote()) || (k === "compliance" && !COMP.canSee()) || (k === "prestart" && !COMP.canPrestart())) return "";
+  const item = k => { const x = NAV.find(n => n[0] === k); if (!x || x[3] || (k === "inbox" ? !canImport() : (x[4] && !isOwner())) || (k === "invoices" && (!me || me.role !== "admin")) || (k === "staff" && !canInvite()) || (k === "quotes" && !canQuote()) || (k === "compliance" && !COMP.canSee()) || (k === "prestart" && !COMP.canPrestart())) return "";
     const badge = k === "chat" ? CHAT.badge("staff") : "";
     return `<button class="sm-nav ${ui.view === k ? "on" : ""}" data-view="${k}" title="${esc(NAV_LBL[k] || x[2])}"><span class="ic">${x[1]}</span><span class="lbl">${esc(NAV_LBL[k] || x[2])}</span>${badge}</button>`; };
   const grp = ([g, ic, n, ks]) => { const has = ks.includes(ui.view), open = has || !ui.navCol[g];
@@ -823,6 +827,8 @@ const canXero = () => !!me && XERO_UIDS.includes(me.uid);
 // App roles on users/{uid}: "operator" (staff) | "supervisor" (sees money, still operator shell unless also Firebase-admin).
 const canSeeMoney = () => !!me && (me.role === "admin" || me.role === "supervisor" || me.staffRole === "supervisor");
 const canInvite = () => !!(me && (me.role === "admin" || me.role === "supervisor" || me.staffRole === "supervisor"));
+// Inbox and import: admins and supervisors. Operators (staff) do not see the Inbox.
+const canImport = () => canImportInbox(me);
 // Quotes: same people who see money (admins + users.role/staffRole supervisor). Ordinary staff: no Quotes nav or dollars.
 const canQuote = () => canSeeMoney();
 // Business quote rates (meta/quoteRates): admin edit only — supervisors can read/use rates while quoting, not change them.
@@ -1988,7 +1994,7 @@ function attentionHtml(all) {
   const incs = (ui.incidents || []).filter(r => r.status !== "Closed");
   const owed = isOwner() ? owedList() : [], dk = r => [r.workerName, (+r.amountInc || 0).toFixed(2), String(r.date || "").slice(0, 10)].join("|");
   const dups = owed.filter(r => owed.filter(x => dk(x) === dk(r)).length > 1);
-  const unread = isOwner() && ui.inbox ? inboxUnread() : 0;
+  const unread = canImport() && ui.inbox ? inboxUnread() : 0;
   const jl = j => `<div class="at-j" data-id="${j.id}"><b>${esc(j.date ? shortDate(j.date) : "—")}</b> ${esc(j.time || "")} · ${esc(j.address || j.client || "")} <span class="jn">#${esc(jobNo(j))}</span></div>`;
   const row = (n, txt, cls, body, go) => !n ? "" : body
     ? `<details class="at-row ${cls}"><summary><span class="at-n">${n}</span><span class="at-t">${txt}</span><span class="car">▸</span></summary><div class="at-list">${body}</div></details>`
@@ -2012,12 +2018,12 @@ function homeBody(all, admin, btns) {
   return `<div class="home"><div class="hhead"><h1>${greet()}, ${esc(String(me.name || "").split(" ")[0])}</h1><div class="muted">${esc(dayLabel(t0))} · ${esc(orgSettings().name)}</div></div>
     ${admin ? COMP.adminBannerHtml() : ""}${admin ? cloudExpiryNotice(all) : ""}
     ${swmsReminderHtml()}${admin ? attentionHtml(all) + (canXero() ? profitChartHtml() : "") : `<div class="hbtns opbtns"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button><button class="hbtn" data-go="swms"><span class="ic">📋</span>SWMS</button></div>`}
-    <div class="hstats hidden">${stat(today.length, "Today", "q-wo")}${stat(ip, "In progress", "ip", admin ? "q-ip" : "")}${admin ? stat(ready, "Ready to invoice", "q-comp", "invoices") + stat(unal, "Unallocated", "q-uns", "dispatch") + (isOwner() && ui.inbox ? stat(inboxUnread(), "Unread builder emails", "q-inbox", "inbox") : "") : stat(tomorrow.length, "Tomorrow", "q-quote")}</div>
+    <div class="hstats hidden">${stat(today.length, "Today", "q-wo")}${stat(ip, "In progress", "ip", admin ? "q-ip" : "")}${admin ? stat(ready, "Ready to invoice", "q-comp", "invoices") + stat(unal, "Unallocated", "q-uns", "dispatch") + (canImport() && ui.inbox ? stat(inboxUnread(), "Unread builder emails", "q-inbox", "inbox") : "") : stat(tomorrow.length, "Tomorrow", "q-quote")}</div>
     <div class="hbtns hidden"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button>${btns.map(([go, ic, n]) => `<button class="hbtn" data-go="${go}"><span class="ic">${ic}</span>${n}</button>`).join("")}</div>
     ${sec("Today", t0, today)}${sec("Tomorrow", t1, tomorrow)}${admin ? "" : myIncidentsHtml()}</div>`;
 }
 function homeView(all) {
-  return homeBody(all, true, NAV.filter(x => x[0] !== "home" && !x[3] && (!x[4] || isOwner())).map(([k, ic, n]) => [k, ic, n]));
+  return homeBody(all, true, NAV.filter(x => x[0] !== "home" && !x[3] && (x[0] === "inbox" ? canImport() : (!x[4] || isOwner()))).map(([k, ic, n]) => [k, ic, n]));
 }
 async function saveInvite(fields) {
   const draft = buildInviteDraft({ ...fields, createdBy: me.uid, now: new Date(), token: newInviteToken(), tenantId: myTenant() });
@@ -2257,19 +2263,23 @@ async function undoSplit(j) {
   toast("Split undone");
 }
 function editJob(j) {
-  const n = !j; j = j || { date: todayStr(), time: "07:00", durationHrs: 4, status: "Scheduled", type: "spoil", assigned: [], client: CLIENTS[0] };
+  const importing = !!(j && j._import);
+  const n = !j || !j.id;
+  j = j || { date: todayStr(), time: "07:00", durationHrs: 4, status: "Scheduled", type: "spoil", assigned: [], client: CLIENTS[0] };
   const d = $("#dlg");
   const qq = n ? "Work Order" : queueOf(j), hist = [];
   if (j.source === "sm8") hist.push(["ServiceM8", `Imported from ServiceM8 job #${j.sm8JobNo || "?"} (${j.sm8Status || "?"})`]);
   if (j.editedInApp) hist.push(["App", "Edited in the app – ServiceM8 import will no longer overwrite this job"]);
+  if (j.inboxId) hist.push(["Inbox", "Linked to a builder email"]);
   if (j.completedByName) hist.push([j.completedByName, `Completed${j.loads ? ` · ${j.loads} loads` : ""}`]);
   const SL = { "Scheduled": "Work Order – scheduled", "In progress": "Work Order – in progress", "Done": "Completed", "Cancelled": "Unsuccessful" };
-  d.className = "jobcard"; d.onclose = () => renderAdmin();
+  d.className = "jobcard"; d.onclose = () => refreshAfterImport();
   d.innerHTML = `<form method="dialog" id="jf" class="jc">
     <div class="jc-top ${QCLS[qq]}"><div><div class="jc-no">${n ? "New Job" : "Job #" + esc(jobNo(j))}</div>${n ? "" : ipTop(j, "onbar")}<div class="jc-q">${qq}${j.sm8Status === "Quote" ? " (quote in ServiceM8)" : ""}</div></div>
       <label class="jc-st">Job Status<select name="status">${STATUSES.map(s => `<option value="${s}" ${j.status === s ? "selected" : ""}>${SL[s]}</option>`).join("")}</select></label>
       <button value="cancel" formnovalidate class="jc-x" title="Close">✕</button></div>
     <div class="jc-body"><div class="jc-col">
+      ${importing ? importBanner(j) : ""}
       <h4>Client &amp; Site</h4>
       <label>Client<input name="client" list="clients" value="${esc(j.client)}" required><datalist id="clients">${CLIENTS.map(c => `<option value="${esc(c)}">`).join("")}</datalist></label>
       ${n ? "" : `<div class="supcard" data-sup="${esc(j.id)}"></div>`}
@@ -2324,7 +2334,8 @@ function editJob(j) {
     splitJob(j, pick).catch(e => toast("Not split: " + (e.code || e.message))); };
   if (!n && $("#splitundo")) $("#splitundo").onclick = () => undoSplit(j).catch(e => toast("Undo failed: " + (e.code || e.message)));
   const f = $("#jf");
-  f.description.oninput = () => { if (n) f.type.value = guessType(f.description.value); };
+  f.description.oninput = () => { if (n && !importing) f.type.value = guessType(f.description.value); };
+  if (importing) wireImportForm(j, f);
   f.addEventListener("change", () => refreshJobLeaveWarn(f));
   refreshJobLeaveWarn(f);
   f.onsubmit = async ev => {
@@ -2343,9 +2354,18 @@ function editJob(j) {
     if (data.status === "Done" && j.status !== "Done") Object.assign(data, { completedAt: serverTimestamp(), completedBy: me.uid });
     if (!confirmIfOnLeave(data.date, data.assignedNames)) return;
     try {
-      if (n) await addDoc(collection(db, "jobs"), { ...data, source: "app", log: [], createdAt: serverTimestamp() });
-      else await updateDoc(doc(db, "jobs", j.id), data);
-      d.close(); toast("Saved"); renderAdmin(); if (!data.date) location.reload();
+      if (importing && !canImport()) { $("#ferr").textContent = "Supervisors and admins only."; return; }
+      if (importing) {
+        const cur = (ui.inbox || []).find(m => m.id === j._import.emailId);
+        if (!cur) { $("#ferr").textContent = "That email is no longer in the inbox."; return; }
+        if (isImported(cur)) { $("#ferr").textContent = "That email is already imported."; return; }
+      }
+      if (n) {
+        const extra = importing ? importFieldExtras(j, f) : {};
+        const ref = await addDoc(collection(db, "jobs"), { ...data, ...extra, source: importing ? "inbox" : "app", log: [], createdAt: serverTimestamp() });
+        if (importing) await markInboxImported(j._import.emailId, ref.id);
+      } else await updateDoc(doc(db, "jobs", j.id), data);
+      d.close(); toast("Saved"); refreshAfterImport(); if (!data.date) location.reload();
     } catch (e) { $("#ferr").textContent = e.message; }
   };
 }
@@ -2464,49 +2484,294 @@ async function supervisorFor(j) {
   const m = await supervisors(), base = String(j.po || "").split("/")[0].replace(/\D/g, "");
   return (base && m.byPo?.[base]) || m.byClient?.[j.client] || m.remembered?.[(j.client || "").replace(/[.\/]/g, "_")] || null;
 }
-// ---- Inbox (owner only): inbox/{gmailMessageId} written by tools/sync_inbox.py. Tap opens the Gmail thread; 'read' is app-side.
+// ---- Inbox: inbox/{gmailMessageId} written by tools/sync_inbox.py. Admins and supervisors import.
+// Staff (operators) do not see this screen. Import opens the new-job form; nothing is created until Save.
+function refreshAfterImport() {
+  if (me && me.role === "admin" && !ui.myJobs) renderAdmin();
+  else renderOperator();
+}
 function inboxSub() {
-  if (!isOwner() || ui.inboxSub) return;
+  if (!canImport() || ui.inboxSub) return;
   ui.inboxSub = onSnapshot(collection(db, "inbox"), s => { ui.inbox = s.docs.map(d => ({ id: d.id, ...d.data() })); ui.inboxErr = "";
-    if (ui.view === "inbox" || ui.view === "home") renderAdmin(); else inboxBadge(); },
-    e => { ui.inbox = []; ui.inboxErr = e.code || e.message; if (ui.view === "inbox") renderAdmin(); });
+    if (me && me.role === "admin" && !ui.myJobs) { if (ui.view === "inbox" || ui.view === "home") renderAdmin(); else inboxBadge(); }
+    else if (ui.opTab === "inbox") renderOperator(); },
+    e => { ui.inbox = []; ui.inboxErr = e.code || e.message;
+      if (me && me.role === "admin" && !ui.myJobs && ui.view === "inbox") renderAdmin();
+      else if (ui.opTab === "inbox") renderOperator(); });
 }
 const inboxUnread = () => (ui.inbox || []).filter(m => !m.read).length;
 function inboxBadge() { document.querySelectorAll('.sm-nav[data-view="inbox"]').forEach(b => { let x = b.querySelector(".nbadge"); const n = inboxUnread();
   if (!n) return x && x.remove(); if (!x) { x = document.createElement("span"); x.className = "nbadge"; b.appendChild(x); } x.textContent = n; }); }
 const BLD = ["All", "Orbit", "Torsion", "Silkwood"];
 const mailDate = s => { const d = new Date(s); return isNaN(d) ? "" : d.toLocaleString("en-AU", { timeZone: TZ, day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }); };
+const loadedJobs = () => [...jobs, ...(ui.undated || []), ...(ui.done || [])];
+function importJobLabel(j) {
+  if (!j) return "an existing job";
+  return `#${jobNo(j)}${j.date ? " · " + shortDate(j.date) : ""}${j.po ? " · PO " + j.po : ""}`;
+}
+function importBanner(j) {
+  const p = j._import || {};
+  const existing = p.existing;
+  const warn = [...(p.warnings || [])];
+  if (existing) warn.unshift(duplicateWarning(existing, importJobLabel(existing.job)));
+  if (p.jobLike === false) warn.push("This email does not look like a job. Check every field before you save.");
+  return `<div class="import-banner">
+    <b>Import from ${esc(p.builder || "builder")} email.</b>
+    <span class="sub">Review and edit, then save. Nothing is created until you save.</span>
+    ${p.subject ? `<div class="sub">${esc(p.subject)}</div>` : ""}
+    <div class="row">
+      <label>Lot<input name="ilot" value="${esc(p.lot || "")}"></label>
+      <label>Street<input name="istreet" value="${esc(p.street || "")}"></label>
+      <label>Suburb<input name="isuburb" value="${esc(p.suburb || "")}"></label>
+    </div>
+    <div class="row">
+      <label>Supervisor<input name="isup" value="${esc(p.supervisorName || "")}"></label>
+      <label>Phone<input name="iphone" value="${esc(p.supervisorPhone || "")}"></label>
+      <label>Email<input name="iemail" value="${esc(p.supervisorEmail || "")}"></label>
+    </div>
+    <p class="sub">${p.costCode ? `Cost code ${esc(p.costCode)}${p.typeLabel ? " · " + esc(p.typeLabel) : ""}` : esc(p.typeLabel || "No cost code found")}</p>
+    ${warn.map(w => `<p class="iwarn">${esc(w)}</p>`).join("")}
+    ${existing ? `<button type="button" class="sm-btn" id="importdate">Update ${esc(importJobLabel(existing.job))}'s date</button>` : ""}
+  </div>`;
+}
+function importFieldExtras(j, f) {
+  const p = j._import || {};
+  const name = (f.isup && f.isup.value || p.supervisorName || "").trim();
+  const email = (f.iemail && f.iemail.value || p.supervisorEmail || "").trim();
+  const phone = (f.iphone && f.iphone.value || p.supervisorPhone || "").trim();
+  return {
+    inboxId: p.emailId || "",
+    ...(p.costCode ? { costCode: p.costCode } : {}),
+    ...(name ? { supervisorName: name, contactName: name } : {}),
+    ...(email ? { supervisorEmail: email } : {}),
+    ...(phone ? { contactPhone: phone } : {}),
+  };
+}
+function wireImportForm(j, f) {
+  const syncAddr = () => { f.address.value = composeAddress({ lot: f.ilot.value.trim(), street: f.istreet.value.trim(), suburb: f.isuburb.value.trim() }); };
+  ["ilot", "istreet", "isuburb"].forEach(name => { if (f[name]) f[name].oninput = syncAddr; });
+  const dateBtn = $("#importdate");
+  if (dateBtn) dateBtn.onclick = () => importUpdateDate(j, f).catch(e => { const err = $("#ferr"); if (err) err.textContent = e.message || "Not saved"; });
+}
+async function lookupImportDuplicate(draft) {
+  const pool = loadedJobs();
+  let hit = findExistingJob(pool, draft);
+  const po = String(draft.po || "").trim().toUpperCase().replace(/\s+/g, "");
+  if (!hit && po) {
+    try {
+      const snap = await getDocs(query(collection(db, "jobs"), where("po", "==", po)));
+      hit = findExistingJob([...pool, ...snap.docs.map(d => ({ id: d.id, ...d.data() }))], { ...draft, po });
+    } catch { /* loaded jobs still apply */ }
+  }
+  return hit;
+}
+async function markInboxImported(emailId, jobId) {
+  const cur = (ui.inbox || []).find(m => m.id === emailId);
+  if (cur && isImported(cur) && cur.importedJobId && cur.importedJobId !== jobId) throw new Error("That email is already imported.");
+  await updateDoc(doc(db, "inbox", emailId), {
+    imported: true, importedJobId: jobId, importedAt: serverTimestamp(), importedBy: me.uid,
+    jobIds: arrayUnion(jobId), read: true, readAt: serverTimestamp(),
+  });
+}
+async function importUpdateDate(j, f) {
+  if (!canImport()) throw new Error("Supervisors and admins only.");
+  const date = f.date.value;
+  if (!date) throw new Error("Enter the date to put on the existing job.");
+  const hit = await lookupImportDuplicate({ po: f.po.value, address: f.address.value });
+  if (!hit) throw new Error("No job with this address or PO is loaded.");
+  const emailId = j._import.emailId;
+  const cur = (ui.inbox || []).find(m => m.id === emailId);
+  if (cur && isImported(cur)) throw new Error("That email is already imported.");
+  if (!confirmIfOnLeave(date, namesOf(hit.job))) return;
+  await updateDoc(doc(db, "jobs", hit.job.id), { date, editedInApp: true, inboxId: emailId, updatedAt: serverTimestamp(), updatedBy: me.uid });
+  await markInboxImported(emailId, hit.job.id);
+  $("#dlg").close();
+  toast(`Updated the date on ${importJobLabel(hit.job)}`);
+  refreshAfterImport();
+}
+function openImport(email) {
+  if (!canImport()) return toast("Supervisors and admins only.");
+  if (!email) return;
+  if (isImported(email)) return toast("That email is already imported.");
+  const parsed = parseInboxEmail(email, { today: todayStr() });
+  const existing = findExistingJob(loadedJobs(), parsed);
+  editJob({
+    date: parsed.date || "", time: "07:00", durationHrs: 4, status: "Scheduled", type: parsed.type || "other",
+    assigned: [], client: parsed.client || "", address: parsed.address || "", po: parsed.po || "",
+    description: parsed.description || "", notes: parsed.notes || "",
+    _import: { ...parsed, emailId: email.id, existing },
+  });
+}
 function inboxView(all) {
-  if (!isOwner()) return `<div class="sm-head"><h1>Inbox</h1></div><p class="muted pad">Owner only.</p>`;
+  if (!canImport()) return `<div class="sm-head"><h1>Inbox</h1></div><p class="muted pad">Supervisors and admins only.</p>`;
+  if (ui.ibMode === "review") return inboxReview(all);
+  if (ui.ibMode === "bulk") return inboxBulk(all);
   const b = ui.ib || "All", w = (ui.iq || "").toLowerCase().split(/\s+/).filter(Boolean), unreadOnly = ui.ibUnread;
   const L = (ui.inbox || []).filter(m => (b === "All" || m.builder === b) && (!unreadOnly || !m.read)
       && w.every(x => [m.subject, m.fromName, m.fromEmail, m.snippet, m.matchKey, m.jobLabel, (m.attachments || []).join(" ")].join(" ").toLowerCase().includes(x)))
     .sort((x, y) => String(y.date).localeCompare(String(x.date)));
   const cnt = k => (ui.inbox || []).filter(m => (k === "All" || m.builder === k) && !m.read).length;
   const jobsById = new Map(all.map(j => [j.id, j]));
-  return `<div class="sm-head"><h1>Inbox</h1><span class="sub">Builder emails · last 30 days · ${ui.inbox ? ui.inbox.length : "…"} emails</span></div>
+  const side = m => {
+    const js = (m.jobIds || []).map(i => jobsById.get(i)).filter(Boolean);
+    const imported = isImported(m);
+    const jobBtns = js.map(j => `<button class="sm-btn ijob" data-ijob="${esc(j.id)}">Job #${esc(jobNo(j))}</button>`).join("");
+    const importBtn = imported
+      ? `<span class="sub iimported">Imported</span>`
+      : `<button type="button" class="sm-btn primary" data-iimport="${esc(m.id)}">Import as job</button>`;
+    return `${jobBtns}${importBtn}<button class="sm-btn iread" data-iread="${esc(m.id)}" title="${m.read ? "Mark unread" : "Mark read"}">${m.read ? "●" : "✓"}</button>`;
+  };
+  return `<div class="sm-head"><h1>Inbox</h1><span class="sub">Builder emails · last 30 days · ${ui.inbox ? ui.inbox.length : "…"} emails</span>
+      <span class="headbtns"><button type="button" class="sm-btn" id="ibulk">Bulk import</button></span></div>
     ${ui.inboxErr ? `<p class="err pad">Inbox not available: ${esc(ui.inboxErr)}</p>` : ""}
     <div class="ibar">${BLD.map(k => `<button class="qtab ${b === k ? "on" : ""}" data-ib="${k}">${k}${cnt(k) ? ` <span class="nbadge">${cnt(k)}</span>` : ""}</button>`).join("")}
       <label class="ck ibun"><input type="checkbox" id="ibun" ${unreadOnly ? "checked" : ""}> Unread only</label></div>
     <div class="sbar"><span class="sbar-ic">🔍</span><input id="iq" type="search" placeholder="Search subject, sender, job, lot, attachment…" value="${esc(ui.iq || "")}"></div>
-    <div class="ilist">${L.map(m => { const js = (m.jobIds || []).map(i => jobsById.get(i)).filter(Boolean);
-      return `<div class="irow ${m.read ? "" : "unread"}"><a class="imain" href="${esc(m.link)}" target="_blank" rel="noopener" data-imsg="${esc(m.id)}">
+    <div class="ilist">${L.map(m => `<div class="irow ${m.read ? "" : "unread"} ${isImported(m) ? "iimported" : ""}"><a class="imain" href="${esc(m.link || "")}" target="_blank" rel="noopener" data-imsg="${esc(m.id)}">
         <div class="itop"><span class="ibld b-${esc((m.builder || "").toLowerCase())}">${esc(m.builder)}</span><b class="ifrom">${esc(m.fromName || m.fromEmail)}</b><span class="idate">${esc(mailDate(m.date))}</span></div>
         <div class="isubj">${esc(m.subject)}</div><div class="isnip sub">${esc(m.snippet)}</div>
         ${(m.attachments || []).length ? `<div class="sub iatt">📎 ${esc(m.attachments.join(", "))}</div>` : ""}</a>
-        <div class="iside">${js.length ? js.map(j => `<button class="sm-btn ijob" data-ijob="${esc(j.id)}">Job #${esc(jobNo(j))}</button>`).join("") : m.matchKey ? `<span class="sub muted">${esc(m.matchKey)} · no job</span>` : ""}
-          <button class="sm-btn iread" data-iread="${esc(m.id)}" title="${m.read ? "Mark unread" : "Mark read"}">${m.read ? "●" : "✓"}</button></div></div>`; }).join("")
+        <div class="iside">${side(m)}${!((m.jobIds || []).length) && m.matchKey && !isImported(m) ? `<span class="sub muted">${esc(m.matchKey)} · no job</span>` : ""}</div></div>`).join("")
       || `<p class="pad muted">${ui.inbox ? "No emails" : "Loading…"}</p>`}</div>`;
 }
+function inboxBulk(all) {
+  const rows = bulkCandidates(ui.inbox || [], { today: todayStr() });
+  const sel = new Set(ui.ibSel || []);
+  return `<div class="sm-head"><h1>Bulk import</h1><span class="sub">Unimported emails that look like jobs. Nothing is saved on this step.</span>
+      <span class="headbtns"><button type="button" class="sm-btn" id="iback">Back</button></span></div>
+    <div class="ibar"><button type="button" class="sm-btn primary" id="ireview">Review selected</button>
+      <button type="button" class="sm-btn" id="iall">Select all</button></div>
+    <div class="ilist">${rows.map(m => { const d = parseInboxEmail(m, { today: todayStr() }); const hit = findExistingJob(all, d);
+      return `<label class="irow ibulk"><input type="checkbox" data-isel="${esc(m.id)}" ${sel.has(m.id) ? "checked" : ""}>
+        <span class="imain"><span class="itop"><span class="ibld b-${esc((m.builder || "").toLowerCase())}">${esc(m.builder)}</span><b>${esc(d.address || m.subject || "Email")}</b></span>
+        <span class="sub">${esc([d.typeLabel || d.type, d.date, d.po].filter(Boolean).join(" · "))}</span>
+        ${hit ? `<span class="iwarn">${esc(duplicateWarning(hit, importJobLabel(hit.job)))}</span>` : ""}</span></label>`; }).join("")
+      || `<p class="pad muted">No unimported job emails.</p>`}</div>`;
+}
+function inboxReview(all) {
+  const ids = ui.ibReview || [];
+  ui.ibDraft = ui.ibDraft || {};
+  ids.forEach(id => {
+    if (ui.ibDraft[id]) return;
+    const email = (ui.inbox || []).find(m => m.id === id);
+    const parsed = email ? parseInboxEmail(email, { today: todayStr() }) : null;
+    if (!parsed) return;
+    const existing = findExistingJob(all, parsed);
+    ui.ibDraft[id] = { ...parsed, mode: defaultImportMode(existing), existingBy: existing ? existing.by : "", existingLabel: existing ? importJobLabel(existing.job) : "" };
+  });
+  const card = id => {
+    const row = ui.ibDraft[id];
+    if (!row) return "";
+    const opt = (v, label) => `<option value="${v}" ${row.type === v ? "selected" : ""}>${label}</option>`;
+    const kind = [row.costCode ? "Cost code " + row.costCode : "", row.typeLabel].filter(Boolean).join(" · ");
+    return `<div class="irow ireview"><div class="imain">
+      <div class="itop"><b>${esc(row.subject || row.address || "Email")}</b></div>
+      ${kind ? `<div class="sub">${esc(kind)}</div>` : ""}
+      ${row.warnings && row.warnings.length ? row.warnings.map(w => `<p class="iwarn">${esc(w)}</p>`).join("") : ""}
+      ${row.existingLabel ? `<p class="iwarn">${esc(duplicateWarning({ by: row.existingBy || "address" }, row.existingLabel))}</p>
+        <label class="ck"><input type="radio" name="mode-${esc(id)}" data-iid="${esc(id)}" data-field="mode" value="create" ${row.mode !== "date" ? "checked" : ""}> Save as a new job</label>
+        <label class="ck"><input type="radio" name="mode-${esc(id)}" data-iid="${esc(id)}" data-field="mode" value="date" ${row.mode === "date" ? "checked" : ""}> Update ${esc(row.existingLabel)}'s date</label>` : ""}
+      <div class="row">
+        <label>Client<input data-iid="${esc(id)}" data-field="client" value="${esc(row.client)}"></label>
+        <label>Address<input data-iid="${esc(id)}" data-field="address" value="${esc(row.address)}"></label>
+        <label>Suburb<input data-iid="${esc(id)}" data-field="suburb" value="${esc(row.suburb)}"></label>
+      </div>
+      <div class="row">
+        <label>Category<select data-iid="${esc(id)}" data-field="type">${Object.entries(TYPES).map(([k, v]) => opt(k, v)).join("")}</select></label>
+        <label>Required date<input type="date" data-iid="${esc(id)}" data-field="date" value="${esc(row.date)}"></label>
+        <label>PO<input data-iid="${esc(id)}" data-field="po" value="${esc(row.po)}"></label>
+      </div>
+      <div class="row">
+        <label>Supervisor<input data-iid="${esc(id)}" data-field="supervisorName" value="${esc(row.supervisorName)}"></label>
+        <label>Phone<input data-iid="${esc(id)}" data-field="supervisorPhone" value="${esc(row.supervisorPhone)}"></label>
+        <label>Email<input data-iid="${esc(id)}" data-field="supervisorEmail" value="${esc(row.supervisorEmail)}"></label>
+      </div>
+      <label>Notes<textarea data-iid="${esc(id)}" data-field="notes" rows="2">${esc(row.notes)}</textarea></label>
+    </div></div>`;
+  };
+  return `<div class="sm-head"><h1>Review import</h1><span class="sub">Check these, then save. Nothing is written until you save.</span>
+      <span class="headbtns"><button type="button" class="sm-btn" id="iback">Back</button>
+      <button type="button" class="sm-btn primary" id="isave">Save imports</button></span></div>
+    <div class="ilist">${ids.map(card).join("") || `<p class="pad muted">Nothing selected.</p>`}</div>`;
+}
+function readImportReview(A) {
+  A.querySelectorAll("[data-iid]").forEach(el => {
+    const row = (ui.ibDraft || {})[el.dataset.iid];
+    if (!row || !el.dataset.field) return;
+    if (el.type === "radio") { if (el.checked) row[el.dataset.field] = el.value; return; }
+    row[el.dataset.field] = el.value;
+  });
+}
+async function saveBulkImport(A) {
+  if (!canImport()) return toast("Supervisors and admins only.");
+  readImportReview(A);
+  const ids = ui.ibReview || [];
+  let saved = 0, failed = 0;
+  for (const id of ids) {
+    const row = (ui.ibDraft || {})[id];
+    const email = (ui.inbox || []).find(m => m.id === id);
+    if (!row || !email || isImported(email)) continue;
+    const address = addressWithSuburb(row.address, row.suburb);
+    try {
+      if (row.mode === "date") {
+        const existing = await lookupImportDuplicate({ po: row.po, address });
+        if (!existing) throw new Error("No matching job");
+        if (!row.date) throw new Error("Date required");
+        if (!confirmIfOnLeave(row.date, namesOf(existing.job))) continue;
+        await updateDoc(doc(db, "jobs", existing.job.id), { date: row.date, editedInApp: true, inboxId: id, updatedAt: serverTimestamp(), updatedBy: me.uid });
+        await markInboxImported(id, existing.job.id);
+      } else {
+        const typ = row.type || "other";
+        const desc = String(row.description || "");
+        if (typ === "backslab" && desc.toLowerCase().includes("spoil")) throw new Error("Spoil must be its own job");
+        if (typ === "spoil" && /back ?slab|slab clean|back blade/.test(desc.toLowerCase())) throw new Error("Backslab must be its own job");
+        if (!String(row.client || "").trim() || !address) throw new Error("Client and address are required");
+        const ref = await addDoc(collection(db, "jobs"), {
+          client: String(row.client).trim(), address, type: typ,
+          po: String(row.po || "").trim().toUpperCase().replace(/\s+/g, ""),
+          description: desc.trim(), date: row.date || "", time: "07:00", durationHrs: 4,
+          assigned: [], assignedNames: [], status: "Scheduled", notes: String(row.notes || "").trim(),
+          loads: null, editedInApp: true, source: "inbox", inboxId: id, log: [],
+          ...(row.costCode ? { costCode: String(row.costCode) } : {}),
+          ...(row.supervisorName ? { supervisorName: String(row.supervisorName).trim(), contactName: String(row.supervisorName).trim() } : {}),
+          ...(row.supervisorEmail ? { supervisorEmail: String(row.supervisorEmail).trim() } : {}),
+          ...(row.supervisorPhone ? { contactPhone: String(row.supervisorPhone).trim() } : {}),
+          createdAt: serverTimestamp(), updatedAt: serverTimestamp(), updatedBy: me.uid,
+        });
+        await markInboxImported(id, ref.id);
+      }
+      saved += 1;
+    } catch (e) { failed += 1; console.warn("import", id, e); }
+  }
+  ui.ibMode = ""; ui.ibReview = []; ui.ibDraft = {};
+  toast(failed ? `Saved ${saved}. ${failed} not saved.` : `Saved ${saved} job${saved === 1 ? "" : "s"}.`);
+  refreshAfterImport();
+}
 function bindInbox(A) {
-  const all = [...jobs, ...(ui.undated || []), ...(ui.done || [])];
-  A.querySelectorAll("[data-ib]").forEach(x => x.onclick = () => { ui.ib = x.dataset.ib; renderAdmin(); });
-  const u = A.querySelector("#ibun"); if (u) u.onchange = () => { ui.ibUnread = u.checked; renderAdmin(); };
-  const qi = A.querySelector("#iq"); if (qi) qi.oninput = () => { ui.iq = qi.value; const p = qi.selectionStart; renderAdmin(); const n = $("#iq"); n.focus(); n.setSelectionRange(p, p); };
+  const all = loadedJobs();
+  const go = () => refreshAfterImport();
+  A.querySelectorAll("[data-ib]").forEach(x => x.onclick = () => { ui.ib = x.dataset.ib; go(); });
+  const u = A.querySelector("#ibun"); if (u) u.onchange = () => { ui.ibUnread = u.checked; go(); };
+  const qi = A.querySelector("#iq"); if (qi) qi.oninput = () => { ui.iq = qi.value; const p = qi.selectionStart; go(); const n = $("#iq"); if (n) { n.focus(); n.setSelectionRange(p, p); } };
   const setRead = (id, v) => updateDoc(doc(db, "inbox", id), { read: v, readAt: serverTimestamp() }).catch(e => toast("Not saved: " + (e.code || e.message)));
   A.querySelectorAll("[data-imsg]").forEach(x => x.addEventListener("click", () => { const m = (ui.inbox || []).find(y => y.id === x.dataset.imsg); if (m && !m.read) setRead(m.id, true); }));
   A.querySelectorAll("[data-iread]").forEach(x => x.onclick = () => { const m = (ui.inbox || []).find(y => y.id === x.dataset.iread); if (m) setRead(m.id, !m.read); });
   A.querySelectorAll("[data-ijob]").forEach(x => x.onclick = () => { const j = all.find(y => y.id === x.dataset.ijob); j ? editJob(j) : toast("Job not loaded"); });
+  A.querySelectorAll("[data-iimport]").forEach(x => x.onclick = ev => { ev.preventDefault(); ev.stopPropagation(); const m = (ui.inbox || []).find(y => y.id === x.dataset.iimport); openImport(m); });
+  const bulk = A.querySelector("#ibulk"); if (bulk) bulk.onclick = () => { ui.ibMode = "bulk"; go(); };
+  const back = A.querySelector("#iback"); if (back) back.onclick = () => { ui.ibMode = ui.ibMode === "review" ? "bulk" : ""; go(); };
+  A.querySelectorAll("[data-isel]").forEach(x => x.onchange = () => {
+    const set = new Set(ui.ibSel || []);
+    if (x.checked) set.add(x.dataset.isel); else set.delete(x.dataset.isel);
+    ui.ibSel = [...set];
+  });
+  const allBtn = A.querySelector("#iall"); if (allBtn) allBtn.onclick = () => { ui.ibSel = bulkCandidates(ui.inbox || [], { today: todayStr() }).map(m => m.id); go(); };
+  const review = A.querySelector("#ireview"); if (review) review.onclick = () => {
+    const ids = [...A.querySelectorAll("[data-isel]:checked")].map(x => x.dataset.isel);
+    if (!ids.length) return toast("Select at least one email.");
+    ui.ibReview = ids; ui.ibDraft = {}; ui.ibMode = "review"; go();
+  };
+  const save = A.querySelector("#isave"); if (save) save.onclick = () => saveBulkImport(A);
 }
 // ---- Clients (clients/{id}: name, office{address,phone}, contacts[{kind,name,role,mobile,phone,email,source,default}]).
 // Workers read, admins edit. Contacts come from builders' emails (see data/clients_contacts.json).
@@ -2932,6 +3197,7 @@ function withRunOrder(list) {
 }
 function renderOperator() {
   paintBrand();
+  if (canImport()) inboxSub();
   if (!ui.forceRender && document.querySelector("#compform, #prestartform")) return;
   ui.forceRender = false;
   document.body.className = "operator";
@@ -2994,10 +3260,18 @@ function renderOperator() {
     bindOp(mine); bindStaff($("#app")); return;
   }
   if (ui.opTab === "staff") ui.opTab = "more";
+  if (ui.opTab === "inbox" && canImport()) {
+    const pool = loadedJobs();
+    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Inbox</div><div class="mob-sub">Import builder emails as jobs</div></div>
+      ${inboxView(pool)}${opTabs("more")}</div>`;
+    bindInbox($("#app")); bindOp(mine); return;
+  }
+  if (ui.opTab === "inbox") ui.opTab = "more";
   if (ui.opTab === "more") {
     const quoteBtn = canQuote() && me.role !== "admin" ? `<button type="button" class="mob-more" data-go="quotes"><b>Quotes</b><small>Guided pricing for supervisors</small></button>` : "";
     const fleetBtn = COMP.canSee() ? `<button type="button" class="mob-more" data-go="fleet"><b>Compliance</b><small>Registration and COI status</small></button>` : "";
     const staffBtn = canInvite() ? `<button type="button" class="mob-more" data-go="staff"><b>Staff</b><small>Invite operators and supervisors</small></button>` : "";
+    const inboxBtn = canImport() ? `<button type="button" class="mob-more" data-go="inbox"><b>Inbox</b><small>Import builder emails as jobs</small></button>` : "";
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">More</div><div class="mob-sub">${esc(me.name || "")} · ${esc(orgSettings().name)}</div></div>
       <div class="mob-menu">
         <button type="button" class="mob-more" data-go="hours"><b>Hours</b><small>Clock on, or add hours manually</small></button>
@@ -3011,6 +3285,7 @@ function renderOperator() {
         <button type="button" class="mob-more incbtn" data-inc=""><b>Report incident</b><small>Safety report</small></button>
         ${quoteBtn}
         ${staffBtn}
+        ${inboxBtn}
         <p class="powered pad">${esc(orgSettings().name)} · ${esc(POWERED_BY)}</p>
       </div>
       ${myIncidentsHtml()}
