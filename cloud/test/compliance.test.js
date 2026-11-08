@@ -29,6 +29,12 @@ test("fleet and policies are Pro, off on Base, and on for Heartwood only", () =>
   assert.equal(CALLUP_PLANS.pro.plan, "pro");
   assert.equal(CALLUP_PLANS.pro.features.fleet, true);
   assert.equal(CALLUP_PLANS.pro.features.policies, true);
+  assert.equal(CALLUP_PLANS.base.features.servicing, false);
+  assert.equal(CALLUP_PLANS.pro.features.servicing, true);
+  assert.equal(CALLUP_PLANS.base.features.prestart, false);
+  assert.equal(CALLUP_PLANS.pro.features.prestart, true);
+  assert.equal(CALLUP_BASE.features.servicing, false);
+  assert.equal(CALLUP_BASE.features.prestart, false);
   const heartwood = featuresFor(resolveMembership({ uid: "op1", profile: { role: "operator", name: "Sam" } }));
   assert.equal(heartwood.plan, "pro");
   assert.equal(heartwood.features.fleet, true);
@@ -86,7 +92,8 @@ test("payloads match the rules shape and staff html hides policies", () => {
   assert.equal(asset.ok, true);
   assert.equal(asset.data.rego, "PRE002");
   assert.equal(asset.data.coiExpiry, "");
-  assert.deepEqual(Object.keys(asset.data).sort(), ["coiExpiry", "coiRequired", "name", "notes", "rego", "regoExpiry", "type", "updatedBy"]);
+  assert.equal(asset.data.prestartKind, "trailer");
+  assert.deepEqual(Object.keys(asset.data).sort(), ["coiExpiry", "coiRequired", "name", "notes", "prestartKind", "rego", "regoExpiry", "type", "updatedBy"]);
   assert.equal(assetPayload({ type: "car", name: "X", rego: "", regoExpiry: "", coiRequired: false, coiExpiry: "", notes: "" }, "admin1").ok, false);
   const policy = policyPayload({
     type: "vehicle", insurer: "Preview Insurance", policyNumber: "VI-9", startDate: "2026-01-01",
@@ -160,7 +167,8 @@ test("compliance rules are additive and do not touch receipts, finance, or sched
   const app = readFileSync(new URL("../../app/app.js", import.meta.url), "utf8");
   assert.match(app, /installCompliance/);
   assert.match(app, /NAV_TOP = \["home", "chat", "inbox", "clients", "staff"\]/);
-  assert.match(app, /\["safety", "⚠", "Safety", \["safety", "swms", "compliance"\]\]/);
+  assert.match(app, /\["safety", "⚠", "Safety", \["safety", "swms", "prestart", "compliance"\]\]/);
+  assert.match(app, /data-go="prestart"/);
   assert.match(app, /<div class="mob-sec">Safety<\/div>/);
   assert.doesNotMatch(app, /NAV_TOP = \["home", "compliance"/);
   assert.match(app, /COMP\.adminBannerHtml\(\)/);

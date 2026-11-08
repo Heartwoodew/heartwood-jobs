@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { initializeTestEnvironment, assertFails, assertSucceeds } from "@firebase/rules-unit-testing";
 import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, setDoc, updateDoc, serverTimestamp, Timestamp, runTransaction, query, where } from "firebase/firestore";
 import { swmsSignatureData } from "../../app/features/swms-sign.js";
+import { itemsFor, prestartPayload, templateSeedDocs } from "../../app/features/prestart.js";
 import { ref, uploadBytes, getBytes, list, listAll, getMetadata, deleteObject } from "firebase/storage";
 
 const ALEX = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";
@@ -513,4 +514,100 @@ test("a supervisor can invite, resend and cancel; an operator cannot", async () 
   assert.equal(after.data().status, "cancelled");
   assert.equal(after.data().role, "operator");
   assert.notEqual(after.data().role, "admin");
+});
+
+function serviceRecord(uid, extra = {}) {
+  return {
+    assetId: "tipper", doneOn: "2026-05-01", reading: 1000, readingUnit: "hours",
+    serviceType: "major", servicedBy: "Chuwar Diesel", notes: "",
+    updatedBy: uid, updatedAt: serverTimestamp(), ...extra,
+  };
+}
+
+test("servicing records are staff-readable and costs stay with admins and supervisors", async () => {
+  await assertSucceeds(setDoc(doc(db(ALEX), "tenants", "heartwood", "servicing", "s1"), serviceRecord(ALEX)));
+  await assertSucceeds(setDoc(doc(db(ALEX), "tenants", "heartwood", "servicePlans", "tipper"), {
+    everyDays: 180, everyReading: 250, readingUnit: "hours", currentReading: 1280,
+    updatedBy: ALEX, updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(setDoc(doc(db(ALEX), "tenants", "heartwood", "serviceCosts", "s1"), {
+    amount: "$840", updatedBy: ALEX, updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(getDoc(doc(db("op1"), "tenants", "heartwood", "servicing", "s1")));
+  await assertSucceeds(getDoc(doc(db("op1"), "tenants", "heartwood", "servicePlans", "tipper")));
+  await assertFails(getDoc(doc(db("op1"), "tenants", "heartwood", "serviceCosts", "s1")));
+  await assertFails(getDocs(collection(db("op1"), "tenants", "heartwood", "serviceCosts")));
+  await assertFails(setDoc(doc(db("op1"), "tenants", "heartwood", "servicing", "nope"), serviceRecord("op1")));
+  await assertFails(deleteDoc(doc(db("op1"), "tenants", "heartwood", "servicing", "s1")));
+  await assertSucceeds(setDoc(doc(db("sup1"), "tenants", "heartwood", "servicing", "s2"), serviceRecord("sup1", { serviceType: "repair", reading: 0, readingUnit: "" })));
+  await assertSucceeds(setDoc(doc(db("sup1"), "tenants", "heartwood", "serviceCosts", "s2"), {
+    amount: "$150", updatedBy: "sup1", updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(getDoc(doc(db("sup1"), "tenants", "heartwood", "serviceCosts", "s1")));
+  await assertFails(setDoc(doc(db(ALEX), "tenants", "heartwood", "servicing", "bad"), serviceRecord(ALEX, { serviceType: "oil" })));
+  await assertFails(getDoc(doc(db("op2"), "tenants", "heartwood", "servicing", "s1")));
+  await assertFails(getDoc(doc(db("op1"), "tenants", "otherco", "servicing", "s9")));
+  await assertSucceeds(setDoc(doc(db("finOther"), "tenants", "otherco", "servicing", "s9"), serviceRecord("finOther")));
+  await assertFails(getDoc(doc(db(ALEX), "tenants", "otherco", "serviceCosts", "s9")));
+  await assertFails(setDoc(doc(db(ALEX), "receipts", "from-service"), { uid: ALEX, amountInc: 1 }));
+  await assertSucceeds(deleteDoc(doc(db("sup1"), "tenants", "heartwood", "serviceCosts", "s2")));
+  await assertSucceeds(deleteDoc(doc(db(PATRICK), "tenants", "heartwood", "servicing", "s1")));
+});
+
+function prestartBody(uid, extra = {}) {
+  return {
+    assetId: "tipper", assetType: "vehicle", assetName: "Preview tipper", kind: "tip-truck", day: "2026-11-06",
+    reading: 1280, readingUnit: "hours", odometer: 84210,
+    items: [{ id: "tt-hyd", result: "fail", comment: "Weep at the ram", critical: true }],
+    signerUid: uid, signerName: "Sam", signedAt: serverTimestamp(), defect: true, doNotOperate: true, resolved: false,
+    ...extra,
+  };
+}
+
+test("prestarts are create-only for staff and only an admin can resolve a defect", async () => {
+  const created = await assertSucceeds(addDoc(collection(db("op1"), "tenants", "heartwood", "prestarts"), prestartBody("op1")));
+  await assertSucceeds(getDoc(doc(db("sup1"), created.path)));
+  await assertFails(updateDoc(created, { signerName: "Someone else" }));
+  await assertFails(deleteDoc(created));
+  await assertFails(deleteDoc(doc(db(ALEX), created.path)));
+  await assertFails(updateDoc(doc(db("sup1"), created.path), {
+    resolved: true, resolvedBy: "sup1", resolvedNote: "No", resolvedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(updateDoc(doc(db(ALEX), created.path), {
+    resolved: true, resolvedBy: ALEX, resolvedNote: "Hose replaced", resolvedAt: serverTimestamp(),
+  }));
+  await assertFails(addDoc(collection(db("op1"), "tenants", "heartwood", "prestarts"), prestartBody("idle")));
+  await assertFails(getDoc(doc(db("op2"), created.path)));
+  await assertFails(setDoc(doc(db("op1"), "tenants", "heartwood", "prestartTemplates", "tip-truck"), {
+    items: [{ id: "tt-tyres", label: "Tyres", critical: true }], updatedBy: "op1", updatedAt: serverTimestamp(),
+  }));
+  const tip = templateSeedDocs([], ALEX).find(row => row.id === "tip-truck");
+  await assertSucceeds(setDoc(doc(db(ALEX), "tenants", "heartwood", "prestartTemplates", "tip-truck"), {
+    ...tip.data, updatedAt: serverTimestamp(),
+  }));
+  await assertFails(setDoc(doc(db(ALEX), "tenants", "heartwood", "prestartTemplates", "vehicle"), {
+    items: [{ id: "tt-tyres", label: "Tyres", critical: true }], updatedBy: ALEX, updatedAt: serverTimestamp(),
+  }));
+  await assertFails(setDoc(doc(db("op1"), "receipts", "from-prestart"), { uid: "op1", amountInc: 1 }));
+});
+
+test("Test Worker operator can prestart any machine and read the history", async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), "users/testworker"), { role: "operator", name: "Test Worker" });
+  });
+  const worker = db("testworker");
+  const machine = { id: "excavator", type: "plant", name: "Excavator", prestartKind: "excavator" };
+  const checks = itemsFor("excavator", []);
+  const answers = Object.fromEntries(checks.map(item => [item.id, { result: item.id === "ex-hyd" ? "fail" : "pass", comment: item.id === "ex-hyd" ? "Hose weep" : "" }]));
+  const built = prestartPayload({ asset: machine, day: "2026-11-06", reading: "410", readingUnit: "hours", odometer: "", answers, signerName: "Test Worker", items: checks }, "testworker");
+  assert.equal(built.ok, true);
+  const created = await assertSucceeds(addDoc(collection(worker, "tenants", "heartwood", "prestarts"), { ...built.data, signedAt: serverTimestamp() }));
+  const listed = await assertSucceeds(getDocs(collection(worker, "tenants", "heartwood", "prestarts")));
+  assert.equal(listed.docs.some(row => row.data().assetId === "excavator"), true);
+  await assertSucceeds(getDoc(doc(worker, "tenants", "heartwood", "prestarts", created.id)));
+  await assertFails(updateDoc(created, { signerName: "Changed" }));
+  await assertFails(deleteDoc(created));
+  await assertFails(addDoc(collection(db("noprofile"), "tenants", "heartwood", "prestarts"), prestartBody("noprofile", {
+    assetId: "excavator", assetName: "Excavator", signerName: "No Profile",
+  })));
 });

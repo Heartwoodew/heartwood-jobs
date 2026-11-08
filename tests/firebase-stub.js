@@ -93,6 +93,22 @@ function withGeo(row) {
   const geo = extra[row.id];
   return geo ? { ...row, geo } : row;
 }
+function previewJob(row) {
+  const crew = (typeof window !== "undefined" && window.HW_JOB_CREW) || {};
+  const add = crew[row.id];
+  let next = add ? {
+    ...row,
+    assigned: [...(row.assigned || []), add.uid],
+    assignedNames: [...(row.assignedNames || []), add.name],
+  } : row;
+  if (crew && (next.assigned || []).includes("admin-preview")) {
+    const names = [...(next.assignedNames || [])];
+    const idx = next.assigned.indexOf("admin-preview");
+    if (idx >= 0 && !names[idx]) names[idx] = "Alex";
+    next = { ...next, assignedNames: names };
+  }
+  return withGeo(next);
+}
 function ratesDoc() {
   if (typeof window !== "undefined" && window.HW_PREVIEW_RATES === "blank") {
     return { travelPerKm: null, materialPerUnit: null, tipPerLoad: null, machineRates: {}, labourerRate: null, labourerUnit: "hour" };
@@ -241,7 +257,7 @@ export function onSnapshot(ref, onNext) {
           exists: () => found,
           data: () => { if (!found) return undefined; const { id: _id, ...rest } = row; return rest; }
         });
-      } else if (col === "jobs") onNext(snap(JOBS.map(withGeo)));
+      } else if (col === "jobs") onNext(snap(JOBS.map(previewJob)));
       else if (col === "invites") {
         const rows = (typeof window !== "undefined" && window.HW_INVITES) || [];
         onNext(snap(rows.map(row => ({
@@ -250,7 +266,12 @@ export function onSnapshot(ref, onNext) {
           expiresAt: row.expiresAt && row.expiresAt.toDate ? row.expiresAt : chatStamp(row.expiresAt),
         }))));
       } else if (col === "fleet") onNext(snap((typeof window !== "undefined" && window.HW_FLEET) || []));
+      else if (col === "prestarts") onNext(snap((typeof window !== "undefined" && window.HW_PRESTARTS) || []));
+      else if (col === "prestartTemplates") onNext(snap((typeof window !== "undefined" && window.HW_PRESTART_TEMPLATES) || []));
       else if (col === "policies") onNext(snap((typeof window !== "undefined" && window.HW_POLICIES) || []));
+      else if (col === "servicing") onNext(snap((typeof window !== "undefined" && window.HW_SERVICING) || []));
+      else if (col === "servicePlans") onNext(snap((typeof window !== "undefined" && window.HW_SERVICE_PLANS) || []));
+      else if (col === "serviceCosts") onNext(snap((typeof window !== "undefined" && window.HW_SERVICE_COSTS) || []));
       else if (col === "swmsSignatures") {
         let rows = swmsPreviewRows();
         const uidEq = (ref._wheres || []).find(w => w.field === "uid" && w.op === "==");
