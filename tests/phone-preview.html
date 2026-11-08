@@ -88,6 +88,18 @@
       { id: "s2", amount: "$150" }
     ];
   }
+  if (q.get("prestart") === "1") {
+    window.HW_PRESTARTS = [
+      { id: "ps1", assetId: "a1", assetType: "vehicle", assetName: "Preview tipper", day: "2026-11-06", reading: 1280, readingUnit: "hours", signerUid: "patrick", signerName: "Patrick", defect: true, resolved: false,
+        items: [
+          { id: "fluids", result: "pass", comment: "" },
+          { id: "hydraulics", result: "fail", comment: "Weep at the ram" }
+        ] }
+    ];
+  }
+  if (q.get("open") === "prestartadmin") {
+    window.HW_JOB_CREW = { j3: { uid: "sam", name: "Sam" } };
+  }
   if (q.get("open") === "optimise") {
     window.HW_GEO_BY_ID = {
       j1: { lat: -27.64, lng: 152.86, query: "Lot 95 · 21 Lumen Street, Redbank Plains QLD 4301", source: "nominatim" },
@@ -298,6 +310,25 @@ if (q.get("open") === "servicing" || q.get("open") === "serviceedit") {
 if (q.get("open") === "serviceedit") {
   document.querySelector('[data-comp-edit="service"]')?.click();
   await waitFor("#compform");
+}
+if (q.get("open") === "prestart") {
+  document.querySelector('[data-tab="more"]')?.click();
+  await sleep(40);
+  document.querySelector('[data-go="fleet"]')?.click();
+  await waitFor('[data-ctab="prestart"]');
+  document.querySelector('[data-ctab="prestart"]')?.click();
+  await waitFor("#prestartform");
+  document.querySelector('#prestartform input[name="result-fluids"][value="pass"]')?.click();
+  document.querySelector('#prestartform input[name="result-tyres"][value="pass"]')?.click();
+  document.querySelector('#prestartform input[name="result-hydraulics"][value="fail"]')?.click();
+  const note = document.querySelector('#prestartform input[name="comment-hydraulics"]');
+  if (note) note.value = "Weep at the ram";
+}
+if (q.get("open") === "prestartadmin") {
+  document.querySelector('[data-view="compliance"]')?.click();
+  await waitFor('[data-ctab="prestart"]');
+  document.querySelector('[data-ctab="prestart"]')?.click();
+  await waitFor("[data-prestart], .comp-card");
 }
 if (q.get("open") === "staffservice") {
   document.querySelector('[data-tab="more"]')?.click();

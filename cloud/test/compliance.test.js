@@ -31,7 +31,10 @@ test("fleet and policies are Pro, off on Base, and on for Heartwood only", () =>
   assert.equal(CALLUP_PLANS.pro.features.policies, true);
   assert.equal(CALLUP_PLANS.base.features.servicing, false);
   assert.equal(CALLUP_PLANS.pro.features.servicing, true);
+  assert.equal(CALLUP_PLANS.base.features.prestart, false);
+  assert.equal(CALLUP_PLANS.pro.features.prestart, true);
   assert.equal(CALLUP_BASE.features.servicing, false);
+  assert.equal(CALLUP_BASE.features.prestart, false);
   const heartwood = featuresFor(resolveMembership({ uid: "op1", profile: { role: "operator", name: "Sam" } }));
   assert.equal(heartwood.plan, "pro");
   assert.equal(heartwood.features.fleet, true);

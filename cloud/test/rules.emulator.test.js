@@ -405,3 +405,37 @@ test("servicing records are staff-readable and costs stay with admins and superv
   await assertSucceeds(deleteDoc(doc(db("sup1"), "tenants", "heartwood", "serviceCosts", "s2")));
   await assertSucceeds(deleteDoc(doc(db(PATRICK), "tenants", "heartwood", "servicing", "s1")));
 });
+
+function prestartBody(uid, extra = {}) {
+  return {
+    assetId: "tipper", assetType: "vehicle", assetName: "Preview tipper", day: "2026-11-06",
+    reading: 1280, readingUnit: "hours",
+    items: [{ id: "hydraulics", result: "fail", comment: "Weep at the ram" }],
+    signerUid: uid, signerName: "Sam", signedAt: serverTimestamp(), defect: true, resolved: false,
+    ...extra,
+  };
+}
+
+test("prestarts are create-only for staff and only an admin can resolve a defect", async () => {
+  const created = await assertSucceeds(addDoc(collection(db("op1"), "tenants", "heartwood", "prestarts"), prestartBody("op1")));
+  await assertSucceeds(getDoc(doc(db("sup1"), created.path)));
+  await assertFails(updateDoc(created, { signerName: "Someone else" }));
+  await assertFails(deleteDoc(created));
+  await assertFails(deleteDoc(doc(db(ALEX), created.path)));
+  await assertFails(updateDoc(doc(db("sup1"), created.path), {
+    resolved: true, resolvedBy: "sup1", resolvedNote: "No", resolvedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(updateDoc(doc(db(ALEX), created.path), {
+    resolved: true, resolvedBy: ALEX, resolvedNote: "Hose replaced", resolvedAt: serverTimestamp(),
+  }));
+  await assertFails(addDoc(collection(db("op1"), "tenants", "heartwood", "prestarts"), prestartBody("idle")));
+  await assertFails(getDoc(doc(db("op2"), created.path)));
+  await assertFails(setDoc(doc(db("op1"), "tenants", "heartwood", "prestartTemplates", "vehicle"), {
+    items: [{ id: "tyres", label: "Tyres" }], updatedBy: "op1", updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(setDoc(doc(db(ALEX), "tenants", "heartwood", "prestartTemplates", "vehicle"), {
+    items: [{ id: "tyres", label: "Tyres" }, { id: "lights", label: "Lights" }],
+    updatedBy: ALEX, updatedAt: serverTimestamp(),
+  }));
+  await assertFails(setDoc(doc(db("op1"), "receipts", "from-prestart"), { uid: "op1", amountInc: 1 }));
+});

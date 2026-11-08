@@ -2688,7 +2688,8 @@ document.addEventListener("click", e => {
 
 CHAT = installChatApp({ db, storage, getMe: () => me, toast });
 COMP = installCompliance({
-  db, collection, doc, setDoc, deleteDoc, onSnapshot, serverTimestamp,
+  db, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp,
+  getJobs: () => [...(jobs || []), ...(ui.undated || []), ...(ui.done || [])],
   getMe: () => me, getUi: () => ui, today: todayStr, toast,
   canSeeMoney,
   rerenderAdmin: () => { if (me && me.role === "admin") { ui.forceRender = true; renderAdmin(); } },

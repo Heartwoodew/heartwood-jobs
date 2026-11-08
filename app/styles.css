@@ -888,6 +888,14 @@ body.operator .job-chat .chat-screen{height:calc(100dvh - 168px - env(safe-area-
 body.operator .comp-list{padding:0 16px 12px}
 body.operator .comp-help.pad-note{padding:4px 16px 8px}
 body.operator .comp-banner{margin:8px 16px 12px}
+.ps-row{border:0;margin:0;padding:10px 0;border-top:1px solid #eadfd3;display:grid;gap:6px}
+.ps-row legend{font-weight:750;padding:0}
+.ps-choices{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
+.ps-choices label{position:relative;display:flex;align-items:center;justify-content:center;min-height:44px;border:1px solid #eadfd3;border-radius:12px;background:#fff;font-weight:650}
+.ps-choices input{position:absolute;opacity:0;inset:0}
+.ps-choices label:has(input:checked){background:#3b2a1a;color:#f6f1ea;border-color:#3b2a1a}
+.ps-fail:has(input:checked){background:#7d1313;border-color:#7d1313}
+.ps-note input{min-height:44px}
 /* Optimise order. Cream sheet, coffee type, caramel approve. Addresses only. */
 .route-open{min-height:44px;font-weight:750}
 body.admin .mdisp .route-open{display:block;width:calc(100% - 24px);margin:10px 12px;background:#8a5a2b;border-color:#8a5a2b;color:#fff;border-radius:12px}

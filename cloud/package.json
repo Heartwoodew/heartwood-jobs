@@ -2,7 +2,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/storage-plan.test.js test/retention.test.js test/bundle.test.js test/storage-deploy-config.test.js test/capture-order.test.js test/gallery.test.js test/chat.test.js test/route-order.test.js test/swms.test.js test/compliance.test.js test/servicing.test.js",
+    "test": "node --test test/storage-plan.test.js test/retention.test.js test/bundle.test.js test/storage-deploy-config.test.js test/capture-order.test.js test/gallery.test.js test/chat.test.js test/route-order.test.js test/swms.test.js test/compliance.test.js test/servicing.test.js test/prestart.test.js",
     "test:browser": "node --test test/browser.test.js",
     "test:emulator": "firebase emulators:exec --only auth,firestore,storage --project demo-heartwood \"node --test test/rules.emulator.test.js\"",
     "deploy": "node scripts/refuse-live-deploy.js"
