@@ -1070,3 +1070,8 @@ body.operator .helper-launch{bottom:calc(84px + env(safe-area-inset-bottom))}
 .rc-paidwith { border: 0; padding: 0; margin: 4px 0; display: flex; gap: 14px; flex-wrap: wrap; }
 .rc-paidwith legend { font-weight: 600; margin-bottom: 4px; }
 .rc-decide .btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+
+/* Service due pop-up (in-app; no push notifications in this build) */
+dialog.comp-alert { max-width: 420px; border: 0; border-radius: 12px; padding: 18px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+dialog.comp-alert::backdrop { background: rgba(0,0,0,.35); }
+dialog.comp-alert h2 { margin: 0 0 8px; font-size: 1.1rem; }

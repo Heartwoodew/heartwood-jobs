@@ -82,7 +82,7 @@ test("service payloads stay plain and staff html hides the cost", () => {
   const views = serviceViews(assets, records, plans, TODAY);
   const staff = servicingHtml(views, { editable: false, showCost: false, costs: { s1: "$840" } });
   assert.match(staff, /Overdue/);
-  assert.match(staff, /Due within 30 days/);
+  assert.match(staff, /Due soon/);
   assert.match(staff, /Chuwar Diesel/);
   assert.doesNotMatch(staff, /\$840|data-comp-edit|data-comp-add/);
   const admin = servicingHtml(views, { editable: true, showCost: true, costs: { s1: "$840" } });
@@ -108,4 +108,30 @@ test("servicing rules are an additive block and do not widen storage", () => {
   assert.doesNotMatch(readFileSync(new URL("../emulator/storage.rules", import.meta.url), "utf8"), /servicing|serviceCosts/);
   assert.equal(SCHEDULING_APPROVED, false);
   assert.match(readFileSync(new URL("../../app/features/servicing.js", import.meta.url), "utf8"), /not stored in the app/);
+});
+
+test("service due point follows the last service reading and the latest prestart reading", async () => {
+  const { dueWindow, machineService, servicingHtml: html, serviceAfterReading } = await import("../../app/features/servicing.js");
+  assert.equal(dueWindow(250, "hours"), 25);
+  assert.equal(dueWindow(1000, "hours"), 50);
+  assert.equal(dueWindow(10000, "km"), 1000);
+  assert.equal(dueWindow(50000, "km"), 1000);
+  const plan = { id: "ex", everyDays: 0, everyReading: 250, readingUnit: "hours", currentReading: 0 };
+  const rec = [{ id: "s1", assetId: "ex", doneOn: "2026-10-01", reading: 1000, readingUnit: "hours", serviceType: "250hr" }];
+  const asset = { id: "ex", name: "JCB", reading: 1200, readingUnit: "hours", readingAt: "2026-11-08T01:00:00Z", readingByName: "Sam" };
+  const ok = machineService(asset, rec, plan, "2026-11-08");
+  assert.equal(ok.k, "ok"); assert.equal(ok.nextReading, 1250); assert.equal(ok.sinceService, 200); assert.equal(ok.lastReading, 1000);
+  assert.equal(ok.latest.by, "Sam"); assert.equal(ok.latest.at, "2026-11-08");
+  assert.equal(machineService({ ...asset, reading: 1230 }, rec, plan, "2026-11-08").k, "due");
+  assert.equal(machineService({ ...asset, reading: 1250 }, rec, plan, "2026-11-08").k, "overdue");
+  assert.equal(serviceAfterReading(asset, rec, plan, "2026-11-08", 1251, "hours").k, "overdue");
+  // a new service resets the due point
+  const reset = machineService({ ...asset, reading: 1260 }, [...rec, { id: "s2", assetId: "ex", doneOn: "2026-11-08", reading: 1260, readingUnit: "hours", serviceType: "250hr" }], plan, "2026-11-08");
+  assert.equal(reset.k, "ok"); assert.equal(reset.nextReading, 1510);
+  const out = html([ok], {});
+  assert.match(out, /Latest<\/span><span>1,200 hours · 8 Nov 2026 · Sam/);
+  assert.match(out, /At service<\/span><span>1,000 hours/);
+  assert.match(out, /Since service<\/span><span>200 hours/);
+  // no interval by default: no status invented
+  assert.equal(machineService(asset, rec, null, "2026-11-08").k, "none");
 });
