@@ -1033,6 +1033,9 @@ body.operator .helper-launch{bottom:calc(84px + env(safe-area-inset-bottom))}
 .helper-input{flex:1;min-height:48px;max-height:120px;border-radius:12px;border:1px solid #eadfd3;padding:10px 12px;font:16px/1.35 system-ui,sans-serif;resize:none;background:#fff}
 .helper-send{min-height:48px;min-width:72px;border:none;border-radius:12px;background:#8a5a2b;color:#fff;font-weight:750}
 .helper-send:disabled{opacity:.5}
+.helper-mic{min-height:48px;min-width:64px;border-radius:12px;border:1px solid #eadfd3;background:#fff;color:#3b2a1a;font-weight:750}
+.helper-mic:disabled{opacity:.45}
+.helper-mic[aria-pressed="true"]{background:#3b2a1a;color:#f6f1ea}
 .helper-card{margin-top:10px;background:#fff6ea;border:1px solid #e0a050;border-radius:14px;padding:10px 12px}
 .helper-card h3{margin:0 0 6px;font-size:16px}
 .helper-card ul{margin:0;padding-left:18px}

@@ -23,7 +23,9 @@ export async function proposeHelperAction({ membership, question, action, reader
   const at = (now instanceof Date ? now : new Date(now || Date.now())).toLocaleString("en-AU", {
     timeZone: "Australia/Brisbane", dateStyle: "short", timeStyle: "short",
   });
-  const prepared = await prepareAction({ membership, intent, reader, name, at });
+  const prepared = await prepareAction({
+    membership, intent, reader, name, at, today: dayOf(now),
+  });
   if (!prepared.ok) {
     const reply = prepared.reason === "supervisor-only"
       ? "That one is for a supervisor or admin. Nothing was changed."
@@ -64,6 +66,7 @@ export async function confirmHelperAction({ membership, proposalId, reader, stor
     reader,
     name,
     at: proposal.action.at,
+    today: dayOf(now),
   });
   if (!prepared.ok || prepared.action.type !== proposal.action.type) {
     await store.markProposal(proposal.id, { status: "denied" });
@@ -97,7 +100,18 @@ function intentFromStored(action) {
   if (action.type === "chat" && action.threadId === "staff") return { type: "chat", where: "staff", text: action.text };
   if (action.type === "chat") return { type: "chat", where: "job", jobHint: action.jobId, text: action.text, jobId: action.jobId };
   if (action.type === "job-status") return { type: "job-status", jobHint: action.jobId, status: action.status, jobId: action.jobId };
+  if (action.type === "job-edit") return { type: "job-edit", jobHint: action.jobId, jobId: action.jobId, field: action.field, value: action.value };
+  if (action.type === "prestart") return { type: "prestart", assetHint: action.assetId, day: action.day, reading: String(action.reading ?? "") };
+  if (action.type === "leave-create") return { type: "leave-create", id: action.id, leaveType: action.leaveType, start: action.start, end: action.end, startHalf: action.startHalf, endHalf: action.endHalf, reason: action.reason };
+  if (action.type === "leave-decision") return { type: "leave-decision", id: action.id, hint: action.id, status: action.status, note: action.note };
   return null;
+}
+
+function dayOf(now) {
+  const date = now instanceof Date ? now : new Date(now || Date.now());
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Australia/Brisbane", year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(date);
 }
 
 export async function cancelHelperAction({ membership, proposalId, store }) {

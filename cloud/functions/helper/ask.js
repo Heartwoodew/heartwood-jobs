@@ -69,6 +69,15 @@ export async function handleHelperAsk({
   const person = named(auth.uid, profile);
   const pack = knowledge || loadKnowledge();
   const step = data && data.step;
+  if (!membership.rulesAdmin) {
+    if (step === "status") {
+      return { ok: true, enabled: false, admin: false, reply: "", knowledge: pack.source, proposal: null };
+    }
+    return { ok: false, code: "permission-denied", reply: DENIED_REPLY };
+  }
+  if (step === "status") {
+    return { ok: true, enabled: !!enabled, admin: true, reply: "", knowledge: pack.source, proposal: null };
+  }
   if (step === "confirm") {
     const confirmed = await confirmHelperAction({
       membership, proposalId: data.proposalId, reader, store, now, name: person,
@@ -94,7 +103,7 @@ export async function handleHelperAsk({
     return { ok: true, enabled: !!enabled, reply: proposed.reply, proposal: proposed.proposal || null, knowledge: pack.source };
   }
   if (!enabled) {
-    return { ok: true, enabled: false, reply: DISABLED_REPLY, knowledge: pack.source, proposal: null };
+    return { ok: true, enabled: false, admin: true, reply: DISABLED_REPLY, knowledge: pack.source, proposal: null };
   }
   const question = typeof data?.question === "string" ? data.question.trim() : "";
   if (!question || question.length > QUESTION_CAP) {
