@@ -1298,7 +1298,7 @@ function hxPanel(ws) {
   if (!me || me.role !== "admin") return "";
   const L = (ui.hxList || []).filter(x => x.weekStart === ws).slice(0, 3);
   return `<div class="ts-card hx-card"><h3>Hours spreadsheet for accounts</h3>
-    <p class="sub">Builds an Excel file (.xlsx) of everyone's hours for Mon ${dmy(ws)} – Sun ${dmy(addDays(ws, 6))}. Each day is listed, with clock times, breaks, and that day's total. Days with no hours show approved leave, a pending request, or Day off. It saves on this device and emails ${ACCOUNTS_TO}.</p>
+    <p class="sub">Builds an Excel file (.xlsx) for Mon ${dmy(ws)} – Sun ${dmy(addDays(ws, 6))}. The first sheet is hours for each day. A leave day shows Annual, Sick, Other, or Pending. The second sheet lists each shift. It saves on this device and emails ${ACCOUNTS_TO}.</p>
     <div class="btns"><button type="button" class="sm-btn primary" id="hxgo"${ui.hxBusy ? " disabled" : ""}>${ui.hxBusy ? "Building…" : "📊 Make & send hours spreadsheet"}</button>
     <button type="button" class="sm-btn" id="hxdl"${ui.hxBusy ? " disabled" : ""}>Download only</button></div>
     ${ui.hxErr ? `<p class="err" role="alert" id="hxerr">${esc(ui.hxErr)}</p>` : ""}
