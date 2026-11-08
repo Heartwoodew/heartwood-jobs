@@ -1,0 +1,137 @@
+# Reimbursement claim rule additions
+
+Paste each block into the live rules for `heartwood-9f37f`. Firestore goes after `// END LEAVE RULES`, inside `match /databases/{database}/documents`. Storage goes after `// END LEAVE CERTIFICATE RULES`, inside `match /b/{bucket}/o`. The Firestore block uses the live helpers `isAlex`, `isPatrick`, `hasProfile` and `profile`. Claims use the new `reimbursementClaims` collection. The owner-only `reimbursements` ledger and the `receipts` rules are not touched.
+
+## Firestore
+
+```
+// BEGIN REIMBURSEMENT CLAIM RULES
+    function rcSignedIn() { return request.auth != null; }
+    function rcStaff() {
+      return rcSignedIn() && (
+        isAlex() || isPatrick() || (
+          hasProfile() && (!("tenantId" in profile()) || profile().tenantId == "heartwood")
+        )
+      );
+    }
+    function rcAdmin() {
+      return rcStaff() && (isAlex() || isPatrick() || (hasProfile() && profile().role == "admin"));
+    }
+    function rcReceiptPath(uid, id) {
+      return request.resource.data.receiptPath == ""
+        || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.pdf"
+        || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.jpg"
+        || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.png"
+        || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.webp";
+    }
+    function rcCreate(id) {
+      return rcStaff()
+        && id.matches('^rc[a-z0-9]{16}$')
+        && request.resource.data.keys().hasOnly(["uid", "name", "date", "amountCents", "supplier", "category", "notes", "paidWith", "jobId", "jobLabel", "receiptPath", "receiptName", "status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "paidAt", "createdAt", "updatedAt"])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80
+        && request.resource.data.date is string
+        && request.resource.data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && request.resource.data.amountCents is int
+        && request.resource.data.amountCents > 0
+        && request.resource.data.amountCents <= 10000000
+        && request.resource.data.supplier is string
+        && request.resource.data.supplier.size() > 0
+        && request.resource.data.supplier.size() <= 120
+        && (request.resource.data.category == "fuel" || request.resource.data.category == "tip-fees" || request.resource.data.category == "parts" || request.resource.data.category == "tools" || request.resource.data.category == "consumables" || request.resource.data.category == "other")
+        && request.resource.data.notes is string
+        && request.resource.data.notes.size() <= 1000
+        && (request.resource.data.paidWith == "personal-card" || request.resource.data.paidWith == "cash")
+        && request.resource.data.jobId is string
+        && request.resource.data.jobId.matches('^[A-Za-z0-9_-]{0,80}$')
+        && request.resource.data.jobLabel is string
+        && request.resource.data.jobLabel.size() <= 160
+        && rcReceiptPath(request.auth.uid, id)
+        && request.resource.data.receiptName is string
+        && request.resource.data.receiptName.size() <= 120
+        && (request.resource.data.receiptPath == ""
+          ? request.resource.data.receiptName == ""
+          : request.resource.data.receiptName.size() > 0)
+        && request.resource.data.status == "submitted"
+        && request.resource.data.decisionNote == ""
+        && request.resource.data.decidedBy == ""
+        && request.resource.data.decidedByName == ""
+        && request.resource.data.decidedAt == null
+        && request.resource.data.paidAt == null
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+    }
+    function rcStep() {
+      return (resource.data.status == "submitted" && (request.resource.data.status == "approved" || request.resource.data.status == "declined" || request.resource.data.status == "paid"))
+        || (resource.data.status == "approved" && (request.resource.data.status == "paid" || request.resource.data.status == "declined"));
+    }
+    function rcDecision() {
+      return rcAdmin()
+        && rcStep()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "paidAt", "updatedAt"])
+        && request.resource.data.decisionNote is string
+        && request.resource.data.decisionNote.size() <= 500
+        && request.resource.data.decidedBy == request.auth.uid
+        && request.resource.data.decidedByName is string
+        && request.resource.data.decidedByName.size() > 0
+        && request.resource.data.decidedByName.size() <= 80
+        && request.resource.data.decidedAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && (request.resource.data.status == "paid"
+          ? request.resource.data.paidAt == request.time
+          : request.resource.data.paidAt == null);
+    }
+
+    match /reimbursementClaims/{id} {
+      allow read: if rcStaff() && (
+        rcAdmin()
+        || (resource != null && resource.data.uid == request.auth.uid)
+        || (resource == null && id.matches('^rc[a-z0-9]{16}$'))
+      );
+      allow create: if rcCreate(id);
+      allow update: if rcDecision();
+      allow delete: if false;
+    }
+// END REIMBURSEMENT CLAIM RULES
+```
+
+## Storage
+
+```
+// BEGIN REIMBURSEMENT RECEIPT RULES
+    function rcFileSignedIn() { return request.auth != null; }
+    function rcFileIsAlex() { return rcFileSignedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
+    function rcFileIsPatrick() { return rcFileSignedIn() && request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"; }
+    function rcFileAdmin() {
+      return rcFileIsAlex() || rcFileIsPatrick() || (
+        rcFileSignedIn() && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.get("role", "") == "admin"
+      );
+    }
+    function rcFileOk(uid, claimId, file) {
+      return request.auth.uid == uid
+        && claimId.matches('^rc[a-z0-9]{16}$')
+        && request.resource.size > 0
+        && request.resource.size <= 10 * 1024 * 1024
+        && request.resource.metadata.purpose == "reimbursement-receipt"
+        && request.resource.metadata.uploaderUid == request.auth.uid
+        && request.resource.metadata.claimId == claimId
+        && (
+          (file == "receipt.pdf" && request.resource.contentType == "application/pdf")
+          || (file == "receipt.jpg" && request.resource.contentType == "image/jpeg")
+          || (file == "receipt.png" && request.resource.contentType == "image/png")
+          || (file == "receipt.webp" && request.resource.contentType == "image/webp")
+        );
+    }
+    function rcFileReader(uid) {
+      return rcFileSignedIn() && (request.auth.uid == uid || rcFileAdmin());
+    }
+
+    match /reimbursements/{uid}/{claimId}/{file} {
+      allow read: if rcFileReader(uid);
+      allow create: if rcFileSignedIn() && rcFileOk(uid, claimId, file);
+      allow update, delete: if false;
+    }
+// END REIMBURSEMENT RECEIPT RULES
+```

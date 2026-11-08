@@ -32,6 +32,10 @@ import {
   assignmentWarning, cellLeaveText, certificateContentType, certificateObjectName, certificateStoragePath,
   leaveCreateBody, leaveDecisionBody, leaveScreenHtml, newLeaveId, plannerLeaveHtml, saveCertificate, certificateDownloadName, weekLeaveHtml,
 } from "./features/leave.js";
+import {
+  claimCreateBody, claimDecisionBody, claimsScreenHtml, newClaimId, receiptContentType, receiptDownloadName,
+  receiptObjectName, receiptStoragePath, RECEIPT_MAX_BYTES,
+} from "./features/claims.js";
 
 const cfg = useEmulator ? { ...firebaseConfig, apiKey: "demo-key", projectId: "demo-heartwood" } : firebaseConfig;
 const fb = initializeApp(cfg);
@@ -122,7 +126,7 @@ onAuthStateChanged(auth, async user => {
       ui.invites = s.docs.map(d => ({ id: d.id, ...d.data() })); ui.invitesErr = "";
       if (ui.view === "staff") renderAdmin();
     }, e => { ui.invites = []; ui.invitesErr = e.code || "permission-denied"; if (ui.view === "staff") renderAdmin(); });
-    unsub = () => { u1(); u2(); u3(); u4(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start(); leaveStart();
+    unsub = () => { u1(); u2(); u3(); u4(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start(); leaveStart(); claimsStart();
     getDocs(query(collection(db, "jobs"), where("date", "==", ""))).then(s => { ui.undated = s.docs.map(d => ({ id: d.id, ...d.data() })); addNameOnlyStaff(ui.undated); renderAdmin(); });
   } else {
     // Operators may only list jobs assigned to them (enforced by firestore.rules).
@@ -136,7 +140,7 @@ onAuthStateChanged(auth, async user => {
       }, e => { ui.invites = []; ui.invitesErr = e.code || "permission-denied"; if ((ui.opTab || "today") === "staff") renderOperator(); })
       : () => {};
     if (canInvite() && window.HW_PREVIEW_VIEW === "staff") ui.opTab = "staff";
-    unsub = () => { u1(); u3(); u4(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start(); leaveStart();
+    unsub = () => { u1(); u3(); u4(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start(); leaveStart(); claimsStart();
   }
 });
 
@@ -307,7 +311,7 @@ const jobNo = j => j.sm8JobNo ? j.sm8JobNo : "HW-" + String(j.id || "").slice(-4
 const firstLine = s => String(s || "").split(/\n|\. /)[0];
 const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Unscheduled";
 const NAV = [["home", "⌂", "Home"], ["compliance", "🚐", "Compliance"], ["prestart", "☑", "Prestart"], ["chat", "💬", "Chat"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["staff", "👥", "Staff"], ["inbox", "✉", "Inbox", 0, 1],
-  ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["leave", "🌴", "Leave"], ["reimb", "💵", "Reimbursements", 0, 1], ["settings", "⚙", "Organisation"]];
+  ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["leave", "🌴", "Leave"], ["claims", "🧾", "Reimbursements"], ["reimb", "💵", "Receipt ledger", 0, 1], ["settings", "⚙", "Organisation"]];
 ui.view = "home"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
 const PHONE = matchMedia("(max-width:760px)");
 const TOUCH = matchMedia("(pointer:coarse)");
@@ -315,7 +319,7 @@ PHONE.addEventListener?.("change", () => { if (me && me.role === "admin") render
 // Grouped side menu: top items, then collapsible groups (open/closed remembered on this device; the group holding the current screen is always open).
 const NAV_TOP = ["home", "chat", "inbox", "clients", "staff"];
 const NAV_FOOT = ["settings"];
-const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "jobs", "unscheduled", "quotes", "completed", "myjobs"]], ["money", "$", "Money", ["invoices", "reimb", "timesheet", "leave"]], ["safety", "⚠", "Safety", ["safety", "swms", "prestart", "compliance"]]];
+const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "jobs", "unscheduled", "quotes", "completed", "myjobs"]], ["money", "$", "Money", ["invoices", "claims", "reimb", "timesheet", "leave"]], ["safety", "⚠", "Safety", ["safety", "swms", "prestart", "compliance"]]];
 const NAV_LBL = { safety: "Incidents" };
 ui.navCol = (() => { try { return JSON.parse(localStorage.getItem("hwNavCol") || "{}"); } catch { return {}; } })();
 function shell(inner) {
@@ -1440,6 +1444,126 @@ function bindLeave(A) {
   A.querySelectorAll(".lv-cert").forEach(btn => { btn.onclick = () => openLeaveCert(btn.dataset.cert); });
   A.querySelectorAll(".lv-cert-dl").forEach(btn => { btn.onclick = () => downloadLeaveCert(btn.dataset.cert); });
 }
+function claimsIsAdmin() {
+  return !!(me && me.role === "admin");
+}
+function claimsStop() {
+  ui.claimsUnsub?.();
+  ui.claimsUnsub = null;
+}
+function claimsStart() {
+  claimsStop();
+  if (!me) { ui.claims = []; return; }
+  const src = claimsIsAdmin()
+    ? collection(db, "reimbursementClaims")
+    : query(collection(db, "reimbursementClaims"), where("uid", "==", me.uid));
+  ui.claimsUnsub = onSnapshot(src, snap => {
+    ui.claims = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    ui.claimsErr = "";
+    if (document.activeElement?.closest?.("#claimform, .rc-decide")) return;
+    const admin = me.role === "admin" && !ui.myJobs;
+    if (admin && ui.view === "claims") renderAdmin();
+    else if (!admin && ui.opTab === "claims") renderOperator();
+  }, e => { ui.claims = []; ui.claimsErr = "Couldn't load claims (" + (e.code || "error") + ")."; });
+}
+function claimJobs() {
+  const list = [...(jobs || []), ...(claimsIsAdmin() ? (ui.undated || []) : [])];
+  const seen = new Set();
+  return list.filter(j => j && j.id && !seen.has(j.id) && seen.add(j.id))
+    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
+    .map(j => ({ id: j.id, label: `${jobNo(j)} · ${String(j.client || j.address || "").slice(0, 60)}${j.date ? " · " + j.date : ""}` }));
+}
+function claimsArgs() {
+  return { claims: ui.claims || [], uid: me.uid, isAdmin: claimsIsAdmin(), jobs: claimJobs(), today: todayStr(), error: ui.claimsErr || "", filter: ui.claimsFilter || "open" };
+}
+function claimsView() {
+  return `<div class="sm-head"><h1>Reimbursements</h1><span class="sub">Staff claims for things they paid for</span></div><div class="lv-wrap">${claimsScreenHtml(claimsArgs())}</div>`;
+}
+async function downloadClaimReceipt(id) {
+  const row = (ui.claims || []).find(item => item.id === id);
+  if (!row || !row.receiptPath) return;
+  if (row.uid !== me.uid && !claimsIsAdmin()) { toast("Only that person and an admin can open the receipt."); return; }
+  const fileRef = storageRef(storage, row.receiptPath);
+  try {
+    const blob = await getBlob(fileRef);
+    let downloadUrl = "";
+    try {
+      const storageMod = await import("https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js");
+      downloadUrl = await storageMod.getDownloadURL(fileRef);
+    } catch { downloadUrl = ""; }
+    const saved = await saveCertificate({ blob, downloadUrl, filename: receiptDownloadName(row) });
+    if (!saved.ok) toast("Receipt not downloaded.");
+  } catch (e) {
+    toast("Receipt not downloaded (" + (e.code || "storage") + ").");
+  }
+}
+function bindClaims(A, rerender) {
+  const form = A.querySelector("#claimform");
+  if (form) form.onsubmit = async ev => {
+    ev.preventDefault();
+    const err = A.querySelector("#claimerr");
+    const say = text => { if (err) err.textContent = text; };
+    if (form.dataset.busy) return;
+    const file = form.receipt.files[0];
+    const id = newClaimId();
+    const jobSel = form.jobId;
+    const jobOpt = jobSel && jobSel.selectedOptions && jobSel.selectedOptions[0];
+    const draft = {
+      id, uid: me.uid, name: me.name, date: form.date.value, amount: form.amount.value, supplier: form.supplier.value,
+      category: form.category.value, notes: form.notes.value, paidWith: (form.querySelector("[name=paidWith]:checked") || {}).value,
+      jobId: jobSel ? jobSel.value : "", jobLabel: jobOpt ? (jobOpt.dataset.label || "") : "", receiptPath: "", receiptName: "",
+    };
+    let objectName = "";
+    if (file) {
+      objectName = receiptObjectName(file.type);
+      if (!objectName) return say("Use a photo (JPEG, PNG, WebP) or a PDF.");
+      if (file.size > RECEIPT_MAX_BYTES) return say("The receipt must be 10 MB or smaller.");
+      draft.receiptPath = receiptStoragePath(me.uid, id, objectName);
+      draft.receiptName = String(file.name || objectName).slice(0, 120);
+    }
+    const built = claimCreateBody(draft);
+    if (!built.ok) return say(built.reason);
+    form.dataset.busy = "1";
+    try {
+      if (file) {
+        try {
+          await uploadBytes(storageRef(storage, draft.receiptPath), file, {
+            contentType: receiptContentType(file.type),
+            customMetadata: { purpose: "reimbursement-receipt", uploaderUid: me.uid, claimId: id },
+          });
+        } catch (e) {
+          return say("The receipt was not saved (" + (e.code || "storage") + "). Nothing was claimed.");
+        }
+      }
+      await setDoc(doc(db, "reimbursementClaims", id), { ...built.data, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+      form.reset();
+      say("");
+      toast("Claim submitted");
+    } catch (e) {
+      say("Not saved: " + (e.code || e.message));
+    } finally {
+      delete form.dataset.busy;
+    }
+  };
+  A.querySelectorAll(".rc-decide").forEach(decide => {
+    decide.onsubmit = async ev => {
+      ev.preventDefault();
+      const status = ev.submitter && ev.submitter.value;
+      const built = claimDecisionBody({ from: decide.dataset.from, status, note: decide.note.value, uid: me.uid, name: me.name });
+      if (!built.ok) { toast(built.reason); return; }
+      try {
+        await updateDoc(doc(db, "reimbursementClaims", decide.dataset.id), {
+          ...built.data, decidedAt: serverTimestamp(), paidAt: status === "paid" ? serverTimestamp() : null, updatedAt: serverTimestamp(),
+        });
+        toast(status === "approved" ? "Claim approved" : status === "paid" ? "Marked paid" : "Claim declined");
+      } catch (e) {
+        toast("Not saved: " + (e.code || e.message));
+      }
+    };
+  });
+  A.querySelectorAll("[data-rc-receipt]").forEach(btn => { btn.onclick = () => downloadClaimReceipt(btn.dataset.rcReceipt); });
+  A.querySelectorAll("[data-rc-filter]").forEach(btn => { btn.onclick = () => { ui.claimsFilter = btn.dataset.rcFilter; rerender(); }; });
+}
 async function tsLoad(ws) {
   const snap = await getDoc(doc(db, "timesheets", `${me.uid}_${ws}`));
   return snap.exists() ? { id: snap.id, ...snap.data() } : null;
@@ -1898,6 +2022,7 @@ function renderAdmin() {
   if (!ui.tsForce && ui.view === "timesheet" && (ui.tsBusy || ui.tsAsk || (ui.tsMachineShift && document.getElementById("tsmachine")))) return;
   if (!ui.tsForce && ui.view === "timesheet" && (ui.tsDirty || ui.tsEdit) && ($("#tsman") || $("#tsf"))) return;
   if (ui.view === "leave" && document.activeElement?.closest?.("#leaveform, .lv-decide")) return;
+  if (ui.view === "claims" && document.activeElement?.closest?.("#claimform, .rc-decide")) return;
   if (ui.view === "chat" && document.activeElement?.closest?.(".chat-compose")) return;
   if (ui.view === "staff" && document.activeElement?.closest?.("#invitef")) return;
   document.body.className = "admin";
@@ -1906,7 +2031,7 @@ function renderAdmin() {
   const quotesHtml = ui.view === "quotes" ? adminViewRouter(ui.view, ui, { esc, $$, staff, jobs: all, todayStr, rerender: () => renderAdmin(), canEditQuoteRates }) : null;
   const staffHtml = ui.view === "staff" ? staffViewHtml(ui.invites || [], { now: inviteDisplayNow(), error: ui.invitesErr || "" }) : null;
   paintBrand();
-  $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : quotesHtml != null ? quotesHtml : jobsView(all));
+  $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : quotesHtml != null ? quotesHtml : jobsView(all));
   const A = $("#app"); inboxBadge();
   CHAT.watch([...(jobs || []), ...(ui.undated || [])]);
   if (ui.view === "chat") CHAT.mount(A);
@@ -1916,6 +2041,7 @@ function renderAdmin() {
   if (ui.view === "reimb") bindReimb(A);
   if (ui.view === "timesheet") bindTs(A, renderAdmin);
   if (ui.view === "leave") bindLeave(A);
+  if (ui.view === "claims") bindClaims(A, renderAdmin);
   if (ui.view === "quotes") QG.bindAdmin({ ui, A });
   if (ui.view === "staff") bindStaff(A);
   if (ui.view === "compliance" || ui.view === "prestart") COMP.bind(A);
@@ -2762,6 +2888,12 @@ function renderOperator() {
       <div class="pad">${leaveScreenHtml({ requests: ui.leave || [], uid: me.uid, canDecide: leaveCanDecide(), canOpenCert: leaveCanOpen() })}</div>${opTabs("more")}</div>`;
     bindOp(mine); bindLeave($("#app")); return;
   }
+  if (ui.opTab === "claims" && document.activeElement?.closest?.("#claimform, .rc-decide")) return;
+  if (ui.opTab === "claims" && !ui.opSel) {
+    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Reimbursements</div><div class="mob-sub">Claim back what you paid for</div></div>
+      <div class="pad">${claimsScreenHtml(claimsArgs())}</div>${opTabs("more")}</div>`;
+    bindOp(mine); bindClaims($("#app"), renderOperator); return;
+  }
   if (ui.opTab === "prestart" && COMP.canPrestart()) {
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Prestart</div><div class="mob-sub">Any machine · before you use it</div></div>
       ${COMP.staffHtml()}${opTabs("prestart")}</div>`;
@@ -2793,6 +2925,7 @@ function renderOperator() {
       <div class="mob-menu">
         <button type="button" class="mob-more" data-go="hours"><b>Hours</b><small>Clock on, or add hours manually</small></button>
         <button type="button" class="mob-more" data-go="leave"><b>Leave</b><small>Annual, sick, or other</small></button>
+        <button type="button" class="mob-more" data-go="claims"><b>Reimbursements</b><small>Claim back fuel, parts, tip fees…</small></button>
         <button type="button" class="mob-more" data-go="done"><b>Completed</b><small>Finished in the last 30 days</small></button>
         <div class="mob-sec">Safety</div>
         <button type="button" class="mob-more" data-go="swms"><b>SWMS</b><small>Read and sign</small></button>
