@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { initializeTestEnvironment, assertFails, assertSucceeds } from "@firebase/rules-unit-testing";
 import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, setDoc, updateDoc, serverTimestamp, Timestamp, runTransaction, query, where } from "firebase/firestore";
+import { swmsSignatureData } from "../../app/features/swms-sign.js";
 import { ref, uploadBytes, getBytes, list, listAll, getMetadata, deleteObject } from "firebase/storage";
 
 const ALEX = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";
@@ -333,10 +334,8 @@ test("rules-admins create operator invites and staff cannot read or self-assign 
   await assertFails(getDocs(collection(db(ALEX), "inviteEmails")));
   await assertFails(getDoc(doc(db("op1"), "inviteEmails", email)));
   await assertFails(getDocs(query(collection(db("op1"), "invites"), where("tenantId", "==", "heartwood"))));
-  await assertFails(getDocs(query(collection(db("sup1"), "invites"), where("tenantId", "==", "heartwood"))));
   await assertFails(getDocs(query(collection(env.unauthenticatedContext().firestore(), "invites"), where("tenantId", "==", "heartwood"))));
   await assertFails(writeInvite("op1", "operator.invite@example.com", { token: "d".repeat(43) }));
-  await assertFails(writeInvite("sup1", "supervisor.invite@example.com", { token: "e".repeat(43) }));
   await assertSucceeds(writeInvite(PATRICK, "patrick.staff@example.com", { token: "f".repeat(43) }));
   await assertFails(getDoc(doc(db("finOther"), created.path)));
   await assertFails(writeInvite("finOther", "cross.tenant@example.com", { tenantId: "heartwood", token: "g".repeat(43) }));
@@ -404,4 +403,114 @@ test("invite shape rejects admin, a second pending email, and a client accept", 
   assert.equal(after.data().role, "operator");
   assert.equal(after.data().token, "t".repeat(43));
   assert.equal(after.data().email, email);
+});
+
+function fleetBody(uid, extra = {}) {
+  return {
+    type: "vehicle", name: "Preview tipper", rego: "PRE001", regoExpiry: "2026-10-01",
+    coiRequired: true, coiExpiry: "2026-09-15", notes: "", updatedBy: uid, updatedAt: serverTimestamp(),
+    ...extra,
+  };
+}
+function policyBody(uid, extra = {}) {
+  return {
+    type: "workcover", insurer: "WorkCover Queensland", policyNumber: "WC-PREVIEW",
+    startDate: "2025-07-01", expiry: "2026-11-25", amount: "Statutory", notes: "", assetId: "",
+    updatedBy: uid, updatedAt: serverTimestamp(), ...extra,
+  };
+}
+
+test("fleet is signed-in read and admin write; policies stay admin-only", async () => {
+  await assertSucceeds(setDoc(doc(db(ALEX), "tenants", "heartwood", "fleet", "tipper"), fleetBody(ALEX)));
+  await assertSucceeds(getDoc(doc(db("op1"), "tenants", "heartwood", "fleet", "tipper")));
+  await assertSucceeds(getDocs(collection(db("sup1"), "tenants", "heartwood", "fleet")));
+  await assertFails(setDoc(doc(db("op1"), "tenants", "heartwood", "fleet", "nope"), fleetBody("op1")));
+  await assertFails(updateDoc(doc(db("op1"), "tenants", "heartwood", "fleet", "tipper"), { notes: "changed" }));
+  await assertFails(getDoc(doc(db("op2"), "tenants", "heartwood", "fleet", "tipper")));
+  await assertFails(getDocs(collection(env.unauthenticatedContext().firestore(), "tenants", "heartwood", "fleet")));
+  await assertFails(setDoc(doc(db(ALEX), "tenants", "heartwood", "fleet", "bad"), fleetBody(ALEX, { type: "insurance" })));
+
+  await assertSucceeds(setDoc(doc(db(ALEX), "tenants", "heartwood", "policies", "wc"), policyBody(ALEX)));
+  await assertSucceeds(getDoc(doc(db(PATRICK), "tenants", "heartwood", "policies", "wc")));
+  await assertFails(getDoc(doc(db("op1"), "tenants", "heartwood", "policies", "wc")));
+  await assertFails(getDocs(collection(db("sup1"), "tenants", "heartwood", "policies")));
+  await assertFails(setDoc(doc(db("op1"), "tenants", "heartwood", "policies", "leak"), policyBody("op1")));
+  await assertSucceeds(setDoc(doc(db("finOther"), "tenants", "otherco", "policies", "pl"), policyBody("finOther", { type: "public-liability", insurer: "Other Mutual" })));
+  await assertFails(getDoc(doc(db("op1"), "tenants", "otherco", "policies", "pl")));
+  await assertFails(getDoc(doc(db(ALEX), "tenants", "otherco", "policies", "pl")));
+  await assertFails(deleteDoc(doc(db("op1"), "tenants", "heartwood", "policies", "wc")));
+  await assertSucceeds(deleteDoc(doc(db(ALEX), "tenants", "heartwood", "policies", "wc")));
+  await assertFails(deleteDoc(doc(db("sup1"), "tenants", "heartwood", "fleet", "tipper")));
+  await assertSucceeds(deleteDoc(doc(db(PATRICK), "tenants", "heartwood", "fleet", "tipper")));
+  await assertFails(setDoc(doc(db(ALEX), "receipts", "from-fleet"), { uid: ALEX, amountInc: 1 }));
+});
+
+const TINY_SIG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+function swmsPayload(uid, extra = {}) {
+  const now = Date.now();
+  return {
+    ...swmsSignatureData({
+      uid, name: extra.name || "Sam", swmsId: extra.swmsId || "electrical",
+      jobId: extra.jobId || "", jobLabel: extra.jobLabel || "", sig: TINY_SIG, now, device: "rules-test",
+    }),
+    signedAt: serverTimestamp(),
+  };
+}
+
+test("SWMS signatures are self-only for staff and readable by admins", async () => {
+  const mine = await assertSucceeds(addDoc(collection(db("op1"), "swmsSignatures"), swmsPayload("op1", {
+    jobId: "job1", jobLabel: "#2402 · 14 Brightvale Street",
+  })));
+  await assertSucceeds(getDoc(mine));
+  await assertSucceeds(getDocs(query(collection(db("op1"), "swmsSignatures"), where("uid", "==", "op1"))));
+  await assertFails(getDocs(collection(db("op1"), "swmsSignatures")));
+  await assertFails(getDoc(doc(db("idle"), mine.path)));
+  await assertFails(getDocs(collection(db("sup1"), "swmsSignatures")));
+  await assertSucceeds(getDocs(query(collection(db("sup1"), "swmsSignatures"), where("uid", "==", "sup1"))));
+  await assertSucceeds(getDocs(collection(db(ALEX), "swmsSignatures")));
+  await assertSucceeds(getDocs(collection(db(PATRICK), "swmsSignatures")));
+  await assertFails(addDoc(collection(db("op1"), "swmsSignatures"), swmsPayload("idle")));
+  await assertFails(addDoc(collection(db("stranger"), "swmsSignatures"), swmsPayload("stranger")));
+  await assertFails(addDoc(collection(db("op1"), "swmsSignatures"), { ...swmsPayload("op1"), signedAt: Timestamp.fromDate(new Date()) }));
+  await assertFails(addDoc(collection(db("op1"), "swmsSignatures"), { ...swmsPayload("op1"), expiresAtMs: Date.now() + 30 * 86400000 }));
+  await assertFails(addDoc(collection(db("op1"), "swmsSignatures"), { ...swmsPayload("op1"), swmsId: "made-up-method" }));
+  await assertFails(addDoc(collection(db("op1"), "swmsSignatures"), { ...swmsPayload("op1"), sig: "data:image/jpeg;base64,AAAA" }));
+  await assertFails(updateDoc(mine, { name: "Someone else" }));
+  await assertFails(deleteDoc(mine));
+  await assertFails(deleteDoc(doc(db(ALEX), mine.path)));
+  await assertFails(updateDoc(doc(db("op1"), "receipts/rOp"), { amountInc: 99 }));
+  await assertFails(setDoc(doc(db("op1"), "xeroQueue/from-swms"), { status: "queued", by: "op1" }));
+  const signedOut = env.unauthenticatedContext().firestore();
+  await assertFails(getDocs(collection(signedOut, "swmsSignatures")));
+});
+
+test("a supervisor can invite, resend and cancel; an operator cannot", async () => {
+  const email = "crew.lead@example.com";
+  const created = await assertSucceeds(writeInvite("sup1", email, { token: "u".repeat(43), role: "operator" }));
+  await assertSucceeds(getDocs(query(collection(db("sup1"), "invites"), where("tenantId", "==", "heartwood"))));
+  await assertSucceeds(getDoc(doc(db("sup1"), "inviteEmails", email)));
+  await assertFails(writeInvite("op1", "crew.mate@example.com", { token: "v".repeat(43) }));
+  await assertFails(getDocs(query(collection(db("op1"), "invites"), where("tenantId", "==", "heartwood"))));
+  await assertFails(writeInvite("sup1", "not.admin@example.com", { role: "admin", token: "y".repeat(43) }));
+  const sup = db("sup1");
+  const ref = doc(sup, created.path);
+  const lock = doc(sup, "inviteEmails", email);
+  const nextExpiry = inviteExpires();
+  await assertSucceeds(runTransaction(sup, async tx => {
+    tx.update(ref, { token: "w".repeat(43), expiresAt: nextExpiry, resentAt: serverTimestamp(), resentBy: "sup1" });
+    tx.update(lock, { expiresAt: nextExpiry, status: "pending" });
+  }));
+  const op = db("op1");
+  await assertFails(runTransaction(op, async tx => {
+    tx.update(doc(op, created.path), { status: "cancelled", cancelledAt: serverTimestamp(), cancelledBy: "op1" });
+    tx.update(doc(op, "inviteEmails", email), { status: "cancelled" });
+  }));
+  await assertSucceeds(runTransaction(sup, async tx => {
+    tx.update(ref, { status: "cancelled", cancelledAt: serverTimestamp(), cancelledBy: "sup1" });
+    tx.update(lock, { status: "cancelled" });
+  }));
+  const after = await assertSucceeds(getDoc(ref));
+  assert.equal(after.data().status, "cancelled");
+  assert.equal(after.data().role, "operator");
+  assert.notEqual(after.data().role, "admin");
 });

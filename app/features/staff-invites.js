@@ -7,6 +7,8 @@ export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const INVITE_ROLES = Object.freeze(["operator", "supervisor"]);
 export const INVITE_LINK_ORIGIN = "https://jobs.heartwoodew.com/app";
 export const HEARTWOOD_TENANT = "heartwood";
+const ALEX_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";
+const PATRICK_UID = "R7t41e54Ykcdk9WPdVZnDd697iI2";
 
 const EMAIL_RE = /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/;
 const TOKEN_RE = /^[A-Za-z0-9_-]{43,128}$/;
@@ -72,7 +74,15 @@ export function roleLabel(role) {
 }
 
 export function canManageInvites(membership) {
-  return !!(membership && membership.ok && membership.rulesAdmin);
+  return !!(membership && membership.ok && (membership.rulesAdmin || membership.role === "supervisor"));
+}
+
+// Rules-admins (Alex, Patrick, or profile role admin) and supervisors may invite.
+// Operators cannot. The invited role is still only operator or supervisor.
+export function inviterMayInvite({ uid, profile } = {}) {
+  if (uid === ALEX_UID || uid === PATRICK_UID) return true;
+  const role = profile && profile.role;
+  return role === "admin" || role === "supervisor";
 }
 
 export function pendingInviteForEmail(invites, email) {
@@ -358,6 +368,8 @@ export async function acceptStaffInvite(input, deps) {
   if (status !== "pending") return { ok: false, reason: status === "invalid" ? "invalid" : status };
   const profile = profileFromInvite(invite);
   if (!profile) return { ok: false, reason: "invalid" };
+  const inviter = typeof deps.getInviter === "function" ? await deps.getInviter(invite.createdBy) : { uid: invite.createdBy, profile: null };
+  if (!inviterMayInvite(inviter || { uid: invite.createdBy, profile: null })) return { ok: false, reason: "invalid" };
   const existing = await deps.getUserByEmail(profile.email);
   if (existing) return { ok: false, reason: "email-in-use" };
   const user = await deps.createUser({ email: profile.email, password: input.password, displayName: profile.name });

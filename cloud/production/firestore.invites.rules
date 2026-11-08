@@ -4,7 +4,7 @@
 // Do not deploy cloud/emulator/firestore.rules. That file is an emulator model
 // and would replace jobs, quotes, receipts and the rest of the live rules.
 //
-// Invites are CallUp Base. An admin creates invites/{id} together with
+// Invites are CallUp Base. A supervisor or admin creates invites/{id} together with
 // inviteEmails/{email} in one transaction. Role is operator or supervisor.
 // The accept function (Admin SDK) is the only writer of users/{uid}.role.
 // This block does not add a users match: a second users match would be OR'd
@@ -22,7 +22,8 @@
     function inviteProfile() { return get(inviteUserPath()).data; }
     function inviteAdmin() {
       return inviteIsAlex() || inviteIsPatrick()
-        || (inviteHasProfile() && "role" in inviteProfile() && inviteProfile().role == "admin");
+        || (inviteHasProfile() && "role" in inviteProfile()
+          && (inviteProfile().role == "admin" || inviteProfile().role == "supervisor"));
     }
     function inviteCallerTenant() {
       return inviteIsAlex() || inviteIsPatrick()

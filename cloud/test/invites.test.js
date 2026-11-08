@@ -64,6 +64,9 @@ function memory(seed = []) {
       async deleteProfile(uid) {
         profiles.delete(uid);
       },
+      async getInviter(uid) {
+        return { uid, profile: { role: "supervisor", name: "Sue" } };
+      },
       async claimInvite(id, uid) {
         const row = invites.get(id);
         if (!row || displayStatus(row, NOW) !== "pending") return { ok: false, reason: displayStatus(row, NOW) };
@@ -83,14 +86,14 @@ test("CallUp Base includes staff invites and still has no Xero", () => {
   assert.equal(CALLUP_BASE.plan, "base");
 });
 
-test("only a rules-admin can manage invites", () => {
+test("supervisors and admins can manage invites; operators cannot", () => {
   const admin = resolveMembership({ uid: "1JKLsoxkQNfkphBBO0vDz2ziEyj2", profile: null });
   const patrick = resolveMembership({ uid: "R7t41e54Ykcdk9WPdVZnDd697iI2", profile: { role: "operator", name: "Patrick" } });
   const supervisor = resolveMembership({ uid: "sup1", profile: { role: "supervisor", name: "Sue" } });
   const operator = resolveMembership({ uid: "op1", profile: { role: "operator", name: "Sam" } });
   assert.equal(canManageInvites(admin), true);
   assert.equal(canManageInvites(patrick), true);
-  assert.equal(canManageInvites(supervisor), false);
+  assert.equal(canManageInvites(supervisor), true);
   assert.equal(canManageInvites(operator), false);
 });
 
@@ -126,6 +129,18 @@ test("profile role is the invited role and heartwood omits tenantId", () => {
   const other = profileFromInvite({ ...draft({ tenantId: "otherco" }).invite });
   assert.equal(other.tenantId, "otherco");
   assert.equal(profileFromInvite({ ...draft().invite, role: "admin" }), null);
+});
+
+test("an operator cannot be the inviter, and a requested admin role is ignored", async () => {
+  const store = memory([{ id: "i1", ...draft().invite }]);
+  store.deps.getInviter = async () => ({ uid: "op1", profile: { role: "operator", name: "Sam" } });
+  const denied = await acceptStaffInvite({ token: TOKEN, password: "choose-a-password", role: "admin" }, store.deps);
+  assert.equal(denied.reason, "invalid");
+  assert.equal(store.calls.createUser.length, 0);
+  store.deps.getInviter = async () => ({ uid: "1JKLsoxkQNfkphBBO0vDz2ziEyj2", profile: null });
+  const allowed = await acceptStaffInvite({ token: TOKEN, password: "choose-a-password", role: "admin" }, store.deps);
+  assert.equal(allowed.ok, true);
+  assert.equal(allowed.role, "operator");
 });
 
 test("accept ignores a requested admin role and creates the invited profile", async () => {

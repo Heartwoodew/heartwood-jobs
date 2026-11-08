@@ -53,7 +53,31 @@ const FILLED_RATES = {
   labourerRate: 55, labourerUnit: "hour"
 };
 
-const SWMS_IDS = ["working-near-roads", "mobile-plant", "working-with-silica", "hazardous-substances", "electrical"];
+const TINY_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+function swmsPreviewRows() {
+  const sig = (typeof window !== "undefined" && window.HW_SWMS_SIG) || TINY_PNG;
+  const at = iso => Date.parse(iso);
+  const row = (uid, name, swmsId, swmsTitle, when, extra = {}) => ({
+    id: uid + "-" + swmsId,
+    uid, name, swmsId, swmsTitle,
+    version: extra.version || "2026-07",
+    signedAtMs: at(when),
+    sig,
+    jobId: extra.jobId || "",
+    jobLabel: extra.jobLabel || "",
+  });
+  // Preview clock is window.HW_NOW (6 Nov 2026). These rows are not production data.
+  return [
+    row("patrick", "Patrick", "working-near-roads", "Working near roads", "2026-06-01T09:00:00+10:00", {
+      jobId: "j2", jobLabel: "#2402 · Lot 88 · 14 Brightvale Street, Redbank Plains QLD 4301",
+    }),
+    row("patrick", "Patrick", "mobile-plant", "Mobile plant", "2025-11-20T09:00:00+10:00"),
+    row("patrick", "Patrick", "working-with-silica", "Working with silica", "2025-10-01T09:00:00+10:00"),
+    row("patrick", "Patrick", "hazardous-substances", "Hazardous substances", "2026-08-01T09:00:00+10:00", { version: "2025-07" }),
+    row("sam", "Sam", "electrical", "Electrical & underground services", "2026-09-01T09:00:00+10:00"),
+    row("sam", "Sam", "mobile-plant", "Mobile plant", "2025-11-10T09:00:00+10:00"),
+  ];
+}
 
 function role() {
   return (typeof window !== "undefined" && window.HW_PREVIEW_ROLE) || "operator";
@@ -63,6 +87,11 @@ function uidFor(r) {
 }
 function snap(rows) {
   return { docs: (rows || []).map(r => ({ id: r.id, data: () => { const { id, ...rest } = r; return rest; } })) };
+}
+function withGeo(row) {
+  const extra = (typeof window !== "undefined" && window.HW_GEO_BY_ID) || {};
+  const geo = extra[row.id];
+  return geo ? { ...row, geo } : row;
 }
 function ratesDoc() {
   if (typeof window !== "undefined" && window.HW_PREVIEW_RATES === "blank") {
@@ -111,8 +140,11 @@ export function doc(a, ...parts) {
   }
   return { _col: parts.length >= 2 ? parts[parts.length - 2] : parts[0], _id: parts[parts.length - 1], _path: parts.join("/") };
 }
-export function query(ref) { return { _col: ref && ref._col, _path: ref && ref._path, _id: ref && ref._id, _q: true }; }
-export function where() { return {}; }
+export function query(ref, ...extras) {
+  const wheres = extras.filter(x => x && x._where).map(x => x._where);
+  return { _col: ref && ref._col, _path: ref && ref._path, _id: ref && ref._id, _q: true, _wheres: wheres };
+}
+export function where(field, op, value) { return { _where: { field, op, value } }; }
 export function orderBy() { return {}; }
 export function limitToLast() { return {}; }
 export function serverTimestamp() { return { _server: true }; }
@@ -140,6 +172,14 @@ export function getDoc(ref) {
   }
   if (ref && ref._col === "meta" && ref._id === "quoteRates") {
     return Promise.resolve({ exists: () => true, data: () => ratesDoc() });
+  }
+  if (ref && ref._col === "runSheets") {
+    const sheet = typeof window !== "undefined" ? window.HW_RUNSHEET : null;
+    if (sheet && sheet.id === ref._id) {
+      const { id, ...rest } = sheet;
+      return Promise.resolve({ exists: () => true, data: () => rest });
+    }
+    return Promise.resolve({ exists: () => false, data: () => undefined });
   }
   return Promise.resolve({ exists: () => false, data: () => undefined });
 }
@@ -194,13 +234,14 @@ export function onSnapshot(ref, onNext) {
         return;
       }
       if (col === "jobs" && id && id !== "auto") {
-        const row = JOBS.find(j => j.id === id);
+        const row = withGeo(JOBS.find(j => j.id === id) || {});
+        const found = JOBS.some(j => j.id === id);
         onNext({
           id,
-          exists: () => !!row,
-          data: () => { if (!row) return undefined; const { id: _id, ...rest } = row; return rest; }
+          exists: () => found,
+          data: () => { if (!found) return undefined; const { id: _id, ...rest } = row; return rest; }
         });
-      } else if (col === "jobs") onNext(snap(JOBS));
+      } else if (col === "jobs") onNext(snap(JOBS.map(withGeo)));
       else if (col === "invites") {
         const rows = (typeof window !== "undefined" && window.HW_INVITES) || [];
         onNext(snap(rows.map(row => ({
@@ -208,11 +249,13 @@ export function onSnapshot(ref, onNext) {
           createdAt: row.createdAt && row.createdAt.toDate ? row.createdAt : chatStamp(row.createdAt || row.expiresAt),
           expiresAt: row.expiresAt && row.expiresAt.toDate ? row.expiresAt : chatStamp(row.expiresAt),
         }))));
-      } else if (col === "swmsSignatures") {
-        const uid = uidFor(role());
-        onNext(snap(SWMS_IDS.map(id => ({
-          id: uid + "-" + id, uid, swmsId: id, version: "2026-07", signedAtMs: Date.now(), name: "Patrick"
-        }))));
+      } else if (col === "fleet") onNext(snap((typeof window !== "undefined" && window.HW_FLEET) || []));
+      else if (col === "policies") onNext(snap((typeof window !== "undefined" && window.HW_POLICIES) || []));
+      else if (col === "swmsSignatures") {
+        let rows = swmsPreviewRows();
+        const uidEq = (ref._wheres || []).find(w => w.field === "uid" && w.op === "==");
+        if (uidEq) rows = rows.filter(r => r.uid === uidEq.value);
+        onNext(snap(rows));
       } else onNext(snap([]));
     } catch (e) {
       if (typeof window !== "undefined") {
@@ -229,11 +272,17 @@ export function updateDoc(ref, data) {
   return Promise.resolve();
 }
 export function setDoc(ref, data) {
-  record("setDoc", { col: ref && ref._col, id: ref && ref._id });
+  record("setDoc", {
+    col: ref && ref._col, id: ref && ref._id,
+    keys: data ? Object.keys(data) : [],
+    jobIds: data && data.jobIds, status: data && data.status,
+    workerUid: data && data.workerUid,
+  });
   return Promise.resolve();
 }
 export function addDoc(ref, data) {
-  record("addDoc", { col: ref && ref._col });
+  const brief = data && typeof data.sig === "string" ? { ...data, sig: "png:" + data.sig.length } : data;
+  record("addDoc", { col: ref && ref._col, data: brief });
   return Promise.resolve({ id: "new-" + (ref && ref._col || "x") });
 }
 function storageObjects() {

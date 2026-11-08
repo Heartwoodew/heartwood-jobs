@@ -65,6 +65,10 @@ function inviteBackend() {
     async deleteProfile(uid) {
       await db.collection("users").doc(uid).delete();
     },
+    async getInviter(uid) {
+      const snap = await db.collection("users").doc(String(uid || "")).get();
+      return { uid, profile: snap.exists ? (snap.data() || null) : null };
+    },
     async claimInvite(id, uid, now) {
       return db.runTransaction(async tx => {
         const ref = db.collection("invites").doc(id);

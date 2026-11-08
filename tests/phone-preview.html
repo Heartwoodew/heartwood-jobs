@@ -30,6 +30,7 @@
 <script>
   const q = new URLSearchParams(location.search);
   window.HW_TODAY = "2026-11-06";
+  window.HW_NOW = Date.parse("2026-11-06T10:00:00+10:00");
   window.HW_PREVIEW_ROLE = q.get("role") || "operator";
   if (q.get("open") === "staff") {
     window.HW_PREVIEW_VIEW = "staff";
@@ -46,6 +47,17 @@
       expiresAt: "2026-11-14T10:00:00+10:00"
     };
   }
+  (() => {
+    const c = document.createElement("canvas");
+    c.width = 360; c.height = 120;
+    const g = c.getContext("2d");
+    g.strokeStyle = "#0b1f3a"; g.lineWidth = 4; g.lineCap = "round"; g.lineJoin = "round";
+    g.beginPath(); g.moveTo(24, 78);
+    g.bezierCurveTo(70, 20, 110, 110, 160, 64);
+    g.bezierCurveTo(210, 20, 250, 100, 330, 48);
+    g.stroke();
+    window.HW_SWMS_SIG = c.toDataURL("image/png");
+  })();
   window.HW_CHAT = {
     staff: [
       { id: "m1", senderUid: "sam", senderName: "Sam", text: "Brightvale slab is clear. The crew can start.", createdAt: "2026-11-06T07:05:00+10:00" },
@@ -61,6 +73,38 @@
     ]
   };
   window.HW_PREVIEW_RATES = q.get("rates") || "";
+  if (q.get("fleet") === "1") {
+    window.HW_FLEET = [
+      { id: "a1", type: "vehicle", name: "Preview tipper", rego: "PRE001", regoExpiry: "2026-10-01", coiRequired: true, coiExpiry: "2026-09-15", notes: "Preview only" },
+      { id: "a4", type: "plant", name: "Preview excavator", rego: "PRE004", regoExpiry: "2026-12-20", coiRequired: true, coiExpiry: "2026-11-10", notes: "" },
+      { id: "a2", type: "trailer", name: "Preview dog trailer", rego: "PRE002", regoExpiry: "2026-11-28", coiRequired: true, coiExpiry: "2027-04-01", notes: "" },
+      { id: "a3", type: "vehicle", name: "Preview ute", rego: "PRE003", regoExpiry: "2027-06-01", coiRequired: false, coiExpiry: "", notes: "" }
+    ];
+    window.HW_POLICIES = [
+      { id: "p1", type: "public-liability", insurer: "Preview Mutual", policyNumber: "PL-100", startDate: "2025-09-01", expiry: "2026-09-01", amount: "$20,000,000", notes: "Preview only", assetId: "" },
+      { id: "p2", type: "workcover", insurer: "WorkCover Queensland", policyNumber: "WC-PREVIEW", startDate: "2025-07-01", expiry: "2026-11-25", amount: "Statutory", notes: "", assetId: "" },
+      { id: "p3", type: "vehicle", insurer: "Preview Insurance", policyNumber: "VI-9", startDate: "2026-01-01", expiry: "2027-01-15", amount: "$10,000,000", notes: "", assetId: "a1" }
+    ];
+  }
+  if (q.get("open") === "optimise") {
+    window.HW_GEO_BY_ID = {
+      j1: { lat: -27.64, lng: 152.86, query: "Lot 95 · 21 Lumen Street, Redbank Plains QLD 4301", source: "nominatim" },
+      j2: { lat: -27.65, lng: 152.87, query: "Lot 88 · 14 Brightvale Street, Redbank Plains QLD 4301", source: "nominatim" },
+      j3: { lat: -27.57, lng: 152.79, query: "Lot 12 · 4 Cedar Court, Redbank Plains QLD 4301", source: "nominatim" },
+    };
+    localStorage.setItem("hwDepotGeo:v1", JSON.stringify({
+      query: "208-220 Holdsworth Rd, Chuwar QLD 4306", lat: -27.56, lng: 152.78, source: "nominatim",
+    }));
+  }
+  if (q.get("run") === "1") {
+    window.HW_RUNSHEET = {
+      id: "patrick_2026-11-06", workerUid: "patrick", workerName: "Patrick", date: "2026-11-06",
+      jobIds: ["j3", "j1", "j2"], returnToDepot: false, status: "approved",
+      depot: "208-220 Holdsworth Rd, Chuwar QLD 4306", method: "exact", provider: "osrm",
+      totalMinutes: 37, totalKm: 26.9, currentMinutes: 64, currentKm: 46.1,
+      approvedBy: "admin-preview", approvedByName: "Alex",
+    };
+  }
   window.__errs = [];
   window.addEventListener("error", e => window.__errs.push(String(e.message || e.error)));
   window.addEventListener("unhandledrejection", e => window.__errs.push(String(e.reason && (e.reason.stack || e.reason.message || e.reason))));
@@ -74,6 +118,27 @@
 <script type="module">
 const q = new URLSearchParams(location.search);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+if (q.get("open") === "optimise") {
+  const durations = [
+    [0, 1800, 1900, 300],
+    [1800, 0, 240, 1700],
+    [1900, 240, 0, 1800],
+    [300, 1700, 1800, 0],
+  ];
+  const distances = durations.map(row => row.map(s => s * 12));
+  const origFetch = window.fetch.bind(window);
+  window.fetch = (url, opts) => {
+    const u = String(url);
+    if (u.includes("router.project-osrm.org")) {
+      return Promise.resolve(new Response(JSON.stringify({ code: "Ok", durations, distances }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    }
+    if (u.includes("nominatim.openstreetmap.org") || u.includes("openrouteservice.org")) {
+      window.__routeGeoFetches = (window.__routeGeoFetches || 0) + 1;
+      return Promise.resolve(new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } }));
+    }
+    return origFetch(url, opts);
+  };
+}
 async function waitFor(sel, ms = 4000) {
   const t0 = performance.now();
   while (performance.now() - t0 < ms) {
@@ -199,6 +264,93 @@ if (q.get("open") === "jobchat") {
   await waitFor(".job-chat .chat-msg", 4000);
 }
 if (q.get("open") === "more") document.querySelector('[data-tab="more"]')?.click();
+if (q.get("fleet") === "1" && q.get("role") === "admin" && !q.get("open")) {
+  await waitFor(".comp-banner");
+  const t0 = performance.now();
+  while (performance.now() - t0 < 4000 && !(document.querySelector(".comp-banner")?.innerText || "").includes("policy")) await sleep(30);
+}
+if (q.get("open") === "fleet" || q.get("open") === "fleetedit" || q.get("open") === "policies") {
+  document.querySelector('[data-view="compliance"]')?.click();
+  await waitFor(".comp-card");
+}
+if (q.get("open") === "policies") {
+  document.querySelector('[data-ctab="policies"]')?.click();
+  await waitFor("[data-policy]");
+}
+if (q.get("open") === "fleetedit") {
+  document.querySelector("[data-comp-edit]")?.click();
+  await waitFor("#compform");
+}
+if (q.get("open") === "stafffleet") {
+  document.querySelector('[data-tab="more"]')?.click();
+  await sleep(40);
+  document.querySelector('[data-go="fleet"]')?.click();
+  await waitFor(".comp-card");
+}
+if (q.get("open") === "sign") {
+  document.querySelector('.mrow[data-id="j2"]')?.click();
+  await waitFor('[data-swms="j2"]');
+  document.querySelector('[data-swms="j2"]')?.click();
+  await waitFor('[data-swsign="electrical"]');
+  document.querySelector('[data-swsign="electrical"]')?.click();
+  await waitFor("#swpad");
+  await sleep(120);
+  document.querySelector("#swread")?.click();
+  const box = document.querySelector("#swok");
+  if (box) { box.checked = true; box.dispatchEvent(new Event("change", { bubbles: true })); }
+  const nm = document.querySelector("#swnm");
+  if (nm) { nm.value = "Patrick"; nm.dispatchEvent(new Event("input", { bubbles: true })); }
+  const pad = document.querySelector("#swpad");
+  const rect = pad.getBoundingClientRect();
+  const fire = (type, x, y) => pad.dispatchEvent(new PointerEvent(type, {
+    clientX: rect.left + x, clientY: rect.top + y, pointerId: 1, bubbles: true, cancelable: true, pointerType: "touch",
+  }));
+  fire("pointerdown", 24, 100);
+  for (let i = 1; i <= 18; i++) fire("pointermove", 24 + i * 14, 100 - Math.sin(i / 2.2) * 34);
+  fire("pointerup", 270, 72);
+  const t0 = performance.now();
+  while (document.querySelector("#swgo")?.disabled && performance.now() - t0 < 8000) await sleep(40);
+  document.querySelector("#swpad")?.scrollIntoView({ block: "center" });
+}
+if (q.get("open") === "adminswms") {
+  document.querySelector('[data-view="swms"]')?.click();
+  await waitFor(".swperson");
+  [...document.querySelectorAll(".swh")].find(n => n.textContent.includes("Team status"))?.scrollIntoView({ block: "start" });
+  await sleep(40);
+}
+if (q.get("open") === "swmspdf") {
+  document.querySelector('[data-view="swms"]')?.click();
+  await waitFor('[data-swdl="working-near-roads"]');
+  document.querySelector('[data-swdl="working-near-roads"]')?.click();
+  await waitFor("#swdl, .swdlov .swph", 8000);
+}
+if (q.get("open") === "dispatch") {
+  document.querySelector('[data-view="dispatch"]')?.click();
+  await waitFor("#optorder", 6000);
+}
+if (q.get("open") === "optimise") {
+  document.querySelector('[data-view="dispatch"]')?.click();
+  await waitFor("#optorder", 6000);
+  document.querySelector("#optorder").click();
+  await waitFor("#routesuggest", 6000);
+  document.querySelector("#routesuggest").click();
+  await waitFor(".route-leg", 8000);
+  if (q.get("tweak") === "1") {
+    document.querySelector('#routelist .route-nudge[data-dir="1"]')?.click();
+    await waitFor("#routetotals", 4000);
+    const until = performance.now() + 4000;
+    while (performance.now() < until && !/longer than the current order/.test(document.body.innerText)) await sleep(30);
+  }
+  if (q.get("approve") === "1") {
+    document.querySelector("#routeapprove")?.click();
+    const until = performance.now() + 4000;
+    while (performance.now() < until && !(window.__fbCalls || []).some(c => c.op === "setDoc" && c.col === "runSheets")) await sleep(30);
+  }
+}
+if (q.get("run") === "1") {
+  await waitFor(".run-note", 6000);
+  await waitFor('.mob-list .mrow[data-id="j3"]', 6000);
+}
 if (q.get("open") === "myjobs") document.querySelector('[data-view="myjobs"]')?.click();
 if (q.get("open") === "quotes") {
   document.querySelector('[data-tab="more"]')?.click();
@@ -243,6 +395,7 @@ if (q.get("check") === "1") {
     ok(!!document.querySelector('[data-go="swms"]'), "swms");
     ok(!!document.querySelector('[data-inc]'), "incident");
     ok(!document.querySelector('[data-go="quotes"]'), "more hides quotes");
+    ok(!document.querySelector('[data-go="staff"]'), "operator more hides staff");
     ok(!/\$\s?\d/.test(text()), "more dollars");
     document.querySelector('[data-tab="today"]')?.click();
     await sleep(40);
@@ -366,6 +519,7 @@ if (q.get("check") === "1") {
     document.querySelector('[data-tab="more"]')?.click();
     await sleep(30);
     ok(!!document.querySelector('[data-go="quotes"]'), "supervisor quotes");
+    ok(!!document.querySelector('[data-go="staff"]'), "supervisor can invite staff");
     ok(!document.querySelector("#editrates"), "supervisor cannot edit rates from more");
     document.querySelector('[data-go="quotes"]')?.click();
     await waitFor("#newquote");

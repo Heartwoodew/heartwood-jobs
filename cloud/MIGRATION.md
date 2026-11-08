@@ -149,7 +149,7 @@ Do these in order. Stop if a step is not approved.
 
 ## Staff invites
 
-CallUp Base can invite an operator or a supervisor. Admin is not an invite role. The Staff screen is rules-admin only (the same people who can list `users`). The invitee opens `https://jobs.heartwoodew.com/app?invite=<token>`, sets a password, and the accept function creates the Auth user and `users/{uid}` with the name and role from the invite. The browser never writes `role`.
+CallUp Base can invite an operator or a supervisor. Admin is not an invite role. The Staff screen is for supervisors and admins. Operators cannot see it or write invites. The invitee opens `https://jobs.heartwoodew.com/app?invite=<token>`, sets a password, and the accept function creates the Auth user and `users/{uid}` with the name and role from the invite. The browser never writes `role`.
 
 `invites/{id}` stores name, lowercased email, role, status `pending`, createdBy, createdAt, expiresAt (7 days), token, and tenantId. `inviteEmails/{email}` is the lock that stops a second pending invite for that email. Pending includes an invite whose link has expired; resend or cancel it. Accepted and cancelled invites stay in the list. Resend rotates the token and moves the expiry. Cancel makes the link stop working.
 
