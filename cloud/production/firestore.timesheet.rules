@@ -1,0 +1,177 @@
+// Firestore timesheet rules to merge into the LIVE ruleset for heartwood-9f37f.
+// Paste this block once, inside the existing:
+//   service cloud.firestore { match /databases/{database}/documents { ... } }
+// Do not deploy cloud/emulator/firestore.rules. That file is an emulator model
+// and would replace jobs, quotes, receipts and the rest of the live rules.
+// Do not deploy this block until Alex has approved it.
+//
+// timesheets/{uid}_{weekStart} is the existing week document.
+// Workers read and write only their own id. Heartwood admins (Alex, Patrick,
+// or a heartwood profile role admin) read every sheet, and may only flip the
+// sent / sentAt / sentBy flags. Clock stamps (clockOn, clockOff, breakOn,
+// breakOff) cannot be rewritten. A later edit must append one audit map entry.
+// Location is one fix map per tap: gps (lat, lng, accuracy) or "no location".
+
+// BEGIN TIMESHEET RULES
+    function tsHeartwoodAdmin() {
+      return isAlex() || isPatrick() || (
+        hasProfile() && profile().role == "admin"
+        && (!("tenantId" in profile()) || profile().tenantId == "heartwood")
+      );
+    }
+    function tsMine(id) {
+      return signedIn()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.weekStart is string
+        && request.resource.data.weekStart.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && id == request.auth.uid + "_" + request.resource.data.weekStart;
+    }
+    function tsDocOk() {
+      return request.resource.data.keys().hasOnly(["uid", "name", "weekStart", "weekEnd", "days", "entries", "totalHrs", "updatedAt", "updatedAtIso", "lastEntryId", "locationConsentAt", "sent", "sentAt", "sentBy"])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80
+        && request.resource.data.weekEnd is string
+        && request.resource.data.weekEnd >= request.resource.data.weekStart
+        && request.resource.data.days is map
+        && request.resource.data.days.size() <= 7
+        && request.resource.data.totalHrs is number
+        && request.resource.data.totalHrs >= 0
+        && request.resource.data.totalHrs <= 400
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.updatedAtIso is string
+        && request.resource.data.updatedAtIso.size() <= 40;
+    }
+    function tsFix(m) {
+      return m.keys().hasOnly(["at", "fix", "lat", "lng", "accuracy"])
+        && m.at == request.time
+        && ((m.fix == "no location" && m.keys().hasOnly(["at", "fix"]))
+          || (m.fix == "gps" && m.lat is number && m.lat >= -90 && m.lat <= 90
+            && m.lng is number && m.lng >= -180 && m.lng <= 180
+            && m.accuracy is number && m.accuracy >= 0 && m.accuracy <= 100000));
+    }
+    function tsFixSame(b, a, k) {
+      return a.source == "manual" ? !(k in a)
+        : ((!(k in a) && !(k in b)) || ((k in a) && (k in b) && a[k] == b[k]) || ((k in a) && !(k in b) && tsFix(a[k])));
+    }
+    function tsEntryCore(e) {
+      return e.keys().hasOnly(["id", "source", "status", "date", "start", "finish", "breakStart", "breakEnd", "note", "job", "clockOn", "clockOff", "breakOn", "breakOff", "enteredBy", "enteredByName", "enteredAt", "edits", "lastEditId", "machineChoice", "machineId", "machineName"])
+        && e.id == request.resource.data.lastEntryId
+        && e.id.matches('^[a-z0-9]{8,24}$')
+        && (e.source == "clock" || e.source == "manual")
+        && e.enteredBy == request.auth.uid
+        && e.enteredByName is string && e.enteredByName.size() > 0 && e.enteredByName.size() <= 80
+        && e.enteredAt is timestamp
+        && e.edits is map
+        && e.note is string && e.note.size() <= 200
+        && e.job is string && e.job.size() <= 200
+        && e.date is string && e.date.size() == 10
+        && e.start is string && e.start.size() <= 5
+        && e.finish is string && e.finish.size() <= 5
+        && ((e.source == "clock" && "clockOn" in e) || (e.source == "manual" && !e.keys().hasAny(["clockOn", "clockOff", "breakOn", "breakOff"])));
+    }
+    function tsEntryNew(e) {
+      return tsEntryCore(e) && e.enteredAt == request.time && e.edits.size() == 0 && e.lastEditId == ""
+        && tsFixSame({}, e, "clockOn") && tsFixSame({}, e, "clockOff") && tsFixSame({}, e, "breakOn") && tsFixSame({}, e, "breakOff");
+    }
+    function tsEditOk(b, a) {
+      return a.edits.diff(b.edits).removedKeys().size() == 0
+        && a.edits.diff(b.edits).changedKeys().size() == 0
+        && (a.edits.diff(b.edits).addedKeys().size() == 0
+          || (a.edits.diff(b.edits).addedKeys().hasOnly([a.lastEditId])
+            && a.edits[a.lastEditId].at == request.time
+            && a.edits[a.lastEditId].by == request.auth.uid
+            && a.edits[a.lastEditId].byName is string
+            && a.edits[a.lastEditId].summary is string
+            && a.edits[a.lastEditId].summary.size() > 0
+            && a.edits[a.lastEditId].summary.size() <= 200));
+    }
+    function tsMachineLock(b, a) {
+      return (!("machineChoice" in a) && !("machineChoice" in b))
+        || ("machineChoice" in b && a.machineChoice == b.machineChoice && a.get("machineId", "") == b.get("machineId", "") && a.get("machineName", "") == b.get("machineName", ""))
+        || (!("machineChoice" in b) && (
+          ((a.machineChoice == "none" || a.machineChoice == "skip") && a.machineId == "" && a.machineName is string && a.machineName.size() <= 80)
+          || (a.machineChoice == "asset" && a.machineId.matches('^[A-Za-z0-9_-]{1,80}$') && a.machineName is string && a.machineName.size() > 0 && a.machineName.size() <= 80)
+        ));
+    }
+    function tsEntryNext(b, a) {
+      return tsEntryCore(a) && a.source == b.source && a.enteredBy == b.enteredBy && a.enteredAt == b.enteredAt && a.id == b.id
+        && tsFixSame(b, a, "clockOn") && tsFixSame(b, a, "clockOff") && tsFixSame(b, a, "breakOn") && tsFixSame(b, a, "breakOff")
+        && tsMachineLock(b, a)
+        && tsEditOk(b, a);
+    }
+    function tsFleetReader(tenantId) {
+      return signedIn()
+        && tenantId is string
+        && tenantId.matches('^[a-z0-9][a-z0-9-]{0,39}$')
+        && (
+          ((isAlex() || isPatrick()) && tenantId == "heartwood")
+          || (hasProfile() && (
+            ("tenantId" in profile() && profile().tenantId == tenantId)
+            || (!("tenantId" in profile()) && tenantId == "heartwood")
+          ))
+        );
+    }
+    function tsOneEntry() {
+      return request.resource.data.entries is map
+        && request.resource.data.entries.size() <= 40
+        && request.resource.data.lastEntryId is string
+        && request.resource.data.entries.diff(resource.data.get("entries", {})).removedKeys().size() == 0
+        && request.resource.data.entries.diff(resource.data.get("entries", {})).affectedKeys().size() == 1
+        && request.resource.data.entries.diff(resource.data.get("entries", {})).affectedKeys().hasOnly([request.resource.data.lastEntryId])
+        && (
+          (request.resource.data.lastEntryId in resource.data.get("entries", {})
+            && tsEntryNext(resource.data.entries[request.resource.data.lastEntryId], request.resource.data.entries[request.resource.data.lastEntryId]))
+          || (!(request.resource.data.lastEntryId in resource.data.get("entries", {}))
+            && tsEntryNew(request.resource.data.entries[request.resource.data.lastEntryId]))
+        );
+    }
+    function tsWorkerCreate(id) {
+      return tsMine(id) && tsDocOk()
+        && !("sent" in request.resource.data) && !("sentAt" in request.resource.data) && !("sentBy" in request.resource.data)
+        && (!("locationConsentAt" in request.resource.data) || request.resource.data.locationConsentAt == request.time)
+        && (!("entries" in request.resource.data)
+          || (request.resource.data.entries.size() == 1
+            && request.resource.data.lastEntryId in request.resource.data.entries
+            && tsEntryNew(request.resource.data.entries[request.resource.data.lastEntryId])));
+    }
+    function tsWorkerUpdate(id) {
+      return tsMine(id) && tsDocOk()
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.weekStart == resource.data.weekStart
+        && same("sent") && same("sentAt") && same("sentBy")
+        && (!("locationConsentAt" in resource.data) && !("locationConsentAt" in request.resource.data)
+          || !("locationConsentAt" in resource.data) && request.resource.data.locationConsentAt == request.time
+          || request.resource.data.get("locationConsentAt", null) == resource.data.get("locationConsentAt", null))
+        && (request.resource.data.get("entries", {}) == resource.data.get("entries", {}) || tsOneEntry());
+    }
+    function tsSentUpdate() {
+      return tsHeartwoodAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["sent", "sentAt", "sentBy"])
+        && request.resource.data.sent is bool
+        && (request.resource.data.get("sentAt", null) == null || request.resource.data.sentAt is string)
+        && (request.resource.data.get("sentBy", null) == null || request.resource.data.sentBy == request.auth.uid);
+    }
+
+    match /timesheets/{id} {
+      allow read: if signedIn() && (
+        tsHeartwoodAdmin()
+        || (resource == null && id.matches('^' + request.auth.uid + '_[0-9]{4}-[0-9]{2}-[0-9]{2}$'))
+        || (resource != null && resource.data.uid == request.auth.uid)
+      );
+      allow create: if tsWorkerCreate(id);
+      allow update: if tsWorkerUpdate(id) || tsSentUpdate();
+      allow delete: if false;
+    }
+
+    // Read-only mirror so clock-on can list machines and today's prestart.
+    // Creates and edits stay with the compliance PR. allow write: if false does not veto those rules.
+    match /tenants/{tenantId}/fleet/{assetId} {
+      allow read: if tsFleetReader(tenantId);
+      allow write: if false;
+    }
+    match /tenants/{tenantId}/prestarts/{id} {
+      allow read: if tsFleetReader(tenantId);
+      allow write: if false;
+    }
+// END TIMESHEET RULES
