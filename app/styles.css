@@ -1062,3 +1062,11 @@ body.operator .helper-launch{bottom:calc(84px + env(safe-area-inset-bottom))}
 .lv-card .qpill{display:inline-block;margin-top:4px}
 .lv-cert-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
 .lv-cert-row .sm-btn{min-height:44px}
+
+/* Reimbursement claims */
+.rc-owed { width: 100%; border-collapse: collapse; margin: 6px 0; }
+.rc-owed th, .rc-owed td { text-align: left; padding: 6px 8px; border-bottom: 1px solid rgba(0,0,0,.08); }
+.rc-filter { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 10px; }
+.rc-paidwith { border: 0; padding: 0; margin: 4px 0; display: flex; gap: 14px; flex-wrap: wrap; }
+.rc-paidwith legend { font-weight: 600; margin-bottom: 4px; }
+.rc-decide .btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }

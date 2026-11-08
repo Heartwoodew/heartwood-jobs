@@ -255,5 +255,40 @@ service firebase.storage {
       allow update, delete: if false;
     }
 // END LEAVE CERTIFICATE RULES
+
+// BEGIN REIMBURSEMENT RECEIPT RULES
+    function rcFileSignedIn() { return request.auth != null; }
+    function rcFileIsAlex() { return rcFileSignedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
+    function rcFileIsPatrick() { return rcFileSignedIn() && request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"; }
+    function rcFileAdmin() {
+      return rcFileIsAlex() || rcFileIsPatrick() || (
+        rcFileSignedIn() && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.get("role", "") == "admin"
+      );
+    }
+    function rcFileOk(uid, claimId, file) {
+      return request.auth.uid == uid
+        && claimId.matches('^rc[a-z0-9]{16}$')
+        && request.resource.size > 0
+        && request.resource.size <= 10 * 1024 * 1024
+        && request.resource.metadata.purpose == "reimbursement-receipt"
+        && request.resource.metadata.uploaderUid == request.auth.uid
+        && request.resource.metadata.claimId == claimId
+        && (
+          (file == "receipt.pdf" && request.resource.contentType == "application/pdf")
+          || (file == "receipt.jpg" && request.resource.contentType == "image/jpeg")
+          || (file == "receipt.png" && request.resource.contentType == "image/png")
+          || (file == "receipt.webp" && request.resource.contentType == "image/webp")
+        );
+    }
+    function rcFileReader(uid) {
+      return rcFileSignedIn() && (request.auth.uid == uid || rcFileAdmin());
+    }
+
+    match /reimbursements/{uid}/{claimId}/{file} {
+      allow read: if rcFileReader(uid);
+      allow create: if rcFileSignedIn() && rcFileOk(uid, claimId, file);
+      allow update, delete: if false;
+    }
+// END REIMBURSEMENT RECEIPT RULES
   }
 }

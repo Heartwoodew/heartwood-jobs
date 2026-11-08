@@ -889,3 +889,66 @@ test("leave requests stay with the person, and a certificate is only for them an
   await assertFails(deleteObject(ref(storageOf("op1"), cert)));
   await assertFails(deleteObject(ref(storageOf(ALEX), cert)));
 });
+
+const CLAIM_ID = "rc0123456789abcdef";
+function claimBody(uid, name, extra = {}) {
+  return {
+    uid, name, date: "2026-11-08", amountCents: 4590, supplier: "Ampol", category: "fuel", notes: "",
+    paidWith: "personal-card", jobId: "", jobLabel: "", receiptPath: "", receiptName: "", status: "submitted",
+    decisionNote: "", decidedBy: "", decidedByName: "", decidedAt: null, paidAt: null,
+    createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    ...extra,
+  };
+}
+function claimStep(uid, name, status, extra = {}) {
+  return {
+    status, decisionNote: "", decidedBy: uid, decidedByName: name, decidedAt: serverTimestamp(),
+    paidAt: status === "paid" ? serverTimestamp() : null, updatedAt: serverTimestamp(), ...extra,
+  };
+}
+
+test("reimbursement claims stay with the person; only admins decide and read receipts", async () => {
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), "users/adm1"), { role: "admin", name: "Ada" });
+  });
+  const op = db("op1");
+  const id = CLAIM_ID;
+  const path = `reimbursements/op1/${id}/receipt.jpg`;
+  await assertFails(setDoc(doc(op, "reimbursementClaims", id), claimBody("op2", "Pat")));
+  await assertFails(setDoc(doc(op, "reimbursementClaims", id), claimBody("op1", "Sam", { status: "approved" })));
+  await assertFails(setDoc(doc(op, "reimbursementClaims", id), claimBody("op1", "Sam", { amountCents: 0 })));
+  await assertFails(setDoc(doc(op, "reimbursementClaims", id), claimBody("op1", "Sam", { category: "beer" })));
+  await assertFails(setDoc(doc(op, "reimbursementClaims", id), claimBody("op1", "Sam", { receiptPath: `reimbursements/op2/${id}/receipt.jpg`, receiptName: "r.jpg" })));
+  await assertFails(setDoc(doc(db("idle"), "reimbursementClaims", id), claimBody("idle", "Nobody")));
+  await assertSucceeds(setDoc(doc(op, "reimbursementClaims", id), claimBody("op1", "Sam", { receiptPath: path, receiptName: "r.jpg" })));
+  await assertSucceeds(getDoc(doc(op, "reimbursementClaims", id)));
+  await assertFails(getDocs(collection(op, "reimbursementClaims")));
+  await assertSucceeds(getDocs(query(collection(op, "reimbursementClaims"), where("uid", "==", "op1"))));
+  await assertFails(getDoc(doc(db("op2"), "reimbursementClaims", id)));
+  await assertFails(getDoc(doc(db("sup1"), "reimbursementClaims", id)));
+  await assertSucceeds(getDocs(collection(db("adm1"), "reimbursementClaims")));
+  await assertFails(updateDoc(doc(op, "reimbursementClaims", id), claimStep("op1", "Sam", "approved")));
+  await assertFails(updateDoc(doc(db("sup1"), "reimbursementClaims", id), claimStep("sup1", "Sue", "approved")));
+  await assertFails(updateDoc(doc(db(ALEX), "reimbursementClaims", id), claimStep(ALEX, "Alex", "approved", { amountCents: 1 })));
+  await assertSucceeds(updateDoc(doc(db(ALEX), "reimbursementClaims", id), claimStep(ALEX, "Alex", "approved")));
+  await assertFails(updateDoc(doc(db("adm1"), "reimbursementClaims", id), claimStep("adm1", "Ada", "submitted")));
+  await assertSucceeds(updateDoc(doc(db(PATRICK), "reimbursementClaims", id), claimStep(PATRICK, "Patrick", "paid")));
+  await assertFails(updateDoc(doc(db(ALEX), "reimbursementClaims", id), claimStep(ALEX, "Alex", "declined")));
+  await assertFails(deleteDoc(doc(db(ALEX), "reimbursementClaims", id)));
+  await assertFails(deleteDoc(doc(op, "reimbursementClaims", id)));
+
+  const meta = { contentType: "image/jpeg", customMetadata: { purpose: "reimbursement-receipt", uploaderUid: "op1", claimId: id } };
+  await assertSucceeds(uploadBytes(ref(storageOf("op1"), path), jpeg, meta));
+  await assertSucceeds(getBytes(ref(storageOf("op1"), path)));
+  await assertSucceeds(getBytes(ref(storageOf(ALEX), path)));
+  await assertSucceeds(getBytes(ref(storageOf(PATRICK), path)));
+  await assertSucceeds(getBytes(ref(storageOf("adm1"), path)));
+  await assertFails(getBytes(ref(storageOf("sup1"), path)));
+  await assertFails(getBytes(ref(storageOf("op2"), path)));
+  await assertFails(getBytes(ref(env.unauthenticatedContext().storage(), path)));
+  await assertFails(uploadBytes(ref(storageOf("op2"), path), jpeg, { contentType: "image/jpeg", customMetadata: { purpose: "reimbursement-receipt", uploaderUid: "op2", claimId: id } }));
+  await assertFails(uploadBytes(ref(storageOf("op1"), `reimbursements/op1/${id}/note.txt`), new Uint8Array([1]), { contentType: "text/plain", customMetadata: { purpose: "reimbursement-receipt", uploaderUid: "op1", claimId: id } }));
+  await assertFails(uploadBytes(ref(storageOf("op1"), path), jpeg, meta));
+  await assertFails(deleteObject(ref(storageOf("op1"), path)));
+  await assertFails(deleteObject(ref(storageOf(ALEX), path)));
+});
