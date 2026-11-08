@@ -1,13 +1,13 @@
-// CallUp Pro — Compliance.
+// CallUp compliance.
 // Fleet: registration and Queensland certificate of inspection (COI) for
 // heavy vehicles and trailers. COI is not insurance.
 // Policies: WorkCover (QLD workers' compensation) and insurance. Admin only.
 //
-// features.fleet, features.policies, features.servicing and features.prestart are on for Heartwood. Base plan stays off.
+// Fleet, policies, servicing and prestart are included for every signed-in company.
 // Paper photos are not stored. Storage has no fleet or policy path, and this
 // build does not add one. Real plates are not seeded.
 
-import { CALLUP_BASE, HEARTWOOD_TENANT, resolveMembership } from "./cloud-storage.js";
+import { CALLUP_BASE, resolveMembership } from "./cloud-storage.js";
 import { costPayload, intervalFormHtml, planPayload, serviceAfterReading, serviceAttention, serviceFormHtml, servicePayload, serviceViews, servicingHtml } from "./servicing.js";
 import { PRESTART_KINDS, assetKind, itemsFor, kindMeta, openDefects, prestartAdminHtml, prestartFormHtml, prestartHistoryHtml, prestartPayload, fleetReadingUpdate, templateFormHtml, templatePayload, templateSeedDocs } from "./prestart.js";
 
@@ -29,28 +29,23 @@ export const POLICY_TYPES = Object.freeze([
 
 export const LINKED_POLICY_TYPES = Object.freeze(["vehicle", "plant"]);
 
-// Pro includes fleet and policies. Base includes neither. Heartwood uses Pro for this section only.
-export const CALLUP_PLANS = Object.freeze({
-  base: Object.freeze({
-    plan: "base",
-    features: Object.freeze({ fleet: false, policies: false, servicing: false, prestart: false }),
-  }),
-  pro: Object.freeze({
-    plan: "pro",
-    features: Object.freeze({ fleet: true, policies: true, servicing: true, prestart: true }),
-  }),
+const FEATURES_OFF = Object.freeze({ fleet: false, policies: false, servicing: false, prestart: false });
+export const CALLUP_PLAN = Object.freeze({
+  plan: "callup",
+  features: Object.freeze({ fleet: true, policies: true, servicing: true, prestart: true }),
 });
+export const CALLUP_PLANS = Object.freeze({ callup: CALLUP_PLAN });
 
 const OVERALL = { expired: "Expired", due: "Due within 30 days", ok: "OK" };
 const RANK = { expired: 0, due: 1, ok: 2 };
 
 export function featuresFor(membership) {
-  if (membership?.ok && membership.tenantId === HEARTWOOD_TENANT) return CALLUP_PLANS.pro;
-  return CALLUP_PLANS.base;
+  if (membership?.ok) return CALLUP_PLAN;
+  return { plan: "callup", features: FEATURES_OFF };
 }
 
 export function complianceFor(me) {
-  if (!me?.uid) return CALLUP_PLANS.base;
+  if (!me?.uid) return { plan: "callup", features: FEATURES_OFF };
   return featuresFor(resolveMembership({ uid: me.uid, profile: me.cloudProfile || null }));
 }
 
@@ -673,7 +668,7 @@ export function installCompliance(deps) {
   }
 
   function adminHtml() {
-    if (!canViewFleet(plan()) && !viewService() && !viewPrestart()) return `<p class="pad">Compliance is a CallUp Pro feature.</p>`;
+    if (!canViewFleet(plan()) && !viewService() && !viewPrestart()) return `<p class="pad">Compliance is not available for this sign-in.</p>`;
     if (state.editing && state.editing.kind === "template") return prestartBlock(true);
     if (state.editing) return editHtml();
     const tab = tabOf(true);
@@ -681,7 +676,7 @@ export function installCompliance(deps) {
       : tab === "servicing" ? (editService() ? `<button type="button" class="sm-btn primary comp-add" data-comp-add="service">Add service</button>` : "")
       : tab === "prestart" ? ""
       : addMachineBtn();
-    const head = `<div class="sm-head"><h1>Compliance <span class="comp-pro">Pro</span></h1>${add}</div>${tabsHtml(tab, true)}`;
+    const head = `<div class="sm-head"><h1>Compliance</h1>${add}</div>${tabsHtml(tab, true)}`;
     if (tab === "prestart") return `${head}${prestartBlock(true)}`;
     if (tab === "servicing") return `${head}${servicingBlock(true)}`;
     if (tab === "policies") {

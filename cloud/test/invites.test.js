@@ -83,7 +83,7 @@ test("CallUp Base includes staff invites and still has no Xero", () => {
   assert.equal(CALLUP_BASE.staffPermissions, true);
   assert.equal(CALLUP_BASE.xero, false);
   assert.equal(CALLUP_BASE.invoicing, false);
-  assert.equal(CALLUP_BASE.plan, "base");
+  assert.equal(CALLUP_BASE.plan, "callup");
 });
 
 test("supervisors and admins can manage invites; operators cannot", () => {

@@ -4,6 +4,8 @@ import { paidShift, shiftHours, sortedEntries } from "./timesheet.js";
 import { exportDayLeave } from "./leave.js";
 
 export const ACCOUNTS_TO = "accounts@heartwoodew.com";
+// Heartwood's mailbox stays accounts@. Other companies pass their own accountsEmail
+// into the export record. This constant is the Heartwood default.
 const DAYS = 7;
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const SHORT_DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];

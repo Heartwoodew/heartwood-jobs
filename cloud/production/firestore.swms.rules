@@ -40,7 +40,8 @@
     }
     function swmsCreateOk() {
       return swmsCanSign()
-        && request.resource.data.keys().hasOnly(["uid", "name", "swmsId", "swmsTitle", "version", "jobId", "jobLabel", "sig", "signedAt", "signedAtMs", "expiresAtMs", "device"])
+        && request.resource.data.keys().hasOnly(["uid", "name", "swmsId", "swmsTitle", "version", "jobId", "jobLabel", "sig", "signedAt", "signedAtMs", "expiresAtMs", "device", "companyId"])
+        && (!("companyId" in request.resource.data) || request.resource.data.companyId == callerCompany())
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.name is string
         && request.resource.data.name.size() >= 2
@@ -68,7 +69,15 @@
     }
 
     match /swmsSignatures/{id} {
-      allow read: if swmsSignedIn() && (resource.data.uid == request.auth.uid || swmsIsAdmin());
+      allow get: if swmsSignedIn() && resource != null && docCompany(resource.data) == callerCompany()
+        && (resource.data.uid == request.auth.uid || swmsIsAdmin() && callerCompany() == docCompany(resource.data));
+      allow list: if swmsSignedIn() && callerCompany() == "heartwood" && resource.data.uid == request.auth.uid;
+      allow list: if swmsSignedIn() && callerCompany() != "heartwood" && resource.data.uid == request.auth.uid
+        && resource.data.companyId == callerCompany();
+      allow list: if (swmsIsAlex() || swmsIsPatrick() || (swmsHasProfile() && swmsProfile().role == "admin" && callerCompany() == "heartwood"))
+        && resource.data.companyId == "heartwood";
+      allow list: if callerCompany() != "heartwood" && swmsHasProfile() && swmsProfile().role == "admin"
+        && resource.data.companyId == callerCompany();
       allow create: if swmsCreateOk();
       allow update, delete: if false;
     }

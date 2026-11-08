@@ -1,5 +1,6 @@
 // CallUp guided Quotes (Nov 2026). Prices always ex GST.
 import { orgSettings, POWERED_BY, PRODUCT_NAME } from "../org-settings.js";
+import { scopeRecord } from "./company.js";
 // Rates from meta/quoteRates only — never invent business rates.
 // Draft/Accepted are explicit quoteStatus fields.
 // Admins + supervisors (canQuote / canSeeMoney). Rate *edits* admin-only (canEditQuoteRates).
@@ -718,7 +719,7 @@ async function createJobFromQuote(qid, q) {
     q.travelNote ? `Travel: ${q.travelNote}` : "",
     ...(q.lines || []).map(l => `• ${l.label}${l.amount != null ? `: $${Number(l.amount).toFixed(2)}` : " (rate missing)"}`),
     `Total ex GST: $${Number(q.totalEx).toFixed(2)}`].filter(Boolean).join("\n");
-  const ref = await addDoc(collection(db, "jobs"), {
+  const ref = await addDoc(collection(db, "jobs"), scopeRecord({
     client: q.client, address: q.address, type: q.type || "other", description: desc,
     date: "", time: "", status: "Scheduled", assigned: [], assignedNames: [],
     source: "quote", quoteId: qid, quoteStatus: "Accepted",
@@ -732,7 +733,7 @@ async function createJobFromQuote(qid, q) {
     machines: q.machines || [], presetId: q.presetId || null, includeLabourer: !!q.includeLabourer,
     quoteAmount: q.totalEx, poAmount: q.totalEx, poAmountBasis: "accepted quote (ex GST)", poAmountSource: "quote",
     log: [], createdAt: serverTimestamp(), updatedAt: serverTimestamp(), updatedBy: me.uid, editedInApp: true
-  });
+  }, orgSettings().companyId));
   return ref.id;
 }
 

@@ -119,6 +119,7 @@ export function buildInviteDraft({ name, email, role, createdBy, now, token, ten
       expiresAt,
       token,
       tenantId: cleanTenant,
+      ...(cleanTenant !== HEARTWOOD_TENANT ? { companyId: cleanTenant } : {}),
     },
   };
 }
@@ -131,9 +132,11 @@ export function profileFromInvite(invite) {
   const email = normalizeInviteEmail(invite.email);
   if (!name || name.length > 80 || !email) return null;
   const profile = { name, role: invite.role, email };
-  if (typeof invite.tenantId === "string" && invite.tenantId && invite.tenantId !== HEARTWOOD_TENANT) {
-    if (!TENANT_RE.test(invite.tenantId)) return null;
-    profile.tenantId = invite.tenantId;
+  const companyId = typeof invite.companyId === "string" && invite.companyId ? invite.companyId : invite.tenantId;
+  if (typeof companyId === "string" && companyId && companyId !== HEARTWOOD_TENANT) {
+    if (!TENANT_RE.test(companyId)) return null;
+    profile.tenantId = companyId;
+    profile.companyId = companyId;
   }
   return profile;
 }
@@ -261,10 +264,13 @@ export function buildInviteEmail(invite, config = {}) {
   if (!profile || !tokenOk(invite.token)) return null;
   const link = inviteLink(invite.token);
   const role = roleLabel(profile.role).toLowerCase();
+  const companyName = typeof config.companyName === "string" ? config.companyName.trim() : "";
+  const heartwood = !companyName || companyName === "Heartwood" || companyName === "Heartwood Earthworx" || companyName === "Heartwood Jobs";
+  const place = heartwood ? "Heartwood Jobs" : companyName;
   const text = [
     `Hello ${profile.name},`,
     "",
-    `You have been invited to Heartwood Jobs as ${role === "supervisor" ? "a supervisor" : "an operator"}.`,
+    `You have been invited to ${place} as ${role === "supervisor" ? "a supervisor" : "an operator"}.`,
     "Open this link and set your own password:",
     link,
     "",
@@ -272,9 +278,9 @@ export function buildInviteEmail(invite, config = {}) {
   ].join("\n");
   return {
     to: profile.email,
-    from: config.from || inviteEmailConfig().from,
+    from: config.from || (heartwood ? inviteEmailConfig().from : `${companyName} <${config.replyTo || "jobs@heartwoodew.com"}>`),
     replyTo: config.replyTo || "alex@heartwoodew.com",
-    subject: "You're invited to Heartwood Jobs",
+    subject: heartwood ? "You're invited to Heartwood Jobs" : `You're invited to ${companyName}`,
     text,
     link,
   };

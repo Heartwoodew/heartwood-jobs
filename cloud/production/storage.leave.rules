@@ -13,9 +13,12 @@
     function lvCertIsAlex() { return lvCertSignedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
     function lvCertIsPatrick() { return lvCertSignedIn() && request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"; }
     function lvCertUserPath() { return /databases/(default)/documents/users/$(request.auth.uid); }
-    function lvCertAdmin() {
-      return lvCertIsAlex() || lvCertIsPatrick() || (
-        lvCertSignedIn() && firestore.get(lvCertUserPath()).data.get("role", "") == "admin"
+    function lvCertAdmin(uid) {
+      return ((lvCertIsAlex() || lvCertIsPatrick()) && userCompanyOf(uid) == "heartwood") || (
+        lvCertSignedIn()
+        && firestore.exists(lvCertUserPath())
+        && firestore.get(lvCertUserPath()).data.get("role", "") == "admin"
+        && userCompanyOf(request.auth.uid) == userCompanyOf(uid)
       );
     }
     function lvCertFile(uid, requestId, file) {
@@ -34,7 +37,7 @@
         );
     }
     function lvCertReader(uid) {
-      return lvCertSignedIn() && (request.auth.uid == uid || lvCertAdmin());
+      return lvCertSignedIn() && (request.auth.uid == uid || lvCertAdmin(uid));
     }
 
     match /leaveCertificates/{uid}/{requestId} {

@@ -1,24 +1,32 @@
 // BEGIN HOURS EXPORT RULES
-    // hoursExports/{id}: admin queues one .xlsx hours spreadsheet for accounts@heartwoodew.com.
-    // The box sync account (tools/hours_export_mailer.py) records only the send state. No deletes.
+    // Heartwood still queues to accounts@heartwoodew.com only.
+    // Another company queues to companies/{id}.accountsEmail, never Heartwood's mailbox.
     function hxSignedIn() { return request.auth != null; }
+    function hxProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    function hxHasProfile() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+    function hxCaller() {
+      return callerCompany();
+    }
     function hxAdmin() {
       return hxSignedIn() && (
         request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2" || request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"
-        || (exists(/databases/$(database)/documents/users/$(request.auth.uid))
-          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("role", "") == "admin"
-          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("tenantId", "heartwood") == "heartwood")
+        || (hxHasProfile() && hxProfile().get("role", "") == "admin" && hxCaller() != "")
       );
     }
     function hxSync() { return hxSignedIn() && request.auth.uid == "38SU5waAy4f9UI9N6JTqDMaYpQg2"; }
-    function hxCreate(id) {
-      let d = request.resource.data;
-      return hxAdmin()
-        && id.matches('^hx[a-z0-9]{16}$')
-        && d.keys().hasOnly(["weekStart", "weekEnd", "to", "fileName", "storagePath", "people", "totalHours", "status", "attempts", "createdBy", "createdByName", "createdAt"])
+    function hxAccounts() {
+      return hxCaller() == "heartwood"
+        ? "accounts@heartwoodew.com"
+        : get(/databases/$(database)/documents/companies/$(hxCaller())).data.accountsEmail;
+    }
+    function hxShape(d, id) {
+      return id.matches('^hx[a-z0-9]{16}$')
         && d.weekStart is string && d.weekStart.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
         && d.weekEnd is string && d.weekEnd.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
-        && d.to == "accounts@heartwoodew.com"
         && d.fileName is string && d.fileName.matches('^[A-Za-z0-9_-]{1,80}[.]xlsx$')
         && d.storagePath == "hoursExports/" + id + "/" + d.fileName
         && d.people is int && d.people >= 0 && d.people <= 500
@@ -28,17 +36,36 @@
         && d.createdByName is string && d.createdByName.size() <= 80
         && d.createdAt == request.time;
     }
+    function hxCreate(id) {
+      let d = request.resource.data;
+      return hxAdmin() && hxCaller() != "" && hxShape(d, id) && (
+        (hxCaller() == "heartwood"
+          && d.keys().hasOnly(["weekStart", "weekEnd", "to", "fileName", "storagePath", "people", "totalHours", "status", "attempts", "createdBy", "createdByName", "createdAt", "companyId", "companyName"])
+          && d.companyId == "heartwood"
+          && d.companyName == "Heartwood"
+          && d.to == "accounts@heartwoodew.com")
+        || (hxCaller() != "heartwood"
+          && d.keys().hasOnly(["weekStart", "weekEnd", "to", "fileName", "storagePath", "people", "totalHours", "status", "attempts", "createdBy", "createdByName", "createdAt", "companyId", "companyName"])
+          && d.companyId == hxCaller()
+          && d.companyName is string && d.companyName.size() > 0 && d.companyName.size() <= 80
+          && d.to == hxAccounts()
+          && d.to != "accounts@heartwoodew.com"
+          && exists(/databases/$(database)/documents/companies/$(hxCaller()))
+          && get(/databases/$(database)/documents/companies/$(hxCaller())).data.isTest != true)
+      );
+    }
     function hxMark() {
       return hxSync()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "attempts", "updatedAt", "sentAt", "messageId", "error", "via"])
         && request.resource.data.status in ["sending", "sent", "failed"]
-        && request.resource.data.to == "accounts@heartwoodew.com"
         && request.resource.data.attempts is int
         && request.resource.data.get("error", "") is string && request.resource.data.get("error", "").size() <= 300
         && request.resource.data.get("messageId", "") is string && request.resource.data.get("messageId", "").size() <= 100;
     }
     match /hoursExports/{id} {
-      allow read: if hxAdmin() || hxSync();
+      allow get: if (hxAdmin() && docCompany(resource.data) == hxCaller()) || hxSync();
+      allow list: if hxAdmin() && resource.data.companyId == hxCaller();
+      allow list: if hxSync();
       allow create: if hxCreate(id);
       allow update: if hxMark();
       allow delete: if false;

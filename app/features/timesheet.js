@@ -3,6 +3,13 @@
 export const TS_LUNCH_MIN = 30;
 export const TS_CONSENT = "Location is captured only when you tap Clock on or Clock off (and Break start or Break end, if you use them). Each tap takes one fix. Heartwood does not track your location in the background. If location is denied or unavailable, the time is still recorded and marked no location.";
 
+// Heartwood keeps the sentence above. Another company name replaces only that word.
+export function locationConsent(orgName) {
+  const who = String(orgName || "").trim();
+  if (!who || who === "Heartwood" || who === "Heartwood Earthworx" || who === "Heartwood Earthworx Pty Ltd") return TS_CONSENT;
+  return TS_CONSENT.replaceAll("Heartwood", who);
+}
+
 export function needsLocationConsent({ stored, already }) {
   return !stored && !already;
 }

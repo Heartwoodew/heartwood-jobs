@@ -28,9 +28,11 @@
     function inviteCallerTenant() {
       return inviteIsAlex() || inviteIsPatrick()
         ? "heartwood"
-        : (inviteHasProfile() && "tenantId" in inviteProfile() && inviteProfile().tenantId is string && inviteProfile().tenantId.size() > 0
+        : (inviteHasProfile() && "companyId" in inviteProfile() && inviteProfile().companyId is string && inviteProfile().companyId.size() > 0
+          ? inviteProfile().companyId
+          : (inviteHasProfile() && "tenantId" in inviteProfile() && inviteProfile().tenantId is string && inviteProfile().tenantId.size() > 0
           ? inviteProfile().tenantId
-          : (inviteHasProfile() ? "heartwood" : ""));
+          : (inviteHasProfile() ? "heartwood" : "")));
     }
     function inviteEmailOk(email) {
       return email is string
@@ -55,6 +57,7 @@
         && request.resource.data.tenantId is string
         && request.resource.data.tenantId == inviteCallerTenant()
         && request.resource.data.tenantId.matches('^[a-z0-9][a-z0-9-]{0,39}$')
+        && (!("companyId" in request.resource.data) || request.resource.data.companyId == request.resource.data.tenantId)
         && request.resource.data.token is string
         && request.resource.data.token.matches('^[A-Za-z0-9_-]{43,128}$')
         && request.resource.data.createdBy is string
@@ -86,7 +89,7 @@
     function inviteCreateOk(inviteId) {
       return inviteAdmin()
         && inviteBaseOk()
-        && request.resource.data.keys().hasOnly(["name", "email", "role", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId"])
+        && request.resource.data.keys().hasOnly(["name", "email", "role", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId", "companyId"])
         && request.resource.data.status == "pending"
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.createdAt == request.time
@@ -101,7 +104,7 @@
         && request.resource.data.cancelledAt == request.time
         && inviteSame("name") && inviteSame("email") && inviteSame("role") && inviteSame("createdBy")
         && inviteSame("createdAt") && inviteSame("expiresAt") && inviteSame("token") && inviteSame("tenantId")
-        && inviteSame("resentAt") && inviteSame("resentBy")
+        && inviteSame("resentAt") && inviteSame("resentBy") && inviteSame("companyId")
         && inviteLockAgrees(request.resource.data.email, inviteId);
     }
     function inviteResendOk(inviteId) {
@@ -112,14 +115,14 @@
         && request.resource.data.resentAt == request.time
         && inviteExpiryWindow()
         && inviteSame("name") && inviteSame("email") && inviteSame("role") && inviteSame("createdBy")
-        && inviteSame("createdAt") && inviteSame("tenantId")
+        && inviteSame("createdAt") && inviteSame("tenantId") && inviteSame("companyId")
         && inviteSame("cancelledAt") && inviteSame("cancelledBy")
         && inviteLockAgrees(request.resource.data.email, inviteId);
     }
     function inviteUpdateOk(inviteId) {
       return inviteAdmin()
         && inviteBaseOk()
-        && request.resource.data.keys().hasOnly(["name", "email", "role", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId", "cancelledAt", "cancelledBy", "resentAt", "resentBy"])
+        && request.resource.data.keys().hasOnly(["name", "email", "role", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId", "companyId", "cancelledAt", "cancelledBy", "resentAt", "resentBy"])
         && (inviteCancelOk(inviteId) || inviteResendOk(inviteId));
     }
 

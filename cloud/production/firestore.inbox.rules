@@ -1,14 +1,7 @@
 // BEGIN INBOX IMPORT RULES
-// Paste this inside the live `match /databases/{database}/documents` block.
-// Do not deploy cloud/emulator/firestore.rules. That file is the emulator model.
-// Leave the live hours-export block (cloud/production/firestore.hours-export.rules)
-// and the live reimbursement block (cloud/production/firestore.reimbursements.rules)
-// where they already are. This block only adds inbox access. Firestore allows
-// are OR'd, so an existing inbox match for the sync writer is not removed.
-//
-// inbox/{gmailMessageId} is written by tools/sync_inbox.py (admin SDK, or the
-// same sync UID as hours export). The app only marks read and imported.
-// Admins and supervisors can read and mark. Operators cannot. No client deletes.
+    // inbox/{gmailMessageId} is written by the box (tools/sync_inbox.py, admin SDK, or the
+    // same sync UID as hours export). The app only marks read and imported.
+    // Admins and supervisors can read and mark. Operators cannot. No client deletes.
     function inSignedIn() { return request.auth != null; }
     function inSync() { return inSignedIn() && request.auth.uid == "38SU5waAy4f9UI9N6JTqDMaYpQg2"; }
     function inOffice() {

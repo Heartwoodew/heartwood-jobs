@@ -313,13 +313,11 @@ test("email intake and Pro Xero executor do not call Gmail or Xero", () => {
   assert.equal(still.gmailCalls, 0);
   assert.throws(() => fetchGmailAttachment(), /gmail-stub/);
   const spy = { n: 0, async send() { this.n += 1; } };
-  const base = handleXeroQueue([{ id: "1", status: "queued" }], { CALLUP_PLAN: "base" }, spy.send.bind(spy));
-  assert.equal(base.ran, false);
-  assert.equal(base.transportCalls, 0);
-  assert.equal(spy.n, 0);
-  const pro = handleXeroQueue([{ id: "1", status: "queued" }], { CALLUP_PLAN: "pro", XERO_PROCESSING_ENABLED: "true" }, spy.send.bind(spy));
-  assert.equal(pro.liveXero, false);
-  assert.equal(pro.transportCalls, 0);
+  const refused = handleXeroQueue([{ id: "1", status: "queued" }], { CALLUP_PLAN: "pro", XERO_PROCESSING_ENABLED: "true" }, spy.send.bind(spy));
+  assert.equal(refused.ran, false);
+  assert.equal(refused.reason, "not-a-product-feature");
+  assert.equal(refused.transportCalls, 0);
+  assert.equal(refused.liveXero, false);
   assert.equal(spy.n, 0);
 });
 

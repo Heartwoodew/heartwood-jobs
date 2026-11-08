@@ -1,4 +1,4 @@
-// CallUp Pro servicing for fleet assets.
+// Servicing for fleet assets. Included for every company.
 // Last service, and the next one due by a date and/or hours/km interval set on that asset.
 // Cost is a separate field for people who can see money. Staff never receive it.
 // Invoice photos are not stored. Storage has no servicing path, and this build does not add one.

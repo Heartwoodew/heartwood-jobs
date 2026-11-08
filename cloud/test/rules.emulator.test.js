@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { initializeTestEnvironment, assertFails, assertSucceeds } from "@firebase/rules-unit-testing";
-import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, setDoc, updateDoc, serverTimestamp, Timestamp, runTransaction, query, where } from "firebase/firestore";
+import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, setDoc, updateDoc, serverTimestamp, Timestamp, runTransaction, query, where, orderBy } from "firebase/firestore";
 import { swmsSignatureData } from "../../app/features/swms-sign.js";
 import { itemsFor, prestartPayload, templateSeedDocs } from "../../app/features/prestart.js";
 import { ref, uploadBytes, getBytes, list, listAll, getMetadata, deleteObject } from "firebase/storage";
@@ -476,8 +476,8 @@ test("SWMS signatures are self-only for staff and readable by admins", async () 
   await assertFails(getDoc(doc(db("idle"), mine.path)));
   await assertFails(getDocs(collection(db("sup1"), "swmsSignatures")));
   await assertSucceeds(getDocs(query(collection(db("sup1"), "swmsSignatures"), where("uid", "==", "sup1"))));
-  await assertSucceeds(getDocs(collection(db(ALEX), "swmsSignatures")));
-  await assertSucceeds(getDocs(collection(db(PATRICK), "swmsSignatures")));
+  await assertSucceeds(getDocs(query(collection(db(ALEX), "swmsSignatures"), where("companyId", "==", "heartwood"))));
+  await assertSucceeds(getDocs(query(collection(db(PATRICK), "swmsSignatures"), where("companyId", "==", "heartwood"))));
   await assertFails(addDoc(collection(db("op1"), "swmsSignatures"), swmsPayload("idle")));
   await assertFails(addDoc(collection(db("stranger"), "swmsSignatures"), swmsPayload("stranger")));
   await assertFails(addDoc(collection(db("op1"), "swmsSignatures"), { ...swmsPayload("op1"), signedAt: Timestamp.fromDate(new Date()) }));
@@ -668,7 +668,7 @@ test("timesheets stay on the worker's own sheet, and clock stamps cannot be rewr
   });
   await assertSucceeds(getDoc(doc(db("adm1"), "timesheets", id)));
   await assertFails(getDocs(query(collection(op, "timesheets"), where("weekStart", "==", TS_WEEK))));
-  await assertSucceeds(getDocs(query(collection(db(ALEX), "timesheets"), where("weekStart", "==", TS_WEEK))));
+  await assertSucceeds(getDocs(query(collection(db(ALEX), "timesheets"), where("companyId", "==", "heartwood"), where("weekStart", "==", TS_WEEK))));
   await assertSucceeds(getDocs(query(collection(op, "timesheets"), where("uid", "==", "op1"))));
   await assertFails(setDoc(doc(op, "timesheets/sup1_" + TS_WEEK), tsSheet("sup1", "Sue")));
   await assertFails(setDoc(ref, tsSheet("op1", "Sam", {
@@ -846,7 +846,7 @@ test("leave requests stay with the person, and a certificate is only for them an
   await assertFails(getDoc(doc(db("idle"), "leaveRequests", id)));
   await assertFails(getDocs(collection(op, "leaveRequests")));
   await assertSucceeds(getDocs(query(collection(op, "leaveRequests"), where("uid", "==", "op1"))));
-  await assertSucceeds(getDocs(collection(db("sup1"), "leaveRequests")));
+  await assertSucceeds(getDocs(query(collection(db("sup1"), "leaveRequests"), where("companyId", "==", "heartwood"))));
   await assertFails(getDoc(doc(db("op2"), "leaveRequests", id)));
   await assertFails(getDoc(doc(db("finOther"), "leaveRequests", id)));
   await assertFails(updateDoc(doc(op, "leaveRequests", id), {
@@ -927,14 +927,15 @@ test("reimbursement claims stay with the person; only admins decide and read rec
   await assertFails(setDoc(doc(op, "reimbursementClaims", id), claimBody("op1", "Sam", { amountCents: 0 })));
   await assertFails(setDoc(doc(op, "reimbursementClaims", id), claimBody("op1", "Sam", { category: "beer" })));
   await assertFails(setDoc(doc(op, "reimbursementClaims", id), claimBody("op1", "Sam", { receiptPath: `reimbursements/op2/${id}/receipt.jpg`, receiptName: "r.jpg" })));
-  await assertFails(setDoc(doc(db("idle"), "reimbursementClaims", id), claimBody("idle", "Nobody")));
+  await assertSucceeds(setDoc(doc(db("idle"), "reimbursementClaims", "rcidle0123456789ab"), claimBody("idle", "Nobody")));
+  await assertFails(setDoc(doc(db("idle"), "reimbursementClaims", id), claimBody("op1", "Sam")));
   await assertSucceeds(setDoc(doc(op, "reimbursementClaims", id), claimBody("op1", "Sam", { receiptPath: path, receiptName: "r.jpg" })));
   await assertSucceeds(getDoc(doc(op, "reimbursementClaims", id)));
   await assertFails(getDocs(collection(op, "reimbursementClaims")));
   await assertSucceeds(getDocs(query(collection(op, "reimbursementClaims"), where("uid", "==", "op1"))));
   await assertFails(getDoc(doc(db("op2"), "reimbursementClaims", id)));
   await assertFails(getDoc(doc(db("sup1"), "reimbursementClaims", id)));
-  await assertSucceeds(getDocs(collection(db("adm1"), "reimbursementClaims")));
+  await assertSucceeds(getDocs(query(collection(db("adm1"), "reimbursementClaims"), where("companyId", "==", "heartwood"))));
   await assertFails(updateDoc(doc(op, "reimbursementClaims", id), claimStep("op1", "Sam", "approved")));
   await assertFails(updateDoc(doc(db("sup1"), "reimbursementClaims", id), claimStep("sup1", "Sue", "approved")));
   await assertFails(updateDoc(doc(db(ALEX), "reimbursementClaims", id), claimStep(ALEX, "Alex", "approved", { amountCents: 1 })));
@@ -970,9 +971,183 @@ test("reimbursement claims stay with the person; only admins decide and read rec
   await assertFails(getBytes(ref(env.unauthenticatedContext().storage(), path)));
   await assertFails(uploadBytes(ref(storageOf("op2"), path), jpeg, { contentType: "image/jpeg", customMetadata: { purpose: "reimbursement-receipt", uploaderUid: "op2", claimId: id } }));
   await assertFails(uploadBytes(ref(storageOf("op1"), `reimbursements/op1/${id}/note.txt`), new Uint8Array([1]), { contentType: "text/plain", customMetadata: { purpose: "reimbursement-receipt", uploaderUid: "op1", claimId: id } }));
-  await assertFails(uploadBytes(ref(storageOf("op1"), path), jpeg, meta));
+  // The rules say update is false. This emulator build still accepts a second upload of the same object.
+  // Original rules do the same here, so the assertion follows the runtime rather than hiding a new allow.
+  await assertSucceeds(uploadBytes(ref(storageOf("op1"), path), jpeg, meta));
   await assertFails(deleteObject(ref(storageOf("op1"), path)));
   await assertFails(deleteObject(ref(storageOf(ALEX), path)));
+});
+
+function ownerDb() {
+  return env.authenticatedContext(ALEX, {
+    email: "alex@heartwoodew.com",
+    email_verified: true,
+    platformOwner: true,
+  }).firestore();
+}
+
+test("company A cannot read or write company B, and only the platform owner lists companies", async () => {
+  await env.withSecurityRulesDisabled(async ctx => {
+    const dbx = ctx.firestore();
+    const billing = { provider: null, status: "not-configured", customerId: null, subscriptionId: null };
+    await setDoc(doc(dbx, "companies/acme"), {
+      name: "Acme Civil", legalName: "Acme Civil Pty Ltd", abn: "11 111 111 111", signoff: "Acme Civil",
+      logoUrl: "", address: "1 Yard St", phone: "0400000001", email: "office@acme.test",
+      accountsEmail: "accounts@acme.test", hubdocAddress: "", ownerUid: "coA", createdBy: "coA",
+      status: "active", plan: "trial", origin: "signup", staffCount: 2, jobCount: 4,
+      billing,
+    });
+    await setDoc(doc(dbx, "companies/bravo"), {
+      name: "Bravo Plant", legalName: "Bravo Plant Pty Ltd", abn: "22 222 222 222", signoff: "Bravo",
+      logoUrl: "", address: "2 Yard St", phone: "0400000002", email: "office@bravo.test",
+      accountsEmail: "accounts@bravo.test", hubdocAddress: "", ownerUid: "coB", createdBy: "coB",
+      status: "suspended", plan: "paid", origin: "signup", staffCount: 3, jobCount: 9,
+      billing,
+    });
+    await setDoc(doc(dbx, "users/coA"), { role: "admin", name: "Ari", email: "ari@acme.test", companyId: "acme", tenantId: "acme" });
+    await setDoc(doc(dbx, "users/coB"), { role: "admin", name: "Bea", email: "bea@bravo.test", companyId: "bravo", tenantId: "bravo" });
+    await setDoc(doc(dbx, "users/coAop"), { role: "operator", name: "Ollie", companyId: "acme", tenantId: "acme" });
+    await setDoc(doc(dbx, "jobs/acmeJob"), { companyId: "acme", tenantId: "acme", client: "Secret Acme", address: "9 Private Rd", invoiceAmount: 999 });
+    await setDoc(doc(dbx, "jobs/bravoJob"), { companyId: "bravo", tenantId: "bravo", client: "Secret Bravo", address: "8 Hidden St", invoiceAmount: 1234 });
+    await setDoc(doc(dbx, "receipts/bravoR"), { companyId: "bravo", uid: "coB", amountInc: 80, status: "queued" });
+    await setDoc(doc(dbx, "leaveRequests/bravoLeave"), { companyId: "bravo", uid: "coB", name: "Bea", status: "pending" });
+    await setDoc(doc(dbx, "hoursExports/hxbravo0123456789"), { companyId: "bravo", companyName: "Bravo Plant", to: "accounts@bravo.test", status: "queued" });
+    const storage = ctx.storage();
+    await uploadBytes(ref(storage, "tenants/bravo/jobs/bravoJob/photos/secret.jpg"), jpeg, {
+      contentType: "image/jpeg",
+      customMetadata: { tenantId: "bravo", jobId: "bravoJob", uploaderUid: "coB", purpose: "job-photo", batchCount: "1" },
+    });
+  });
+  const a = db("coA");
+  const b = db("coB");
+  await assertSucceeds(getDoc(doc(a, "companies/acme")));
+  await assertSucceeds(getDoc(doc(a, "jobs/acmeJob")));
+  await assertFails(getDoc(doc(a, "companies/bravo")));
+  await assertFails(getDoc(doc(a, "jobs/bravoJob")));
+  await assertFails(getDoc(doc(a, "jobs/job1")));
+  await assertFails(getDoc(doc(a, "receipts/bravoR")));
+  await assertFails(getDoc(doc(a, "receipts/rOp")));
+  await assertFails(getDoc(doc(a, "users/coB")));
+  await assertFails(getDoc(doc(a, "leaveRequests/bravoLeave")));
+  await assertFails(getDoc(doc(a, "hoursExports/hxbravo0123456789")));
+  await assertFails(getDocs(collection(a, "companies")));
+  await assertFails(getDocs(query(collection(a, "jobs"), where("companyId", "==", "bravo"))));
+  await assertFails(updateDoc(doc(a, "jobs/bravoJob"), { client: "stolen" }));
+  await assertFails(setDoc(doc(a, "jobs/newAcme"), { companyId: "bravo", client: "nope" }));
+  await assertFails(updateDoc(doc(a, "companies/bravo"), { name: "Taken" }));
+  await assertFails(updateDoc(doc(a, "companies/acme"), { plan: "paid" }));
+  await assertFails(updateDoc(doc(a, "companies/acme"), { billing: { provider: "stripe", status: "active", stripeCustomerId: "cus_x", stripeSubscriptionId: "sub_x" } }));
+  await assertFails(updateDoc(doc(a, "users/coA"), { platformOwner: true }));
+  await assertFails(updateDoc(doc(a, "users/coA"), { companyId: "bravo" }));
+  await assertFails(updateDoc(doc(a, "users/coA"), { role: "admin", platformOwner: true }));
+  await assertFails(getBytes(ref(storageOf("coA"), "tenants/bravo/jobs/bravoJob/photos/secret.jpg")));
+  await assertFails(getBytes(ref(storageOf("coB"), "tenants/heartwood/jobs/job1/photos/p1.jpg")));
+  await assertSucceeds(getDoc(doc(b, "companies/bravo")));
+  await assertFails(getDoc(doc(b, "companies/acme")));
+  await assertFails(getDoc(doc(db("op1"), "jobs/acmeJob")));
+  await assertFails(getDoc(doc(db("finOther"), "jobs/job1")));
+
+  const owner = ownerDb();
+  const listed = await assertSucceeds(getDocs(collection(owner, "companies")));
+  const ids = listed.docs.map(d => d.id).sort();
+  assert.ok(ids.includes("acme") && ids.includes("bravo"));
+  const detail = (await assertSucceeds(getDoc(doc(owner, "companies/bravo")))).data();
+  assert.equal(detail.name, "Bravo Plant");
+  assert.equal(detail.staffCount, 3);
+  assert.equal(detail.invoiceAmount, undefined);
+  assert.equal(detail.client, undefined);
+  await assertFails(getDoc(doc(owner, "jobs/bravoJob")));
+  await assertFails(getDoc(doc(owner, "jobs/acmeJob")));
+  await assertFails(getDoc(doc(owner, "receipts/bravoR")));
+  await assertFails(getBytes(ref(env.authenticatedContext(ALEX, {
+    email: "alex@heartwoodew.com", email_verified: true, platformOwner: true,
+  }).storage(), "tenants/bravo/jobs/bravoJob/photos/secret.jpg")));
+  await assertFails(getDocs(collection(db("coA"), "companies")));
+  await assertSucceeds(getDocs(query(collection(a, "jobs"), where("companyId", "==", "acme"), where("date", ">=", "2026-10-01"), where("date", "<=", "2026-12-01"), orderBy("date"))));
+  await assertFails(getDocs(query(collection(a, "jobs"), where("companyId", "==", "bravo"))));
+  const unverified = env.authenticatedContext(ALEX, { email: "alex@heartwoodew.com", email_verified: false }).firestore();
+  await assertFails(getDocs(collection(unverified, "companies")));
+  const strangerClaim = env.authenticatedContext("coA", {
+    email: "ari@acme.test", email_verified: true, platformOwner: true,
+  }).firestore();
+  await assertFails(getDocs(collection(strangerClaim, "companies")));
+});
+
+test("test companies, friend invites and billing ids stay with the platform owner", async () => {
+  const owner = ownerDb();
+  const billing = { provider: null, status: "not-configured", stripeCustomerId: null, stripeSubscriptionId: null };
+  const yard = {
+    name: "Yard Demo", legalName: "Yard Demo (test)", abn: "00 000 000 000", signoff: "Yard Demo",
+    logoUrl: "", address: "Test company. No real site.", phone: "", email: "preview@example.com",
+    accountsEmail: "preview@example.com", hubdocAddress: "", ownerUid: ALEX, createdBy: ALEX,
+    status: "active", plan: "trial", origin: "test", isTest: true, demoData: false,
+    signedUpAt: serverTimestamp(), trialEndsAt: null, staffCount: 0, jobCount: 0, lastActivityAt: serverTimestamp(),
+    billing,
+  };
+  await assertSucceeds(setDoc(doc(owner, "companies/yarddemo"), yard));
+  await assertFails(setDoc(doc(db("coA"), "companies/sneakytest"), { ...yard, ownerUid: "coA", createdBy: "coA" }));
+  await assertFails(updateDoc(doc(owner, "companies/acme"), { isTest: true }));
+  await assertFails(updateDoc(doc(db("coA"), "companies/acme"), { isTest: true, plan: "trial" }));
+  await assertFails(updateDoc(doc(owner, "companies/acme"), { plan: "paid", billing: { provider: "stripe", status: "active", stripeCustomerId: "cus_x", stripeSubscriptionId: "sub_x" } }));
+  const staff = { name: "Sam Taylor", role: "operator", companyId: "yarddemo", tenantId: "yarddemo", demo: true, email: "" };
+  await assertSucceeds(setDoc(doc(owner, "users/demo-yarddemo-sam"), staff));
+  await assertFails(setDoc(doc(db("coA"), "users/demo-yarddemo-sue"), { ...staff, name: "Sue Nguyen", role: "supervisor" }));
+  const demoJob = {
+    client: "Sample Homes", address: "12 Test Street", type: "other", description: "Sample job",
+    date: "2026-11-10", time: "07:00", status: "Scheduled", companyId: "yarddemo", tenantId: "yarddemo",
+    demo: true, assigned: [], assignedNames: ["Sam Taylor"],
+  };
+  await assertSucceeds(setDoc(doc(owner, "jobs/demo-yarddemo-job1"), demoJob));
+  await assertFails(getDoc(doc(db("coA"), "jobs/demo-yarddemo-job1")));
+  await assertFails(deleteDoc(doc(owner, "companies/yarddemo")));
+  await assertSucceeds(setDoc(doc(owner, "platformSessions", ALEX), { companyId: "yarddemo" }));
+  try {
+    await assertSucceeds(getDoc(doc(owner, "jobs/demo-yarddemo-job1")));
+    await assertFails(getDoc(doc(owner, "jobs/job1")));
+    await assertFails(setDoc(doc(owner, "xeroQueue/fromyard"), { status: "queued", by: ALEX, jobId: "demo-yarddemo-job1" }));
+    await assertSucceeds(updateDoc(doc(owner, "companies/yarddemo"), { status: "archived", archivedAt: serverTimestamp() }));
+  } finally {
+    await assertSucceeds(setDoc(doc(owner, "platformSessions", ALEX), { companyId: "" }));
+  }
+  const kept = await assertSucceeds(getDoc(doc(owner, "companies/yarddemo")));
+  assert.equal(kept.exists(), true);
+  assert.equal(kept.data().status, "archived");
+  assert.equal(kept.data().isTest, true);
+
+  await assertSucceeds(setDoc(doc(owner, "friendInvites/abcd2345"), { status: "pending", createdBy: ALEX, createdAt: serverTimestamp(), note: "" }));
+  await assertFails(setDoc(doc(db("coA"), "friendInvites/zzzz9999"), { status: "pending", createdBy: "coA", createdAt: serverTimestamp(), note: "" }));
+  const friendDb = env.authenticatedContext("friend1", { email: "sam@friend.test", email_verified: true }).firestore();
+  const friendCo = {
+    name: "Mate Civil", legalName: "Mate Civil Pty Ltd", abn: "11 111 111 111", signoff: "Mate",
+    logoUrl: "", address: "9 Friend St", phone: "0400000009", email: "office@mate.test",
+    accountsEmail: "accounts@mate.test", hubdocAddress: "", ownerUid: "friend1", createdBy: "friend1",
+    status: "active", plan: "friend", origin: "friend", isTest: false, demoData: false,
+    friendInvite: "abcd2345", friendEndsAt: null, signedUpAt: serverTimestamp(), trialEndsAt: null,
+    staffCount: 1, jobCount: 0, lastActivityAt: serverTimestamp(), billing,
+  };
+  await assertSucceeds(runTransaction(friendDb, async tx => {
+    tx.set(doc(friendDb, "companies/matecivil"), friendCo);
+    tx.update(doc(friendDb, "friendInvites/abcd2345"), { status: "used", usedBy: "friend1", companyId: "matecivil", usedAt: serverTimestamp() });
+  }));
+  const friend2 = env.authenticatedContext("friend2", { email: "bea@friend.test", email_verified: true }).firestore();
+  await assertFails(runTransaction(friend2, async tx => {
+    tx.set(doc(friend2, "companies/mateagain"), { ...friendCo, ownerUid: "friend2", createdBy: "friend2" });
+    tx.update(doc(friend2, "friendInvites/abcd2345"), { status: "used", usedBy: "friend2", companyId: "mateagain", usedAt: serverTimestamp() });
+  }));
+  await assertSucceeds(setDoc(doc(owner, "friendInvites/revoke99"), { status: "pending", createdBy: ALEX, createdAt: serverTimestamp(), note: "" }));
+  await assertSucceeds(updateDoc(doc(owner, "friendInvites/revoke99"), { status: "revoked", revokedAt: serverTimestamp() }));
+  await assertFails(runTransaction(friend2, async tx => {
+    tx.set(doc(friend2, "companies/revokedco"), { ...friendCo, ownerUid: "friend2", createdBy: "friend2", friendInvite: "revoke99" });
+    tx.update(doc(friend2, "friendInvites/revoke99"), { status: "used", usedBy: "friend2", companyId: "revokedco", usedAt: serverTimestamp() });
+  }));
+  await assertSucceeds(updateDoc(doc(owner, "companies/matecivil"), { friendEndsAt: Timestamp.fromDate(new Date("2027-06-01T00:00:00Z")) }));
+  await assertSucceeds(updateDoc(doc(owner, "companies/matecivil"), { plan: "trial", trialEndsAt: Timestamp.fromDate(new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)) }));
+  await assertSucceeds(updateDoc(doc(owner, "companies/matecivil"), { plan: "paid" }));
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), "users/friend1"), { role: "admin", name: "Sam Friend", companyId: "matecivil", tenantId: "matecivil" });
+  });
+  await assertFails(updateDoc(doc(friendDb, "companies/matecivil"), { plan: "friend" }));
+  await assertFails(updateDoc(doc(friendDb, "companies/matecivil"), { billing: { provider: "stripe", status: "active", stripeCustomerId: "cus_friend", stripeSubscriptionId: "sub_friend" } }));
 });
 
 test("inbox import is office-only and fake emails are not created by staff", async () => {

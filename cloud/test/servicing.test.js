@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolveMembership } from "../../app/features/cloud-storage.js";
-import { CALLUP_PLANS, canEditServicing, canViewServicing } from "../../app/features/compliance.js";
+import { CALLUP_PLAN, canEditServicing, canViewServicing } from "../../app/features/compliance.js";
 import { SCHEDULING_APPROVED } from "../../app/features/cloud-retention.js";
 import {
   costPayload, machineService, planPayload, serviceAttention, servicePayload, serviceViews, servicingHtml,
@@ -24,18 +24,18 @@ const plans = [
   { id: "a4", everyDays: 90, everyReading: 250, readingUnit: "hours", currentReading: 0 },
 ];
 
-test("servicing is Pro and on for Heartwood only", () => {
-  assert.equal(CALLUP_PLANS.base.features.servicing, false);
-  assert.equal(CALLUP_PLANS.pro.features.servicing, true);
+test("servicing is included for every company", () => {
+  assert.equal(CALLUP_PLAN.features.servicing, true);
   const hw = resolveMembership({ uid: "op1", profile: { role: "operator", name: "Sam" } });
-  const plan = hw.tenantId === "heartwood" ? CALLUP_PLANS.pro : CALLUP_PLANS.base;
-  assert.equal(canViewServicing(plan), true);
-  assert.equal(canEditServicing(plan, "operator", ""), false);
-  assert.equal(canEditServicing(plan, "supervisor", ""), true);
-  assert.equal(canEditServicing(plan, "admin", "operator"), true);
-  assert.equal(canEditServicing(plan, "operator", "supervisor"), true);
+  assert.equal(hw.tenantId, "heartwood");
+  assert.equal(canViewServicing(CALLUP_PLAN), true);
+  assert.equal(canEditServicing(CALLUP_PLAN, "operator", ""), false);
+  assert.equal(canEditServicing(CALLUP_PLAN, "supervisor", ""), true);
+  assert.equal(canEditServicing(CALLUP_PLAN, "admin", "operator"), true);
+  assert.equal(canEditServicing(CALLUP_PLAN, "operator", "supervisor"), true);
   const other = resolveMembership({ uid: "adm2", profile: { role: "admin", tenantId: "otherco" } });
-  assert.equal(canViewServicing(other.tenantId === "heartwood" ? CALLUP_PLANS.pro : CALLUP_PLANS.base), false);
+  assert.equal(other.tenantId, "otherco");
+  assert.equal(canViewServicing(CALLUP_PLAN), true);
 });
 
 test("next service is overdue, due within 30 days, or OK", () => {

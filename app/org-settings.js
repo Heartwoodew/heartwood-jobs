@@ -1,8 +1,8 @@
 // CallUp organisation settings.
 // The product name is CallUp. The business shown in the header, on SWMS,
-// quotes and emails is this organisation. Heartwood Earthworx is the
-// customer on this install. Another CallUp customer changes these defaults,
-// or an admin saves an override on the Organisation screen (this phone only).
+// quotes and emails is the signed-in company. Heartwood Earthworx is the
+// first company. When no company document is loaded, these defaults keep
+// Heartwood's current name, ABN and sign-off.
 // This file is not a Firebase id, collection, storage path, or tenant id.
 
 export const PRODUCT_NAME = "CallUp";
@@ -10,22 +10,29 @@ export const PRODUCT_SHORT = "CallUp";
 export const POWERED_BY = "Powered by CallUp";
 
 export const DEFAULT_ORG = Object.freeze({
+  companyId: "heartwood",
   name: "Heartwood Earthworx",
   legalName: "Heartwood Earthworx Pty Ltd",
   abn: "31 667 738 098",
   signoff: "Heartwood Earthworx",
   logoUrl: "",
+  address: "208-220 Holdsworth Rd, Chuwar QLD 4306",
+  phone: "",
+  email: "alex@heartwoodew.com",
+  accountsEmail: "accounts@heartwoodew.com",
+  hubdocAddress: "",
 });
 
 const STORE_KEY = "callup.org.v1";
-const FIELDS = ["name", "legalName", "abn", "signoff", "logoUrl"];
+const FIELDS = ["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress"];
+let activeCompany = null;
 
 function clean(source) {
   const out = {};
   if (!source || typeof source !== "object") return out;
   for (const key of FIELDS) {
     if (typeof source[key] !== "string") continue;
-    const max = key === "logoUrl" ? 300 : key === "legalName" ? 120 : 80;
+    const max = key === "logoUrl" ? 300 : key === "legalName" || key === "address" ? 160 : key === "email" || key === "accountsEmail" || key === "hubdocAddress" ? 120 : 80;
     out[key] = source[key].trim().slice(0, max);
   }
   return out;
@@ -52,12 +59,38 @@ function readSaved() {
   }
 }
 
+export function setActiveCompany(company) {
+  if (!company || typeof company !== "object") {
+    activeCompany = null;
+    return orgSettings();
+  }
+  const billing = company.billing && typeof company.billing === "object" ? company.billing : null;
+  activeCompany = {
+    ...clean(company),
+    companyId: typeof company.companyId === "string" && company.companyId ? company.companyId : DEFAULT_ORG.companyId,
+    isTest: company.isTest === true,
+    plan: typeof company.plan === "string" ? company.plan : "",
+    billing: billing ? {
+      provider: billing.provider === "stripe" ? "stripe" : null,
+      status: ["active", "past_due", "canceled", "not-configured"].includes(billing.status) ? billing.status : "not-configured",
+      stripeCustomerId: typeof billing.stripeCustomerId === "string" ? billing.stripeCustomerId : null,
+      stripeSubscriptionId: typeof billing.stripeSubscriptionId === "string" ? billing.stripeSubscriptionId : null,
+    } : null,
+  };
+  return orgSettings();
+}
+
 export function orgSettings() {
   const overlay = typeof window !== "undefined" ? window.CALLUP_ORG : null;
-  const merged = { ...DEFAULT_ORG, ...readSaved(), ...clean(overlay) };
+  const base = activeCompany ? { ...DEFAULT_ORG, ...activeCompany } : { ...DEFAULT_ORG, ...readSaved() };
+  const merged = { ...base, ...clean(overlay) };
+  if (!merged.companyId) merged.companyId = DEFAULT_ORG.companyId;
   if (!merged.name) merged.name = DEFAULT_ORG.name;
   if (!merged.legalName) merged.legalName = DEFAULT_ORG.legalName;
   if (!merged.signoff) merged.signoff = merged.name;
+  if (!merged.accountsEmail && merged.companyId === "heartwood") merged.accountsEmail = DEFAULT_ORG.accountsEmail;
+  if (!merged.email && merged.companyId === "heartwood") merged.email = DEFAULT_ORG.email;
+  if (!merged.address && merged.companyId === "heartwood") merged.address = DEFAULT_ORG.address;
   merged.logoUrl = safeLogo(merged.logoUrl);
   return merged;
 }

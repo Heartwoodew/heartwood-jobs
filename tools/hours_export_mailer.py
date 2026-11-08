@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
-"""Hours spreadsheet mailer. Sends nothing itself. Recipient is hard-wired to accounts@heartwoodew.com.
+"""Hours spreadsheet mailer. Sends nothing itself.
 
-The app (Timesheet > Hours spreadsheet for accounts) uploads the .xlsx to private Storage
-(hoursExports/<id>/<file>.xlsx) and writes hoursExports/<id> with status "queued".
+Heartwood exports still go only to accounts@heartwoodew.com, with the same subject and body.
+Another company's export goes to that company's accountsEmail (hoursExports.to). It is refused
+if that address is Heartwood's mailbox or is not a normal email.
+
+The app uploads the .xlsx to private Storage (hoursExports/<id>/<file>.xlsx) and writes
+hoursExports/<id> with status "queued".
 The box cannot reach SMTP, so an agent routine sends with the Gmail connector (alex@heartwoodew.com):
   1. hours_export_mailer.py pending --out DIR  -> JSON list of emails to send; each is locked as "sending".
-  2. For each item: Gmail send_email to item["to"] (ALWAYS accounts@heartwoodew.com; refuse anything else),
-     one email per item, subject/body from the item, attach item["filename"] (mimeType item["mimeType"],
-     base64 content in item["attachmentB64File"]).
+  2. For each item: Gmail send_email to item["to"], one email per item, subject/body from the item,
+     attach item["filename"] (mimeType item["mimeType"], base64 content in item["attachmentB64File"]).
   3. hours_export_mailer.py mark ID sent MESSAGE_ID   (or: mark ID failed "reason" -> retried next run, max 5 tries)
 Items left "sending" for >30 min come back with "verify": true; search Gmail with item["verifyQuery"] first.
 If found, mark sent with that message id; otherwise send. That keeps it to one email per export.
 No deletes anywhere.
 """
 import base64, datetime as dt, json, os, re, sys, urllib.parse, urllib.request
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.environ.get("HWFIRE_DIR", "/workspace/heartwood-app/tools"))
 import hwfire  # noqa: E402
+from company_scope import hours_recipient, hours_subject  # noqa: E402
 
 TO = "accounts@heartwoodew.com"
 MAX_TRIES = 5
@@ -39,11 +44,16 @@ def storage_get(c, path):
     with urllib.request.urlopen(req, timeout=60) as r: return r.read()
 
 
+def recipient(d):
+    return hours_recipient(d)
+
+
 def due(d):
     """(due, verify)"""
     st = d.get("status") or ""
     if st == "sent": return False, False
-    if d.get("to") != TO: return False, False
+    ok, _to, _name = recipient(d)
+    if not ok: return False, False
     if int(d.get("attempts") or 0) >= MAX_TRIES and st != "sending": return False, False
     if st == "sending":
         t = parse(d.get("updatedAt"))
@@ -74,19 +84,28 @@ def pending(out):
             with open(fpath, "wb") as f: f.write(data)
             with open(fpath + ".b64", "w") as f: f.write(base64.b64encode(data).decode())
             ws, we = d.get("weekStart", ""), d.get("weekEnd", "")
+            ok_to, to, subject_name = recipient(d)
+            if not ok_to: continue
             tag = f"[HWH {id_[2:10]}]"
-            subject = f"Timesheet hours {dmy(ws)} to {dmy(we)} - Heartwood {tag}"
-            body = (f"Hi Nicole,\n\nAttached are the timesheet hours for Mon {dmy(ws)} to Sun {dmy(we)} "
-                    f"({d.get('people', 0)} staff, {float(d.get('totalHours') or 0):.2f} hours total).\n"
-                    "The first sheet is one row per person and one column per day (Mon 02/11). Each cell is the hours worked that day, or Annual, Sick, Other, or Pending on a leave day with no hours. It has a Total column and a grand total.\n"
-                    "The Detail sheet lists every day in the pay period. Each day shows the date and weekday, clock on and clock off for every shift, "
-                    "break start, break end and minutes, hours for the shift, and the day's total. Job, site and machine are filled in when they were recorded.\n"
-                    "A day with no hours is 0. Approved leave shows as annual leave, sick leave, or other leave, with a note when a medical certificate is attached. "
-                    "Pending leave shows as Leave requested (pending). A day with no leave and no hours shows as Day off.\n\n"
-                    "Thanks,\nAlex\nHeartwood")
-            items.append({"key": id_, "to": TO, "subject": subject, "body": body, "filename": name, "mimeType": MIME,
+            subject = hours_subject(subject_name, dmy(ws), dmy(we), tag)
+            sheets = (
+                "The first sheet is one row per person and one column per day (Mon 02/11). Each cell is the hours worked that day, or Annual, Sick, Other, or Pending on a leave day with no hours. It has a Total column and a grand total.\n"
+                "The Detail sheet lists every day in the pay period. Each day shows the date and weekday, clock on and clock off for every shift, "
+                "break start, break end and minutes, hours for the shift, and the day's total. Job, site and machine are filled in when they were recorded.\n"
+                "A day with no hours is 0. Approved leave shows as annual leave, sick leave, or other leave, with a note when a medical certificate is attached. "
+                "Pending leave shows as Leave requested (pending). A day with no leave and no hours shows as Day off.\n\n"
+            )
+            if subject_name == "Heartwood":
+                body = (f"Hi Nicole,\n\nAttached are the timesheet hours for Mon {dmy(ws)} to Sun {dmy(we)} "
+                        f"({d.get('people', 0)} staff, {float(d.get('totalHours') or 0):.2f} hours total).\n"
+                        + sheets + "Thanks,\nAlex\nHeartwood")
+            else:
+                body = (f"Hi,\n\nAttached are the timesheet hours for Mon {dmy(ws)} to Sun {dmy(we)} "
+                        f"({d.get('people', 0)} staff, {float(d.get('totalHours') or 0):.2f} hours total).\n"
+                        + sheets + f"Thanks,\n{subject_name}\n")
+            items.append({"key": id_, "to": to, "subject": subject, "body": body, "filename": name, "mimeType": MIME,
                           "attachmentB64File": fpath + ".b64", "attachmentFile": fpath, "verify": verify,
-                          "verifyQuery": f'to:{TO} subject:"{tag[1:-1]}" in:sent'})
+                          "verifyQuery": f'to:{to} subject:"{tag[1:-1]}" in:sent'})
             update(c, id_, {"status": "sending", "attempts": tries + (0 if verify else 1), "updatedAt": iso()})
     print(json.dumps(items, indent=1))
 
@@ -95,7 +114,8 @@ def mark(id_, status, extra):
     if status not in ("sent", "failed") or not re.fullmatch(ID_RE, id_): sys.exit("usage: mark hx<id> sent <msgId>|failed <reason>")
     c = hwfire.connect(); c = c[0] if isinstance(c, tuple) else c
     d = c.get(f"hoursExports/{id_}") or {}
-    if d.get("to") != TO: sys.exit("refusing: recipient is not " + TO)
+    ok_to, to, _name = recipient(d)
+    if not ok_to: sys.exit("refusing: recipient is not that company's accounts email")
     if status == "sent":
         update(c, id_, {"status": "sent", "sentAt": iso(), "messageId": extra[:100], "via": "gmail-connector", "error": "", "updatedAt": iso()})
     else:

@@ -101,6 +101,6 @@ test("claim rules match the emulator, are additive, and never delete", () => {
   assert.doesNotMatch(block, /role == "supervisor"/);
   assert.match(st, /match \/reimbursements\/\{uid\}\/\{claimId\}\/\{file\}/);
   assert.match(st, /allow update, delete: if false/);
-  assert.match(st, /request\.auth\.uid == uid \|\| rcFileAdmin\(\)/);
+  assert.match(st, /request\.auth\.uid == uid \|\| rcFileAdmin\(uid\)/);
   assert.doesNotMatch(st, /match \/receipts|tenants\//);
 });

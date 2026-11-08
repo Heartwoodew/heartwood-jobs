@@ -2,9 +2,12 @@
     function rcFileSignedIn() { return request.auth != null; }
     function rcFileIsAlex() { return rcFileSignedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
     function rcFileIsPatrick() { return rcFileSignedIn() && request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"; }
-    function rcFileAdmin() {
-      return rcFileIsAlex() || rcFileIsPatrick() || (
-        rcFileSignedIn() && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.get("role", "") == "admin"
+    function rcFileAdmin(uid) {
+      return ((rcFileIsAlex() || rcFileIsPatrick()) && userCompanyOf(uid) == "heartwood") || (
+        rcFileSignedIn()
+        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
+        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.get("role", "") == "admin"
+        && userCompanyOf(request.auth.uid) == userCompanyOf(uid)
       );
     }
     function rcFileOk(uid, claimId, file) {
@@ -24,7 +27,7 @@
     }
     function rcFileReader(uid) {
       // 38SU... is the box sync account; it reads receipts only to email paid claims to Hubdoc.
-      return rcFileSignedIn() && (request.auth.uid == uid || rcFileAdmin() || request.auth.uid == "38SU5waAy4f9UI9N6JTqDMaYpQg2");
+      return rcFileSignedIn() && (request.auth.uid == uid || rcFileAdmin(uid) || request.auth.uid == "38SU5waAy4f9UI9N6JTqDMaYpQg2");
     }
 
     match /reimbursements/{uid}/{claimId}/{file} {

@@ -3,7 +3,9 @@
     function rcStaff() {
       return rcSignedIn() && (
         isAlex() || isPatrick() || (
-          hasProfile() && (!("tenantId" in profile()) || profile().tenantId == "heartwood")
+          hasProfile() && callerCompany() == "heartwood"
+        ) || (
+          callerCompany() != "heartwood" && callerCompany() != "" && hasProfile()
         )
       );
     }
@@ -20,7 +22,8 @@
     function rcCreate(id) {
       return rcStaff()
         && id.matches('^rc[a-z0-9]{16}$')
-        && request.resource.data.keys().hasOnly(["uid", "name", "date", "amountCents", "supplier", "category", "notes", "paidWith", "jobId", "jobLabel", "receiptPath", "receiptName", "status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "paidAt", "createdAt", "updatedAt"])
+        && request.resource.data.keys().hasOnly(["uid", "name", "date", "amountCents", "supplier", "category", "notes", "paidWith", "jobId", "jobLabel", "receiptPath", "receiptName", "status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "paidAt", "createdAt", "updatedAt", "companyId"])
+        && (!("companyId" in request.resource.data) || request.resource.data.companyId == callerCompany())
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.name is string
         && request.resource.data.name.size() > 0
@@ -96,13 +99,22 @@
     }
 
     match /reimbursementClaims/{id} {
-      allow read: if (rcSync() && resource != null && resource.data.status == "paid") || rcStaff() && (
-        rcAdmin()
-        || (resource != null && resource.data.uid == request.auth.uid)
-        || (resource == null && id.matches('^rc[a-z0-9]{16}$'))
+      allow get: if (rcSync() && resource != null && resource.data.status == "paid")
+        || (rcStaff() && callerCompany() == "heartwood" && (
+          (resource == null && id.matches('^rc[a-z0-9]{16}$'))
+          || (resource != null && docCompany(resource.data) == "heartwood" && (rcAdmin() || resource.data.uid == request.auth.uid))
+        ))
+        || (callerCompany() != "heartwood" && resource != null && resource.data.companyId == callerCompany()
+          && (resource.data.uid == request.auth.uid || (hasProfile() && profile().role == "admin")));
+      allow list: if rcStaff() && callerCompany() == "heartwood" && resource.data.uid == request.auth.uid;
+      allow list: if rcAdmin() && callerCompany() == "heartwood" && resource.data.companyId == "heartwood";
+      allow list: if rcSync() && resource.data.status == "paid";
+      allow list: if callerCompany() != "heartwood" && resource.data.companyId == callerCompany()
+        && (resource.data.uid == request.auth.uid || (hasProfile() && profile().role == "admin"));
+      allow create: if rcCreate(id) && (
+        callerCompany() == "heartwood" || request.resource.data.companyId == callerCompany()
       );
-      allow create: if rcCreate(id);
-      allow update: if rcDecision() || rcHubdoc();
+      allow update: if (rcDecision() && docCompany(resource.data) == callerCompany()) || rcHubdoc();
       allow delete: if false;
     }
 // END REIMBURSEMENT CLAIM RULES

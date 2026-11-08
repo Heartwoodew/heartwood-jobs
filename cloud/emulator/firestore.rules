@@ -28,7 +28,226 @@ service cloud.firestore {
     function hasProfile() { return exists(userPath()); }
     function profile() { return get(userPath()).data; }
     function isAppAdmin() {
-      return isAlex() || isPatrick() || (hasProfile() && profile().role == "admin");
+      return isAlex() || isPatrick() || (hasProfile() && profile().role == "admin" && callerCompany() == "heartwood");
+    }
+
+    // Platform owner is Alex's verified mailbox, plus either his bootstrap uid
+    // or a custom claim platformOwner=true. A company admin cannot set this.
+    function platformOwner() {
+      return signedIn()
+        && "email_verified" in request.auth.token
+        && request.auth.token.email_verified == true
+        && "email" in request.auth.token
+        && request.auth.token.email == "alex@heartwoodew.com"
+        && (("platformOwner" in request.auth.token && request.auth.token.platformOwner == true) || isAlex());
+    }
+    function docCompany(data) {
+      return ("companyId" in data && data.companyId is string && data.companyId.size() > 0)
+        ? data.companyId
+        : (("tenantId" in data && data.tenantId is string && data.tenantId.size() > 0)
+          ? data.tenantId
+          : "heartwood");
+    }
+    function sessionPath() { return /databases/$(database)/documents/platformSessions/$(request.auth.uid); }
+    function sessionCompany() {
+      let id = platformOwner() && exists(sessionPath()) ? get(sessionPath()).data.get("companyId", "") : "";
+      return id is string && id.size() > 1
+        && exists(/databases/$(database)/documents/companies/$(id))
+        && get(/databases/$(database)/documents/companies/$(id)).data.isTest == true
+        && get(/databases/$(database)/documents/companies/$(id)).data.status == "active"
+        ? id : "";
+    }
+    function callerCompany() {
+      let session = sessionCompany();
+      return session != "" ? session
+        : (isAlex() || isPatrick())
+        ? "heartwood"
+        : (hasProfile() && "companyId" in profile() && profile().companyId is string && profile().companyId.size() > 0
+          ? profile().companyId
+          : (hasProfile() && "tenantId" in profile() && profile().tenantId is string && profile().tenantId.size() > 0
+            ? profile().tenantId
+            : (hasProfile() ? "heartwood" : "")));
+    }
+    function companyIdOk(id) {
+      return id is string && id.size() >= 2 && id.size() <= 40 && id.matches('^[a-z0-9][a-z0-9-]{0,39}$');
+    }
+    function companyDetailText(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 80
+        && data.legalName is string && data.legalName.size() > 0 && data.legalName.size() <= 120
+        && data.abn is string && data.abn.size() > 0 && data.abn.size() <= 20
+        && data.signoff is string && data.signoff.size() <= 80
+        && data.logoUrl is string && data.logoUrl.size() <= 300
+        && data.address is string && data.address.size() > 0 && data.address.size() <= 160
+        && data.phone is string && data.phone.size() <= 40
+        && data.email is string && data.email.size() >= 6 && data.email.size() <= 120
+        && data.accountsEmail is string && data.accountsEmail.size() >= 6 && data.accountsEmail.size() <= 120
+        && data.hubdocAddress is string && data.hubdocAddress.size() <= 120
+        && (data.hubdocAddress == "" || data.hubdocAddress.matches('^[a-z0-9._+-]+@app[.]hubdoc[.]com$'));
+    }
+    function companyBillingLocked(data) {
+      return data.billing is map
+        && data.billing.keys().hasOnly(["provider", "status", "stripeCustomerId", "stripeSubscriptionId"])
+        && data.billing.provider == null
+        && data.billing.status == "not-configured"
+        && data.billing.stripeCustomerId == null
+        && data.billing.stripeSubscriptionId == null;
+    }
+    function companyOwnerCreate(companyId) {
+      let d = request.resource.data;
+      return signedIn()
+        && !isAlex() && !isPatrick()
+        && !hasProfile()
+        && companyIdOk(companyId)
+        && companyId != "heartwood"
+        && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing"])
+        && companyDetailText(d)
+        && d.ownerUid == request.auth.uid
+        && d.createdBy == request.auth.uid
+        && d.status == "active"
+        && d.plan == "trial"
+        && d.isTest == false
+        && d.origin == "signup"
+        && d.signedUpAt == request.time
+        && d.trialEndsAt > request.time + duration.value(13, 'd')
+        && d.trialEndsAt < request.time + duration.value(15, 'd')
+        && d.staffCount == 1
+        && d.jobCount == 0
+        && d.lastActivityAt == request.time
+        && companyBillingLocked(d)
+        && !d.keys().hasAny(["platformOwner", "finance"]);
+    }
+    function companyAdminEdit(companyId) {
+      let next = request.resource.data;
+      let diff = next.diff(resource.data).affectedKeys();
+      return signedIn()
+        && companyId == callerCompany()
+        && (isAlex() || isPatrick() || (hasProfile() && profile().role == "admin"))
+        && diff.hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress"])
+        && companyDetailText(next)
+        && next.status == resource.data.status
+        && next.plan == resource.data.plan
+        && next.billing == resource.data.billing
+        && next.ownerUid == resource.data.ownerUid
+        && next.staffCount == resource.data.staffCount
+        && next.jobCount == resource.data.jobCount
+        && next.origin == resource.data.origin
+        && next.get("isTest", false) == resource.data.get("isTest", false)
+        && next.get("plan", "trial") == resource.data.get("plan", "trial")
+        && next.get("friendEndsAt", null) == resource.data.get("friendEndsAt", null);
+    }
+    function testCompanyCreate(companyId) {
+      let d = request.resource.data;
+      return platformOwner()
+        && companyIdOk(companyId)
+        && companyId != "heartwood"
+        && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "demoData", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing"])
+        && companyDetailText(d)
+        && d.isTest == true
+        && d.plan == "trial"
+        && d.origin == "test"
+        && d.status == "active"
+        && d.demoData is bool
+        && d.ownerUid == request.auth.uid
+        && d.createdBy == request.auth.uid
+        && d.signedUpAt == request.time
+        && d.trialEndsAt == null
+        && d.lastActivityAt == request.time
+        && companyBillingLocked(d)
+        && (d.demoData == true ? (d.staffCount == 2 && d.jobCount == 2) : (d.staffCount == 0 && d.jobCount == 0));
+    }
+    function friendInvitePath(code) { return /databases/$(database)/documents/friendInvites/$(code); }
+    function friendCompanyCreate(companyId) {
+      let d = request.resource.data;
+      return signedIn()
+        && !isAlex() && !isPatrick()
+        && !hasProfile()
+        && companyIdOk(companyId)
+        && companyId != "heartwood"
+        && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "demoData", "friendInvite", "friendEndsAt", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing"])
+        && companyDetailText(d)
+        && d.plan == "friend"
+        && d.isTest == false
+        && d.demoData == false
+        && d.origin == "friend"
+        && d.status == "active"
+        && d.friendInvite is string
+        && d.friendInvite == d.friendInvite
+        && exists(friendInvitePath(d.friendInvite))
+        && get(friendInvitePath(d.friendInvite)).data.status == "pending"
+        && existsAfter(friendInvitePath(d.friendInvite))
+        && getAfter(friendInvitePath(d.friendInvite)).data.status == "used"
+        && getAfter(friendInvitePath(d.friendInvite)).data.usedBy == request.auth.uid
+        && getAfter(friendInvitePath(d.friendInvite)).data.companyId == companyId
+        && d.ownerUid == request.auth.uid
+        && d.friendEndsAt == null
+        && d.trialEndsAt == null
+        && d.signedUpAt == request.time
+        && d.lastActivityAt == request.time
+        && d.staffCount == 1
+        && d.jobCount == 0
+        && companyBillingLocked(d);
+    }
+    function ownerPlanEdit(companyId) {
+      let next = request.resource.data;
+      return platformOwner()
+        && resource.data.get("isTest", false) != true
+        && next.get("isTest", false) == resource.data.get("isTest", false)
+        && next.diff(resource.data).affectedKeys().hasOnly(["plan", "friendEndsAt", "trialEndsAt"])
+        && next.plan in ["friend", "trial", "paid"]
+        && next.billing == resource.data.billing
+        && next.status == resource.data.status
+        && (next.friendEndsAt == null || next.friendEndsAt is timestamp)
+        && (next.plan != "trial" || (
+          next.trialEndsAt > request.time + duration.value(13, 'd')
+          && next.trialEndsAt < request.time + duration.value(15, 'd')
+        ));
+    }
+    function testArchive(companyId) {
+      let next = request.resource.data;
+      return platformOwner()
+        && resource.data.isTest == true
+        && resource.data.status == "active"
+        && next.diff(resource.data).affectedKeys().hasOnly(["status", "archivedAt"])
+        && next.status == "archived"
+        && next.archivedAt == request.time
+        && next.isTest == true
+        && next.plan == resource.data.plan
+        && next.billing == resource.data.billing;
+    }
+    function testDemoCounts(companyId) {
+      let next = request.resource.data;
+      return platformOwner()
+        && resource.data.isTest == true
+        && resource.data.status == "active"
+        && next.diff(resource.data).affectedKeys().hasOnly(["demoData", "staffCount", "jobCount", "lastActivityAt"])
+        && next.demoData == true
+        && next.staffCount == 2
+        && next.jobCount == 2
+        && next.lastActivityAt == request.time;
+    }
+    function companyStatsBump(companyId) {
+      let next = request.resource.data;
+      return signedIn()
+        && companyId == callerCompany()
+        && hasProfile()
+        && next.diff(resource.data).affectedKeys().hasOnly(["staffCount", "jobCount", "lastActivityAt"])
+        && next.staffCount is int && next.jobCount is int
+        && next.staffCount >= resource.data.staffCount && next.staffCount <= resource.data.staffCount + 1
+        && next.jobCount >= resource.data.jobCount && next.jobCount <= resource.data.jobCount + 1
+        && next.lastActivityAt == request.time;
+    }
+    function ownerProfileCreate() {
+      let d = request.resource.data;
+      return d.keys().hasOnly(["name", "email", "role", "companyId", "tenantId"])
+        && d.role == "admin"
+        && companyIdOk(d.companyId)
+        && d.companyId != "heartwood"
+        && d.tenantId == d.companyId
+        && d.name is string && d.name.size() > 0 && d.name.size() <= 80
+        && d.email is string && d.email.size() <= 120
+        && exists(/databases/$(database)/documents/companies/$(d.companyId))
+        && get(/databases/$(database)/documents/companies/$(d.companyId)).data.ownerUid == request.auth.uid
+        && !d.keys().hasAny(["platformOwner", "finance", "customerIds"]);
     }
 
     function same(key) {
@@ -36,35 +255,153 @@ service cloud.firestore {
         || ((key in request.resource.data) && (key in resource.data) && request.resource.data[key] == resource.data[key]);
     }
     match /users/{uid} {
-      allow read: if signedIn() && (request.auth.uid == uid || isAppAdmin());
-      allow create: if signedIn() && request.auth.uid == uid
-        && !request.resource.data.keys().hasAny(["tenantId", "role", "customerIds", "finance"]);
+      allow get: if signedIn() && (
+        request.auth.uid == uid
+        || platformOwner()
+        || (callerCompany() != "" && docCompany(resource.data) == callerCompany()
+          && (isAlex() || isPatrick() || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor"))))
+      );
+      allow list: if platformOwner();
+      allow list: if signedIn() && callerCompany() != ""
+        && resource.data.companyId == callerCompany()
+        && (isAlex() || isPatrick() || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor")));
+      allow create: if signedIn() && request.auth.uid == uid && (
+        (!request.resource.data.keys().hasAny(["tenantId", "role", "customerIds", "finance", "platformOwner", "companyId"]))
+        || ownerProfileCreate()
+      );
+      allow create, update: if platformOwner()
+        && uid.matches('^demo-[a-z0-9-]{1,80}$')
+        && request.resource.data.keys().hasOnly(["name", "role", "companyId", "tenantId", "demo", "email"])
+        && request.resource.data.demo == true
+        && request.resource.data.role in ["operator", "supervisor"]
+        && request.resource.data.companyId is string
+        && request.resource.data.tenantId == request.resource.data.companyId
+        && exists(/databases/$(database)/documents/companies/$(request.resource.data.companyId))
+        && get(/databases/$(database)/documents/companies/$(request.resource.data.companyId)).data.isTest == true
+        && !request.resource.data.keys().hasAny(["platformOwner", "finance", "isTest"]);
       allow update: if signedIn() && request.auth.uid == uid
-        && same("tenantId") && same("role") && same("customerIds") && same("finance");
+        && same("tenantId") && same("role") && same("customerIds") && same("finance")
+        && same("companyId") && same("platformOwner");
       allow delete: if false;
     }
 
     match /xeroQueue/{id} {
       allow read: if isHeartwoodFinance();
       allow create: if isHeartwoodFinance()
+        && callerCompany() == "heartwood"
         && request.resource.data.status == "queued"
         && request.resource.data.by == request.auth.uid
-        && (!("tenantId" in request.resource.data) || request.resource.data.tenantId == "heartwood");
+        && (!("tenantId" in request.resource.data) || request.resource.data.tenantId == "heartwood")
+        && request.resource.data.get("isTest", false) != true;
       allow update, delete: if false;
     }
 
     match /tenants/{id} {
-      allow read: if signedIn();
+      allow get: if signedIn() && (id == callerCompany() || platformOwner());
+      allow list: if platformOwner();
       allow write: if false;
     }
 
+    // Reads are company-scoped. Writes stay closed in this emulator model:
+    // the live jobs and receipts rules are not in this file. Do not deploy it.
+    function demoJobWrite(id) {
+      let d = request.resource.data;
+      return platformOwner()
+        && id.matches('^demo-[a-z0-9-]{1,80}$')
+        && d.demo == true
+        && d.companyId is string
+        && d.tenantId == d.companyId
+        && exists(/databases/$(database)/documents/companies/$(d.companyId))
+        && get(/databases/$(database)/documents/companies/$(d.companyId)).data.isTest == true
+        && d.keys().hasOnly(["client", "address", "type", "description", "date", "time", "status", "companyId", "tenantId", "demo", "assigned", "assignedNames"])
+        && d.client is string && d.client.size() <= 80
+        && d.address is string && d.address.size() <= 160
+        && d.description is string && d.description.size() <= 400
+        && !d.keys().hasAny(["invoiceAmount", "invoiceNo", "amountInc", "quoteAmount"]);
+    }
     match /jobs/{id} {
-      allow read: if signedIn();
+      allow get: if signedIn() && callerCompany() != "" && docCompany(resource.data) == callerCompany();
+      allow list: if signedIn() && callerCompany() != "" && resource.data.companyId == callerCompany();
       allow write: if false;
+      allow create, update: if demoJobWrite(id);
     }
     match /receipts/{id} {
-      allow read: if signedIn();
+      allow get: if signedIn() && callerCompany() != "" && docCompany(resource.data) == callerCompany();
+      allow list: if signedIn() && callerCompany() != "" && resource.data.companyId == callerCompany();
       allow write: if false;
+    }
+
+// BEGIN COMPANY RULES
+    match /companies/{companyId} {
+      allow get: if platformOwner() || (signedIn() && callerCompany() == companyId);
+      allow list: if platformOwner();
+      allow create: if companyOwnerCreate(companyId) || testCompanyCreate(companyId) || friendCompanyCreate(companyId);
+      allow update: if ownerPlanEdit(companyId) || testArchive(companyId) || testDemoCounts(companyId) || companyAdminEdit(companyId) || companyStatsBump(companyId);
+      allow delete: if false;
+    }
+// END COMPANY RULES
+
+    match /platformSessions/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow create, update: if platformOwner() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(["companyId"])
+        && request.resource.data.companyId is string
+        && request.resource.data.companyId.size() <= 40
+        && (request.resource.data.companyId == ""
+          || (exists(/databases/$(database)/documents/companies/$(request.resource.data.companyId))
+            && get(/databases/$(database)/documents/companies/$(request.resource.data.companyId)).data.isTest == true
+            && get(/databases/$(database)/documents/companies/$(request.resource.data.companyId)).data.status == "active"));
+      allow delete: if false;
+    }
+
+    function friendCodeOk(code) { return code.matches('^[a-z0-9]{8}$'); }
+    match /friendInvites/{code} {
+      allow get: if platformOwner()
+        || (signedIn() && resource.data.status == "pending")
+        || (signedIn() && resource.data.usedBy == request.auth.uid);
+      allow list: if platformOwner();
+      allow create: if platformOwner()
+        && friendCodeOk(code)
+        && request.resource.data.keys().hasOnly(["status", "createdBy", "createdAt", "note"])
+        && request.resource.data.status == "pending"
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.note is string
+        && request.resource.data.note.size() <= 80;
+      allow update: if (
+          platformOwner()
+          && resource.data.status == "pending"
+          && request.resource.data.status == "revoked"
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "revokedAt"])
+          && request.resource.data.revokedAt == request.time
+        ) || (
+          signedIn()
+          && resource.data.status == "pending"
+          && request.resource.data.status == "used"
+          && request.resource.data.usedBy == request.auth.uid
+          && request.resource.data.companyId is string
+          && request.resource.data.usedAt == request.time
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "usedBy", "companyId", "usedAt"])
+          && existsAfter(/databases/$(database)/documents/companies/$(request.resource.data.companyId))
+          && getAfter(/databases/$(database)/documents/companies/$(request.resource.data.companyId)).data.ownerUid == request.auth.uid
+          && getAfter(/databases/$(database)/documents/companies/$(request.resource.data.companyId)).data.plan == "friend"
+          && getAfter(/databases/$(database)/documents/companies/$(request.resource.data.companyId)).data.friendInvite == code
+        );
+      allow delete: if false;
+    }
+
+    match /testMailLog/{id} {
+      allow read: if platformOwner();
+      allow create: if platformOwner()
+        && sessionCompany() != ""
+        && request.resource.data.keys().hasOnly(["kind", "status", "companyId", "preview", "createdAt"])
+        && request.resource.data.kind in ["hours", "hubdoc", "xero", "builder"]
+        && request.resource.data.status == "preview"
+        && request.resource.data.companyId == sessionCompany()
+        && request.resource.data.preview is string
+        && request.resource.data.preview.size() <= 2000
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
     }
 
 // BEGIN INVITE RULES
@@ -82,9 +419,11 @@ service cloud.firestore {
     function inviteCallerTenant() {
       return inviteIsAlex() || inviteIsPatrick()
         ? "heartwood"
-        : (inviteHasProfile() && "tenantId" in inviteProfile() && inviteProfile().tenantId is string && inviteProfile().tenantId.size() > 0
+        : (inviteHasProfile() && "companyId" in inviteProfile() && inviteProfile().companyId is string && inviteProfile().companyId.size() > 0
+          ? inviteProfile().companyId
+          : (inviteHasProfile() && "tenantId" in inviteProfile() && inviteProfile().tenantId is string && inviteProfile().tenantId.size() > 0
           ? inviteProfile().tenantId
-          : (inviteHasProfile() ? "heartwood" : ""));
+          : (inviteHasProfile() ? "heartwood" : "")));
     }
     function inviteEmailOk(email) {
       return email is string
@@ -109,6 +448,7 @@ service cloud.firestore {
         && request.resource.data.tenantId is string
         && request.resource.data.tenantId == inviteCallerTenant()
         && request.resource.data.tenantId.matches('^[a-z0-9][a-z0-9-]{0,39}$')
+        && (!("companyId" in request.resource.data) || request.resource.data.companyId == request.resource.data.tenantId)
         && request.resource.data.token is string
         && request.resource.data.token.matches('^[A-Za-z0-9_-]{43,128}$')
         && request.resource.data.createdBy is string
@@ -140,7 +480,7 @@ service cloud.firestore {
     function inviteCreateOk(inviteId) {
       return inviteAdmin()
         && inviteBaseOk()
-        && request.resource.data.keys().hasOnly(["name", "email", "role", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId"])
+        && request.resource.data.keys().hasOnly(["name", "email", "role", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId", "companyId"])
         && request.resource.data.status == "pending"
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.createdAt == request.time
@@ -155,7 +495,7 @@ service cloud.firestore {
         && request.resource.data.cancelledAt == request.time
         && inviteSame("name") && inviteSame("email") && inviteSame("role") && inviteSame("createdBy")
         && inviteSame("createdAt") && inviteSame("expiresAt") && inviteSame("token") && inviteSame("tenantId")
-        && inviteSame("resentAt") && inviteSame("resentBy")
+        && inviteSame("resentAt") && inviteSame("resentBy") && inviteSame("companyId")
         && inviteLockAgrees(request.resource.data.email, inviteId);
     }
     function inviteResendOk(inviteId) {
@@ -166,14 +506,14 @@ service cloud.firestore {
         && request.resource.data.resentAt == request.time
         && inviteExpiryWindow()
         && inviteSame("name") && inviteSame("email") && inviteSame("role") && inviteSame("createdBy")
-        && inviteSame("createdAt") && inviteSame("tenantId")
+        && inviteSame("createdAt") && inviteSame("tenantId") && inviteSame("companyId")
         && inviteSame("cancelledAt") && inviteSame("cancelledBy")
         && inviteLockAgrees(request.resource.data.email, inviteId);
     }
     function inviteUpdateOk(inviteId) {
       return inviteAdmin()
         && inviteBaseOk()
-        && request.resource.data.keys().hasOnly(["name", "email", "role", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId", "cancelledAt", "cancelledBy", "resentAt", "resentBy"])
+        && request.resource.data.keys().hasOnly(["name", "email", "role", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId", "companyId", "cancelledAt", "cancelledBy", "resentAt", "resentBy"])
         && (inviteCancelOk(inviteId) || inviteResendOk(inviteId));
     }
 
@@ -725,7 +1065,8 @@ service cloud.firestore {
     }
     function swmsCreateOk() {
       return swmsCanSign()
-        && request.resource.data.keys().hasOnly(["uid", "name", "swmsId", "swmsTitle", "version", "jobId", "jobLabel", "sig", "signedAt", "signedAtMs", "expiresAtMs", "device"])
+        && request.resource.data.keys().hasOnly(["uid", "name", "swmsId", "swmsTitle", "version", "jobId", "jobLabel", "sig", "signedAt", "signedAtMs", "expiresAtMs", "device", "companyId"])
+        && (!("companyId" in request.resource.data) || request.resource.data.companyId == callerCompany())
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.name is string
         && request.resource.data.name.size() >= 2
@@ -753,7 +1094,15 @@ service cloud.firestore {
     }
 
     match /swmsSignatures/{id} {
-      allow read: if swmsSignedIn() && (resource.data.uid == request.auth.uid || swmsIsAdmin());
+      allow get: if swmsSignedIn() && resource != null && docCompany(resource.data) == callerCompany()
+        && (resource.data.uid == request.auth.uid || swmsIsAdmin() && callerCompany() == docCompany(resource.data));
+      allow list: if swmsSignedIn() && callerCompany() == "heartwood" && resource.data.uid == request.auth.uid;
+      allow list: if swmsSignedIn() && callerCompany() != "heartwood" && resource.data.uid == request.auth.uid
+        && resource.data.companyId == callerCompany();
+      allow list: if (swmsIsAlex() || swmsIsPatrick() || (swmsHasProfile() && swmsProfile().role == "admin" && callerCompany() == "heartwood"))
+        && resource.data.companyId == "heartwood";
+      allow list: if callerCompany() != "heartwood" && swmsHasProfile() && swmsProfile().role == "admin"
+        && resource.data.companyId == callerCompany();
       allow create: if swmsCreateOk();
       allow update, delete: if false;
     }
@@ -963,11 +1312,16 @@ service cloud.firestore {
     }
 
     match /timesheets/{id} {
-      allow read: if signedIn() && (
-        tsHeartwoodAdmin()
-        || (resource == null && id.matches('^' + request.auth.uid + '_[0-9]{4}-[0-9]{2}-[0-9]{2}$'))
-        || (resource != null && resource.data.uid == request.auth.uid)
+      allow get: if signedIn() && (
+        (resource == null && id.matches('^' + request.auth.uid + '_[0-9]{4}-[0-9]{2}-[0-9]{2}$'))
+        || (tsHeartwoodAdmin() && resource != null && docCompany(resource.data) == "heartwood")
+        || (resource != null && resource.data.uid == request.auth.uid && docCompany(resource.data) == callerCompany())
+        || (callerCompany() != "heartwood" && hasProfile() && profile().role == "admin" && resource != null && resource.data.companyId == callerCompany())
       );
+      allow list: if signedIn() && callerCompany() == "heartwood" && resource.data.uid == request.auth.uid;
+      allow list: if callerCompany() != "heartwood" && resource.data.uid == request.auth.uid && resource.data.companyId == callerCompany();
+      allow list: if tsHeartwoodAdmin() && resource.data.companyId == "heartwood";
+      allow list: if callerCompany() != "heartwood" && hasProfile() && profile().role == "admin" && resource.data.companyId == callerCompany();
       allow create: if tsWorkerCreate(id);
       allow update: if tsWorkerUpdate(id) || tsSentUpdate();
       allow delete: if false;
@@ -989,17 +1343,15 @@ service cloud.firestore {
     function lvSignedIn() { return request.auth != null; }
     function lvHeartwood() {
       return lvSignedIn() && (
-        isAlex() || isPatrick() || (
-          hasProfile() && (!("tenantId" in profile()) || profile().tenantId == "heartwood")
-        )
+        isAlex() || isPatrick() || (hasProfile() && callerCompany() == "heartwood")
       );
     }
     function lvDecider() {
-      return lvHeartwood() && (
-        isAlex() || isPatrick() || (
-          hasProfile() && (profile().role == "admin" || profile().role == "supervisor")
-        )
-      );
+      return lvSignedIn() && hasProfile() == false && (isAlex() || isPatrick())
+        || lvSignedIn() && (
+          (callerCompany() == "heartwood" && (isAlex() || isPatrick() || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor"))))
+          || (callerCompany() != "heartwood" && hasProfile() && (profile().role == "admin" || profile().role == "supervisor"))
+        );
     }
     function lvDate(v) {
       return v is string && v.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
@@ -1026,9 +1378,10 @@ service cloud.firestore {
         || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.webp";
     }
     function lvCreate(id) {
-      return lvHeartwood()
+      return (lvHeartwood() || (callerCompany() != "heartwood" && callerCompany() != "" && hasProfile()))
         && id.matches('^lv[a-z0-9]{16}$')
-        && request.resource.data.keys().hasOnly(["uid", "name", "type", "start", "end", "startHalf", "endHalf", "reason", "certificatePath", "certificateName", "status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "createdAt", "updatedAt"])
+        && request.resource.data.keys().hasOnly(["uid", "name", "type", "start", "end", "startHalf", "endHalf", "reason", "certificatePath", "certificateName", "status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "createdAt", "updatedAt", "companyId"])
+        && (!("companyId" in request.resource.data) || request.resource.data.companyId == callerCompany())
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.name is string
         && request.resource.data.name.size() > 0
@@ -1075,13 +1428,16 @@ service cloud.firestore {
     }
 
     match /leaveRequests/{id} {
-      allow read: if lvHeartwood() && (
-        lvDecider()
-        || (resource != null && resource.data.uid == request.auth.uid)
-        || (resource == null && id.matches('^lv[a-z0-9]{16}$'))
-      );
-      allow create: if lvCreate(id);
-      allow update: if lvDecision();
+      allow get: if (lvHeartwood() && (resource == null && id.matches('^lv[a-z0-9]{16}$')
+          || resource != null && docCompany(resource.data) == "heartwood" && (lvDecider() || resource.data.uid == request.auth.uid)))
+        || (callerCompany() != "heartwood" && resource != null && resource.data.companyId == callerCompany()
+          && (resource.data.uid == request.auth.uid || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor"))));
+      allow list: if lvHeartwood() && resource.data.uid == request.auth.uid;
+      allow list: if lvHeartwood() && lvDecider() && resource.data.companyId == "heartwood";
+      allow list: if callerCompany() != "heartwood" && resource.data.companyId == callerCompany()
+        && (resource.data.uid == request.auth.uid || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor")));
+      allow create: if lvCreate(id) && (lvHeartwood() && callerCompany() == "heartwood" || request.resource.data.companyId == callerCompany());
+      allow update: if lvDecision() && docCompany(resource.data) == callerCompany();
       allow delete: if false;
     }
 // END LEAVE RULES
@@ -1091,7 +1447,9 @@ service cloud.firestore {
     function rcStaff() {
       return rcSignedIn() && (
         isAlex() || isPatrick() || (
-          hasProfile() && (!("tenantId" in profile()) || profile().tenantId == "heartwood")
+          hasProfile() && callerCompany() == "heartwood"
+        ) || (
+          callerCompany() != "heartwood" && callerCompany() != "" && hasProfile()
         )
       );
     }
@@ -1108,7 +1466,8 @@ service cloud.firestore {
     function rcCreate(id) {
       return rcStaff()
         && id.matches('^rc[a-z0-9]{16}$')
-        && request.resource.data.keys().hasOnly(["uid", "name", "date", "amountCents", "supplier", "category", "notes", "paidWith", "jobId", "jobLabel", "receiptPath", "receiptName", "status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "paidAt", "createdAt", "updatedAt"])
+        && request.resource.data.keys().hasOnly(["uid", "name", "date", "amountCents", "supplier", "category", "notes", "paidWith", "jobId", "jobLabel", "receiptPath", "receiptName", "status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "paidAt", "createdAt", "updatedAt", "companyId"])
+        && (!("companyId" in request.resource.data) || request.resource.data.companyId == callerCompany())
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.name is string
         && request.resource.data.name.size() > 0
@@ -1184,37 +1543,54 @@ service cloud.firestore {
     }
 
     match /reimbursementClaims/{id} {
-      allow read: if (rcSync() && resource != null && resource.data.status == "paid") || rcStaff() && (
-        rcAdmin()
-        || (resource != null && resource.data.uid == request.auth.uid)
-        || (resource == null && id.matches('^rc[a-z0-9]{16}$'))
+      allow get: if (rcSync() && resource != null && resource.data.status == "paid")
+        || (rcStaff() && callerCompany() == "heartwood" && (
+          (resource == null && id.matches('^rc[a-z0-9]{16}$'))
+          || (resource != null && docCompany(resource.data) == "heartwood" && (rcAdmin() || resource.data.uid == request.auth.uid))
+        ))
+        || (callerCompany() != "heartwood" && resource != null && resource.data.companyId == callerCompany()
+          && (resource.data.uid == request.auth.uid || (hasProfile() && profile().role == "admin")));
+      allow list: if rcStaff() && callerCompany() == "heartwood" && resource.data.uid == request.auth.uid;
+      allow list: if rcAdmin() && callerCompany() == "heartwood" && resource.data.companyId == "heartwood";
+      allow list: if rcSync() && resource.data.status == "paid";
+      allow list: if callerCompany() != "heartwood" && resource.data.companyId == callerCompany()
+        && (resource.data.uid == request.auth.uid || (hasProfile() && profile().role == "admin"));
+      allow create: if rcCreate(id) && (
+        callerCompany() == "heartwood" || request.resource.data.companyId == callerCompany()
       );
-      allow create: if rcCreate(id);
-      allow update: if rcDecision() || rcHubdoc();
+      allow update: if (rcDecision() && docCompany(resource.data) == callerCompany()) || rcHubdoc();
       allow delete: if false;
     }
 // END REIMBURSEMENT CLAIM RULES
 // BEGIN HOURS EXPORT RULES
-    // hoursExports/{id}: admin queues one .xlsx hours spreadsheet for accounts@heartwoodew.com.
-    // The box sync account (tools/hours_export_mailer.py) records only the send state. No deletes.
+    // Heartwood still queues to accounts@heartwoodew.com only.
+    // Another company queues to companies/{id}.accountsEmail, never Heartwood's mailbox.
     function hxSignedIn() { return request.auth != null; }
+    function hxProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    function hxHasProfile() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+    function hxCaller() {
+      return callerCompany();
+    }
     function hxAdmin() {
       return hxSignedIn() && (
         request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2" || request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"
-        || (exists(/databases/$(database)/documents/users/$(request.auth.uid))
-          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("role", "") == "admin"
-          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("tenantId", "heartwood") == "heartwood")
+        || (hxHasProfile() && hxProfile().get("role", "") == "admin" && hxCaller() != "")
       );
     }
     function hxSync() { return hxSignedIn() && request.auth.uid == "38SU5waAy4f9UI9N6JTqDMaYpQg2"; }
-    function hxCreate(id) {
-      let d = request.resource.data;
-      return hxAdmin()
-        && id.matches('^hx[a-z0-9]{16}$')
-        && d.keys().hasOnly(["weekStart", "weekEnd", "to", "fileName", "storagePath", "people", "totalHours", "status", "attempts", "createdBy", "createdByName", "createdAt"])
+    function hxAccounts() {
+      return hxCaller() == "heartwood"
+        ? "accounts@heartwoodew.com"
+        : get(/databases/$(database)/documents/companies/$(hxCaller())).data.accountsEmail;
+    }
+    function hxShape(d, id) {
+      return id.matches('^hx[a-z0-9]{16}$')
         && d.weekStart is string && d.weekStart.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
         && d.weekEnd is string && d.weekEnd.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
-        && d.to == "accounts@heartwoodew.com"
         && d.fileName is string && d.fileName.matches('^[A-Za-z0-9_-]{1,80}[.]xlsx$')
         && d.storagePath == "hoursExports/" + id + "/" + d.fileName
         && d.people is int && d.people >= 0 && d.people <= 500
@@ -1224,17 +1600,36 @@ service cloud.firestore {
         && d.createdByName is string && d.createdByName.size() <= 80
         && d.createdAt == request.time;
     }
+    function hxCreate(id) {
+      let d = request.resource.data;
+      return hxAdmin() && hxCaller() != "" && hxShape(d, id) && (
+        (hxCaller() == "heartwood"
+          && d.keys().hasOnly(["weekStart", "weekEnd", "to", "fileName", "storagePath", "people", "totalHours", "status", "attempts", "createdBy", "createdByName", "createdAt", "companyId", "companyName"])
+          && d.companyId == "heartwood"
+          && d.companyName == "Heartwood"
+          && d.to == "accounts@heartwoodew.com")
+        || (hxCaller() != "heartwood"
+          && d.keys().hasOnly(["weekStart", "weekEnd", "to", "fileName", "storagePath", "people", "totalHours", "status", "attempts", "createdBy", "createdByName", "createdAt", "companyId", "companyName"])
+          && d.companyId == hxCaller()
+          && d.companyName is string && d.companyName.size() > 0 && d.companyName.size() <= 80
+          && d.to == hxAccounts()
+          && d.to != "accounts@heartwoodew.com"
+          && exists(/databases/$(database)/documents/companies/$(hxCaller()))
+          && get(/databases/$(database)/documents/companies/$(hxCaller())).data.isTest != true)
+      );
+    }
     function hxMark() {
       return hxSync()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "attempts", "updatedAt", "sentAt", "messageId", "error", "via"])
         && request.resource.data.status in ["sending", "sent", "failed"]
-        && request.resource.data.to == "accounts@heartwoodew.com"
         && request.resource.data.attempts is int
         && request.resource.data.get("error", "") is string && request.resource.data.get("error", "").size() <= 300
         && request.resource.data.get("messageId", "") is string && request.resource.data.get("messageId", "").size() <= 100;
     }
     match /hoursExports/{id} {
-      allow read: if hxAdmin() || hxSync();
+      allow get: if (hxAdmin() && docCompany(resource.data) == hxCaller()) || hxSync();
+      allow list: if hxAdmin() && resource.data.companyId == hxCaller();
+      allow list: if hxSync();
       allow create: if hxCreate(id);
       allow update: if hxMark();
       allow delete: if false;
