@@ -108,12 +108,23 @@ export function canMoveTo(from, to) {
   return false;
 }
 
-export function claimDecisionBody({ from, status, note, uid, name } = {}) {
+export function claimDecisionBody({ from, status, note, uid, name, receiptPath } = {}) {
   if (!canMoveTo(from, status)) return { ok: false, reason: "That change isn't allowed for this claim." };
   const decisionNote = clean(note, 500);
   if (status === "declined" && !decisionNote) return { ok: false, reason: "Add a note saying why it was declined." };
   if (!uid || !clean(name, 80)) return { ok: false, reason: "Sign in again." };
-  return { ok: true, data: { status, decisionNote, decidedBy: uid, decidedByName: clean(name, 80) } };
+  const data = { status, decisionNote, decidedBy: uid, decidedByName: clean(name, 80) };
+  // Paid claims go to Hubdoc: the box filer (tools/hubdoc_filer.py) emails the receipt once, or records "no-receipt".
+  if (status === "paid") data.hubdocStatus = receiptPath ? "queued" : "no-receipt";
+  return { ok: true, data };
+}
+
+export const HUBDOC_LABEL = Object.freeze({ queued: "Hubdoc: queued", sending: "Hubdoc: sending", sent: "Hubdoc: sent", failed: "Hubdoc: failed, will retry", "no-receipt": "Hubdoc: no receipt" });
+
+/** Hubdoc state for a paid claim. Paid claims from before this change with no marker count as queued. */
+export function hubdocState(row = {}) {
+  if (row.status !== "paid") return "";
+  return HUBDOC_LABEL[row.hubdocStatus] ? row.hubdocStatus : (row.receiptPath ? "queued" : "no-receipt");
 }
 
 /** Approved (not yet paid) and submitted totals per person, highest owed first. Declined and paid claims are left out. */
@@ -169,11 +180,11 @@ export function claimsScreenHtml({ claims, uid, isAdmin, jobs, today, error, fil
     const file = row.receiptPath ? `<button type="button" class="sm-btn" data-rc-receipt="${esc(row.id)}">Download receipt</button>` : `<p class="sub">No receipt attached.</p>`;
     const btn = (to, label, primary) => canMoveTo(st, to) ? `<button type="submit" class="sm-btn${primary ? " primary" : ""}" value="${to}">${label}</button>` : "";
     const actions = admin && (st === "submitted" || st === "approved")
-      ? `<form class="rc-decide" data-id="${esc(row.id)}" data-from="${esc(st)}"><label>Note<input name="note" maxlength="500" placeholder="Optional (required to decline)" autocomplete="off"></label><div class="btns">${btn("approved", "Approve", true)}${btn("paid", "Mark paid", st === "approved")}${btn("declined", "Decline")}</div></form>`
+      ? `<form class="rc-decide" data-id="${esc(row.id)}" data-from="${esc(st)}" data-receipt="${esc(row.receiptPath || "")}"><label>Note<input name="note" maxlength="500" placeholder="Optional (required to decline)" autocomplete="off"></label><div class="btns">${btn("approved", "Approve", true)}${btn("paid", "Mark paid", st === "approved")}${btn("declined", "Decline")}</div></form>`
       : "";
     return `<article class="lv-card rc-card rc-${esc(st)}"><h3>${admin ? esc(row.name || "Staff") + " · " : ""}${esc(money(row.amountCents))} · ${esc(row.supplier || "")}</h3>
       <p>${esc(row.date || "")} · ${esc(meta)}</p>${row.notes ? `<p>${esc(row.notes)}</p>` : ""}
-      <p class="qpill">${esc(CLAIM_STATUS[st] || st)}</p>${note}${file}${actions}</article>`;
+      <p class="qpill">${esc(CLAIM_STATUS[st] || st)}</p>${admin && hubdocState(row) ? `<p class="qpill rc-hubdoc rc-hubdoc-${esc(hubdocState(row))}" title="${esc(row.hubdocError || "")}">${esc(HUBDOC_LABEL[hubdocState(row)])}${row.hubdocSentAt ? " " + esc(String(row.hubdocSentAt).slice(0, 10)) : ""}</p>` : ""}${note}${file}${actions}</article>`;
   };
   const mine = sortClaims(rows.filter(row => row.uid === uid));
   const mineHtml = `<h2>Your claims</h2>${mine.map(row => card(row, false)).join("") || `<p class="sub">You have no claims yet.</p>`}`;

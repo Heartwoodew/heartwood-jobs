@@ -1549,7 +1549,7 @@ function bindClaims(A, rerender) {
     decide.onsubmit = async ev => {
       ev.preventDefault();
       const status = ev.submitter && ev.submitter.value;
-      const built = claimDecisionBody({ from: decide.dataset.from, status, note: decide.note.value, uid: me.uid, name: me.name });
+      const built = claimDecisionBody({ from: decide.dataset.from, status, note: decide.note.value, uid: me.uid, name: me.name, receiptPath: decide.dataset.receipt || "" });
       if (!built.ok) { toast(built.reason); return; }
       try {
         await updateDoc(doc(db, "reimbursementClaims", decide.dataset.id), {

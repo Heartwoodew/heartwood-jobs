@@ -63,7 +63,10 @@
     function rcDecision() {
       return rcAdmin()
         && rcStep()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "paidAt", "updatedAt"])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "paidAt", "updatedAt", "hubdocStatus"])
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(["hubdocStatus"])
+          || (request.resource.data.status == "paid"
+            && request.resource.data.hubdocStatus == (resource.data.receiptPath == "" ? "no-receipt" : "queued")))
         && request.resource.data.decisionNote is string
         && request.resource.data.decisionNote.size() <= 500
         && request.resource.data.decidedBy == request.auth.uid
@@ -77,14 +80,29 @@
           : request.resource.data.paidAt == null);
     }
 
+    // Hubdoc filer: the box sync account (tools/hubdoc_filer.py) reads paid claims and records only the Hubdoc
+    // send state. It cannot change the claim itself, and only on claims that are already paid.
+    function rcSync() { return rcSignedIn() && request.auth.uid == "38SU5waAy4f9UI9N6JTqDMaYpQg2"; }
+    function rcHubdoc() {
+      return rcSync()
+        && resource.data.status == "paid"
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["hubdocStatus", "hubdocAttempts", "hubdocUpdatedAt", "hubdocSentAt", "hubdocMessageId", "hubdocVia", "hubdocError"])
+        && request.resource.data.hubdocStatus in ["sending", "sent", "failed", "no-receipt"]
+        && request.resource.data.get("hubdocAttempts", 0) is int
+        && request.resource.data.get("hubdocError", "") is string
+        && request.resource.data.get("hubdocError", "").size() <= 300
+        && request.resource.data.get("hubdocMessageId", "") is string
+        && request.resource.data.get("hubdocMessageId", "").size() <= 100;
+    }
+
     match /reimbursementClaims/{id} {
-      allow read: if rcStaff() && (
+      allow read: if (rcSync() && resource != null && resource.data.status == "paid") || rcStaff() && (
         rcAdmin()
         || (resource != null && resource.data.uid == request.auth.uid)
         || (resource == null && id.matches('^rc[a-z0-9]{16}$'))
       );
       allow create: if rcCreate(id);
-      allow update: if rcDecision();
+      allow update: if rcDecision() || rcHubdoc();
       allow delete: if false;
     }
 // END REIMBURSEMENT CLAIM RULES
