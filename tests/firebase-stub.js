@@ -88,6 +88,11 @@ function uidFor(r) {
 function snap(rows) {
   return { docs: (rows || []).map(r => ({ id: r.id, data: () => { const { id, ...rest } = r; return rest; } })) };
 }
+function withGeo(row) {
+  const extra = (typeof window !== "undefined" && window.HW_GEO_BY_ID) || {};
+  const geo = extra[row.id];
+  return geo ? { ...row, geo } : row;
+}
 function ratesDoc() {
   if (typeof window !== "undefined" && window.HW_PREVIEW_RATES === "blank") {
     return { travelPerKm: null, materialPerUnit: null, tipPerLoad: null, machineRates: {}, labourerRate: null, labourerUnit: "hour" };
@@ -154,6 +159,14 @@ export function getDoc(ref) {
   if (ref && ref._col === "meta" && ref._id === "quoteRates") {
     return Promise.resolve({ exists: () => true, data: () => ratesDoc() });
   }
+  if (ref && ref._col === "runSheets") {
+    const sheet = typeof window !== "undefined" ? window.HW_RUNSHEET : null;
+    if (sheet && sheet.id === ref._id) {
+      const { id, ...rest } = sheet;
+      return Promise.resolve({ exists: () => true, data: () => rest });
+    }
+    return Promise.resolve({ exists: () => false, data: () => undefined });
+  }
   return Promise.resolve({ exists: () => false, data: () => undefined });
 }
 
@@ -207,13 +220,14 @@ export function onSnapshot(ref, onNext) {
         return;
       }
       if (col === "jobs" && id && id !== "auto") {
-        const row = JOBS.find(j => j.id === id);
+        const row = withGeo(JOBS.find(j => j.id === id) || {});
+        const found = JOBS.some(j => j.id === id);
         onNext({
           id,
-          exists: () => !!row,
-          data: () => { if (!row) return undefined; const { id: _id, ...rest } = row; return rest; }
+          exists: () => found,
+          data: () => { if (!found) return undefined; const { id: _id, ...rest } = row; return rest; }
         });
-      } else if (col === "jobs") onNext(snap(JOBS));
+      } else if (col === "jobs") onNext(snap(JOBS.map(withGeo)));
       else if (col === "swmsSignatures") {
         let rows = swmsPreviewRows();
         const uidEq = (ref._wheres || []).find(w => w.field === "uid" && w.op === "==");
@@ -235,7 +249,12 @@ export function updateDoc(ref, data) {
   return Promise.resolve();
 }
 export function setDoc(ref, data) {
-  record("setDoc", { col: ref && ref._col, id: ref && ref._id });
+  record("setDoc", {
+    col: ref && ref._col, id: ref && ref._id,
+    keys: data ? Object.keys(data) : [],
+    jobIds: data && data.jobIds, status: data && data.status,
+    workerUid: data && data.workerUid,
+  });
   return Promise.resolve();
 }
 export function addDoc(ref, data) {

@@ -866,3 +866,40 @@ body.operator .job-chat .chat-screen{height:calc(100dvh - 168px - env(safe-area-
   dialog.jobcard .jc-pane[data-pane="chat"] .chat-screen{height:calc(100dvh - 210px)}
   .chat-compose{padding-bottom:calc(8px + env(safe-area-inset-bottom))}
 }
+
+/* Optimise order. Cream sheet, coffee type, caramel approve. Addresses only. */
+.route-open{min-height:44px;font-weight:750}
+body.admin .mdisp .route-open{display:block;width:calc(100% - 24px);margin:10px 12px;background:#8a5a2b;border-color:#8a5a2b;color:#fff;border-radius:12px}
+.route-ov{position:fixed;inset:0;z-index:80;background:#f6f1ea;color:#2b2118;overflow:auto;display:flex;justify-content:center}
+.route-sheet{width:min(520px,100%);padding:8px 16px calc(28px + env(safe-area-inset-bottom))}
+.route-top{display:flex;align-items:flex-start;gap:8px;position:sticky;top:0;background:#f6f1ea;padding:8px 0 12px;z-index:1}
+.route-top h2{margin:0;font-size:28px;letter-spacing:-.03em;line-height:1.1}
+.route-x{min-width:44px;min-height:44px;border:none;background:transparent;color:#3b2a1a;font-size:22px;padding:0}
+.route-pick{display:grid;gap:10px;background:#fffdf9;border:1px solid #eadfd3;border-radius:16px;padding:12px}
+.route-pick label{color:#5c4e42;font-weight:650}
+.route-pick input,.route-pick select{min-height:48px;border-radius:12px;border:1px solid #eadfd3;background:#fff;color:#2b2118}
+.route-return{display:flex;align-items:center;gap:10px;min-height:44px;color:#2b2118;font-weight:700}
+.route-return input{width:22px;height:22px;min-height:0}
+.route-go,.route-approve{min-height:52px;border-radius:14px;background:#8a5a2b;border-color:#8a5a2b;color:#fff;font-weight:750;font-size:17px}
+.route-reject{min-height:48px;border-radius:14px;background:transparent;border:1px solid #eadfd3;color:#3b2a1a;font-weight:700}
+.route-actions{display:grid;gap:8px;margin-top:8px}
+.route-kicker{margin:16px 0 8px;font-weight:800;letter-spacing:-.02em}
+.route-depot{display:flex;flex-direction:column;margin:4px 0;font-size:15px}
+.route-depot span{color:#7a6a5a;font-size:13px}
+.route-leg{margin:0 8px 0 22px;padding:2px 0 2px 12px;border-left:2px solid #e7c59a;color:#5c4e42;font-size:14px}
+.route-stop{display:grid;grid-template-columns:44px 1fr auto;gap:8px;align-items:center;background:#fffdf9;border:1px solid #eadfd3;border-radius:16px;padding:8px;margin:6px 0}
+.route-stop.dragging{opacity:.45}
+.route-handle{min-width:44px;min-height:44px;border:none;border-radius:12px;background:#efe6da;color:#3b2a1a;font-weight:800;touch-action:none}
+.route-stop-main b{display:block;font-size:16px}
+.route-nudges{display:grid;gap:4px}
+.route-nudge{min-width:44px;min-height:36px;border-radius:10px;border:1px solid #eadfd3;background:#fffdf9;color:#3b2a1a;font-weight:800}
+.route-totals{background:#fffdf9;border:1px solid #eadfd3;border-radius:16px;padding:12px;margin:12px 0;display:grid;gap:8px}
+.route-totals div{display:flex;justify-content:space-between;gap:12px;align-items:baseline}
+.route-totals span{color:#7a6a5a}
+.route-totals b{font-size:18px}
+.route-save{color:#3f6b45;font-weight:750;margin:0}
+.route-note{color:#7a6a5a;font-size:14px;margin:4px 0}
+.route-warn,.route-error{background:#fff6ea;border:1px solid #e0a050;border-radius:12px;padding:10px 12px;color:#6b3a12}
+.route-skip{color:#5c4e42;font-size:14px}
+.run-stop{display:inline-block;background:#efe6da;color:#3b2a1a;font-size:12px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;border-radius:999px;padding:3px 8px;margin:0 0 6px}
+.run-note{margin:8px 0 0;color:#5c4e42;font-weight:700}

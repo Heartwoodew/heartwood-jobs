@@ -9,6 +9,7 @@ import { getStorage, ref as storageRef, uploadBytes, connectStorageEmulator, lis
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
 import { firebaseConfig, useEmulator } from "./firebase-config.js";
 import { installQuotes, adminViewRouter } from "./features/quotes.js";
+import { installRouteOrder, orderJobsForRun, runSheetId, geoPatch } from "./features/route-order.js";
 import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPlanned, jobPhotoPrefix, storageErrorCode, summarizePhotoListing } from "./features/cloud-storage.js";
 import { buildOperationalExport, retentionAdminText, retentionView } from "./features/cloud-retention.js";
 import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, lightboxHtml, photoFailureText } from "./features/photo-gallery.js";
@@ -57,6 +58,7 @@ function guessType(text) {
 let me = null, staff = [], jobs = [], unsub = null;
 let CHAT = { badge() { return ""; }, teamHtml() { return ""; }, jobHtml() { return ""; }, mount() {}, openJob() {}, start() {}, stop() {}, watch() {}, refresh() {} };
 let QG = { bindAdmin() {} }; // Quotes module; filled after helpers load
+let ROUTE = { open() {} };
 const ALEX_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";      // Alex has no users/{uid} profile doc; always staff
 const ui = { view: "list", staffF: "", typeF: "", photoLists: {}, photoUrls: {}, photoBlobs: {}, photoThumbs: {}, photoThumbTasks: {}, photoErrors: {}, photoJobs: {}, photoPaint: 0 };
 
@@ -305,6 +307,7 @@ function dispatchView(all) {
       <div class="seg"><button data-dv="day" class="${ui.dview === "day" ? "on" : ""}">Day</button><button data-dv="week" class="${ui.dview === "week" ? "on" : ""}">Week</button></div>
       <button class="sm-btn" data-wk="-1">‹</button><button class="sm-btn" data-wk="0">Today</button><button class="sm-btn" data-wk="1">›</button>
       <span class="drange">${ui.dview === "week" ? shortDate(days[0]) + " – " + shortDate(days[6]) : dayLabel(dayD)}</span>
+      <button type="button" class="sm-btn route-open" id="optorder">Optimise order</button>
       <button id="new" class="sm-btn primary">+ New Job</button></div>
     <div class="dwrap"><div class="dboard"><p class="touchhint">Tap a job to open it. Press and hold a job to move it to another day or staff member.</p><div class="dgrid-scroll">${grid}</div><p class="sub muted">Drag a job to another day or staff member to reschedule (saved in the app, sent to ServiceM8 by the next sync).</p></div>
       </div>`;
@@ -1059,6 +1062,7 @@ function renderAdmin() {
   A.querySelectorAll("[data-grp]").forEach(b => b.onclick = () => { const g = b.dataset.grp; if (NAV_GROUPS.find(x => x[0] === g)[3].includes(ui.view)) return;
     ui.navCol[g] = !ui.navCol[g]; try { localStorage.setItem("hwNavCol", JSON.stringify(ui.navCol)); } catch {} renderAdmin(); });
   if (ui.view === "dispatch" && PHONE.matches) bindMobileDispatch(A, [...jobs, ...(ui.undated || [])]);
+  if ($("#optorder")) $("#optorder").onclick = () => ROUTE.open({ date: (PHONE.matches && ui.mday) || todayStr() });
   A.querySelectorAll("[data-cq]").forEach(b => b.onclick = () => { ui.cq = b.dataset.cq; renderAdmin(); });
   if (ui.view === "completed" && canXero()) { bindXc(A, ui.xcList); if ($("#xcall")) $("#xcall").onclick = () => { const l = ui.xcList.filter(j => !j.xeroCheckPending);
     if (l.length && confirm(`Check ${l.length} completed job${l.length === 1 ? "" : "s"} in Xero?\n\nRead-only: nothing is created or changed in Xero.`)) checkXero(l); }; }
@@ -1789,7 +1793,9 @@ function opCard(j) {
   const crew = namesOf(j);
   const type = TYPES[j.type] || j.client || "Job";
   const st = j.status === "In progress" ? "inprog" : j.status === "Done" ? "done" : "";
+  const stop = ui.runStops && ui.runStops[j.id];
   return `<div class="mrow opj t-${esc(j.type || "other")}" data-id="${esc(j.id)}" role="button" tabindex="0" aria-label="${esc(type + " " + (p.line || p.full) + " " + phoneTime(j.time))}">
+    ${stop ? `<div class="run-stop">Stop ${stop}</div>` : ""}
     <div class="mtime"><b>${esc(phoneTime(j.time))}</b>${j.durationHrs ? `<small>${esc(j.durationHrs)}h</small>` : ""}</div>
     <div class="mbody">${ipTop(j, "sm")}<div class="mcl"><span class="qdot ${QCLS[queueOf(j)]}"></span>${esc(type)}${jobPhotosIcon(j)}</div>
       <div class="maddr">${esc(p.line || p.full || "-")}</div>
@@ -1813,8 +1819,41 @@ function bindOp(mine) {
     if (j) emailPhotos(j);
   });
 }
+function snapExists(snap) {
+  if (!snap) return false;
+  return typeof snap.exists === "function" ? !!snap.exists() : !!snap.exists;
+}
+function readRunSheet(uid, date) {
+  const id = runSheetId(uid, date);
+  if (!id) return null;
+  ui.runSheets = ui.runSheets || {};
+  if (ui.runSheets[id] === undefined) {
+    ui.runSheets[id] = null;
+    getDoc(doc(db, "runSheets", id)).then(snap => {
+      ui.runSheets[id] = snapExists(snap) ? { id, ...snap.data() } : false;
+      const sheet = ui.runSheets[id];
+      if (sheet && sheet.status === "approved" && !ui.opSel && me && (me.role !== "admin" || ui.myJobs)) renderOperator();
+    }).catch(() => { ui.runSheets[id] = false; });
+  }
+  const sheet = ui.runSheets[id];
+  return sheet && sheet.status === "approved" ? sheet : null;
+}
+function withRunOrder(list) {
+  const dates = [...new Set(list.map(j => j.date))].sort();
+  const out = [];
+  for (const date of dates) {
+    const sheet = readRunSheet(me.uid, date);
+    const rows = orderJobsForRun(list.filter(j => j.date === date), sheet);
+    rows.forEach((j, i) => {
+      if (sheet && Array.isArray(sheet.jobIds) && sheet.jobIds.includes(j.id)) ui.runStops[j.id] = i + 1;
+      out.push(j);
+    });
+  }
+  return out;
+}
 function renderOperator() {
   document.body.className = "operator";
+  ui.runStops = {};
   CHAT.watch(jobs);
   const t0 = todayStr(), t1 = addDays(t0, 1), wkEnd = addDays(t0, 7);
   const mine = jobs.filter(j => j.status !== "Cancelled" && (me.role !== "admin" || (j.assigned || []).includes(me.uid))).sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
@@ -1872,18 +1911,19 @@ function renderOperator() {
   const doneL = mine.filter(j => queueOf(j) === "Completed" && j.date >= addDays(t0, -30) && j.date <= t0).reverse();
   const first = esc(String(me.name || "").split(" ")[0]);
   if (ui.opTab === "today") {
-    const todayJobs = open.filter(j => j.date === t0 || (j.date < t0 && j.status === "In progress"));
+    const todayJobs = withRunOrder(open.filter(j => j.date === t0 || (j.date < t0 && j.status === "In progress")));
+    const todaySheet = readRunSheet(me.uid, t0);
     const n = todayJobs.length;
     $("#app").innerHTML = `<div class="mob">${adminBack()}
       <div class="mob-intro"><div class="mob-kicker">Today</div><div class="mob-date">${esc(longDate(t0))}</div>
-        <h1 class="mob-hello">${esc(greet())}, ${first}</h1><p class="mob-count">${n} job${n === 1 ? "" : "s"} today</p>${opSeg("today")}</div>
+        <h1 class="mob-hello">${esc(greet())}, ${first}</h1><p class="mob-count">${n} job${n === 1 ? "" : "s"} today</p>${todaySheet ? `<p class="run-note">Approved driving order${todaySheet.returnToDepot ? " · back to the depot" : ""}</p>` : ""}${opSeg("today")}</div>
       ${swmsReminderHtml()}
       <div class="mob-list">${todayJobs.map(opCard).join("") || `<p class="muted pad">Nothing booked.</p>`}</div>
       ${opTabs("today")}</div>`;
     bindOp(mine); return;
   }
   const groups = ui.opTab === "done" ? groupByDate(doneL).map(([d, js]) => [d === t0 ? "Today · " + dayLabel(d) : dayLabel(d), js])
-    : groupByDate(open.filter(j => j.date >= t1 && j.date <= wkEnd)).map(([d, js]) => [(d === t1 ? "Tomorrow · " : "") + dayLabel(d), js]);
+    : groupByDate(withRunOrder(open.filter(j => j.date >= t1 && j.date <= wkEnd))).map(([d, js]) => [(d === t1 ? "Tomorrow · " : "") + dayLabel(d), js]);
   const upcomingN = groups.reduce((n, [, js]) => n + js.length, 0);
   const head = ui.opTab === "done"
     ? `<div class="mob-bar"><div class="mob-title">Completed</div><div class="mob-sub">Last 30 days</div></div>`
@@ -2130,6 +2170,7 @@ function mobileDispatch(all) {
         <button class="sm-btn" data-md="1" aria-label="Next day">›</button><button class="sm-btn" data-md="0">Today</button></div>
       <div class="mstrip">${strip.map(x => { const n = sched.filter(j => j.date === x).length;
         return `<button class="${x === d ? "on" : ""} ${x === t0 ? "today" : ""}" data-mday="${x}"><small>${new Date(x + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", timeZone: "UTC" })}</small><b>${+x.slice(8)}</b><span class="${n ? "" : "zero"}">${n}</span></button>`; }).join("")}</div></div>
+    <button type="button" class="route-open" id="optorder">Optimise order</button>
     ${groups.map(([r, js]) => `<div class="mgrp">${esc(r.name)} <span class="cnt">${js.length}</span></div>${js.map(card).join("") || `<p class="muted sub pad">Nothing booked.</p>`}`).join("")}
     <p class="sub muted pad">Swipe left / right to change day. Tap a card to open the job.</p></div>`;
 }
@@ -2625,6 +2666,35 @@ document.addEventListener("click", e => {
 
 CHAT = installChatApp({ db, storage, getMe: () => me, toast });
 // ---- Guided Quotes (CallUp, Nov 2026). Rates in meta/quoteRates — never invented. No GPS in this build.
+async function loadRunSheets(date) {
+  ui.runSheets = ui.runSheets || {};
+  await Promise.all(staff.filter(s => s && s.uid).map(async s => {
+    const id = runSheetId(s.uid, date);
+    if (!id) return;
+    try {
+      const snap = await getDoc(doc(db, "runSheets", id));
+      ui.runSheets[id] = snapExists(snap) ? { id, ...snap.data() } : false;
+    } catch { ui.runSheets[id] = false; }
+  }));
+}
+ROUTE = installRouteOrder({
+  db, doc, setDoc, updateDoc, serverTimestamp,
+  todayStr, toast,
+  getMe: () => me,
+  getStaff: () => staff,
+  getJobs: () => [...jobs, ...(ui.undated || [])],
+  peekSheet: (uid, date) => {
+    const id = runSheetId(uid, date);
+    const sheet = (ui.runSheets || {})[id];
+    return sheet && sheet.status === "approved" ? sheet : null;
+  },
+  loadSheets: loadRunSheets,
+  rememberSheet: (id, data) => {
+    ui.runSheets = ui.runSheets || {};
+    ui.runSheets[id] = { id, ...data, status: "approved" };
+  },
+  cacheGeo: (job, hit) => updateDoc(doc(db, "jobs", job.id), geoPatch(job.address, hit)),
+});
 QG = installQuotes({
   db, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, collection, query, where, onSnapshot, serverTimestamp, arrayUnion,
   $, esc, toast, $$, CLIENTS, TYPES, canSeeMoney, canQuote, canEditQuoteRates, todayStr, jobNo,
