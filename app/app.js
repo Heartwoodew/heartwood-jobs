@@ -9,11 +9,13 @@ import { getStorage, ref as storageRef, uploadBytes, connectStorageEmulator, lis
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
 import { firebaseConfig, useEmulator } from "./firebase-config.js";
 import { installQuotes, adminViewRouter } from "./features/quotes.js";
+import { installRouteOrder, orderJobsForRun, runSheetId, geoPatch } from "./features/route-order.js";
 import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPlanned, jobPhotoPrefix, storageErrorCode, summarizePhotoListing } from "./features/cloud-storage.js";
 import { buildOperationalExport, retentionAdminText, retentionView } from "./features/cloud-retention.js";
 import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, lightboxHtml, photoFailureText } from "./features/photo-gallery.js";
 import { installChatApp } from "./features/chat-ui.js";
 import { installCompliance } from "./features/compliance.js";
+import { SWMS, SWMS_VERSION, sigMs, sigExp, latestSig, statusOf, swmsSignatureData, buildPlaceholderPdf } from "./features/swms-sign.js";
 
 const cfg = useEmulator ? { ...firebaseConfig, apiKey: "demo-key", projectId: "demo-heartwood" } : firebaseConfig;
 const fb = initializeApp(cfg);
@@ -58,6 +60,7 @@ let me = null, staff = [], jobs = [], unsub = null;
 let CHAT = { badge() { return ""; }, teamHtml() { return ""; }, jobHtml() { return ""; }, mount() {}, openJob() {}, start() {}, stop() {}, watch() {}, refresh() {} };
 let COMP = { start() {}, stop() {}, bind() {}, abandon() {}, adminHtml() { return ""; }, staffHtml() { return ""; }, adminBannerHtml() { return ""; }, staffBannerHtml() { return ""; }, canSee() { return false; }, canEdit() { return false; } };
 let QG = { bindAdmin() {} }; // Quotes module; filled after helpers load
+let ROUTE = { open() {} };
 const ALEX_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";      // Alex has no users/{uid} profile doc; always staff
 const ui = { view: "list", staffF: "", typeF: "", photoLists: {}, photoUrls: {}, photoBlobs: {}, photoThumbs: {}, photoThumbTasks: {}, photoErrors: {}, photoJobs: {}, photoPaint: 0 };
 
@@ -307,6 +310,7 @@ function dispatchView(all) {
       <div class="seg"><button data-dv="day" class="${ui.dview === "day" ? "on" : ""}">Day</button><button data-dv="week" class="${ui.dview === "week" ? "on" : ""}">Week</button></div>
       <button class="sm-btn" data-wk="-1">‹</button><button class="sm-btn" data-wk="0">Today</button><button class="sm-btn" data-wk="1">›</button>
       <span class="drange">${ui.dview === "week" ? shortDate(days[0]) + " – " + shortDate(days[6]) : dayLabel(dayD)}</span>
+      <button type="button" class="sm-btn route-open" id="optorder">Optimise order</button>
       <button id="new" class="sm-btn primary">+ New Job</button></div>
     <div class="dwrap"><div class="dboard"><p class="touchhint">Tap a job to open it. Press and hold a job to move it to another day or staff member.</p><div class="dgrid-scroll">${grid}</div><p class="sub muted">Drag a job to another day or staff member to reschedule (saved in the app, sent to ServiceM8 by the next sync).</p></div>
       </div>`;
@@ -1065,6 +1069,7 @@ function renderAdmin() {
   A.querySelectorAll("[data-grp]").forEach(b => b.onclick = () => { const g = b.dataset.grp; if (NAV_GROUPS.find(x => x[0] === g)[3].includes(ui.view)) return;
     ui.navCol[g] = !ui.navCol[g]; try { localStorage.setItem("hwNavCol", JSON.stringify(ui.navCol)); } catch {} renderAdmin(); });
   if (ui.view === "dispatch" && PHONE.matches) bindMobileDispatch(A, [...jobs, ...(ui.undated || [])]);
+  if ($("#optorder")) $("#optorder").onclick = () => ROUTE.open({ date: (PHONE.matches && ui.mday) || todayStr() });
   A.querySelectorAll("[data-cq]").forEach(b => b.onclick = () => { ui.cq = b.dataset.cq; renderAdmin(); });
   if (ui.view === "completed" && canXero()) { bindXc(A, ui.xcList); if ($("#xcall")) $("#xcall").onclick = () => { const l = ui.xcList.filter(j => !j.xeroCheckPending);
     if (l.length && confirm(`Check ${l.length} completed job${l.length === 1 ? "" : "s"} in Xero?\n\nRead-only: nothing is created or changed in Xero.`)) checkXero(l); }; }
@@ -1796,7 +1801,9 @@ function opCard(j) {
   const crew = namesOf(j);
   const type = TYPES[j.type] || j.client || "Job";
   const st = j.status === "In progress" ? "inprog" : j.status === "Done" ? "done" : "";
+  const stop = ui.runStops && ui.runStops[j.id];
   return `<div class="mrow opj t-${esc(j.type || "other")}" data-id="${esc(j.id)}" role="button" tabindex="0" aria-label="${esc(type + " " + (p.line || p.full) + " " + phoneTime(j.time))}">
+    ${stop ? `<div class="run-stop">Stop ${stop}</div>` : ""}
     <div class="mtime"><b>${esc(phoneTime(j.time))}</b>${j.durationHrs ? `<small>${esc(j.durationHrs)}h</small>` : ""}</div>
     <div class="mbody">${ipTop(j, "sm")}<div class="mcl"><span class="qdot ${QCLS[queueOf(j)]}"></span>${esc(type)}${jobPhotosIcon(j)}</div>
       <div class="maddr">${esc(p.line || p.full || "-")}</div>
@@ -1820,8 +1827,41 @@ function bindOp(mine) {
     if (j) emailPhotos(j);
   });
 }
+function snapExists(snap) {
+  if (!snap) return false;
+  return typeof snap.exists === "function" ? !!snap.exists() : !!snap.exists;
+}
+function readRunSheet(uid, date) {
+  const id = runSheetId(uid, date);
+  if (!id) return null;
+  ui.runSheets = ui.runSheets || {};
+  if (ui.runSheets[id] === undefined) {
+    ui.runSheets[id] = null;
+    getDoc(doc(db, "runSheets", id)).then(snap => {
+      ui.runSheets[id] = snapExists(snap) ? { id, ...snap.data() } : false;
+      const sheet = ui.runSheets[id];
+      if (sheet && sheet.status === "approved" && !ui.opSel && me && (me.role !== "admin" || ui.myJobs)) renderOperator();
+    }).catch(() => { ui.runSheets[id] = false; });
+  }
+  const sheet = ui.runSheets[id];
+  return sheet && sheet.status === "approved" ? sheet : null;
+}
+function withRunOrder(list) {
+  const dates = [...new Set(list.map(j => j.date))].sort();
+  const out = [];
+  for (const date of dates) {
+    const sheet = readRunSheet(me.uid, date);
+    const rows = orderJobsForRun(list.filter(j => j.date === date), sheet);
+    rows.forEach((j, i) => {
+      if (sheet && Array.isArray(sheet.jobIds) && sheet.jobIds.includes(j.id)) ui.runStops[j.id] = i + 1;
+      out.push(j);
+    });
+  }
+  return out;
+}
 function renderOperator() {
   document.body.className = "operator";
+  ui.runStops = {};
   CHAT.watch(jobs);
   const t0 = todayStr(), t1 = addDays(t0, 1), wkEnd = addDays(t0, 7);
   const mine = jobs.filter(j => j.status !== "Cancelled" && (me.role !== "admin" || (j.assigned || []).includes(me.uid))).sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
@@ -1888,11 +1928,12 @@ function renderOperator() {
   const doneL = mine.filter(j => queueOf(j) === "Completed" && j.date >= addDays(t0, -30) && j.date <= t0).reverse();
   const first = esc(String(me.name || "").split(" ")[0]);
   if (ui.opTab === "today") {
-    const todayJobs = open.filter(j => j.date === t0 || (j.date < t0 && j.status === "In progress"));
+    const todayJobs = withRunOrder(open.filter(j => j.date === t0 || (j.date < t0 && j.status === "In progress")));
+    const todaySheet = readRunSheet(me.uid, t0);
     const n = todayJobs.length;
     $("#app").innerHTML = `<div class="mob">${adminBack()}
       <div class="mob-intro"><div class="mob-kicker">Today</div><div class="mob-date">${esc(longDate(t0))}</div>
-        <h1 class="mob-hello">${esc(greet())}, ${first}</h1><p class="mob-count">${n} job${n === 1 ? "" : "s"} today</p>${opSeg("today")}</div>
+        <h1 class="mob-hello">${esc(greet())}, ${first}</h1><p class="mob-count">${n} job${n === 1 ? "" : "s"} today</p>${todaySheet ? `<p class="run-note">Approved driving order${todaySheet.returnToDepot ? " · back to the depot" : ""}</p>` : ""}${opSeg("today")}</div>
       ${COMP.staffBannerHtml()}
       ${swmsReminderHtml()}
       <div class="mob-list">${todayJobs.map(opCard).join("") || `<p class="muted pad">Nothing booked.</p>`}</div>
@@ -1900,7 +1941,7 @@ function renderOperator() {
     bindOp(mine); return;
   }
   const groups = ui.opTab === "done" ? groupByDate(doneL).map(([d, js]) => [d === t0 ? "Today · " + dayLabel(d) : dayLabel(d), js])
-    : groupByDate(open.filter(j => j.date >= t1 && j.date <= wkEnd)).map(([d, js]) => [(d === t1 ? "Tomorrow · " : "") + dayLabel(d), js]);
+    : groupByDate(withRunOrder(open.filter(j => j.date >= t1 && j.date <= wkEnd))).map(([d, js]) => [(d === t1 ? "Tomorrow · " : "") + dayLabel(d), js]);
   const upcomingN = groups.reduce((n, [, js]) => n + js.length, 0);
   const head = ui.opTab === "done"
     ? `<div class="mob-bar"><div class="mob-title">Completed</div><div class="mob-sub">Last 30 days</div></div>`
@@ -2147,6 +2188,7 @@ function mobileDispatch(all) {
         <button class="sm-btn" data-md="1" aria-label="Next day">›</button><button class="sm-btn" data-md="0">Today</button></div>
       <div class="mstrip">${strip.map(x => { const n = sched.filter(j => j.date === x).length;
         return `<button class="${x === d ? "on" : ""} ${x === t0 ? "today" : ""}" data-mday="${x}"><small>${new Date(x + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", timeZone: "UTC" })}</small><b>${+x.slice(8)}</b><span class="${n ? "" : "zero"}">${n}</span></button>`; }).join("")}</div></div>
+    <button type="button" class="route-open" id="optorder">Optimise order</button>
     ${groups.map(([r, js]) => `<div class="mgrp">${esc(r.name)} <span class="cnt">${js.length}</span></div>${js.map(card).join("") || `<p class="muted sub pad">Nothing booked.</p>`}`).join("")}
     <p class="sub muted pad">Swipe left / right to change day. Tap a card to open the job.</p></div>`;
 }
@@ -2206,8 +2248,8 @@ document.addEventListener("click", e => {
   const r = e.target.closest("[data-incid]"); if (!r || e.target.closest("a")) return;
   const inc = (ui.incidents || []).find(x => x.id === r.dataset.incid); if (inc) incidentDetail(inc);
 });
-function incOverlay(html) {
-  document.querySelectorAll(".incdlg").forEach(x => x.remove());
+function incOverlay(html, keep) {
+  if (!keep) document.querySelectorAll(".incdlg").forEach(x => x.remove());
   const v = document.createElement("div"); v.className = "emdlg incdlg"; v.innerHTML = `<div class="embox incbox">${html}</div>`;
   (document.querySelector("dialog[open]") || document.body).appendChild(v); return v;
 }
@@ -2322,32 +2364,19 @@ function myIncidentsHtml() {
 }
 
 // ------------------------------------------------------------------ SWMS (Safe Work Method Statements, Jul 2026)
-// The PDFs are NOT in the public site: they live in Firestore (swmsChunks, ~700 KB base64 pieces, login required by
-// firestore.rules), uploaded by tools/upload_swms.py. Tapping one reassembles it into a PDF blob and opens it in a new tab.
-const SWMS = [["working-near-roads", "Working near roads", "Traffic, plant near live lanes"], ["mobile-plant", "Mobile plant", "Excavators, loaders, tippers"],
-  ["working-with-silica", "Working with silica", "Dust from cutting, digging, concrete"], ["hazardous-substances", "Hazardous substances", "Fuels, oils, chemicals"],
-  ["electrical", "Electrical & underground services", "Energised installations, services strikes"]];
-// ---- Online signing (swmsSignatures). One doc per signing; the newest per SWMS counts. Valid 12 months, "due soon" 30 days before.
-const SWMS_VERSION = "2026-07";                     // bump when the SWMS set is re-issued -> everyone must re-sign
-const SWMS_VALID_MONTHS = 12, SWMS_DUE_DAYS = 30;
-const swmsCache = {};
+// Official PDFs are not in this repository. When swmsChunks has the file, that PDF is used.
+// When it does not, the app opens a placeholder page that is explicitly not a SWMS.
+const swmsCache = {}, swmsBin = {}, swmsPlaceholder = {};
 const swNow = () => (window.HW_NOW || Date.now());
-const sigMs = s => s.signedAtMs || (s.signedAt && s.signedAt.toMillis ? s.signedAt.toMillis() : 0);
-const sigExp = s => { const d = new Date(sigMs(s)); d.setMonth(d.getMonth() + SWMS_VALID_MONTHS); return d.getTime(); };
+const swmsStatus = sig => {
+  const st = statusOf(sig, swNow());
+  if (st.k === "exp") return { ...st, label: "Expired " + swD(st.exp) };
+  if (st.k === "due") return { ...st, label: `Due soon · expires ${swD(st.exp)}` };
+  if (st.k === "ok") return { ...st, label: "Signed · valid to " + swD(st.exp) };
+  return st;
+};
 const swD = ms => new Date(ms).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric", timeZone: TZ });
 const swDT = ms => new Date(ms).toLocaleString("en-AU", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit", timeZone: TZ });
-function latestSig(list, uid, id) {
-  return (list || []).filter(s => s.uid === uid && s.swmsId === id).sort((a, b) => sigMs(b) - sigMs(a))[0] || null;
-}
-// -> {k:"ok"|"due"|"exp"|"none"|"old", label, cls, sig, exp}
-function swmsStatus(sig) {
-  if (!sig) return { k: "none", label: "Not signed", cls: "sw-exp" };
-  const exp = sigExp(sig), left = (exp - swNow()) / 864e5;
-  if (sig.version !== SWMS_VERSION) return { k: "old", label: "New version – re-sign", cls: "sw-exp", sig, exp };
-  if (left < 0) return { k: "exp", label: "Expired " + swD(exp), cls: "sw-exp", sig, exp };
-  if (left <= SWMS_DUE_DAYS) return { k: "due", label: `Due soon · expires ${swD(exp)}`, cls: "sw-due", sig, exp };
-  return { k: "ok", label: "Signed · valid to " + swD(exp), cls: "sw-ok", sig, exp };
-}
 const mySwms = () => SWMS.map(([id, t, d]) => ({ id, t, d, st: swmsStatus(latestSig(ui.mySigs, me && me.uid, id)) }));
 function swmsReminderHtml() {
   if (!me || !ui.mySigs) return "";
@@ -2364,15 +2393,16 @@ function swmsSub() {          // my signatures (everyone); all signatures (admin
   ui.swmsUnsub = () => { u1(); u2(); ui.swmsUnsub = null; };
 }
 function swmsRefresh() {
-  const ov = document.querySelector(".incdlg.swov"); if (ov) { ov.querySelector(".swlist").outerHTML = swmsList(ov.dataset.job || ""); return; }
+  const ov = document.querySelector(".incdlg.swov"); if (ov) { const hold = ov.querySelector(".swlistwrap"); if (hold) hold.outerHTML = swmsList(ov.dataset.job || ""); return; }
   if (document.querySelector(".incdlg")) return;
   if (me.role === "admin" && !ui.myJobs) { if (ui.view === "swms" || ui.view === "home") renderAdmin(); } else if (!ui.opSel && (ui.opTab || "today") === "today") renderOperator();
 }
-const swmsList = (jobId = "") => `<div class="swlist">${mySwms().map(({ id, t, d, st }) => `<div class="switem swsign">
+const swFlag = s => s.k === "ok" ? "✔ " + swD(s.exp) : s.k === "due" ? "⏳ Due " + swD(s.exp) : s.k === "none" ? "✖ Not signed" : "✖ " + (s.k === "old" ? "Old version" : "Expired " + swD(s.exp));
+const swmsList = (jobId = "") => `<div class="swlistwrap"><div class="swlist">${mySwms().map(({ id, t, d, st }) => `<div class="switem swsign">
     <button type="button" class="swopen" data-swmsf="${id}"><span class="swic">📄</span><span><b>${t}</b><small>${d}</small></span></button>
-    <div class="swst"><span class="swpill ${st.cls}">${st.k === "ok" ? "✔ " : st.k === "due" ? "⏳ " : "✖ "}${esc(st.label)}</span>
+    <div class="swst"><span class="swpill ${st.cls}" data-swstatus="${st.k}">${st.k === "ok" ? "✔ " : st.k === "due" ? "⏳ " : "✖ "}${esc(st.label)}</span>
       <button type="button" class="swbtn ${st.k === "ok" ? "" : "primary"}" data-swsign="${id}" data-job="${esc(jobId)}">${st.k === "none" ? "Read & sign" : st.k === "ok" ? "Sign again" : "Re-sign"}</button></div></div>`).join("")}</div>
-  <p class="sub muted">Company SWMS · version July 2026 · tap a title to read the PDF. Signatures last 12 months.</p>`;
+  <p class="sub muted">Company SWMS · version July 2026 · tap a title to read the PDF. Signatures last 12 months. A signature due within 30 days asks you to sign again.</p></div>`;
 function swmsView() {
   return `<div class="sm-head"><h1>SWMS</h1></div>${swmsReminderHtml()}<h3 class="swh">My signatures</h3>${swmsList()}${me.role === "admin" ? swmsAdminHtml() : ""}`;
 }
@@ -2388,10 +2418,13 @@ function swmsAdminHtml() {
   const over = cells.filter(c => c.sts.some(s => s.k !== "ok" && s.k !== "due")).length, dueN = cells.filter(c => c.sts.some(s => s.k === "due")).length;
   const short = { "working-near-roads": "Roads", "mobile-plant": "Plant", "working-with-silica": "Silica", "hazardous-substances": "Haz subs", "electrical": "Electrical" };
   const rows = [...all].sort((a, b) => sigMs(b) - sigMs(a));
-  return `${swmsDownloadHtml()}<h3 class="swh">Team status <span class="swpill sw-exp">${over} overdue</span> <span class="swpill sw-due">${dueN} due soon</span></h3>
-  <div class="swtablewrap"><table class="swtable"><thead><tr><th>Worker</th>${SWMS.map(([id]) => `<th>${short[id]}</th>`).join("")}</tr></thead><tbody>
-  ${cells.map(c => `<tr><td><b>${esc(c.name)}</b></td>${c.sts.map(s => `<td><span class="swpill ${s.cls}" ${s.sig ? `data-swsig="${esc(s.sig.id)}"` : ""}>${s.k === "ok" ? "✔ " + swD(s.exp) : s.k === "due" ? "⏳ " + swD(s.exp) : s.k === "none" ? "✖ Not signed" : "✖ " + (s.k === "old" ? "Old version" : "Expired " + swD(s.exp))}</span></td>`).join("")}</tr>`).join("")}
+  const cards = `<div class="swpeople">${cells.map(c => `<article class="swperson"><b>${esc(c.name)}</b>${c.sts.map((s, i) => `<div class="swprow"><span>${short[SWMS[i][0]]}</span><span class="swpill ${s.cls}" data-swstatus="${s.k}" ${s.sig ? `data-swsig="${esc(s.sig.id)}"` : ""}>${esc(swFlag(s))}</span></div>`).join("")}</article>`).join("")}</div>`;
+  return `<h3 class="swh">Team status <span class="swpill sw-exp">${over} overdue or missing</span> <span class="swpill sw-due">${dueN} due soon</span></h3>
+  ${cards}
+  <div class="swtablewrap team"><table class="swtable"><thead><tr><th>Worker</th>${SWMS.map(([id]) => `<th>${short[id]}</th>`).join("")}</tr></thead><tbody>
+  ${cells.map(c => `<tr><td><b>${esc(c.name)}</b></td>${c.sts.map(s => `<td><span class="swpill ${s.cls}" data-swstatus="${s.k}" ${s.sig ? `data-swsig="${esc(s.sig.id)}"` : ""}>${esc(swFlag(s))}</span></td>`).join("")}</tr>`).join("")}
   </tbody></table></div>
+  ${swmsDownloadHtml()}
   <h3 class="swh">All signatures <small class="muted">${rows.length}</small></h3>
   <div class="swtablewrap"><table class="swtable swlog"><thead><tr><th>Signed</th><th>Worker</th><th>SWMS</th><th>Job</th><th>Expires</th><th></th></tr></thead><tbody>
   ${rows.map(s => { const st = swmsStatus(s), cur = latestSig(all, s.uid, s.swmsId) === s;
@@ -2417,28 +2450,47 @@ function signSwms(id, jobId) {
   if (jobId && !opts.some(j => j.id === jobId)) { const j = jobs.find(x => x.id === jobId); if (j) opts.unshift(j); }
   const jl = j => `#${jobNo(j)} · ${j.address || ""}`;
   const v = incOverlay(`<h3>✍ Sign SWMS</h3><div class="swsh"><b>${esc(title)}</b><small>${esc(desc)} · version July 2026</small></div>
-    <div class="swstep"><span class="n">1</span><div><b>Read the SWMS</b><button type="button" class="swbtn wide" data-swmsf="${id}" id="swread">📄 Open ${esc(title)} SWMS</button></div></div>
+    <div class="swstep"><span class="n">1</span><div><b>Read the SWMS</b><button type="button" class="swbtn wide" id="swread">📄 Open ${esc(title)} SWMS</button><iframe id="swframe" class="swframe" hidden title="SWMS document"></iframe><p class="swph" id="swph" hidden></p></div></div>
     <label class="swck"><input type="checkbox" id="swok"> <span>I have read and understood this SWMS and will follow it.</span></label>
     <div class="swstep"><span class="n">2</span><div><b>Job</b> <small class="muted">(optional)</small>
       <select id="swjob" class="swsel"><option value="">General – not for a particular job</option>${opts.map(j => `<option value="${j.id}" ${j.id === jobId ? "selected" : ""}>${esc(shortDate(j.date))} · ${esc(jl(j))}</option>`).join("")}</select></div></div>
     <div class="swstep"><span class="n">3</span><div><b>Sign with your finger</b>
-      <div class="sigpad"><canvas id="swpad"></canvas><span class="sigline">✕ Sign here</span><button type="button" class="sigclr" id="swclr">Clear</button></div>
+      <div class="sigpad"><canvas id="swpad" aria-label="Signature"></canvas><span class="sigline">✕ Sign here</span><button type="button" class="sigclr" id="swclr">Clear</button></div>
       <label class="swname">Printed name<input id="swnm" autocomplete="name" value="${esc(me.name === "Alex" && me.uid === ALEX_UID ? "Alex Daly" : me.name || "")}"></label></div></div>
     <p class="err" id="swerr"></p>
-    <div class="btns swfoot"><button type="button" class="mbtn ghost" data-x>Cancel</button><button type="button" class="mbtn complete" id="swgo" disabled>Sign SWMS</button></div>`);
+    <div class="btns swfoot"><button type="button" class="mbtn ghost" data-x>Cancel</button><button type="button" class="mbtn complete" id="swgo" disabled>Sign SWMS</button></div>`, true);
   v.classList.add("swsignov");
   const c = v.querySelector("#swpad"), ctx = c.getContext("2d"), go = v.querySelector("#swgo");
-  const fit = () => { const r = c.getBoundingClientRect(), k = window.devicePixelRatio || 1; c.width = r.width * k; c.height = r.height * k; ctx.scale(k, k);
+  const fit = () => { const r = c.getBoundingClientRect(), k = window.devicePixelRatio || 1;
+    if (r.width < 20) { if (!inked) requestAnimationFrame(fit); return; }
+    if (inked) return;
+    c.width = r.width * k; c.height = r.height * k; ctx.scale(k, k);
     ctx.lineWidth = 2.6; ctx.lineCap = ctx.lineJoin = "round"; ctx.strokeStyle = "#0b1f3a"; inked = 0; check(); };
-  let inked = 0, last = null;
-  const check = () => { go.disabled = !(v.querySelector("#swok").checked && inked > 8 && v.querySelector("#swnm").value.trim().length >= 2); };
+  let inked = 0, last = null, opened = false;
+  const check = () => { go.disabled = !(opened && v.querySelector("#swok").checked && inked > 8 && v.querySelector("#swnm").value.trim().length >= 2); };
   const pt = e => { const r = c.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
-  c.onpointerdown = e => { e.preventDefault(); c.setPointerCapture(e.pointerId); last = pt(e); ctx.beginPath(); ctx.arc(last[0], last[1], 1.2, 0, 7); ctx.fillStyle = ctx.strokeStyle; ctx.fill(); inked++; };
+  c.onpointerdown = e => { e.preventDefault(); try { c.setPointerCapture(e.pointerId); } catch { /* synthetic events and some phones */ } last = pt(e); ctx.beginPath(); ctx.arc(last[0], last[1], 1.2, 0, 7); ctx.fillStyle = ctx.strokeStyle; ctx.fill(); inked++; };
   c.onpointermove = e => { if (!last) return; e.preventDefault(); const p = pt(e); ctx.beginPath(); ctx.moveTo(...last); ctx.lineTo(...p); ctx.stroke(); last = p; inked++; v.classList.add("inked"); check(); };
   c.onpointerup = c.onpointercancel = () => { last = null; check(); };
   c.style.touchAction = "none";
   v.querySelector("#swclr").onclick = () => { ctx.clearRect(0, 0, c.width, c.height); inked = 0; v.classList.remove("inked"); check(); };
   v.querySelector("#swok").onchange = check; v.querySelector("#swnm").oninput = check;
+  v.querySelector("#swread").onclick = async () => {
+    const btn = v.querySelector("#swread");
+    btn.disabled = true;
+    try {
+      await swmsBytes(id);
+      const frame = v.querySelector("#swframe");
+      frame.hidden = false;
+      frame.src = swmsCache[id];
+      opened = true;
+      const note = v.querySelector("#swph");
+      if (swmsPlaceholder[id] && note) { note.hidden = false; note.textContent = "The official PDF is not in the app. The page above is a placeholder, not the SWMS text."; }
+      else toast("SWMS opened. Tick the box, then sign.");
+      check();
+    } catch (e) { v.querySelector("#swerr").textContent = "SWMS not available: " + (e.code || e.message); }
+    finally { btn.disabled = false; }
+  };
   v.querySelector("[data-x]").onclick = () => v.remove();
   requestAnimationFrame(fit);
   go.onclick = async () => {
@@ -2450,9 +2502,7 @@ function signSwms(id, jobId) {
     const sig = out.toDataURL("image/png");
     if (sig.length > 90000) { v.querySelector("#swerr").textContent = "Signature too large, please clear and sign again."; go.disabled = false; go.textContent = "Sign SWMS"; return; }
     const jid = v.querySelector("#swjob").value, j = jid && jobs.find(x => x.id === jid), now = swNow();
-    const rec = { uid: me.uid, name: v.querySelector("#swnm").value.trim().slice(0, 80), swmsId: id, swmsTitle: title, version: SWMS_VERSION,
-      jobId: jid || "", jobLabel: j ? jl(j).slice(0, 160) : "", sig, signedAt: serverTimestamp(), signedAtMs: now,
-      expiresAtMs: (d => (d.setMonth(d.getMonth() + SWMS_VALID_MONTHS), d.getTime()))(new Date(now)), device: navigator.userAgent.slice(0, 200) };
+    const rec = { ...swmsSignatureData({ uid: me.uid, name: v.querySelector("#swnm").value, swmsId: id, swmsTitle: title, jobId: jid, jobLabel: j ? jl(j) : "", sig, now, device: navigator.userAgent }), signedAt: serverTimestamp() };
     try {
       const r = await addDoc(collection(db, "swmsSignatures"), rec);
       ui.mySigs = [...(ui.mySigs || []).filter(x => x.id !== r.id), { id: r.id, ...rec }];
@@ -2460,24 +2510,40 @@ function signSwms(id, jobId) {
     } catch (e) { v.querySelector("#swerr").textContent = "Could not save: " + (e.code || e.message); go.disabled = false; go.textContent = "Sign SWMS"; }
   };
 }
-async function swmsBytes(id) {          // original SWMS PDF bytes, reassembled from swmsChunks (cached as blob URL)
-  if (!swmsCache[id]) {
+async function swmsChunkBytes(id) {
+  try {
     const s = await getDocs(query(collection(db, "swmsChunks"), where("file", "==", id)));
     const parts = s.docs.map(d => d.data()).sort((a, b) => a.k - b.k);
-    if (!parts.length) throw new Error("not uploaded yet");
+    if (!parts.length || parts.some(p => typeof p.data !== "string" || !p.data)) return null;
     const bin = atob(parts.map(p => p.data).join("")), u8 = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-    swmsCache[id] = URL.createObjectURL(new Blob([u8], { type: "application/pdf" }));
+    if (u8.length < 5 || String.fromCharCode(u8[0], u8[1], u8[2], u8[3], u8[4]) !== "%PDF-") return null;
+    return u8;
+  } catch { return null; }
+}
+async function swmsBytes(id) {          // official SWMS PDF, or a labelled placeholder when the PDF is not in swmsChunks
+  if (!swmsBin[id]) {
+    const got = await swmsChunkBytes(id);
+    if (got) { swmsPlaceholder[id] = false; swmsBin[id] = got; }
+    else {
+      const known = SWMS.find(x => x[0] === id);
+      swmsPlaceholder[id] = true;
+      swmsBin[id] = await buildPlaceholderPdf(await loadPdfLib(), known ? known[1] : id);
+    }
+    swmsCache[id] = URL.createObjectURL(new Blob([swmsBin[id]], { type: "application/pdf" }));
   }
-  return new Uint8Array(await (await fetch(swmsCache[id])).arrayBuffer());
+  return swmsBin[id];
 }
 async function openSwms(id) {
   const w = window.open("", "_blank");            // open now (inside the tap) so phones don't block the popup
-  if (w) w.document.write("<p style='font:16px sans-serif;padding:20px'>Loading SWMS…</p>");
+  if (!w) { toast("Pop-up blocked. Allow pop-ups to read the SWMS, then sign."); return false; }
+  try { w.document.write("<p style='font:16px sans-serif;padding:20px'>Loading SWMS…</p>"); } catch { /* already navigating */ }
   try {
     await swmsBytes(id);
-    if (w) w.location.href = swmsCache[id]; else location.href = swmsCache[id];
-  } catch (e) { if (w) w.close(); toast("SWMS not available: " + (e.code || e.message)); }
+    w.location.href = swmsCache[id];
+    if (swmsPlaceholder[id]) toast("Official SWMS PDF is not in the app. That page is a placeholder, not the SWMS.");
+    return true;
+  } catch (e) { try { w.close(); } catch { /* */ } toast("SWMS not available: " + (e.code || e.message)); return false; }
 }
 // ---- Signed download (admins): original SWMS pages + a sign-off sheet, built in the browser with pdf-lib
 // (vendor/pdf-lib.min.js, MIT, loaded on first use only — no CDN).
@@ -2485,7 +2551,7 @@ const COMPANY = "Heartwood Earthworx Pty Ltd", COMPANY_ABN = "31 667 738 098";
 let pdfLibP = null;
 const loadPdfLib = () => pdfLibP || (pdfLibP = new Promise((ok, no) => {
   if (window.PDFLib) return ok(window.PDFLib);
-  const sc = document.createElement("script"); sc.src = new URL("vendor/pdf-lib.min.js", location.href).href;
+  const sc = document.createElement("script"); sc.src = new URL("vendor/pdf-lib.min.js", import.meta.url).href;
   sc.onload = () => ok(window.PDFLib); sc.onerror = () => { pdfLibP = null; no(new Error("PDF library failed to load")); }; document.head.appendChild(sc);
 }));
 const sigJobKey = s => s.jobId || s.jobLabel || "";
@@ -2503,9 +2569,9 @@ async function buildSignedSwmsPdf(id, sigs, jobLabel = "", single = false) {
   const F = await out.embedFont(StandardFonts.Helvetica), B = await out.embedFont(StandardFonts.HelveticaBold);
   const T = x => String(x ?? "").replace(/[\u00a0\u202f\u2009]/g, " ").replace(/[^\x20-\x7e\u00a1-\u00ff\u2013\u2014\u2018\u2019\u201c\u201d\u2022]/g, "?");
   const fit = (t, f, sz, w) => { t = T(t); while (t.length > 1 && f.widthOfTextAtSize(t, sz) > w) t = t.slice(0, -2) + "…"; return t; };
-  const W = 595.28, H = 841.89, M = 40, navy = rgb(0.043, 0.122, 0.227), grey = rgb(0.4, 0.42, 0.45), line = rgb(0.75, 0.77, 0.8);
-  const cols = [[M, 150, "Printed name"], [M + 150, 165, "Signature"], [M + 315, 110, "Signed (Brisbane)"], [M + 425, W - M - (M + 425), "Expires"]];
-  const RH = 54, gen = swDT(swNow());
+  const W = 595.28, H = 841.89, M = 32, navy = rgb(0.043, 0.122, 0.227), grey = rgb(0.4, 0.42, 0.45), line = rgb(0.75, 0.77, 0.8), red = rgb(0.55, 0.08, 0.08);
+  const cols = [[M, 100, "Name"], [M + 100, 118, "Signature"], [M + 218, 108, "Signed"], [M + 326, 128, "Job"], [M + 454, W - M - (M + 454), "Expires"]];
+  const RH = 58, gen = swDT(swNow()), ph = !!swmsPlaceholder[id];
   let pg, y, n = 0;
   const head = () => {
     pg = out.addPage([W, H]); y = H - M; n++;
@@ -2517,7 +2583,9 @@ async function buildSignedSwmsPdf(id, sigs, jobLabel = "", single = false) {
     pg.drawText(fit(title, B, 14, W - 2 * M), { x: M, y, size: 14, font: B }); y -= 16;
     pg.drawText(fit(`Safe Work Method Statement · ${desc} · Version ${SWMS_VERSION}`, F, 9.5, W - 2 * M), { x: M, y, size: 9.5, font: F, color: grey }); y -= 14;
     pg.drawText(fit((single ? "Individual sign-off: " + (sigs[0] && sigs[0].name) + (jobLabel ? " · " : "") : "") + (jobLabel ? "Job: " + jobLabel : single ? "" : "All current valid signatures (all jobs)"), F, 9.5, W - 2 * M), { x: M, y, size: 9.5, font: B }); y -= 14;
-    pg.drawText(fit("Each person below has read and understood this SWMS and agreed to follow it. Signatures are valid 12 months from signing.", F, 8.5, W - 2 * M), { x: M, y, size: 8.5, font: F, color: grey }); y -= 18;
+    pg.drawText(fit("Each person below has read and understood this SWMS and agreed to follow it. Signatures are valid 12 months from signing.", F, 8.5, W - 2 * M), { x: M, y, size: 8.5, font: F, color: grey }); y -= 14;
+    if (ph) { pg.drawText(fit("PLACEHOLDER COVER: the official SWMS PDF is not in the app. Do not send this file to a client as the SWMS.", B, 8, W - 2 * M), { x: M, y, size: 8, font: B, color: red }); y -= 14; }
+    y -= 4;
     pg.drawRectangle({ x: M, y: y - 6, width: W - 2 * M, height: 20, color: rgb(0.93, 0.94, 0.96) });
     cols.forEach(([x, , h]) => pg.drawText(h, { x: x + 5, y, size: 9, font: B, color: navy })); y -= 6;
   };
@@ -2533,9 +2601,9 @@ async function buildSignedSwmsPdf(id, sigs, jobLabel = "", single = false) {
       const img = await out.embedPng(s.sig), sc = Math.min((cols[1][1] - 10) / img.width, (RH - 8) / img.height);
       pg.drawImage(img, { x: cols[1][0] + 5, y: y + (RH - img.height * sc) / 2, width: img.width * sc, height: img.height * sc });
     } catch (e) { pg.drawText("(signature image unavailable)", { x: cols[1][0] + 5, y: mid, size: 8, font: F, color: grey }); }
-    pg.drawText(fit(swDT(sigMs(s)), F, 9, cols[2][1] - 8), { x: cols[2][0] + 5, y: mid, size: 9, font: F });
-    pg.drawText(fit(swD(sigExp(s)), F, 9, cols[3][1] - 8), { x: cols[3][0] + 5, y: mid, size: 9, font: F });
-    if (!jobLabel && s.jobLabel) pg.drawText(fit("Job: " + s.jobLabel, F, 7, cols[0][1] - 10), { x: cols[0][0] + 5, y: mid - 12, size: 7, font: F, color: grey });
+    pg.drawText(fit(swDT(sigMs(s)), F, 8, cols[2][1] - 8), { x: cols[2][0] + 4, y: mid, size: 8, font: F });
+    pg.drawText(fit(s.jobLabel || "General", F, 8, cols[3][1] - 8), { x: cols[3][0] + 4, y: mid, size: 8, font: F });
+    pg.drawText(fit(swD(sigExp(s)), F, 8, cols[4][1] - 8), { x: cols[4][0] + 4, y: mid, size: 8, font: F });
     void top;
   }
   const pages = out.getPages().slice(-n);
@@ -2548,15 +2616,16 @@ function signedFileName(id, job, one) {
   return `SWMS_${slug(t)}_v${SWMS_VERSION}_signed${one ? "_" + slug(one) : job ? "_" + slug(job) : ""}_${ymd(new Date(swNow()))}.pdf`;
 }
 // Ready sheet: a fresh tap for Share (iPhone/iPad share sheet: Mail, Messages, Files…) / Download / Open.
-function deliverPdf(bytes, name) {
+function deliverPdf(bytes, name, placeholder = false) {
   const blob = new Blob([bytes], { type: "application/pdf" }), url = URL.createObjectURL(blob);
   const file = typeof File === "function" ? new File([blob], name, { type: "application/pdf" }) : null;
   const canShare = !!(file && navigator.canShare && navigator.canShare({ files: [file] }));
   const v = incOverlay(`<h3>📄 Signed SWMS ready</h3><p class="sub">${esc(name)}<br><small class="muted">${Math.round(bytes.length / 1024)} KB</small></p>
+    ${placeholder ? `<p class="swph">Placeholder cover only. The official SWMS PDF is not in the app, so do not send this file to a client as the SWMS.</p>` : ""}
     <div class="btns swdlbtns">${canShare ? `<button type="button" class="mbtn complete" id="swshare">Share / Save…</button>` : ""}
     <a class="mbtn ${canShare ? "" : "complete"}" id="swdl" href="${url}" download="${esc(name)}">⬇ Download</a>
     <a class="mbtn ghost" href="${url}" target="_blank" rel="noopener">Open</a><button type="button" class="mbtn ghost" data-x>Close</button></div>`);
-  v.classList.add("swdlov"); window.HW_LAST_PDF = { url, name, size: bytes.length };
+  v.classList.add("swdlov"); window.HW_LAST_PDF = { url, name, size: bytes.length, placeholder };
   v.querySelector("[data-x]").onclick = () => { v.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000); };
   const sh = v.querySelector("#swshare");
   if (sh) sh.onclick = () => navigator.share({ files: [file], title: name }).catch(e => { if (e.name !== "AbortError") toast("Share failed: " + e.message); });
@@ -2569,7 +2638,7 @@ async function downloadSigned(id, job = "", sigId = "") {
   const jobLabel = one ? (one.jobLabel || "") : job ? ((all.find(s => sigJobKey(s) === job) || {}).jobLabel || job) : "";
   if (!one && !sigs.length) return toast("No current valid signatures" + (job ? " for that job" : "") + ".");
   toast("Building signed PDF…");
-  try { deliverPdf(await buildSignedSwmsPdf(sid, sigs, jobLabel, !!one), signedFileName(sid, jobLabel, one && one.name)); }
+  try { const bytes = await buildSignedSwmsPdf(sid, sigs, jobLabel, !!one); deliverPdf(bytes, signedFileName(sid, jobLabel, one && one.name), !!swmsPlaceholder[sid]); }
   catch (e) { console.warn(e); toast("Could not build PDF: " + (e.code || e.message)); }
 }
 function swmsDownloadHtml() {
@@ -2621,6 +2690,35 @@ COMP = installCompliance({
   rerenderOperator: () => renderOperator(),
 });
 // ---- Guided Quotes (CallUp, Nov 2026). Rates in meta/quoteRates — never invented. No GPS in this build.
+async function loadRunSheets(date) {
+  ui.runSheets = ui.runSheets || {};
+  await Promise.all(staff.filter(s => s && s.uid).map(async s => {
+    const id = runSheetId(s.uid, date);
+    if (!id) return;
+    try {
+      const snap = await getDoc(doc(db, "runSheets", id));
+      ui.runSheets[id] = snapExists(snap) ? { id, ...snap.data() } : false;
+    } catch { ui.runSheets[id] = false; }
+  }));
+}
+ROUTE = installRouteOrder({
+  db, doc, setDoc, updateDoc, serverTimestamp,
+  todayStr, toast,
+  getMe: () => me,
+  getStaff: () => staff,
+  getJobs: () => [...jobs, ...(ui.undated || [])],
+  peekSheet: (uid, date) => {
+    const id = runSheetId(uid, date);
+    const sheet = (ui.runSheets || {})[id];
+    return sheet && sheet.status === "approved" ? sheet : null;
+  },
+  loadSheets: loadRunSheets,
+  rememberSheet: (id, data) => {
+    ui.runSheets = ui.runSheets || {};
+    ui.runSheets[id] = { id, ...data, status: "approved" };
+  },
+  cacheGeo: (job, hit) => updateDoc(doc(db, "jobs", job.id), geoPatch(job.address, hit)),
+});
 QG = installQuotes({
   db, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, collection, query, where, onSnapshot, serverTimestamp, arrayUnion,
   $, esc, toast, $$, CLIENTS, TYPES, canSeeMoney, canQuote, canEditQuoteRates, todayStr, jobNo,
