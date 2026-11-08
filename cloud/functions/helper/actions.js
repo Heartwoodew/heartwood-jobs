@@ -2,6 +2,7 @@
 // A proposal is not a write. Job notes are never parsed for actions.
 // Prices, email, deletes, Xero, roles and Storage are not actions.
 
+import { randomBytes } from "node:crypto";
 import { canSeeJob } from "../shared/cloud-storage.js";
 import { redactMoneyText } from "./money.js";
 
@@ -11,7 +12,7 @@ export const CHAT_CAP = 4000;
 const STATUSES = ["Scheduled", "In progress", "Done", "Cancelled"];
 const JOB_TYPES = ["spoil", "backslab", "waterproof", "clean", "other"];
 
-const BLOCKED = /email|sms|delete|xero|invoice|payment|reimburse|invite|role|storage|receipt|profit/i;
+const BLOCKED = /email|sms|delete|xero|invoice|payment|reimburse|role|storage|receipt|profit/i;
 
 export function intentFromQuestion(question) {
   const q = String(question || "").trim();
@@ -55,6 +56,8 @@ export function intentFromQuestion(question) {
   }
   match = /^(approve|decline) leave (.+?): (.+)$/i.exec(q);
   if (match) return { type: "leave-decision", status: match[1].toLowerCase() === "approve" ? "approved" : "declined", hint: match[2].trim(), note: match[3].trim() };
+  match = /^invite (operator|supervisor) (.+?) at (\S+)$/i.exec(q);
+  if (match) return { type: "invite", role: match[1].toLowerCase(), name: match[2].trim(), email: match[3].trim() };
   return null;
 }
 
@@ -106,8 +109,27 @@ function deny(reason) {
   return { ok: false, reason };
 }
 
+const STAFF_ACTIONS = new Set(["job-note", "timesheet", "prestart", "leave-create"]);
+const SUPERVISOR_ACTIONS = new Set([...STAFF_ACTIONS, "leave-decision", "invite", "quote-draft", "chat", "job-status"]);
+const ADMIN_ACTIONS = new Set([...SUPERVISOR_ACTIONS, "job-draft", "job-edit"]);
+
+/** Same gates as the Firestore rules: own timesheet and leave, member prestart, supervisor leave and invites, admin job edits. */
+export function actionAllowed(membership, type) {
+  if (!membership?.ok) return { ok: false, reason: "not-allowed" };
+  if (membership.rulesAdmin) return ADMIN_ACTIONS.has(type) ? { ok: true } : { ok: false, reason: "not-allowed" };
+  if (membership.role === "supervisor") {
+    if (type === "job-draft" || type === "job-edit") return { ok: false, reason: "admin-only" };
+    return SUPERVISOR_ACTIONS.has(type) ? { ok: true } : { ok: false, reason: "not-allowed" };
+  }
+  if (type === "leave-decision" || type === "invite" || type === "quote-draft") return { ok: false, reason: "supervisor-only" };
+  if (type === "job-draft" || type === "job-edit" || type === "job-status" || type === "chat") return { ok: false, reason: "not-allowed" };
+  return STAFF_ACTIONS.has(type) ? { ok: true } : { ok: false, reason: "not-allowed" };
+}
+
 export async function prepareAction({ membership, intent, reader, name, at, today }) {
   if (!membership?.ok || !intent || BLOCKED.test(intent.type || "")) return deny("not-allowed");
+  const gate = actionAllowed(membership, intent.type);
+  if (!gate.ok) return deny(gate.reason);
   const hideMoney = !membership.canSeeMoney;
   if (intent.type === "job-note") return prepareNote(membership, intent, reader, name, at, hideMoney);
   if (intent.type === "timesheet") return prepareTimesheet(membership, intent, hideMoney);
@@ -119,6 +141,7 @@ export async function prepareAction({ membership, intent, reader, name, at, toda
   if (intent.type === "prestart") return preparePrestart(membership, intent, reader, name, today);
   if (intent.type === "leave-create") return prepareLeave(membership, intent, name);
   if (intent.type === "leave-decision") return prepareLeaveDecision(membership, intent, reader, name);
+  if (intent.type === "invite") return prepareInvite(membership, intent, reader);
   return deny("not-allowed");
 }
 
@@ -177,7 +200,7 @@ function prepareTimesheet(membership, intent, hideMoney) {
 }
 
 function prepareJobDraft(membership, intent) {
-  if (!membership.canSeeMoney) return deny("supervisor-only");
+  if (!membership.rulesAdmin) return deny("admin-only");
   const address = cleanText(intent.address, 200, true);
   const client = cleanText(intent.client, 120, true);
   if (!address || !client) return deny("invalid");
@@ -277,6 +300,7 @@ export function previewHasMoney(lines) {
 const EDIT_FIELDS = ["date", "time", "address", "client", "description", "notes"];
 
 async function prepareJobEdit(membership, intent, reader) {
+  if (!membership.rulesAdmin) return deny("admin-only");
   if (!EDIT_FIELDS.includes(intent.field)) return deny("not-allowed");
   const found = await oneJob(reader, membership, intent.jobId || intent.jobHint);
   if (!found.ok) return found;
@@ -370,6 +394,7 @@ function randomLeaveId() {
 }
 
 async function prepareLeaveDecision(membership, intent, reader, name) {
+  if (!(membership.rulesAdmin || membership.role === "supervisor")) return deny("supervisor-only");
   if (intent.status !== "approved" && intent.status !== "declined") return deny("not-allowed");
   const note = cleanText(intent.note, 500, true);
   if (!note) return deny("empty");
@@ -393,5 +418,27 @@ async function prepareLeaveDecision(membership, intent, reader, name) {
     },
     title: intent.status === "approved" ? "Approve leave" : "Decline leave",
     lines: [`${row.name || "Staff"} · ${row.type || "leave"}`, `${row.start} to ${row.end}`, `Note: ${note}`],
+  };
+}
+
+async function prepareInvite(membership, intent, reader) {
+  if (!(membership.rulesAdmin || membership.role === "supervisor")) return deny("supervisor-only");
+  const role = String(intent.role || "");
+  if (role !== "operator" && role !== "supervisor") return deny("not-allowed");
+  const email = String(intent.email || "").trim().toLowerCase();
+  if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(email) || email.length > 120) return deny("invalid");
+  const name = String(intent.name || "").trim().replace(/ +/g, " ");
+  if (!name || name.length > 80 || /[\n\r\t<>]/.test(name)) return deny("invalid");
+  if (reader && typeof reader.invites === "function") {
+    const rows = await reader.invites({ limit: 40 });
+    const pending = (rows || []).some(row => row && row.email === email && row.status === "pending" && (row.tenantId || "heartwood") === membership.tenantId);
+    if (pending) return deny("not-allowed");
+  }
+  const token = /^[A-Za-z0-9_-]{43,128}$/.test(intent.token || "") ? intent.token : randomBytes(32).toString("base64url");
+  return {
+    ok: true,
+    action: { type: "invite", name, email, role, token, tenantId: membership.tenantId, createdBy: membership.uid },
+    title: "Invite staff",
+    lines: [`${name}`, email, `Role: ${role}`, "No email is sent."],
   };
 }

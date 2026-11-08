@@ -30,7 +30,7 @@ import {
 } from "./features/timesheet.js";
 import {
   assignmentWarning, cellLeaveText, certificateContentType, certificateObjectName, certificateStoragePath,
-  leaveCreateBody, leaveDecisionBody, leaveScreenHtml, newLeaveId, plannerLeaveHtml, weekLeaveHtml,
+  leaveCreateBody, leaveDecisionBody, leaveScreenHtml, newLeaveId, plannerLeaveHtml, saveCertificate, certificateDownloadName, weekLeaveHtml,
 } from "./features/leave.js";
 
 const cfg = useEmulator ? { ...firebaseConfig, apiKey: "demo-key", projectId: "demo-heartwood" } : firebaseConfig;
@@ -1363,6 +1363,25 @@ async function openLeaveCert(id) {
     toast("Certificate not opened (" + (e.code || "storage") + ").");
   }
 }
+async function downloadLeaveCert(id) {
+  const row = (ui.leave || []).find(item => item.id === id);
+  if (!row || !row.certificatePath) return;
+  if (row.uid !== me.uid && !leaveCanOpen()) { toast("Only that person and an admin can open the certificate."); return; }
+  const filename = certificateDownloadName(row);
+  const fileRef = storageRef(storage, row.certificatePath);
+  try {
+    const blob = await getBlob(fileRef);
+    let downloadUrl = "";
+    try {
+      const storageMod = await import("https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js");
+      downloadUrl = await storageMod.getDownloadURL(fileRef);
+    } catch { downloadUrl = ""; }
+    const saved = await saveCertificate({ blob, downloadUrl, filename });
+    if (!saved.ok) toast("Certificate not downloaded.");
+  } catch (e) {
+    toast("Certificate not downloaded (" + (e.code || "storage") + ").");
+  }
+}
 function bindLeave(A) {
   const form = A.querySelector("#leaveform");
   if (form) form.onsubmit = async ev => {
@@ -1419,6 +1438,7 @@ function bindLeave(A) {
     };
   });
   A.querySelectorAll(".lv-cert").forEach(btn => { btn.onclick = () => openLeaveCert(btn.dataset.cert); });
+  A.querySelectorAll(".lv-cert-dl").forEach(btn => { btn.onclick = () => downloadLeaveCert(btn.dataset.cert); });
 }
 async function tsLoad(ws) {
   const snap = await getDoc(doc(db, "timesheets", `${me.uid}_${ws}`));

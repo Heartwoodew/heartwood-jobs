@@ -75,6 +75,10 @@ export function sampleStore() {
       { id: "lv0123456789abcdef", uid: "op1", name: "Sam", type: "annual", status: "approved", start: "2026-11-20", end: "2026-11-20", startHalf: "pm", endHalf: "pm", reason: "Appointment", certificatePath: "leaveCertificates/op1/lv0123456789abcdef/cert.pdf" },
       { id: "lvabcdef0123456789", uid: "op2", name: "Riley", type: "sick", status: "pending", start: "2026-11-21", end: "2026-11-21", startHalf: "", endHalf: "", reason: "Flu" },
     ],
+    prestarts: [
+      { id: "ps1", assetId: "ex1", assetName: "Excavator", day: "2026-11-08", kind: "excavator", defect: false, signerName: "Sam" },
+    ],
+    invites: [],
   };
 }
 
@@ -132,6 +136,14 @@ export function memoryReader(store, log) {
     async leaveRequests({ limit }) {
       note("leave");
       return (store.leaveRequests || []).slice(0, limit);
+    },
+    async prestarts({ limit }) {
+      note("prestarts");
+      return (store.prestarts || []).slice(0, limit);
+    },
+    async invites({ limit }) {
+      note("invites");
+      return (store.invites || []).slice(0, limit);
     },
   };
 }

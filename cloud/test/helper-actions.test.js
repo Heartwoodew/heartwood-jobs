@@ -70,18 +70,91 @@ test("Cancel writes nothing", async () => {
   assert.equal(h.proposals.get(preview.proposal.id).status, "cancelled");
 });
 
-test("staff and supervisors cannot use Helper, even for a job or a quote", async () => {
-  for (const uid of ["op1", "sup1"]) {
+test("staff cannot draft a job, quote, edit, approve leave, invite, or chat", async () => {
+  const cases = [
+    "Create a job at 5 Creek Road for Orbit Homes",
+    "Save a quote draft for Orbit Homes at 5 Creek Road",
+    "Edit the Ironbark job date to 2026-11-20",
+    "Approve leave Riley: Rest up",
+    "Invite operator Pat at pat@example.com",
+    "Post to team chat: see you at the depot",
+    "Set the Ironbark job to Cancelled",
+    "Add a note on Riley: hello",
+  ];
+  for (const question of cases) {
     const h = harness();
-    const job = await ask(h, uid, { question: "Create a job at 5 Creek Road for Orbit Homes" });
-    assert.equal(job.reply, "You don't have access to Helper.");
-    assert.equal(job.proposal ?? null, null);
-    assert.equal(h.applied.length, 0);
-    const quote = await ask(h, uid, { question: "Save a quote draft for Orbit Homes at 5 Creek Road" });
-    assert.equal(quote.proposal ?? null, null);
-    const hours = await ask(h, uid, { question: "Add a timesheet entry on 2026-11-09 from 07:00 to 15:30" });
-    assert.equal(hours.proposal ?? null, null);
+    const result = await ask(h, "op1", { question });
+    assert.equal(result.proposal ?? null, null, question);
+    assert.equal(h.applied.length, 0, question);
+    assert.equal(h.audit.length, 0, question);
   }
+  const planted = harness();
+  await planted.store.saveProposal({
+    id: "hp_planted",
+    uid: "op1",
+    tenantId: "heartwood",
+    status: "pending",
+    createdAtMs: Date.parse("2026-11-08T02:00:00Z"),
+    title: "Create a job draft",
+    lines: ["Client: Orbit"],
+    action: { type: "job-draft", address: "5 Creek Road", client: "Orbit Homes", jobType: "other", description: "" },
+  });
+  const confirmed = await ask(planted, "op1", { step: "confirm", proposalId: "hp_planted" });
+  assert.match(confirmed.reply, /Nothing was changed/);
+  assert.equal(planted.applied.length, 0);
+  assert.equal(planted.audit.length, 0);
+});
+
+test("staff can confirm their own note, timesheet, leave, and prestart", async () => {
+  const note = harness();
+  const preview = await ask(note, "op1", { question: "Add a note on Ironbark: spoil pile is clear" });
+  assert.equal(preview.proposal.title, "Add a note");
+  await ask(note, "op1", { step: "confirm", proposalId: preview.proposal.id });
+  assert.equal(note.applied[0].type, "job-note");
+  assert.equal(note.applied[0].by, "op1");
+  assert.equal(note.audit[0].via, "helper");
+  const hours = harness();
+  const sheet = await ask(hours, "op1", { question: "Add a timesheet entry on 2026-11-09 from 07:00 to 15:30 note depot" });
+  await ask(hours, "op1", { step: "confirm", proposalId: sheet.proposal.id });
+  assert.equal(hours.applied[0].uid, "op1");
+  const leave = harness();
+  const asked = await ask(leave, "op1", { question: "Request sick leave from 2026-11-10 to 2026-11-12: Flu" });
+  await ask(leave, "op1", { step: "confirm", proposalId: asked.proposal.id });
+  assert.equal(leave.applied[0].type, "leave-create");
+  assert.equal(leave.applied[0].uid, "op1");
+  const plant = harness();
+  const pre = await ask(plant, "op1", { question: "Start a prestart on Excavator" });
+  await ask(plant, "op1", { step: "confirm", proposalId: pre.proposal.id });
+  assert.equal(plant.applied[0].type, "prestart");
+  assert.equal(plant.applied[0].signerUid, "op1");
+});
+
+test("a supervisor can approve leave, invite, and draft a quote, and cannot edit a job", async () => {
+  const leave = harness();
+  const approved = await ask(leave, "sup1", { question: "Approve leave Riley: Rest up" });
+  assert.equal(approved.proposal.title, "Approve leave");
+  await ask(leave, "sup1", { step: "confirm", proposalId: approved.proposal.id });
+  assert.equal(leave.applied[0].type, "leave-decision");
+  assert.equal(leave.applied[0].uid, "sup1");
+  assert.equal(leave.audit[0].via, "helper");
+  const invite = harness();
+  const sent = await ask(invite, "sup1", { question: "Invite operator Pat at pat@example.com" });
+  assert.equal(sent.proposal.title, "Invite staff");
+  assert.match(sent.proposal.lines.join(" "), /No email is sent/);
+  await ask(invite, "sup1", { step: "cancel", proposalId: sent.proposal.id });
+  assert.equal(invite.applied.length, 0);
+  const quote = harness();
+  const draft = await ask(quote, "sup1", { question: "Save a quote draft for Orbit Homes at 5 Creek Road" });
+  assert.equal(draft.proposal.title, "Save a quote draft");
+  const edit = harness();
+  const changed = await ask(edit, "sup1", { question: "Edit the Ironbark job date to 2026-11-20" });
+  assert.equal(changed.proposal ?? null, null);
+  assert.match(changed.reply, /admin/);
+  assert.equal(edit.applied.length, 0);
+  const cancel = harness();
+  const stopped = await ask(cancel, "sup1", { question: "Set the Wattle job to Cancelled" });
+  assert.equal(stopped.proposal ?? null, null);
+  assert.equal(cancel.applied.length, 0);
 });
 
 test("an admin can draft a job and a quote with no price, edit a job, and cannot put a price in the preview", async () => {

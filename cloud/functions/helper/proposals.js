@@ -104,6 +104,7 @@ function intentFromStored(action) {
   if (action.type === "prestart") return { type: "prestart", assetHint: action.assetId, day: action.day, reading: String(action.reading ?? "") };
   if (action.type === "leave-create") return { type: "leave-create", id: action.id, leaveType: action.leaveType, start: action.start, end: action.end, startHalf: action.startHalf, endHalf: action.endHalf, reason: action.reason };
   if (action.type === "leave-decision") return { type: "leave-decision", id: action.id, hint: action.id, status: action.status, note: action.note };
+  if (action.type === "invite") return { type: "invite", name: action.name, email: action.email, role: action.role, token: action.token };
   return null;
 }
 

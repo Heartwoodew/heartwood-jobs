@@ -82,10 +82,10 @@ test("a missing or bad token is rejected and a mismatched uid is rejected", asyn
 });
 
 test("operator context drops other people, other businesses, and every price", async () => {
-  const denied = await ask("op1", { question: "What am I on at Ironbark?", tenantId: "otherco", role: "admin" });
-  assert.equal(denied.result.code, "permission-denied");
-  assert.equal(denied.result.reply, DENIED_REPLY);
-  assert.equal(denied.seen.length, 0);
+  const answered = await ask("op1", { question: "What am I on at Ironbark?", tenantId: "otherco", role: "admin" });
+  assert.equal(answered.result.ok, true);
+  assert.equal(answered.seen.length, 1);
+  assert.match(answered.seen[0].system, /Money on this login: hidden/);
   const { context, log } = await grounded("op1", "What am I on at Ironbark?", { jobId: "job-riley" });
   const blob = JSON.stringify(context);
   assert.match(blob, /12 Ironbark Street/);
@@ -94,13 +94,15 @@ test("operator context drops other people, other businesses, and every price", a
   assert.match(blob, /\[amount hidden\]/);
   assert.match(blob, /Excavator/);
   assert.match(blob, /Sam/);
+  assert.match(blob, /ps1|Excavator/);
+  assert.equal(context.prestarts.some(row => row.assetId === "ex1"), true);
   assert.equal(blob.includes("440.50"), false);
   assert.equal(blob.includes("SECRET-PLANT"), false);
   assert.equal(context.timesheets.some(sheet => sheet.uid === "op1"), true);
   assert.equal(context.timesheets.some(sheet => sheet.uid === "op2"), false);
   assert.equal(context.leave.some(row => row.uid === "op1"), true);
   assert.equal(context.leave.some(row => row.name === "Riley"), false);
-  assert.equal(context.leave[0].certificate, true);
+  assert.equal("certificate" in context.leave[0], false);
   assert.equal(blob.includes("cert.pdf"), false);
   assert.equal(context.runSheets.some(sheet => sheet.workerUid === "op1"), true);
   assert.equal(context.runSheets.some(sheet => sheet.workerUid === "op2"), false);
@@ -109,7 +111,6 @@ test("operator context drops other people, other businesses, and every price", a
   }
   assert.equal(context.profit, null);
   assert.equal(context.quotes.length, 0);
-  assert.equal(context.profit, null);
   assert.equal(context.rateCard, null);
   assert.equal(log.includes("quotes"), false);
   assert.equal(log.includes("serviceCosts"), false);
@@ -125,21 +126,21 @@ test("a job note that tries to take over the prompt is data, and the reply canno
   assert.equal(result.reply.includes("hw-"), false);
 });
 
-test("an invented price in a staff reply is removed, and staff cannot call Helper", async () => {
+test("an invented price in a staff reply is removed", async () => {
   const { sanitiseReply } = await import("../functions/helper/prompt.js");
   const reply = sanitiseReply("It is $9,999 ex GST.", { canary: "hw-x", canSeeMoney: false });
   assert.match(reply, /\[amount hidden\]/);
   assert.equal(reply.includes("$"), false);
   assert.equal(reply.includes("9999"), false);
-  const denied = await ask("op1", { question: "What is the price?" }, { reply: "It is $9,999 ex GST." });
-  assert.equal(denied.result.reply, DENIED_REPLY);
-  assert.equal(denied.seen.length, 0);
+  const answered = await ask("op1", { question: "What is the price?" }, { reply: "It is $9,999 ex GST." });
+  assert.match(answered.result.reply, /\[amount hidden\]/);
+  assert.equal(answered.result.reply.includes("$"), false);
 });
 
-test("a supervisor is denied, and their scoped data still hides other businesses", async () => {
-  const denied = await ask("sup1", { question: "Prices for my jobs" });
-  assert.equal(denied.result.reply, DENIED_REPLY);
-  assert.equal(denied.seen.length, 0);
+test("a supervisor can ask, sees leave to decide, and still hides other businesses and profit", async () => {
+  const answered = await ask("sup1", { question: "Prices for my jobs" });
+  assert.equal(answered.result.ok, true);
+  assert.equal(answered.seen.length, 1);
   const { context, membership, log } = await grounded("sup1", "Prices for my jobs");
   assert.equal(membership.canSeeMoney, true);
   assert.equal(membership.rulesAdmin, false);
@@ -149,6 +150,9 @@ test("a supervisor is denied, and their scoped data still hides other businesses
   assert.equal(JSON.stringify(context).includes("44.5"), false);
   assert.equal(JSON.stringify(context).includes("WOMBAT-LEDGER-77"), false);
   assert.equal(JSON.stringify(context).includes("SECRET-OTHERCO-8841"), false);
+  assert.equal(JSON.stringify(context).includes("cert.pdf"), false);
+  assert.equal(context.leave.some(row => row.name === "Riley"), true);
+  assert.equal(context.timesheets.length, 0);
   assert.equal(context.profit, null);
   assert.equal(context.rateCard.travelPerKm, 3.5);
   assert.equal(context.servicing.some(row => row.amount === "440.50"), true);
@@ -179,9 +183,9 @@ test("another business admin cannot see Heartwood jobs, rates, or profit", async
   assert.match(blob, /SECRET-QUOTE/);
 });
 
-test("a customer-scoped operator does not see another builder's job and cannot call Helper", async () => {
-  const denied = await ask("scoped", { question: "Silk Road and Ironbark" });
-  assert.equal(denied.result.reply, DENIED_REPLY);
+test("a customer-scoped operator does not see another builder's job", async () => {
+  const answered = await ask("scoped", { question: "Silk Road and Ironbark" });
+  assert.equal(answered.result.ok, true);
   const { context } = await grounded("scoped", "Silk Road and Ironbark");
   assert.deepEqual(context.jobs, []);
   assert.equal(JSON.stringify(context.jobs).includes("Silk"), false);
@@ -213,7 +217,7 @@ test("switched off means no model call and no job text in the reply", async () =
     now: new Date(TODAY + "T02:00:00Z"),
   });
   assert.equal(hidden.ok, true);
-  assert.equal(hidden.enabled, false);
+  assert.equal(hidden.enabled, true);
   assert.equal(hidden.admin, false);
   assert.equal(called, false);
 });

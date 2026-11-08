@@ -204,6 +204,32 @@ export function firestoreHelperStore(db) {
         });
         return;
       }
+      if (action.type === "invite") {
+        const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+        const ref = db.collection("invites").doc();
+        const batch = db.batch();
+        batch.set(ref, {
+          name: action.name,
+          email: action.email,
+          role: action.role,
+          status: "pending",
+          createdBy: action.createdBy,
+          token: action.token,
+          tenantId: action.tenantId,
+          createdAt: FieldValue.serverTimestamp(),
+          expiresAt,
+        });
+        batch.set(db.collection("inviteEmails").doc(action.email), {
+          email: action.email,
+          status: "pending",
+          inviteId: ref.id,
+          role: action.role,
+          tenantId: action.tenantId,
+          expiresAt,
+        });
+        await batch.commit();
+        return;
+      }
       const err = new Error("not-allowed");
       err.code = "not-allowed";
       throw err;

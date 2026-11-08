@@ -54,5 +54,13 @@ export function adminReader(db) {
       const snap = await db.collection("leaveRequests").limit(limit).get();
       return rows(snap);
     },
+    async prestarts({ limit }) {
+      const snap = await db.collectionGroup("prestarts").limit(limit).get();
+      return rows(snap);
+    },
+    async invites({ limit }) {
+      const snap = await db.collection("invites").limit(limit).get();
+      return rows(snap);
+    },
   };
 }

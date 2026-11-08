@@ -3,7 +3,7 @@
 
 import { HEARTWOOD_TENANT, canSeeJob, jobTenantOf } from "../shared/cloud-storage.js";
 import {
-  projectFleet, projectJob, projectLeave, projectProfit, projectQuoteDoc, projectRates,
+  projectFleet, projectJob, projectLeave, projectPrestart, projectProfit, projectQuoteDoc, projectRates,
   projectReceipt, projectRunSheet, projectService, projectTimesheet,
 } from "./money.js";
 
@@ -126,14 +126,22 @@ export async function buildHelperContext({ reader, membership, question, jobId, 
     if (timesheets.length >= 8) break;
   }
   const leave = [];
+  const canReadAllLeave = membership.rulesAdmin || membership.role === "supervisor";
   for (const row of await optionalRows(reader, "leaveRequests", { limit: 40 })) {
     if (!row || jobTenantOf(row) !== membership.tenantId) continue;
-    if (!membership.rulesAdmin && row.uid !== membership.uid) continue;
-    const projected = projectLeave(row, membership.canSeeMoney);
+    if (!canReadAllLeave && row.uid !== membership.uid) continue;
+    const projected = projectLeave(row, membership.canSeeMoney, { includeCertificate: !!membership.rulesAdmin });
     if (projected) leave.push(projected);
     if (leave.length >= 8) break;
   }
-  return { jobs: visible, quotes, receipts, rateCard, profit, runSheets, fleet, servicing, timesheets, leave };
+  const prestarts = [];
+  for (const row of await optionalRows(reader, "prestarts", { limit: 40 })) {
+    if (!row || jobTenantOf(row) !== membership.tenantId) continue;
+    const projected = projectPrestart(row);
+    if (projected) prestarts.push(projected);
+    if (prestarts.length >= 8) break;
+  }
+  return { jobs: visible, quotes, receipts, rateCard, profit, runSheets, fleet, servicing, timesheets, leave, prestarts };
 }
 
 async function optionalRows(reader, method, args) {

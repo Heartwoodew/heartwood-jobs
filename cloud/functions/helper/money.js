@@ -203,9 +203,9 @@ export function projectTimesheet(sheet, canSeeMoney) {
   };
 }
 
-export function projectLeave(row, canSeeMoney) {
+export function projectLeave(row, canSeeMoney, { includeCertificate = false } = {}) {
   if (!row) return null;
-  return {
+  const out = {
     id: String(row.id || ""),
     uid: row.uid || "",
     name: clipText(row.name || "", 80),
@@ -216,6 +216,20 @@ export function projectLeave(row, canSeeMoney) {
     startHalf: row.startHalf || "",
     endHalf: row.endHalf || "",
     reason: clipText(canSeeMoney ? (row.reason || "") : redactMoneyText(row.reason || ""), 500),
-    certificate: !!row.certificatePath,
+  };
+  if (includeCertificate) out.certificate = !!row.certificatePath;
+  return out;
+}
+
+export function projectPrestart(row) {
+  if (!row) return null;
+  return {
+    id: String(row.id || ""),
+    assetId: row.assetId || "",
+    assetName: clipText(row.assetName || "", 80),
+    day: row.day || "",
+    kind: row.kind || "",
+    defect: !!row.defect,
+    signerName: clipText(row.signerName || "", 80),
   };
 }

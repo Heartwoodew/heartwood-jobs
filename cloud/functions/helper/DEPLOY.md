@@ -2,7 +2,7 @@
 
 This branch does not deploy. `cloud/scripts/refuse-live-deploy.js` still refuses `firebase deploy` from `cloud/`. Nothing here enables an API, sets `HELPER_ENABLED`, or publishes a function.
 
-Helper answers only for an admin (Alex, Patrick, or a profile role `admin`). Staff and supervisors get no panel and no answers. The model is Vertex Gemini `gemini-3.5-flash` in `australia-southeast1`. `gemini-2.5-flash` retired on Vertex on 20 October 2026. `gemini-3.8-flash` is only on the global, `us`, and `eu` endpoints, so it is not used.
+Helper answers for every signed-in staff member when `HELPER_ENABLED=true`. An operator only hears and changes what that role can already do. Supervisors and admins keep their wider set. The model is Vertex Gemini `gemini-3.5-flash` in `australia-southeast1`. `gemini-2.5-flash` retired on Vertex on 20 October 2026. `gemini-3.8-flash` is only on the global, `us`, and `eu` endpoints, so it is not used.
 
 ## 1. APIs
 
@@ -74,4 +74,4 @@ Do not deploy `cloud/emulator/firestore.rules` or `cloud/emulator/storage.rules`
 
 ## 4. Check
 
-Sign in as an admin. The Helper button appears only after `helperAsk` returns `enabled: true`. A staff login stays without the button. Ask a question, then Confirm or Cancel. Confirm writes the change and a row in `helperAudit` (`via: "helper"`). Cancel writes nothing else. A mic button uses the browser Web Speech API when that browser has it, and stays disabled with a short note when it does not.
+Sign in as any staff member. The Helper button appears only after `helperAsk` returns `enabled: true`. An operator can confirm their own timesheet, their own leave, a prestart, or a note on a job assigned to them. A supervisor can also approve leave and invite. An admin keeps the wider set. Confirm writes the change and a row in `helperAudit` (`via: "helper"`). Cancel writes nothing else.
