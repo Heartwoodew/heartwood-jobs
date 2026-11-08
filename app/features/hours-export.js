@@ -6,10 +6,20 @@ import { exportDayLeave } from "./leave.js";
 export const ACCOUNTS_TO = "accounts@heartwoodew.com";
 const DAYS = 7;
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const SHORT_DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const addD = (s, n) => { const d = new Date(s + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 const r2 = h => Math.round((+h || 0) * 100) / 100;
 const dmy = ds => `${ds.slice(8, 10)}/${ds.slice(5, 7)}/${ds.slice(0, 4)}`;
-const weekday = ds => WEEKDAYS[(new Date(ds + "T00:00:00Z").getUTCDay() + 6) % 7];
+const dowIndex = ds => (new Date(ds + "T00:00:00Z").getUTCDay() + 6) % 7;
+const weekday = ds => WEEKDAYS[dowIndex(ds)];
+const dayHead = ds => `${SHORT_DOW[dowIndex(ds)]} ${ds.slice(8, 10)}/${ds.slice(5, 7)}`;
+function leaveShort(info) {
+  if (info.annual) return "Annual";
+  if (info.sick) return "Sick";
+  if (info.other) return "Other";
+  if (info.pending) return "Pending";
+  return "";
+}
 const clean = v => String(v ?? "").trim();
 const normKey = v => clean(v).toLowerCase().replace(/^#/, "");
 const minsOf = t => { const m = /^(\d{1,2}):(\d{2})$/.exec(t || ""); return m ? +m[1] * 60 + +m[2] : null; };
@@ -115,7 +125,7 @@ export function buildHoursReport({ weekStart, people, sheets, leaves = [], jobs 
       annual += info.annual; sick += info.sick; other += info.other; pending += info.pending;
       const total = r2(dayShifts.reduce((t, s) => t + s.hours, 0));
       const leaveText = info.text || (dayShifts.length ? "" : "Day off");
-      days.push({ date, weekday: weekday(date), shifts: dayShifts, total, leaveText, note: dayShifts.length ? "" : (notes[date] || "") });
+      days.push({ date, weekday: weekday(date), shifts: dayShifts, total, leaveText, leaveShort: leaveShort(info), note: dayShifts.length ? "" : (notes[date] || "") });
     }
     annual = r2(annual); sick = r2(sick); other = r2(other); pending = r2(pending);
     const noted = Object.keys(notes).some(ds => ds >= weekStart && ds <= weekEnd);
@@ -184,10 +194,12 @@ export function reportSheets(rep, { company = "Heartwood", generated = new Date(
   const title = [{ v: `${company} · Timesheet hours`, s: S.title }];
   const sub = [{ v: `Pay period ${dmy(rep.weekStart)} to ${dmy(rep.weekEnd)} · Every day is listed · A 30-minute lunch is already off a finished shift unless a break was entered · Generated ${gen} (Brisbane)`, s: S.sub }];
   const H = a => a.map(v => ({ v, s: S.head }));
-  const sum = [title, sub, H(["Staff", "Days worked", "Total hours", "Annual leave days", "Sick days", "Other leave days", "Pending days"])];
-  for (const p of rep.people) sum.push([{ v: p.name }, { v: p.daysWorked, s: S.int }, { v: p.total, s: S.hrs }, { v: p.annual, s: S.hrs }, { v: p.sick, s: S.hrs }, { v: p.other, s: S.hrs }, { v: p.pending, s: S.hrs }]);
-  sum.push([{ v: "Grand total", s: S.grandLbl }, { v: rep.people.reduce((n, p) => n + p.daysWorked, 0), s: S.grandInt }, { v: rep.total, s: S.grandHrs },
-    { v: rep.annual, s: S.grandHrs }, { v: rep.sick, s: S.grandHrs }, { v: rep.other, s: S.grandHrs }, { v: rep.pending, s: S.grandHrs }]);
+  const dates = Array.from({ length: DAYS }, (_, i) => addD(rep.weekStart, i));
+  // Hours win when someone worked. A leave day with no hours shows Annual, Sick, Other, or Pending.
+  const gridCell = day => day.total > 0 ? { v: day.total } : (day.leaveShort ? { v: day.leaveShort } : { v: 0 });
+  const sum = [title, sub, H(["Staff", ...dates.map(dayHead), "Total"])];
+  for (const p of rep.people) sum.push([{ v: p.name }, ...p.days.map(gridCell), { v: p.total, s: S.totHrs }]);
+  sum.push([{ v: "Grand total", s: S.grandLbl }, ...dates.map((_, i) => ({ v: r2(rep.people.reduce((t, p) => t + p.days[i].total, 0)), s: S.grandHrs })), { v: rep.total, s: S.grandHrs }]);
   const det = [title, sub, H(DETAIL)];
   const blank = (n, s) => Array(n).fill({ v: "", s });
   for (const p of rep.people) {
@@ -217,7 +229,7 @@ export function reportSheets(rep, { company = "Heartwood", generated = new Date(
   det.push([{ v: "Grand total", s: S.grandLbl }, ...blank(8, S.grandLbl), { v: rep.total, s: S.grandHrs }, ...blank(6, S.grandLbl)]);
   if (!rep.people.length) det.push([{ v: "No hours entered for this pay period." }]);
   return [
-    { name: "Summary", xml: sheetXml(sum, [26, 14, 14, 18, 12, 18, 14], 3) },
+    { name: "Summary", xml: sheetXml(sum, [22, 12, 12, 12, 12, 12, 12, 12, 12], 3) },
     { name: "Detail", xml: sheetXml(det, [22, 12, 12, 12, 12, 13, 12, 15, 13, 12, 22, 32, 22, 36, 28, 14], 3) },
   ];
 }

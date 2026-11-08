@@ -78,7 +78,7 @@ def pending(out):
             subject = f"Timesheet hours {dmy(ws)} to {dmy(we)} - Heartwood {tag}"
             body = (f"Hi Nicole,\n\nAttached are the timesheet hours for Mon {dmy(ws)} to Sun {dmy(we)} "
                     f"({d.get('people', 0)} staff, {float(d.get('totalHours') or 0):.2f} hours total).\n"
-                    "The Summary sheet has each person's total, annual leave days, sick days, other leave days, pending days, and a grand total.\n"
+                    "The first sheet is one row per person and one column per day (Mon 02/11). Each cell is the hours worked that day, or Annual, Sick, Other, or Pending on a leave day with no hours. It has a Total column and a grand total.\n"
                     "The Detail sheet lists every day in the pay period. Each day shows the date and weekday, clock on and clock off for every shift, "
                     "break start, break end and minutes, hours for the shift, and the day's total. Job, site and machine are filled in when they were recorded.\n"
                     "A day with no hours is 0. Approved leave shows as annual leave, sick leave, or other leave, with a note when a medical certificate is attached. "

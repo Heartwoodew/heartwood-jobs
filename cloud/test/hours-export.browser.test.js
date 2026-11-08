@@ -35,8 +35,12 @@ function assertDailyBreakdown(xml) {
   assert.match(xml, /Day off/);
   assert.match(xml, /Day total/);
   assert.match(xml, /Patrick week total/);
-  assert.match(xml, /Annual leave days/);
-  assert.match(xml, /Sick days/);
+  assert.match(xml, /Mon 02\/11/);
+  assert.match(xml, /Sun 08\/11/);
+  assert.match(xml, />Sick</);
+  assert.match(xml, />Pending</);
+  assert.match(xml, /<v>7\.5<\/v>/);
+  assert.match(xml, /<v>14\.5<\/v>/);
   assert.equal((xml.match(/Day off/g) || []).length, 3);
   assert.doesNotMatch(xml, /secret-scan|Declined holiday|leaveCertificates/);
 }

@@ -48,9 +48,15 @@ test("hours xlsx: every day, summary leave counts, subtotals, no ids, valid zip"
   assert.match(sheets[1].xml, /2:30 pm/);
   assert.match(sheets[1].xml, /Day off/);
   assert.match(sheets[1].xml, /Day total/);
+  assert.match(sheets[0].xml, /Mon 02\/11/);
+  assert.match(sheets[0].xml, /Tue 03\/11/);
+  assert.match(sheets[0].xml, /Sun 08\/11/);
+  assert.match(sheets[0].xml, />Total</);
   assert.match(sheets[0].xml, /Grand total/);
-  assert.match(sheets[0].xml, /Annual leave days/);
-  assert.match(sheets[0].xml, /Sick days/);
+  assert.match(sheets[0].xml, />Sick</);
+  assert.match(sheets[0].xml, /<v>8<\/v>/);
+  assert.match(sheets[0].xml, /<v>0<\/v>/);
+  assert.doesNotMatch(sheets[0].xml, /Annual leave days|Sick days/);
   assert.doesNotMatch(sheets[1].xml, /u1|e1|30 min/);
   const b = m.xlsxBytes(sheets);
   assert.equal(b[0], 0x50); assert.equal(b[1], 0x4b);
@@ -86,6 +92,7 @@ test("a day lists each shift from stored fields, and leave follows the request",
   const days = rep.people[0].days;
   assert.equal(rep.total, 7.67);
   assert.equal(days[0].leaveText, "Annual leave · morning only");
+  assert.equal(days[0].leaveShort, "Annual");
   assert.equal(days[0].total, 0);
   assert.equal(days[1].shifts.length, 2);
   assert.equal(days[1].shifts[0].breakMins, 20);
@@ -103,7 +110,9 @@ test("a day lists each shift from stored fields, and leave follows the request",
   assert.equal(days[2].leaveText, "Day off");
   assert.equal(days[2].shifts.length, 0);
   assert.equal(days[3].leaveText, "Sick leave · Medical certificate");
+  assert.equal(days[3].leaveShort, "Sick");
   assert.equal(days[4].leaveText, "Leave requested (pending)");
+  assert.equal(days[4].leaveShort, "Pending");
   assert.equal(days[5].leaveText, "Day off");
   assert.equal(days[6].total, 0);
   assert.equal(rep.people[0].annual, 0.5);
@@ -112,7 +121,13 @@ test("a day lists each shift from stored fields, and leave follows the request",
   assert.equal(rep.people[0].pending, 1);
   const shared = m.shiftRows({ entries: { a: { date: "2026-11-03", start: "07:00", finish: "15:00", job: "14 Brightvale Street", source: "manual" } } }, jobs);
   assert.equal(shared[0].site, "");
-  const xml = m.reportSheets(rep, { company: "Heartwood", generated: new Date("2026-11-08T06:00:00Z") }).map(s => s.xml).join("\n");
+  const built = m.reportSheets(rep, { company: "Heartwood", generated: new Date("2026-11-08T06:00:00Z") });
+  const xml = built.map(s => s.xml).join("\n");
+  assert.match(built[0].xml, /Mon 02\/11/);
+  assert.match(built[0].xml, />Annual</);
+  assert.match(built[0].xml, />Sick</);
+  assert.match(built[0].xml, />Pending</);
+  assert.match(built[0].xml, /<v>7\.67<\/v>/);
   assert.match(xml, /9:00 am/);
   assert.match(xml, /9:20 am/);
   assert.match(xml, /Sam week total/);
@@ -197,7 +212,7 @@ test("hours buttons do not call an undefined rerender, and list errors stay visi
   assert.match(subs, /Hours spreadsheet list not available/);
   assert.match(app, /hxg\.onclick/);
   assert.match(sw, /u\.protocol === "blob:"/);
-  assert.match(sw, /callup-shell-v76-hours-daily/);
+  assert.match(sw, /callup-shell-v77-hours-grid/);
   const slice = (text, a, b) => text.slice(text.indexOf(a), text.indexOf(b) + b.length);
   assert.equal(
     slice(readFileSync(new URL("../emulator/firestore.rules", import.meta.url), "utf8"), "// BEGIN HOURS EXPORT RULES", "// END HOURS EXPORT RULES"),
