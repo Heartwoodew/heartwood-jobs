@@ -22,7 +22,7 @@ import { onDocumentCreated, onDocumentWritten } from "firebase-functions/v2/fire
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
 import { defineSecret } from "firebase-functions/params";
 import { initializeApp, getApps } from "firebase-admin/app";
-import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
 import { handlePhotoIntake } from "./lib/photo-intake.js";
 import {
@@ -45,9 +45,12 @@ import {
   syncStaffQuantity,
   companiesTouchedByUser,
 } from "./billing/stripe-billing.js";
+import { jobCheckDoc, performJobCheck, withinRateLimit } from "./job-check.js";
 
 const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
 const STRIPE_WEBHOOK_SECRET = defineSecret("STRIPE_WEBHOOK_SECRET");
+const JOB_CHECK_WEBHOOK_URL = defineSecret("JOB_CHECK_WEBHOOK_URL");
+const JOB_CHECK_WEBHOOK_KEY = defineSecret("JOB_CHECK_WEBHOOK_KEY");
 
 function ensureAdmin() {
   if (!getApps().length) initializeApp();
@@ -319,6 +322,111 @@ export const syncStripeStaff = onDocumentWritten(
       const staff = await db.collection("users").where("companyId", "==", companyId).get();
       await syncStaffQuantity({ companyId, company: snap.data(), staffCount: staff.size, stripe });
     }
+  },
+);
+
+function jobCheckFailure(result) {
+  const code = result && (result.code === "unauthenticated" || result.code === "permission-denied" || result.code === "resource-exhausted" || result.code === "failed-precondition")
+    ? result.code
+    : "internal";
+  const message = code === "unauthenticated" ? "Sign in to check for jobs."
+    : code === "permission-denied" ? "Only a Heartwood admin or supervisor can check for jobs."
+    : code === "resource-exhausted" ? "A check already started. Try again in a couple of minutes."
+    : code === "failed-precondition" && result.reason === "not-configured" ? "Job check is not set up yet."
+    : code === "failed-precondition" ? "The check did not start. Try again in a couple of minutes."
+    : "Couldn't start the check.";
+  if (result && result.requestId) throw new HttpsError(code, message, { requestId: result.requestId });
+  throw new HttpsError(code, message);
+}
+
+// jobCheckGate/heartwood is the 2-minute lock. Clients have no rule for it.
+// The jobChecks row is what the Jobs tab listens to.
+async function reserveJobCheck(db, body) {
+  const ref = db.collection("jobChecks").doc();
+  const gate = db.collection("jobCheckGate").doc("heartwood");
+  let outcome = "ok";
+  try {
+    outcome = await db.runTransaction(async tx => {
+      const snap = await tx.get(gate);
+      const stamp = snap.exists ? snap.get("requestedAt") : null;
+      const last = stamp && typeof stamp.toMillis === "function" ? stamp.toMillis() : null;
+      const now = Date.now();
+      if (withinRateLimit(last, now)) return "limited";
+      const requestedAt = Timestamp.fromMillis(now);
+      tx.set(gate, { companyId: "heartwood", requestedAt, requestedBy: body.requestedBy });
+      tx.set(ref, jobCheckDoc({ requestedBy: body.requestedBy, requestedAt }));
+      return "ok";
+    });
+  } catch {
+    console.error("job-check-reserve");
+    const wrapped = new Error("reserve");
+    wrapped.code = "internal";
+    throw wrapped;
+  }
+  if (outcome === "limited") {
+    const err = new Error("rate");
+    err.code = "resource-exhausted";
+    throw err;
+  }
+  return { id: ref.id };
+}
+
+async function postJobCheck(request) {
+  const res = await fetch(request.url, {
+    method: "POST",
+    headers: request.headers,
+    body: request.body,
+    signal: AbortSignal.timeout(15000),
+  });
+  if (res.status !== 200) console.error("job-check-webhook", res.status);
+  return { ok: res.status === 200, status: res.status };
+}
+
+export const requestJobCheck = onCall(
+  {
+    region: "australia-southeast1",
+    timeoutSeconds: 30,
+    memory: "256MiB",
+    secrets: [JOB_CHECK_WEBHOOK_URL, JOB_CHECK_WEBHOOK_KEY],
+    invoker: "public",
+    cors: true,
+  },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Sign in to check for jobs.");
+    ensureAdmin();
+    const db = getFirestore();
+    const uid = request.auth.uid;
+    const [profileSnap, companySnap] = await Promise.all([
+      db.collection("users").doc(uid).get(),
+      db.collection("companies").doc("heartwood").get(),
+    ]);
+    let url = "";
+    let key = "";
+    try {
+      url = String(JOB_CHECK_WEBHOOK_URL.value() || "");
+      key = String(JOB_CHECK_WEBHOOK_KEY.value() || "");
+    } catch {
+      url = "";
+      key = "";
+    }
+    const outcome = await performJobCheck({
+      uid,
+      profile: profileSnap.exists ? profileSnap.data() : null,
+      company: companySnap.exists ? companySnap.data() : null,
+      now: Date.now(),
+      url,
+      key,
+      headerName: process.env.JOB_CHECK_WEBHOOK_HEADER,
+      createCheck: (body) => reserveJobCheck(db, body),
+      markError: (id, patch) => db.collection("jobChecks").doc(id).set({
+        status: "error",
+        summary: patch.summary,
+        finishedAt: Timestamp.fromMillis(patch.finishedAtMs || Date.now()),
+      }, { merge: true }),
+      post: postJobCheck,
+    });
+    if (!outcome.ok) jobCheckFailure(outcome);
+    return { requestId: outcome.requestId };
   },
 );
 

@@ -47,6 +47,7 @@ import {
   addressWithSuburb, bulkCandidates, canImportInbox, composeAddress, defaultImportMode, duplicateWarning,
   findExistingJob, isImported, parseInboxEmail,
 } from "./features/inbox-import.js";
+import { JOB_CHECK_WAIT_MS, canRequestJobCheck, jobCheckFailureText, jobCheckView } from "./features/job-check.js";
 
 const cfg = useEmulator ? { ...firebaseConfig, apiKey: "demo-key", projectId: "demo-heartwood" } : firebaseConfig;
 const fb = initializeApp(cfg);
@@ -100,6 +101,7 @@ const ui = { view: "list", staffF: "", typeF: "", photoLists: {}, photoUrls: {},
 $("#logout").onclick = () => signOut(auth);
 onAuthStateChanged(auth, async user => {
   if (signingUp) return;
+  if (!user || !me || me.uid !== user.uid) stopJobCheck();
   if (unsub) { unsub(); unsub = null; }
   CHAT.stop();
   COMP.stop();
@@ -643,6 +645,112 @@ function matchQ(j) {
   return w.every(x => hay.includes(x));
 }
 const searchBar = () => `<div class="sbar"><span class="sbar-ic">🔍</span><input id="jq" type="search" inputmode="search" autocomplete="off" placeholder="Search job #, address, client, PO, staff…" value="${esc(ui.q || "")}">${ui.q ? `<button type="button" id="jqx" class="sbar-x" title="Clear" aria-label="Clear search">✕</button>` : ""}</div>`;
+function jobCheckViewer() {
+  const org = orgSettings();
+  return {
+    role: me && me.role,
+    staffRole: me && (me.staffRole || (me.cloudProfile && me.cloudProfile.role)),
+    companyId: myCompanyId(),
+    isTest: org.isTest === true,
+    plan: org.plan || "",
+    origin: org.origin || "",
+  };
+}
+function jobCheckHtml() {
+  if (!canRequestJobCheck(jobCheckViewer())) return "";
+  const view = jobCheckView(ui.jobCheck, Date.now());
+  const status = view.message ? `<span class="job-check-status${view.error ? " job-check-error" : ""}" role="status">${esc(view.message)}</span>` : "";
+  return `<span class="job-check"><button type="button" id="jobcheck" class="sm-btn"${view.disabled ? " disabled" : ""}>Check for jobs</button>${status}</span>`;
+}
+function stopJobCheck() {
+  if (ui.jobCheckUnsub) { ui.jobCheckUnsub(); ui.jobCheckUnsub = null; }
+  if (ui.jobCheckTimer) { clearTimeout(ui.jobCheckTimer); ui.jobCheckTimer = null; }
+  ui.jobCheck = null;
+  ui.jobCheckBusy = false;
+}
+function paintJobCheck() {
+  if (!me) return;
+  if (me.role === "admin" && !ui.myJobs) {
+    if (ui.view === "jobs") renderAdmin();
+    return;
+  }
+  if (!ui.opSel && (ui.opTab || "today") === "week") renderOperator();
+}
+function armJobCheckWait(startedAt) {
+  if (ui.jobCheckTimer) clearTimeout(ui.jobCheckTimer);
+  const wait = Math.max(0, JOB_CHECK_WAIT_MS - (Date.now() - startedAt));
+  ui.jobCheckTimer = setTimeout(() => { ui.jobCheckTimer = null; paintJobCheck(); }, wait);
+}
+function watchJobCheck(id, startedAt) {
+  if (ui.jobCheckUnsub) { ui.jobCheckUnsub(); ui.jobCheckUnsub = null; }
+  ui.jobCheckUnsub = onSnapshot(doc(db, "jobChecks", id), snap => {
+    if (!snap.exists()) return;
+    const data = snap.data() || {};
+    const finished = data.finishedAt;
+    const finishedAt = finished && typeof finished.toMillis === "function" ? finished.toMillis()
+      : finished && typeof finished.toDate === "function" ? finished.toDate().getTime()
+      : finished || null;
+    ui.jobCheck = {
+      id,
+      status: data.status || "requested",
+      summary: typeof data.summary === "string" ? data.summary : "",
+      finishedAt,
+      startedAt,
+      pending: data.status !== "done" && data.status !== "error",
+    };
+    paintJobCheck();
+  }, () => {});
+}
+async function callJobCheck() {
+  const projectId = useEmulator ? "demo-heartwood" : firebaseConfig.projectId;
+  const url = useEmulator
+    ? `http://127.0.0.1:5001/${projectId}/australia-southeast1/requestJobCheck`
+    : `https://australia-southeast1-${projectId}.cloudfunctions.net/requestJobCheck`;
+  const token = auth.currentUser ? await auth.currentUser.getIdToken() : "";
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: token ? `Bearer ${token}` : "" },
+      body: JSON.stringify({ data: {} }),
+    });
+  } catch {
+    const err = new Error("Couldn't start the check.");
+    err.code = "unavailable";
+    throw err;
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || body.error) {
+    const info = body.error || {};
+    const err = new Error(info.message || "Couldn't start the check.");
+    err.code = info.status || "internal";
+    err.details = info.details || null;
+    throw err;
+  }
+  return body.result || {};
+}
+async function startJobCheck() {
+  if (!canRequestJobCheck(jobCheckViewer())) return;
+  if (ui.jobCheckBusy || jobCheckView(ui.jobCheck, Date.now()).disabled) return;
+  ui.jobCheckBusy = true;
+  const startedAt = Date.now();
+  ui.jobCheck = { pending: true, status: "requested", startedAt, summary: "", finishedAt: null };
+  armJobCheckWait(startedAt);
+  paintJobCheck();
+  try {
+    const result = await callJobCheck();
+    if (result && result.requestId) watchJobCheck(result.requestId, startedAt);
+  } catch (e) {
+    const requestId = e && e.details && e.details.requestId;
+    if (requestId) watchJobCheck(requestId, startedAt);
+    else {
+      ui.jobCheck = { pending: false, status: "error", summary: jobCheckFailureText(e), finishedAt: Date.now(), startedAt };
+      paintJobCheck();
+    }
+  } finally {
+    ui.jobCheckBusy = false;
+  }
+}
 function groupByDate(list) {
   const m = new Map(); for (const j of list) { const k = j.date || ""; if (!m.has(k)) m.set(k, []); m.get(k).push(j); }
   return [...m.entries()];
@@ -655,7 +763,7 @@ function jobsView(all) {
   const cnt = q => open.filter(j => queueOf(j) === q).length;
   const list = open.filter(j => ui.queue === "All" || queueOf(j) === ui.queue)
     .sort((a, b) => ((a.date || "9") + (a.time || "")).localeCompare((b.date || "9") + (b.time || "")));
-  return `<div class="sm-head"><h1>Jobs</h1><span class="headbtns">${canCompanyExport() ? `<button id="jobscsv" class="sm-btn">Download CSV</button>` : ""}<button id="findall" class="sm-btn" title="Run Find PO on every open and not-yet-invoiced job">🔎 Find all POs</button><button id="new" class="sm-btn primary">+ New Job</button></span></div>${searchBar()}
+  return `<div class="sm-head"><h1>Jobs</h1><span class="headbtns">${jobCheckHtml()}${canCompanyExport() ? `<button id="jobscsv" class="sm-btn">Download CSV</button>` : ""}<button id="findall" class="sm-btn" title="Run Find PO on every open and not-yet-invoiced job">🔎 Find all POs</button><button id="new" class="sm-btn primary">+ New Job</button></span></div>${searchBar()}
     <div class="qtabs"><button data-q="All" class="${ui.queue === "All" ? "on" : ""}">All open <span>${open.length}</span></button>
       ${QUEUES.map(q => `<button data-q="${q}" class="${QCLS[q]} ${ui.queue === q ? "on" : ""}"><span class="qdot ${QCLS[q]}"></span>${q} <span>${cnt(q)}</span></button>`).join("")}</div>
     <div class="filters"><select id="fs"><option value="">All staff</option>${staff.map(s => `<option value="${esc(skey(s))}" ${ui.staffF === skey(s) ? "selected" : ""}>${esc(label(s.name))}</option>`).join("")}<option value="_none" ${ui.staffF === "_none" ? "selected" : ""}>Unallocated</option></select>
@@ -2443,6 +2551,7 @@ function renderAdmin() {
   if ($("#ft")) $("#ft").onchange = e => { ui.typeF = e.target.value; renderAdmin(); };
   if ($("#new")) $("#new").onclick = () => editJob(null);
   if ($("#jobscsv")) $("#jobscsv").onclick = () => downloadJobsCsv(all);
+  if ($("#jobcheck")) $("#jobcheck").onclick = () => startJobCheck();
   if ($("#findall")) $("#findall").onclick = async () => {
     try { await setDoc(doc(db, "meta", "findAllPos"), { status: "pending", requestedBy: me.name, requestedAt: new Date().toISOString() });
       toast("Find all POs queued - the box runs it within 2 min (6am-8pm); each job shows its result"); }
@@ -3471,6 +3580,7 @@ function opCard(j) {
     <div class="chev" aria-hidden="true"></div></div>`;
 }
 function bindOp(mine) {
+  if ($("#jobcheck")) $("#jobcheck").onclick = () => startJobCheck();
   if ($("#toadmin")) $("#toadmin").onclick = () => { ui.myJobs = false; ui.opSel = null; renderAdmin(); };
   $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; renderOperator(); window.scrollTo(0, 0); });
   $("#app").querySelectorAll("[data-go]").forEach(b => b.onclick = () => { if (b.dataset.go === "swms") return swmsOverlay(); ui.opTab = b.dataset.go; renderOperator(); window.scrollTo(0, 0); });
@@ -3651,10 +3761,11 @@ function renderOperator() {
   const groups = ui.opTab === "done" ? groupByDate(doneL).map(([d, js]) => [d === t0 ? "Today · " + dayLabel(d) : dayLabel(d), js])
     : groupByDate(withRunOrder(open.filter(j => j.date >= t1 && j.date <= wkEnd))).map(([d, js]) => [(d === t1 ? "Tomorrow · " : "") + dayLabel(d), js]);
   const upcomingN = groups.reduce((n, [, js]) => n + js.length, 0);
+  const jobCheck = ui.opTab === "done" ? "" : jobCheckHtml();
   const head = ui.opTab === "done"
     ? `<div class="mob-bar"><div class="mob-title">Completed</div><div class="mob-sub">Last 30 days</div></div>`
     : `<div class="mob-intro"><div class="mob-kicker">Jobs</div><div class="mob-date">Upcoming</div>
-        <h1 class="mob-hello">This week</h1><p class="mob-count">${upcomingN} job${upcomingN === 1 ? "" : "s"}</p>${opSeg("week")}</div>`;
+        <h1 class="mob-hello">This week</h1><p class="mob-count">${upcomingN} job${upcomingN === 1 ? "" : "s"}</p>${opSeg("week")}${jobCheck ? `<div class="job-check-op">${jobCheck}</div>` : ""}</div>`;
   $("#app").innerHTML = `<div class="mob">${adminBack()}${head}
     ${groups.map(([g, js]) => `<div class="mob-sec mday">${esc(g)} <span>${js.length}</span></div>
       ${js.map(opCard).join("") || `<p class="muted pad">Nothing booked for ${esc(orgSettings().name)}.</p>`}`).join("") || `<p class="muted pad">${ui.opTab === "done" ? "No completed jobs in the last 30 days." : "Nothing booked for " + orgSettings().name + " this week."}</p>`}

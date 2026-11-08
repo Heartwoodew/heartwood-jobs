@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { initializeTestEnvironment, assertFails, assertSucceeds } from "@firebase/rules-unit-testing";
-import { collection, doc, getDoc, getDocs, setDoc, updateDoc, query, where } from "firebase/firestore";
+import { collection, deleteDoc, doc, getDoc, getDocs, setDoc, updateDoc, query, where } from "firebase/firestore";
 
 const ALEX = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";
 const OP = "op1";
@@ -92,4 +92,36 @@ test("a second company cannot read Heartwood jobs, quotes, receipts, inbox, hour
   assert.equal(own.data().client, "Bravo Secret");
   await assertFails(updateDoc(doc(bravo, "jobs/hw1"), { client: "Stolen" }));
   await assertFails(setDoc(doc(bravo, "jobs/stolen"), { companyId: "heartwood", client: "Stolen", address: "x", assigned: [], status: "Scheduled" }));
+});
+
+test("Heartwood admins and supervisors can read jobChecks and nobody can write", async () => {
+  const PATRICK = "R7t41e54Ykcdk9WPdVZnDd697iI2";
+  await env.withSecurityRulesDisabled(async ctx => {
+    const admin = ctx.firestore();
+    await setDoc(doc(admin, "users/suphw"), { role: "supervisor", name: "Sue", companyId: "heartwood" });
+    await setDoc(doc(admin, "users/legacySup"), { role: "supervisor", name: "Lee" });
+    await setDoc(doc(admin, "users/hwadmin"), { role: "admin", name: "Holly", companyId: "heartwood" });
+    await setDoc(doc(admin, "users/friendsup"), { role: "supervisor", name: "Fran", companyId: "mate", tenantId: "mate" });
+    await setDoc(doc(admin, "users/testadmin"), { role: "admin", name: "Tess", companyId: "yard", tenantId: "yard" });
+    await setDoc(doc(admin, "jobChecks/jc1"), { companyId: "heartwood", requestedBy: ALEX, status: "requested" });
+    await setDoc(doc(admin, "jobChecks/other"), { companyId: "mate", requestedBy: "friendsup", status: "requested" });
+  });
+  await assertSucceeds(getDoc(doc(db(ALEX), "jobChecks/jc1")));
+  await assertSucceeds(getDoc(doc(db(PATRICK), "jobChecks/jc1")));
+  await assertSucceeds(getDoc(doc(db("suphw"), "jobChecks/jc1")));
+  await assertSucceeds(getDoc(doc(db("legacySup"), "jobChecks/jc1")));
+  await assertSucceeds(getDoc(doc(db("hwadmin"), "jobChecks/jc1")));
+  const listed = await assertSucceeds(getDocs(query(collection(db(ALEX), "jobChecks"), where("companyId", "==", "heartwood"))));
+  assert.ok(listed.docs.some(row => row.id === "jc1"));
+  await assertFails(getDoc(doc(db(OP), "jobChecks/jc1")));
+  await assertFails(getDoc(doc(db(BRAVO), "jobChecks/jc1")));
+  await assertFails(getDoc(doc(db("friendsup"), "jobChecks/jc1")));
+  await assertFails(getDoc(doc(db("testadmin"), "jobChecks/jc1")));
+  await assertFails(getDoc(doc(db(ALEX), "jobChecks/other")));
+  await assertFails(setDoc(doc(db(ALEX), "jobChecks/jc2"), { companyId: "heartwood", requestedBy: ALEX, status: "requested" }));
+  await assertFails(setDoc(doc(db("suphw"), "jobChecks/jc3"), { companyId: "heartwood", requestedBy: "suphw", status: "requested" }));
+  await assertFails(updateDoc(doc(db(ALEX), "jobChecks/jc1"), { status: "done", summary: "Found 1", finishedAt: new Date() }));
+  await assertFails(updateDoc(doc(db("hwadmin"), "jobChecks/jc1"), { status: "error", summary: "no" }));
+  await assertFails(deleteDoc(doc(db("suphw"), "jobChecks/jc1")));
+  await assertFails(deleteDoc(doc(db(ALEX), "jobChecks/jc1")));
 });

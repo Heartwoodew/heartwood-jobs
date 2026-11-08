@@ -460,6 +460,10 @@ tr.mhead td{background:#eef2f7;font-size:13px;padding:6px 8px}
 .ibulk{cursor:pointer;align-items:flex-start}
 .iimported .isubj{color:var(--sm-mut)}
 .sm-head .headbtns{margin-left:auto}
+.job-check{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
+.job-check-status{font-size:13px;color:var(--sm-mut);max-width:36rem;white-space:pre-wrap}
+.job-check-error{color:#9a3412}
+.job-check-op{padding:0 16px 8px}
 @media (max-width:760px){.ilist,.ibar{padding-left:8px;padding-right:8px}.irow{flex-direction:column}.iside{flex-direction:row;align-self:stretch;justify-content:flex-end;flex-wrap:wrap}}
 
 /* ===== iPad / tablet (3/11/2026). Phone (<=760px) and desktop mouse layouts unchanged except where noted. ===== */
