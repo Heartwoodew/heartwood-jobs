@@ -228,6 +228,8 @@ export function onSnapshot(ref, onNext) {
           data: () => { if (!found) return undefined; const { id: _id, ...rest } = row; return rest; }
         });
       } else if (col === "jobs") onNext(snap(JOBS.map(withGeo)));
+      else if (col === "fleet") onNext(snap((typeof window !== "undefined" && window.HW_FLEET) || []));
+      else if (col === "policies") onNext(snap((typeof window !== "undefined" && window.HW_POLICIES) || []));
       else if (col === "swmsSignatures") {
         let rows = swmsPreviewRows();
         const uidEq = (ref._wheres || []).find(w => w.field === "uid" && w.op === "==");
