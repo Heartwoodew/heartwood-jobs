@@ -247,6 +247,8 @@ service cloud.firestore {
     match /companies/{companyId} {
       allow get: if platformOwner() || (signedIn() && callerCompany() == companyId);
       allow list: if platformOwner();
+      // Box sync account (Hubdoc filer, receipts worker) reads each company's Hubdoc address and test flag.
+      allow read: if isSync();
       allow create: if companyOwnerCreate(companyId) || testCompanyCreate(companyId) || friendCompanyCreate(companyId);
       allow update: if ownerPlanEdit(companyId) || testArchive(companyId) || testDemoCounts(companyId) || companyAdminEdit(companyId) || companyStatsBump(companyId);
       allow delete: if false;
@@ -350,7 +352,9 @@ service cloud.firestore {
     }
 
     match /jobs/{jobId} {
-      allow read: if isAdmin() || (signedIn() && isAssigned(resource.data) && isOperator());
+      allow read: if isSync() || (signedIn() && isAssigned(resource.data) && isOperator());
+      allow get: if isAdmin() && docCompany(resource.data) == "heartwood";
+      allow list: if isAdmin() && resource.data.companyId == "heartwood";
       allow get: if companyOffice() && docCompany(resource.data) == callerCompany();
       allow get: if companyStaff() && docCompany(resource.data) == callerCompany() && isAssigned(resource.data);
       allow list: if companyOffice() && resource.data.companyId == callerCompany();
@@ -359,8 +363,14 @@ service cloud.firestore {
       allow update: if companyOffice()
         && resource.data.get("companyId", "") == callerCompany()
         && request.resource.data.get("companyId", "") == callerCompany();
-      allow create, delete: if isAdmin();
-      allow update: if (isAdmin() && (xeroUser() || isSync() || !request.resource.data.diff(resource.data).affectedKeys().hasAny(
+      allow create: if isSync() || (isAdmin() && docCompany(request.resource.data) == "heartwood");
+      allow delete: if isSync() || (isAdmin() && docCompany(resource.data) == "heartwood");
+      // Master page: Alex adds demo jobs to a test company only.
+      allow create: if platformOwner() && request.resource.data.get("demo", false) == true
+        && docCompany(request.resource.data) != "heartwood"
+        && get(/databases/$(database)/documents/companies/$(docCompany(request.resource.data))).data.get("isTest", false) == true;
+      allow update: if (isAdmin() && (isSync() || (docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood"))
+        && (xeroUser() || isSync() || !request.resource.data.diff(resource.data).affectedKeys().hasAny(
           ["xeroStatus", "xeroInvoiceId", "xeroInvoiceNo", "xeroError", "xeroQueuedAt"]))) || (
         signedIn() && isAssigned(resource.data) && isOperator()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
@@ -447,8 +457,10 @@ service cloud.firestore {
     match /timesheets/{tid} {
       function mine() { return signedIn() && tid.matches(request.auth.uid + "_[0-9]{4}-[0-9]{2}-[0-9]{2}"); }
       function noSentChange() { return !request.resource.data.diff(resource == null ? {} : resource.data).affectedKeys().hasAny(["sent", "sentAt", "sentBy"]); }
-      allow read: if isOwner() || isSync() || mine();
-      allow create, update: if isOwner() || (mine() && isWorker() && notOtherCompany() && request.resource.data.uid == request.auth.uid && noSentChange());
+      allow read: if isSync() || mine();
+      allow get: if isOwner() && docCompany(resource.data) == "heartwood";
+      allow list: if isOwner() && resource.data.companyId == "heartwood";
+      allow create, update: if (isOwner() && docCompany(request.resource.data) == "heartwood" && (resource == null || docCompany(resource.data) == "heartwood")) || (mine() && isWorker() && notOtherCompany() && request.resource.data.uid == request.auth.uid && noSentChange());
       allow delete: if isOwner();
     }
 
@@ -1551,9 +1563,10 @@ service cloud.firestore {
     }
 
     match /timesheets/{id} {
+      allow get: if tsHeartwoodAdmin() && docCompany(resource.data) == "heartwood";
+      allow list: if tsHeartwoodAdmin() && resource.data.companyId == "heartwood";
       allow read: if signedIn() && (
-        tsHeartwoodAdmin()
-        || (resource == null && id.matches('^' + request.auth.uid + '_[0-9]{4}-[0-9]{2}-[0-9]{2}$'))
+        (resource == null && id.matches('^' + request.auth.uid + '_[0-9]{4}-[0-9]{2}-[0-9]{2}$'))
         || (resource != null && resource.data.uid == request.auth.uid)
       );
       allow get: if resource.data.get("companyId", "heartwood") != "heartwood" && incAdminOf(resource.data.companyId);
@@ -1615,9 +1628,9 @@ service cloud.firestore {
         || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.png"
         || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.webp";
     }
-    function lvCreate(id) {
-      return lvHeartwood()
-        && id.matches('^lv[a-z0-9]{16}$')
+    function lvCreate(id) { return lvHeartwood() && lvCreateBody(id); }
+    function lvCreateBody(id) {
+      return id.matches('^lv[a-z0-9]{16}$')
         && request.resource.data.keys().hasOnly(["uid", "name", "type", "start", "end", "startHalf", "endHalf", "reason", "certificatePath", "certificateName", "status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "createdAt", "updatedAt"])
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.name is string
@@ -1645,9 +1658,9 @@ service cloud.firestore {
         && request.resource.data.createdAt == request.time
         && request.resource.data.updatedAt == request.time;
     }
-    function lvDecision() {
-      return lvDecider()
-        && resource.data.status == "pending"
+    function lvDecision() { return lvDecider() && lvDecisionBody(); }
+    function lvDecisionBody() {
+      return resource.data.status == "pending"
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "updatedAt"])
         && (request.resource.data.status == "approved" || request.resource.data.status == "declined")
         && request.resource.data.decisionNote is string
@@ -1674,6 +1687,19 @@ service cloud.firestore {
       allow update: if lvDecision();
       allow delete: if false;
     }
+    // Other companies (not Heartwood): leave lives under companies/{c}/leaveRequests, so Heartwood's own list
+    // never sees it. Staff of that company create and read their own; its admins and supervisors read and decide.
+    function lvCoDecider(c) { return incStaffOf(c) && cmRole() in ["admin", "supervisor"]; }
+    match /companies/{c}/leaveRequests/{id} {
+      allow read: if incStaffOf(c) && (
+        lvCoDecider(c)
+        || (resource != null && resource.data.uid == request.auth.uid)
+        || (resource == null && id.matches('^lv[a-z0-9]{16}$'))
+      );
+      allow create: if incStaffOf(c) && lvCreateBody(id);
+      allow update: if lvCoDecider(c) && lvDecisionBody();
+      allow delete: if false;
+    }
 // END LEAVE RULES
 
 // BEGIN REIMBURSEMENT CLAIM RULES
@@ -1695,9 +1721,9 @@ service cloud.firestore {
         || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.png"
         || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.webp";
     }
-    function rcCreate(id) {
-      return rcStaff()
-        && id.matches('^rc[a-z0-9]{16}$')
+    function rcCreate(id) { return rcStaff() && rcCreateBody(id); }
+    function rcCreateBody(id) {
+      return id.matches('^rc[a-z0-9]{16}$')
         && request.resource.data.keys().hasOnly(["uid", "name", "date", "amountCents", "supplier", "category", "notes", "paidWith", "jobId", "jobLabel", "receiptPath", "receiptName", "status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "paidAt", "createdAt", "updatedAt"])
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.name is string
@@ -1738,9 +1764,9 @@ service cloud.firestore {
       return (resource.data.status == "submitted" && (request.resource.data.status == "approved" || request.resource.data.status == "declined" || request.resource.data.status == "paid"))
         || (resource.data.status == "approved" && (request.resource.data.status == "paid" || request.resource.data.status == "declined"));
     }
-    function rcDecision() {
-      return rcAdmin()
-        && rcStep()
+    function rcDecision() { return rcAdmin() && rcDecisionBody(); }
+    function rcDecisionBody() {
+      return rcStep()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "paidAt", "updatedAt", "hubdocStatus"])
         && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(["hubdocStatus"])
           || (request.resource.data.status == "paid"
@@ -1781,6 +1807,18 @@ service cloud.firestore {
       );
       allow create: if rcCreate(id);
       allow update: if rcDecision() || rcHubdoc();
+      allow delete: if false;
+    }
+    // Other companies: claims under companies/{c}/reimbursementClaims. Staff create and read their own; that
+    // company's admins read and decide. The box filer reads paid ones and records Hubdoc state only.
+    match /companies/{c}/reimbursementClaims/{id} {
+      allow read: if (rcSync() && resource != null && resource.data.status == "paid") || incStaffOf(c) && (
+        incAdminOf(c)
+        || (resource != null && resource.data.uid == request.auth.uid)
+        || (resource == null && id.matches('^rc[a-z0-9]{16}$'))
+      );
+      allow create: if incStaffOf(c) && rcCreateBody(id);
+      allow update: if (incAdminOf(c) && rcDecisionBody()) || rcHubdoc();
       allow delete: if false;
     }
 // END REIMBURSEMENT CLAIM RULES

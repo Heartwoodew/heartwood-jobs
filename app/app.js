@@ -130,6 +130,7 @@ onAuthStateChanged(auth, async user => {
     : { uid: user.uid, ...prof };
   me.cloudProfile = prof;
   FOREIGN_UIDS = new Set(users ? users.docs.filter(d => docCompanyId(d.data()) !== docCompanyId(prof || {})).map(d => d.id) : []);
+  HOME_UIDS = users ? users.docs.filter(d => docCompanyId(d.data()) === docCompanyId(prof || {})).map(d => d.id) : [];
   const token = await user.getIdTokenResult().catch(() => null);
   me.platformOwner = isPlatformOwner({
     uid: user.uid,
@@ -733,7 +734,7 @@ function unscheduledView(all) {
       && matchQ(j))
     .sort((a, b) => createdOf(b).localeCompare(createdOf(a)) || String(b.sm8JobNo || "").localeCompare(String(a.sm8JobNo || ""), undefined, { numeric: true }));
   return `<div class="sm-head"><h1>Unscheduled jobs <span class="cnt">${list.length}</span></h1><button id="new" class="sm-btn primary">+ New Job</button></div>${searchBar()}
-    <p class="sub muted">Open jobs with no booking date, newest first. Jobs created in ServiceM8 more than 3 months ago are not shown.</p>
+    <p class="sub muted">Open jobs with no booking date, newest first.${myCompanyId() === "heartwood" ? " Jobs created more than 3 months ago are not shown." : ""}</p>
     <table class="jt"><thead><tr><th></th><th>Job #</th><th>Client / Site</th><th>Description</th><th>PO</th><th>Created</th><th></th></tr></thead>
     <tbody>${list.map(j => `<tr class="jr" data-id="${j.id}"><td><span class="qdot ${QCLS[queueOf(j)]}"></span></td><td class="jn">#${esc(jobNo(j))}${jobPhotosIcon(j)}</td>
       <td><b>${esc(j.client || "")}</b><div class="sub">${esc(j.address || "-")}</div></td><td>${esc(firstLine(j.description))}<div class="sub">${esc(TYPES[j.type] || "")}</div></td>
@@ -1299,9 +1300,25 @@ const tsTotal = days => Math.round(Object.values(days || {}).reduce((t, d) => t 
 const hrs = h => (Math.round((+h || 0) * 100) / 100).toFixed(2).replace(/\.?0+$/, "") + " h";
 function tsWeek() { ui.tsWs = ui.tsWs || weekStartOf(todayStr()); return ui.tsWs; }
 // Other companies' timesheets carry companyId so their admins can read them and Heartwood never does.
-function tsCompanyField() { return myCompanyId() === "heartwood" ? {} : { companyId: myCompanyId() }; }
+function tsCompanyField() { return { companyId: myCompanyId() }; }
 // Heartwood admins can list every login; anyone belonging to another company is kept out of Heartwood lists.
 let FOREIGN_UIDS = new Set();
+// Heartwood sheets saved by an older app version have no companyId, so the scoped list misses them. Fetch those
+// by id (uid_week) for Heartwood's own staff; the rules allow reading a sheet with no companyId as Heartwood.
+let HOME_UIDS = [];
+function tsFetchUnscoped(ws) {
+  const have = new Set((ui.tsAll || []).map(t => t.id));
+  const miss = HOME_UIDS.filter(u => !have.has(`${u}_${ws}`));
+  if (!miss.length) return;
+  Promise.all(miss.map(u => getDoc(doc(db, "timesheets", `${u}_${ws}`)).catch(() => null))).then(rs => {
+    if (ui.tsSubWs !== ws || ui.tsAllWs !== ws) return;
+    const ids = new Set((ui.tsAll || []).map(t => t.id));
+    const add = rs.filter(r => r && r.exists() && !ids.has(r.id)).map(r => ({ id: r.id, ...r.data() })).filter(t => docCompanyId(t) === "heartwood");
+    if (!add.length) return;
+    ui.tsAll = [...ui.tsAll, ...add];
+    if (tsIsAdminSheet() && !tsSnapshotBlocked()) ui.tsPaint?.();
+  });
+}
 function tsIsAdminSheet() { return !!(me && me.role === "admin" && !ui.myJobs && ui.view === "timesheet"); }
 function tsStop() {
   ui.hxSub?.(); ui.hxSub = null;
@@ -1746,12 +1763,19 @@ function leaveStop() {
   ui.leaveUnsub?.();
   ui.leaveUnsub = null;
 }
+// Heartwood keeps the root collections; every other company keeps leave and claims under companies/{id}/,
+// so no company's list can ever include another company's requests.
+function coPath(name) { return myCompanyId() === "heartwood" ? [name] : ["companies", myCompanyId(), name]; }
+function lvColl() { return collection(db, ...coPath("leaveRequests")); }
+function lvDoc(id) { return doc(db, ...coPath("leaveRequests"), id); }
+function rcColl() { return collection(db, ...coPath("reimbursementClaims")); }
+function rcDoc(id) { return doc(db, ...coPath("reimbursementClaims"), id); }
 function leaveStart() {
   leaveStop();
   if (!me) { ui.leave = []; return; }
   const src = leaveCanDecide()
-    ? collection(db, "leaveRequests")
-    : query(collection(db, "leaveRequests"), where("uid", "==", me.uid));
+    ? lvColl()
+    : query(lvColl(), where("uid", "==", me.uid));
   ui.leaveUnsub = onSnapshot(src, snap => {
     ui.leave = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     const jobForm = document.getElementById("jf");
@@ -1857,7 +1881,7 @@ function bindLeave(A) {
     });
     if (!built.ok) { if (err) err.textContent = built.reason; return; }
     try {
-      await setDoc(doc(db, "leaveRequests", id), { ...built.data, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+      await setDoc(lvDoc(id), { ...built.data, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
       form.reset();
       if (err) err.textContent = "";
       toast("Leave request sent");
@@ -1873,7 +1897,7 @@ function bindLeave(A) {
       const msg = decide.querySelector(".lv-msg");
       if (!built.ok) { if (msg) msg.textContent = built.reason; return; }
       try {
-        await updateDoc(doc(db, "leaveRequests", decide.dataset.id), { ...built.data, decidedAt: serverTimestamp(), updatedAt: serverTimestamp() });
+        await updateDoc(lvDoc(decide.dataset.id), { ...built.data, decidedAt: serverTimestamp(), updatedAt: serverTimestamp() });
         toast(status === "approved" ? "Leave approved" : "Leave declined");
       } catch (e) {
         if (msg) msg.textContent = "Not saved: " + (e.code || e.message);
@@ -1894,8 +1918,8 @@ function claimsStart() {
   claimsStop();
   if (!me) { ui.claims = []; return; }
   const src = claimsIsAdmin()
-    ? collection(db, "reimbursementClaims")
-    : query(collection(db, "reimbursementClaims"), where("uid", "==", me.uid));
+    ? rcColl()
+    : query(rcColl(), where("uid", "==", me.uid));
   ui.claimsUnsub = onSnapshot(src, snap => {
     ui.claims = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     ui.claimsErr = "";
@@ -1977,8 +2001,7 @@ function bindClaims(A, rerender) {
           return say("The receipt was not saved (" + (e.code || "storage") + "). Nothing was claimed.");
         }
       }
-      const claimCompany = myCompanyId() === "heartwood" ? {} : { companyId: myCompanyId() };
-      await setDoc(doc(db, "reimbursementClaims", id), { ...built.data, ...claimCompany, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+      await setDoc(rcDoc(id), { ...built.data, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
       form.reset();
       say("");
       toast("Claim submitted");
@@ -1995,7 +2018,7 @@ function bindClaims(A, rerender) {
       const built = claimDecisionBody({ from: decide.dataset.from, status, note: decide.note.value, uid: me.uid, name: me.name, receiptPath: decide.dataset.receipt || "" });
       if (!built.ok) { toast(built.reason); return; }
       try {
-        await updateDoc(doc(db, "reimbursementClaims", decide.dataset.id), {
+        await updateDoc(rcDoc(decide.dataset.id), {
           ...built.data, decidedAt: serverTimestamp(), paidAt: status === "paid" ? serverTimestamp() : null, updatedAt: serverTimestamp(),
         });
         toast(status === "approved" ? "Claim approved" : status === "paid" ? "Marked paid" : "Claim declined");
@@ -2159,12 +2182,11 @@ function bindTs(A, rerender) {
     ui.tsDirty = false; ui.tsEdit = null; ui.tsAsk = null; ui.tsWs = n ? addDays(ws, n) : weekStartOf(todayStr()); rerender(); });
   if (tsIsAdminSheet()) {
     if (ui.tsSubWs !== ws) { ui.tsSub?.(); ui.tsSubWs = ws; ui.tsAll = null;
-      const tq = myCompanyId() === "heartwood"
-        ? query(collection(db, "timesheets"), where("weekStart", "==", ws))
-        : query(collection(db, "timesheets"), where("companyId", "==", myCompanyId()), where("weekStart", "==", ws));
+      const tq = query(collection(db, "timesheets"), where("companyId", "==", myCompanyId()), where("weekStart", "==", ws));
       ui.tsSub = onSnapshot(tq, s => {
         // Only this company's people. Heartwood's week list never includes other CallUp companies' staff.
         ui.tsAll = s.docs.map(x => ({ id: x.id, ...x.data() })).filter(t => docCompanyId(t) === myCompanyId() && !FOREIGN_UIDS.has(t.uid)); ui.tsAllWs = ws;
+        if (myCompanyId() === "heartwood") tsFetchUnscoped(ws);
         if (!tsIsAdminSheet() || tsSnapshotBlocked()) return; rerender();
       }, e => { const w = A.querySelector(".ts-wrap"); if (w) w.innerHTML = tsNav() + `<p class="err pad">Timesheets not available: ${esc(e.code || e.message)}</p>`; }); }
   } else if (ui.tsWatchId !== `${me.uid}_${ws}`) {
@@ -2939,7 +2961,7 @@ async function lookupImportDuplicate(draft) {
   const po = String(draft.po || "").trim().toUpperCase().replace(/\s+/g, "");
   if (!hit && po) {
     try {
-      const snap = await getDocs(query(collection(db, "jobs"), where("po", "==", po)));
+      const snap = await getDocs(query(collection(db, "jobs"), where("companyId", "==", myCompanyId()), where("po", "==", po)));
       hit = findExistingJob([...pool, ...snap.docs.map(d => ({ id: d.id, ...d.data() }))], { ...draft, po });
     } catch { /* loaded jobs still apply */ }
   }
@@ -3111,7 +3133,7 @@ async function saveBulkImport(A) {
           po: String(row.po || "").trim().toUpperCase().replace(/\s+/g, ""),
           description: desc.trim(), date: row.date || "", time: "07:00", durationHrs: 4,
           assigned: [], assignedNames: [], status: "Scheduled", notes: String(row.notes || "").trim(),
-          loads: null, editedInApp: true, source: "inbox", inboxId: id, log: [],
+          loads: null, editedInApp: true, source: "inbox", inboxId: id, log: [], companyId: myCompanyId(),
           ...(row.costCode ? { costCode: String(row.costCode) } : {}),
           ...(row.supervisorName ? { supervisorName: String(row.supervisorName).trim(), contactName: String(row.supervisorName).trim() } : {}),
           ...(row.supervisorEmail ? { supervisorEmail: String(row.supervisorEmail).trim() } : {}),
