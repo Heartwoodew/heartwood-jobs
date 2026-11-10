@@ -46,7 +46,7 @@ test("Resend invites: off by default, Heartwood held, test recipients only when 
   assert.equal(plan.resend.from, "CallUp <noreply@callupapp.com.au>");
   assert.deepEqual(plan.resend.to, ["callup932+staff@gmail.com"]);
   assert.equal(plan.resend.reply_to, "callup932+test@gmail.com");
-  assert.match(plan.resend.text, /callupapp\.web\.app\/app\?invite=/);
+  assert.match(plan.resend.text, /app\.callupapp\.com\.au\/app\?invite=/);
   assert.doesNotMatch(plan.resend.text + plan.resend.subject, /Heartwood/);
 
   // Never sends without allowLiveMail, and never under the test runner with it.

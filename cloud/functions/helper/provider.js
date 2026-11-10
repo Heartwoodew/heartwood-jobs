@@ -62,7 +62,7 @@ export function buildVertexRequest({ project, location, model, system, user }) {
 
 async function runtimeAccessToken() {
   const { applicationDefault, getApps, initializeApp } = await import("firebase-admin/app");
-  if (!getApps().length) initializeApp();
+  if (!getApps().some(a => a.name === "[DEFAULT]")) initializeApp();
   const cred = applicationDefault();
   const token = await cred.getAccessToken();
   if (!token || !token.access_token) throw misconfigured("vertex-token-missing");
