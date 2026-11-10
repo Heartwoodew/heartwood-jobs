@@ -299,7 +299,7 @@ test("helper callable is hard-off and the phone has no helper UI", () => {
   assert.equal(existsSync(new URL("../../app/features/helper-ui.js", import.meta.url)), false);
   assert.doesNotMatch(app, /installHelperApp|helper-ui|helperAsk|helper-launch|SpeechRecognition|speechSynthesis/);
   assert.doesNotMatch(sw, /features\/helper/);
-  assert.match(sw, /callup-shell-v80-newuser/);
+  assert.match(sw, /callup-shell-v81-companies2/);
   assert.doesNotMatch(css, /helper-launch|helper-panel|helper-mic|helper-speech|Ask Helper/);
   assert.match(index, /region: "australia-southeast1"/);
   assert.match(index, /helperAsk/);

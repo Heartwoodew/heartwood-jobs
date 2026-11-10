@@ -113,8 +113,10 @@ service cloud.firestore {
       return signedIn()
         && companyId == callerCompany()
         && (isAlex() || isPatrick() || (hasProfile() && profile().role == "admin"))
-        && diff.hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress"])
+        && diff.hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "jobPrefix", "accountsName"])
         && companyDetailText(next)
+        && (!("jobPrefix" in next) || (next.jobPrefix is string && (next.jobPrefix == "" || next.jobPrefix.matches('^[A-Z0-9]{1,5}$'))))
+        && (!("accountsName" in next) || (next.accountsName is string && next.accountsName.size() <= 80))
         && next.status == resource.data.status
         && next.plan == resource.data.plan
         && next.billing == resource.data.billing
@@ -428,14 +430,59 @@ service cloud.firestore {
     // Safety / incident reports (ISO 45001 records). Any worker creates a report as themselves (status Open, number taken
     // from incidentCounter/main in the same transaction); reporters read only their own and may only add the photo flag.
     // Admins read all and update investigation/close fields; reporter, number and original account can't be changed. No deletes.
+    // Other companies (not Heartwood): counter incidentCounter/{companyId}, reports incidents/{companyId}_INC-0001.
+    // Any staff member of the company reports; that company's admins read and investigate. Heartwood's
+    // rules below and its incidentCounter/main numbering are unchanged.
+    // Kept cheap on purpose: Heartwood requests short-circuit on the first comparison, so these never add cost to them.
+    function incProfileCompany() {
+      let p = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      return p.get("companyId", "") is string && p.get("companyId", "") != "" ? p.get("companyId", "") : p.get("tenantId", "heartwood");
+    }
+    function incStaffOf(c) {
+      return signedIn() && c != "heartwood"
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && incProfileCompany() == c;
+    }
+    // True for Heartwood staff and the box (no profile); false for staff of any other company.
+    function notOtherCompany() {
+      return !exists(/databases/$(database)/documents/users/$(request.auth.uid)) || incProfileCompany() == "heartwood";
+    }
+    function incAdminOf(c) {
+      return incStaffOf(c) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("role", "") == "admin";
+    }
+    match /incidentCounter/{id} {
+      allow read: if id != "main" && incStaffOf(id);
+      allow create: if id != "main" && incStaffOf(id) && request.resource.data.n == 1 && request.resource.data.keys().hasOnly(["n"]);
+      allow update: if id != "main" && incStaffOf(id) && request.resource.data.n == resource.data.n + 1 && request.resource.data.keys().hasOnly(["n"]);
+    }
+    match /incidents/{iid} {
+      allow create: if request.resource.data.get("companyId", "heartwood") != "heartwood"
+        && incStaffOf(request.resource.data.companyId)
+        && request.resource.data.get("tenantId", request.resource.data.companyId) == request.resource.data.companyId
+        && request.resource.data.reportedBy == request.auth.uid && request.resource.data.status == "Open"
+        && request.resource.data.reportNo is string
+        && iid == request.resource.data.companyId + "_" + request.resource.data.reportNo
+        && request.resource.data.seq == getAfter(/databases/$(database)/documents/incidentCounter/$(request.resource.data.companyId)).data.n
+        && request.resource.data.type in ["Incident", "Near miss", "Hazard", "Injury", "Property damage"]
+        && !request.resource.data.keys().hasAny(["closedBy", "closedAt", "closedByName"]);
+      allow get: if resource.data.get("companyId", "heartwood") != "heartwood" && incAdminOf(resource.data.companyId);
+      allow list: if resource.data.companyId != "heartwood" && incAdminOf(resource.data.companyId);
+      allow update: if resource.data.get("companyId", "heartwood") != "heartwood" && incAdminOf(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
+             ["rootCause", "actions", "history", "status", "closedBy", "closedByName", "closedAt", "photosEmailedAt", "photosEmailedCount", "updatedAt", "updatedBy"])
+        && resource.data.status == "Open" && request.resource.data.status in ["Open", "Closed"]
+        && (request.resource.data.status == "Open" || request.resource.data.closedBy == request.auth.uid);
+    }
     match /incidentCounter/{id} {
       allow read: if isWorker();
-      allow create: if isWorker() && id == "main" && request.resource.data.n == 1 && request.resource.data.keys().hasOnly(["n"]);
-      allow update: if isWorker() && request.resource.data.n == resource.data.n + 1 && request.resource.data.keys().hasOnly(["n"]);
+      allow create: if isWorker() && id == "main" && notOtherCompany() && request.resource.data.n == 1 && request.resource.data.keys().hasOnly(["n"]);
+      allow update: if isWorker() && id == "main" && notOtherCompany() && request.resource.data.n == resource.data.n + 1 && request.resource.data.keys().hasOnly(["n"]);
     }
     match /incidents/{iid} {
       function seqOk() { return request.resource.data.seq == getAfter(/databases/$(database)/documents/incidentCounter/main).data.n; }
       allow create: if isWorker() && request.resource.data.reportedBy == request.auth.uid && request.resource.data.status == "Open"
+        && docCompany(request.resource.data) == "heartwood"
         && seqOk() && iid == request.resource.data.reportNo
         && request.resource.data.type in ["Incident", "Near miss", "Hazard", "Injury", "Property damage"]
         && !request.resource.data.keys().hasAny(["closedBy", "closedAt", "closedByName"]);

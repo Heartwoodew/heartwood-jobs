@@ -13,6 +13,13 @@ export const DEFAULT_DEPOT = {
   yardAddress: "208-220 Holdsworth Rd, Chuwar QLD 4306",
   yardMapsUrl: "https://maps.app.goo.gl/w4AX7X6VtPtqH75S7?g_st=ic"
 };
+const HEARTWOOD_DEPOT = { ...DEFAULT_DEPOT };
+// Other companies: the depot default is their own company address (no Heartwood maps link).
+export function setDefaultDepot(address) {
+  const a = String(address || "").trim();
+  DEFAULT_DEPOT.yardAddress = a || HEARTWOOD_DEPOT.yardAddress;
+  DEFAULT_DEPOT.yardMapsUrl = a ? "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(a) : HEARTWOOD_DEPOT.yardMapsUrl;
+}
 
 /** Fleet plant from Heartwood Machine register (names/codes). Rates blank until admin sets them. */
 export const FLEET_MACHINES = [

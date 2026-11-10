@@ -7,6 +7,10 @@
 import { routeConfig } from "../route-config.js";
 
 export const DEPOT_ADDRESS = "208-220 Holdsworth Rd, Chuwar QLD 4306";
+// Heartwood starts at Chuwar. Other companies start at their own company address (setRouteDepot).
+let routeDepot = DEPOT_ADDRESS;
+export function setRouteDepot(address) { routeDepot = String(address || "").trim() || DEPOT_ADDRESS; }
+export function depotAddress() { return routeDepot; }
 export const DEPOT_LABEL = "Depot";
 export const EXACT_JOB_LIMIT = 8;
 export const RUN_SHEET_KEYS = [
@@ -384,7 +388,7 @@ async function geocodeOrs(query, cfg, fetchImpl) {
 }
 
 async function locateDepot(cfg, fetchImpl, sleep) {
-  const key = geoCacheKey(DEPOT_ADDRESS);
+  const key = geoCacheKey(depotAddress());
   if (memGeo.has("depot:" + key)) return memGeo.get("depot:" + key);
   const stored = readLocal("hwDepotGeo:v1");
   if (stored && geoCacheKey(stored.query) === key && stored.lat != null && stored.lng != null) {
@@ -392,10 +396,10 @@ async function locateDepot(cfg, fetchImpl, sleep) {
     memGeo.set("depot:" + key, hit);
     return hit;
   }
-  const hit = await geocodeAddress(DEPOT_ADDRESS, cfg, fetchImpl, sleep);
+  const hit = await geocodeAddress(depotAddress(), cfg, fetchImpl, sleep);
   if (!hit) return null;
   memGeo.set("depot:" + key, hit);
-  writeLocal("hwDepotGeo:v1", { query: DEPOT_ADDRESS, ...hit });
+  writeLocal("hwDepotGeo:v1", { query: depotAddress(), ...hit });
   return hit;
 }
 
@@ -508,7 +512,7 @@ export async function planRoute(jobs, options = {}) {
     return { ok: false, error: "No site addresses could be placed for this worker.", skipped, degraded: cfg.degraded };
   }
   const depot = await locateDepot(cfg, fetchImpl, sleep);
-  if (!depot) return { ok: false, error: "Could not geocode the depot (208-220 Holdsworth Rd, Chuwar QLD 4306).", skipped, degraded: cfg.degraded };
+  if (!depot) return { ok: false, error: `Could not geocode the depot (${depotAddress()}).`, skipped, degraded: cfg.degraded };
   let routed;
   try {
     routed = await driveMatrix([depot, ...located], cfg, fetchImpl);
@@ -522,7 +526,7 @@ export async function planRoute(jobs, options = {}) {
   }
   return {
     ok: true,
-    depot: { label: DEPOT_LABEL, address: DEPOT_ADDRESS, ...depot },
+    depot: { label: DEPOT_LABEL, address: depotAddress(), ...depot },
     jobs: located,
     skipped,
     matrix: routed.matrix,
@@ -553,7 +557,7 @@ export function buildApproval(input) {
     jobIds: jobIds.slice(),
     returnToDepot: !!input.returnToDepot,
     status: "approved",
-    depot: DEPOT_ADDRESS,
+    depot: depotAddress(),
     method: input.method === "nearest-neighbour-2opt" ? "nearest-neighbour-2opt" : "exact",
     provider: ["ors", "osrm-fallback"].includes(input.provider) ? input.provider : "osrm",
     tweaked: !!input.tweaked,
@@ -586,7 +590,7 @@ export function suggestionHtml(model, opts = {}) {
   let html = "";
   if (model.degraded) html += `<p class="route-warn">${esc(model.degraded)}</p>`;
   html += `<p class="route-kicker">${esc(model.tweaked ? "Your order" : "Suggested order")} · ${esc(methodLabel(model.method, model.tweaked))}</p>`;
-  html += `<p class="route-depot"><b>${esc(DEPOT_LABEL)}</b><span>${esc(DEPOT_ADDRESS)}</span></p>`;
+  html += `<p class="route-depot"><b>${esc(DEPOT_LABEL)}</b><span>${esc(depotAddress())}</span></p>`;
   html += `<div id="routelist">`;
   const legs = model.suggested.legs || [];
   let legAt = 0;

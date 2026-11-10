@@ -24,7 +24,7 @@ export const DEFAULT_ORG = Object.freeze({
 });
 
 const STORE_KEY = "callup.org.v1";
-const FIELDS = ["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress"];
+const FIELDS = ["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "jobPrefix", "accountsName"];
 let activeCompany = null;
 
 function clean(source) {

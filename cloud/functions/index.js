@@ -195,7 +195,15 @@ export const inviteEmailWorker = onDocumentWritten(
     if (!shouldQueueInviteEmail(before, after)) return;
     if (!getApps().length) initializeApp();
     const db = getFirestore();
+    const companyId = String(after.companyId || after.tenantId || "heartwood");
+    let company = null;
+    if (companyId !== "heartwood") {
+      const snap = await db.collection("companies").doc(companyId).get();
+      const c = snap.exists ? snap.data() : {};
+      company = { name: c.name || "", email: c.email || "" };
+    }
     await queueInviteEmail(after, {
+      company,
       env: process.env,
       allowLiveMail: process.env.INVITE_EMAIL_ENABLED === "true",
       writeMail: (collectionName, body) => db.collection(collectionName).add({

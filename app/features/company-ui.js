@@ -2,7 +2,9 @@
 // Master rows are account-level only. This file does not read jobs, photos, or money.
 
 import { POWERED_BY, PRODUCT_NAME } from "../org-settings.js";
-import { filterMaster, masterTotals } from "./company.js";
+import { derivedJobPrefix, filterMaster, masterTotals } from "./company.js";
+
+const jobPrefixHint = org => derivedJobPrefix(org && org.name);
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -57,7 +59,9 @@ export function companySettingsHtml(org, { canEdit = false } = {}) {
       <label>Email<input name="email" type="email" required maxlength="120" value="${esc(org.email || "")}"${lock}></label>
       <label>Accounts email<span class="sub">Hours spreadsheets go here.</span><input name="accountsEmail" type="email" required maxlength="120" value="${esc(org.accountsEmail || "")}"${lock}></label>
       <label>Hubdoc address<span class="sub">Optional.</span><input name="hubdocAddress" maxlength="120" value="${esc(org.hubdocAddress || "")}" placeholder="name@app.hubdoc.com"${lock}></label>
+      ${org.companyId === "heartwood" ? "" : `<label>Accounts contact name<span class="sub">Optional. Timesheet emails start "Hi" and this name.</span><input name="accountsName" maxlength="80" value="${esc(org.accountsName || "")}"${lock}></label>`}
       <label>Email sign-off<input name="signoff" required maxlength="80" value="${esc(org.signoff)}"${lock}></label>
+      ${org.companyId === "heartwood" ? "" : `<label>Job number prefix<span class="sub">Optional, up to 5 letters or numbers. Blank uses ${esc(jobPrefixHint(org))}.</span><input name="jobPrefix" maxlength="5" value="${esc(org.jobPrefix || "")}" placeholder="${esc(jobPrefixHint(org))}" autocapitalize="characters"${lock}></label>`}
       <label>Logo URL<span class="sub">Optional https address. Blank keeps the name as text.</span><input name="logoUrl" maxlength="300" value="${esc(org.logoUrl || "")}"${lock}></label>
       ${canEdit ? `<div class="btns"><button type="submit" class="primary">Save company details</button></div>` : `<p class="sub">Only a company admin can change these.</p>`}
       <p class="powered">${esc(POWERED_BY)}</p>
@@ -183,6 +187,8 @@ export function failureText(code) {
     accountsEmail: "Enter the accounts email that should receive hours spreadsheets.",
     hubdoc: "Hubdoc addresses end in @app.hubdoc.com, or leave the field blank.",
     logo: "Logo needs an http(s) address or an icons/ file.",
+    jobPrefix: "Job number prefix: up to 5 letters or numbers.",
+    accountsName: "Check the accounts contact name.",
     "email-in-use": "That login email is already in use.",
     "weak-password": "Use a password of at least 8 characters.",
     "permission-denied": "That company could not be saved.",

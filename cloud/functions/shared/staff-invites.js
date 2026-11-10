@@ -153,7 +153,10 @@ export function inviteFailureText(code) {
     accepted: "This invite has already been used.",
     cancelled: "This invite was cancelled.",
     invalid: "This invite link is not valid.",
-    unavailable: "Invite acceptance is not deployed yet. Ask an admin.",
+    unavailable: "Invites aren't working on the server right now. Ask your admin to try again later.",
+    offline: "Couldn't reach CallUp. Check your internet connection and try again.",
+    busy: "Too many tries. Wait a minute and try again.",
+    "server-error": "Something went wrong on our side. Try again in a minute, or ask your admin to resend the invite.",
     mismatch: "Those passwords don't match.",
     "permission-denied": "That invite could not be saved.",
   };
@@ -251,11 +254,15 @@ export function acceptViewHtml(model) {
   </form>`;
 }
 
+// Neutral sender for every company other than Heartwood; replies go to that company's own email.
+export const CALLUP_INVITE_FROM = "CallUp <noreply@callupapp.com.au>";
+
 export function inviteEmailConfig(env = {}) {
   return {
     enabled: env.INVITE_EMAIL_ENABLED === "true",
     from: env.INVITE_EMAIL_FROM || "Heartwood Jobs <jobs@heartwoodew.com>",
     replyTo: env.INVITE_EMAIL_REPLY_TO || "alex@heartwoodew.com",
+    neutralFrom: env.INVITE_EMAIL_NEUTRAL_FROM || CALLUP_INVITE_FROM,
   };
 }
 
@@ -278,8 +285,8 @@ export function buildInviteEmail(invite, config = {}) {
   ].join("\n");
   return {
     to: profile.email,
-    from: config.from || (heartwood ? inviteEmailConfig().from : `${companyName} <${config.replyTo || "jobs@heartwoodew.com"}>`),
-    replyTo: config.replyTo || "alex@heartwoodew.com",
+    from: heartwood ? (config.from || inviteEmailConfig().from) : (config.neutralFrom || CALLUP_INVITE_FROM),
+    replyTo: heartwood ? (config.replyTo || "alex@heartwoodew.com") : (config.companyEmail || ""),
     subject: heartwood ? "You're invited to Heartwood Jobs" : `You're invited to ${companyName}`,
     text,
     link,
@@ -332,7 +339,12 @@ export async function queueInviteEmail(invite, deps = {}) {
   if (env.NODE_TEST_CONTEXT && env.INVITE_EMAIL_ENABLED === "true" && deps.allowLiveMail === true) {
     throw new Error("refusing live invite email under test");
   }
-  const plan = planInviteDelivery(invite, inviteEmailConfig(env));
+  // deps.company ({ name, email }) is passed for companies other than Heartwood: neutral CallUp sender, reply-to the company.
+  const company = deps.company && typeof deps.company === "object" ? deps.company : null;
+  const plan = planInviteDelivery(invite, {
+    ...inviteEmailConfig(env),
+    ...(company ? { companyName: String(company.name || "").trim() || "your company", companyEmail: String(company.email || "").trim() } : {}),
+  });
   if (!plan.ok) return plan;
   if (plan.collection === "mail" && deps.allowLiveMail !== true) {
     return { ...plan, ok: false, sent: false, reason: "live-mail-not-allowed", written: false };
