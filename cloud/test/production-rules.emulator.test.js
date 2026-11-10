@@ -93,3 +93,61 @@ test("a second company cannot read Heartwood jobs, quotes, receipts, inbox, hour
   await assertFails(updateDoc(doc(bravo, "jobs/hw1"), { client: "Stolen" }));
   await assertFails(setDoc(doc(bravo, "jobs/stolen"), { companyId: "heartwood", client: "Stolen", address: "x", assigned: [], status: "Scheduled" }));
 });
+
+// New-user paths (audit 10 Nov 2026): self-signup owner profile, company staff list, company invites.
+import { runTransaction, serverTimestamp, Timestamp } from "firebase/firestore";
+import { buildCompanyCreate, ownerProfile, validateCompanyInput, trialEnd } from "../../app/features/company.js";
+import { buildInviteDraft, newInviteToken } from "../../app/features/staff-invites.js";
+
+const signupInput = validateCompanyInput({ name: "Delta Diggers", legalName: "Delta Diggers Pty Ltd", abn: "12 345 678 901",
+  address: "1 Test St, Ipswich QLD", phone: "", email: "office@delta.test", accountsEmail: "accounts@delta.test", hubdocAddress: "", logoUrl: "" }).value;
+
+test("self-signup: a new owner creates the company and their own admin profile, then sees their staff", async () => {
+  const owner = env.authenticatedContext("deltaowner", { email: "owner@delta.test" }).firestore();
+  const companyId = "delta-diggers-zz01";
+  await assertSucceeds(setDoc(doc(owner, "companies", companyId), buildCompanyCreate(signupInput, {
+    companyId, ownerUid: "deltaowner", signedUpAt: serverTimestamp(), trialEndsAt: Timestamp.fromDate(trialEnd(new Date())), lastActivityAt: serverTimestamp(),
+  })));
+  await assertSucceeds(setDoc(doc(owner, "users", "deltaowner"), { ...ownerProfile(signupInput, companyId, "Dee Owner"), email: "owner@delta.test" }));
+  await assertSucceeds(getDoc(doc(owner, "companies", companyId)));
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), "users/deltaop"), { name: "Dan", role: "operator", companyId, tenantId: companyId });
+  });
+  const staff = await assertSucceeds(getDocs(query(collection(owner, "users"), where("companyId", "==", companyId))));
+  assert.deepEqual(staff.docs.map(d => d.id).sort(), ["deltaop", "deltaowner"]);
+  // Not Heartwood's staff, and not an unscoped list.
+  await assertFails(getDocs(query(collection(owner, "users"), where("companyId", "==", "heartwood"))));
+  await assertFails(getDocs(collection(owner, "users")));
+  await assertFails(getDoc(doc(owner, "users/op1")));
+  // An operator cannot list staff, and nobody can give themselves admin of someone else's company.
+  const op = env.authenticatedContext("deltaop").firestore();
+  await assertFails(getDocs(query(collection(op, "users"), where("companyId", "==", companyId))));
+  const sneaky = env.authenticatedContext("sneaky").firestore();
+  await assertFails(setDoc(doc(sneaky, "users/sneaky"), { name: "S", email: "s@x.test", role: "admin", companyId, tenantId: companyId }));
+  await assertFails(setDoc(doc(sneaky, "users/sneaky"), { name: "S", email: "s@x.test", role: "admin", companyId: "heartwood", tenantId: "heartwood" }));
+});
+
+test("a second company's admin can create a staff invite (the app adds companyId)", async () => {
+  const bravo = db(BRAVO);
+  const draft = buildInviteDraft({ name: "Bob New", email: "bob.new@bravo.test", role: "operator", createdBy: BRAVO, now: new Date(), token: newInviteToken(), tenantId: "bravo" });
+  assert.equal(draft.invite.companyId, "bravo");
+  const inviteRef = doc(collection(bravo, "invites"));
+  const expiresAt = Timestamp.fromDate(draft.invite.expiresAt);
+  const payload = { ...draft.invite, createdAt: serverTimestamp(), expiresAt };
+  await assertSucceeds(runTransaction(bravo, async tx => {
+    const lockRef = doc(bravo, "inviteEmails", payload.email);
+    await tx.get(lockRef);
+    tx.set(inviteRef, payload);
+    tx.set(lockRef, { email: payload.email, status: "pending", inviteId: inviteRef.id, expiresAt, role: payload.role, tenantId: payload.tenantId });
+  }));
+  // companyId must match the caller's tenant.
+  const bad = buildInviteDraft({ name: "Eve", email: "eve@bravo.test", role: "operator", createdBy: BRAVO, now: new Date(), token: newInviteToken(), tenantId: "bravo" });
+  const badRef = doc(collection(bravo, "invites"));
+  const badExp = Timestamp.fromDate(bad.invite.expiresAt);
+  await assertFails(runTransaction(bravo, async tx => {
+    const lockRef = doc(bravo, "inviteEmails", bad.invite.email);
+    await tx.get(lockRef);
+    tx.set(badRef, { ...bad.invite, companyId: "heartwood", createdAt: serverTimestamp(), expiresAt: badExp });
+    tx.set(lockRef, { email: bad.invite.email, status: "pending", inviteId: badRef.id, expiresAt: badExp, role: "operator", tenantId: "bravo" });
+  }));
+});

@@ -1,7 +1,7 @@
 // CallUp jobs app. Organisation name and logo come from org-settings.js.
 // This install's customer is Heartwood Earthworx. Firebase ids are unchanged.
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, connectAuthEmulator }
+import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, signOut, connectAuthEmulator }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator,
   collection, doc, getDoc, getDocs, query, where, orderBy, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, serverTimestamp, arrayUnion, runTransaction, Timestamp }
@@ -119,7 +119,7 @@ onAuthStateChanged(auth, async user => {
   const prof = snap && snap.exists() ? snap.data() : null;
   let users = null;
   users = await getDocs(collection(db, "users")).catch(() => null);
-  if (!prof && !users) { $("#app").innerHTML = `<p class="pad">No access for ${esc(user.email)}. Ask Alex to add you.</p>`; return; }
+  if (!prof && !users) { renderNoAccess(user); return; }
   const bootstrapAdmin = user.uid === ALEX_UID || user.uid === "R7t41e54Ykcdk9WPdVZnDd697iI2";
   const roleAdmin = !!(prof && prof.role === "admin");
   me = users || bootstrapAdmin || roleAdmin
@@ -328,6 +328,28 @@ function holdOutbound(kind, text) {
   }).catch(() => {});
   alert("Test company. Nothing was sent.\n\n" + text);
 }
+// Signed in, but no users/{uid} profile: always leave a way out (sign out / try another login).
+function renderNoAccess(user) {
+  paintBrand();
+  $("#who").textContent = user.email || "";
+  $("#logout").classList.remove("hidden");
+  $("#app").innerHTML = `<form class="card login" id="noaccess">
+    <h2>No company yet</h2>
+    <p>${esc(user.email)} is signed in, but it isn't linked to a company in ${esc(PRODUCT_NAME)}.</p>
+    <p class="sub">If you work for a business that uses ${esc(PRODUCT_NAME)}, ask your admin to send you an invite link. If you were creating a new company, sign out and create it again.</p>
+    <button class="big primary" type="button" id="noaccessout">Sign out</button>
+  </form>`;
+  $("#noaccessout").onclick = () => signOut(auth);
+}
+function signInFailureText(e) {
+  const code = (e && e.code) || "";
+  if (["auth/invalid-credential", "auth/wrong-password", "auth/user-not-found", "auth/invalid-login-credentials"].includes(code)) return "That email and password don't match. Check them, or tap Forgot password.";
+  if (code === "auth/invalid-email") return "Enter a valid email address.";
+  if (code === "auth/too-many-requests") return "Too many tries. Wait a few minutes, or reset your password.";
+  if (code === "auth/user-disabled") return "This login has been turned off. Ask your admin.";
+  if (code === "auth/network-request-failed") return "No connection. Check your signal and try again.";
+  return "Sign-in failed: " + (code || (e && e.message) || "unknown error");
+}
 function renderLogin() {
   const org = orgSettings();
   paintBrand();
@@ -339,13 +361,28 @@ function renderLogin() {
     <label>Email<input name="e" type="email" autocomplete="username" required></label>
     <label>Password<input name="p" type="password" autocomplete="current-password" required></label>
     <button class="big primary">Sign in</button>
+    <button class="ghost" type="button" id="forgotpw">Forgot password?</button>
     <button class="big ghost" type="button" id="opencreate">Create a company</button>
     <p id="lerr" class="err"></p>
     <p class="powered">${esc(POWERED_BY)}</p></form>`;
   $("#login").onsubmit = async ev => {
     ev.preventDefault(); const f = ev.target;
     try { await signInWithEmailAndPassword(auth, f.e.value.trim(), f.p.value); }
-    catch (e) { $("#lerr").textContent = "Sign-in failed: " + (e.code || e.message); }
+    catch (e) { $("#lerr").textContent = signInFailureText(e); }
+  };
+  $("#forgotpw").onclick = async () => {
+    const f = $("#login"), email = f.e.value.trim(), out = $("#lerr");
+    if (!email) { out.textContent = "Type your email above, then tap Forgot password again."; f.e.focus(); return; }
+    try {
+      await sendPasswordResetEmail(auth, email);
+      out.textContent = "If " + email + " has a login, a password reset link is on its way. Check your junk folder too.";
+    } catch (e) {
+      const code = (e && e.code) || "";
+      out.textContent = code === "auth/invalid-email" ? "Enter a valid email address."
+        : code === "auth/too-many-requests" ? "Too many tries. Wait a few minutes."
+        : code === "auth/user-not-found" ? "If " + email + " has a login, a password reset link is on its way."
+        : "Couldn't send the reset email (" + (code || "error") + "). Ask your admin, or try again.";
+    }
   };
   $("#opencreate").onclick = () => renderSignup();
 }
@@ -394,8 +431,10 @@ function renderSignup(friendCode = "") {
       signingUp = false;
       location.reload();
     } catch (e) {
+      // Keep signingUp set while the half-made login is removed, so the auth listener does not
+      // swap this form for the sign-in screen and hide the error.
+      if (cred) { try { await cred.user.delete(); } catch { try { await signOut(auth); } catch { /* already signed out */ } } }
       signingUp = false;
-      if (cred) { try { await cred.user.delete(); } catch { /* the login may already be signed out */ } }
       const code = e && e.code === "auth/email-already-in-use" ? "email-in-use"
         : e && e.code === "auth/weak-password" ? "weak-password"
         : (e && e.code) || "permission-denied";
@@ -2343,7 +2382,7 @@ async function saveInvite(fields) {
     });
   } catch (e) {
     if (e.code === "already-pending") return "already-pending";
-    return e.code === "permission-denied" ? "already-pending" : "permission-denied";
+    return "permission-denied";
   }
   return "";
 }
@@ -3744,7 +3783,8 @@ async function opAction(j, act) {
 // Accepted files are also mirrored to private Storage. The gallery reads those objects back and does not rewrite the job.
 // The share must be started by a fresh tap (browsers require a user gesture), so the picked photos are shown in a
 // small dialog with a "Send" button.
-const OFFICE_EMAIL = "alex@heartwoodew.com";
+// Photos go to this company's office email (Heartwood: alex@heartwoodew.com via org defaults).
+const officeEmail = () => orgSettings().email || "alex@heartwoodew.com";
 const emailSubject = j => `[Job Photos] Job #${jobNo(j)} – ${j.address || "(no address)"}`;
 const emailBody = (j, infos, attached) => [`Job #${jobNo(j)}`, `Address: ${j.address || "-"}`, `Client: ${j.client || "-"}`, `PO: ${j.po || "-"}`,
   `Job date: ${j.date ? dayLabel(j.date) : "-"}`, "",
@@ -3844,15 +3884,15 @@ function emailDialog(j, files, infos, o = {}) {
     .catch(e => console.warn("photosEmailed flag not saved", e.code || e.message));
   const mb = files.reduce((a, f) => a + f.size, 0) / 1e6, n = files.length;
   const canShare = !!(navigator.canShare && navigator.canShare({ files }));
-  const mailto = `mailto:${OFFICE_EMAIL}?subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(body(j, infos, false))}`;
+  const mailto = `mailto:${officeEmail()}?subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(body(j, infos, false))}`;
   const v = document.createElement("div"); v.className = "emdlg";
   v.innerHTML = `<div class="embox"><h3>📧 Email ${n} photo${n > 1 ? "s" : ""}</h3>
     <div class="emthumbs">${files.map(f => `<img src="${URL.createObjectURL(f)}" alt="">`).join("")}</div>
     <p class="sub muted">${o.coll ? esc(j.reportNo) : "Job #" + esc(jobNo(j))} · ${esc(j.address || "")} · ${mb.toFixed(1)} MB${mb > 24 ? " — may be too big for one email, send fewer at a time" : ""}</p>
     ${canShare ? `<button type="button" class="mbtn complete" data-a="share">Send via email app</button>
-      <p class="sub muted">Choose Mail or Gmail, then put <b>${OFFICE_EMAIL}</b> in the To box (the subject and job details are filled in).</p>`
-    : `<p class="sub">This browser can't attach photos automatically. Tap below to open an email to ${OFFICE_EMAIL}, then attach the photos yourself.</p>
-      <a class="mbtn complete" data-a="mail" href="${mailto}">Open email to Alex</a>
+      <p class="sub muted">Choose Mail or Gmail, then put <b>${officeEmail()}</b> in the To box (the subject and job details are filled in).</p>`
+    : `<p class="sub">This browser can't attach photos automatically. Tap below to open an email to ${officeEmail()}, then attach the photos yourself.</p>
+      <a class="mbtn complete" data-a="mail" href="${mailto}">Open email to the office</a>
       <button type="button" class="mbtn" data-a="sent">I've sent it</button>`}
     <button type="button" class="mbtn ghost" data-a="x">Cancel</button></div>`;
   (document.querySelector("dialog[open]") || document.body).appendChild(v);
@@ -3866,7 +3906,7 @@ function emailDialog(j, files, infos, o = {}) {
   const sh = v.querySelector('[data-a="share"]');
   if (sh) sh.onclick = async () => {
     try {
-      await navigator.share({ files, title: subj, text: `To: ${OFFICE_EMAIL}\nSubject: ${subj}\n\n${body(j, infos, true)}` });
+      await navigator.share({ files, title: subj, text: `To: ${officeEmail()}\nSubject: ${subj}\n\n${body(j, infos, true)}` });
       close(); logIt();
     } catch (e) { if (e.name !== "AbortError") toast("Share failed: " + e.message); }
   };
