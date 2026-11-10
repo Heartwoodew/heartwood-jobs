@@ -5,3 +5,5 @@ cloud/firestore-debug.log
 cloud/storage-debug.log
 cloud/ui-debug.log
 cloud/hosting-dist/
+cloud/.dryrun*.mjs
+cloud/.firebase/

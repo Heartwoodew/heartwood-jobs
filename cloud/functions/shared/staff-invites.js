@@ -219,7 +219,7 @@ export function staffViewHtml(invites, { now = new Date(), error = "", origin = 
     </article>`;
   }).join("");
   return `<div class="sm-head"><h1>Staff</h1></div>
-    <p class="sub invite-note">Invite an operator or a supervisor. They set their own password from the link. Admin is not a role you can give here. Mail is not sent from this screen.</p>
+    <p class="sub invite-note">Invite an operator or a supervisor. They set their own password from the link. Admin is not a role you can give here. ${origin !== HEARTWOOD_APP_ORIGIN ? "CallUp emails them the link when invite email is on for your company; you can always copy the link below and send it yourself." : "Mail is not sent from this screen."}</p>
     <form id="invitef" class="card invitef" autocomplete="off">
       <h2>Invite staff</h2>
       <label>Name<input name="name" required maxlength="80" autocomplete="name"></label>

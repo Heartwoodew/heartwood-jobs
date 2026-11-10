@@ -382,12 +382,24 @@ service cloud.firestore {
     }
     // Per-company settings for companies other than Heartwood (Heartwood keeps meta/quoteRates and meta/supervisors).
     // {companyId}_quoteRates: office reads, company admins write. {companyId}_supervisors: office reads and writes.
+    function cmRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("role", "");
+    }
+    function cmGetOk(docId) {
+      let c = incProfileCompany();
+      return signedIn() && c != "heartwood" && cmRole() in ["admin", "supervisor"]
+        && docId in [c + "_quoteRates", c + "_supervisors", c + "_invoicing"];
+    }
+    function cmWriteOk(docId) {
+      let c = incProfileCompany();
+      let role = cmRole();
+      return signedIn() && c != "heartwood" && request.resource.data.get("companyId", "") == c
+        && ((docId == c + "_supervisors" && role in ["admin", "supervisor"])
+          || (docId in [c + "_quoteRates", c + "_invoicing"] && role == "admin"));
+    }
     match /companyMeta/{docId} {
-      allow get: if companyOffice() && (docId == callerCompany() + "_quoteRates" || docId == callerCompany() + "_supervisors");
-      allow create, update: if companyOffice()
-        && request.resource.data.get("companyId", "") == callerCompany()
-        && ((docId == callerCompany() + "_quoteRates" && profile().role == "admin")
-          || docId == callerCompany() + "_supervisors");
+      allow get: if cmGetOk(docId);
+      allow create, update: if cmWriteOk(docId);
       allow delete: if false;
     }
     // Xero monthly P&L for the Home profit chart: Xero users read; only the box (tools/xero_profit_sync.py) writes.
