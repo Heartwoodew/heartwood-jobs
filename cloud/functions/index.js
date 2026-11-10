@@ -55,14 +55,15 @@ const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
 const RESEND_API_KEY = defineSecret("RESEND_API_KEY");
 const INVITE_MAIL_ON = process.env.INVITE_EMAIL_ENABLED === "true";
 const STRIPE_WEBHOOK_SECRET = defineSecret("STRIPE_WEBHOOK_SECRET");
-// Live Stripe. Only bound (and required in Secret Manager) when STRIPE_MODE=live in functions/.env.heartwood-9f37f.
+// Live Stripe. Only declared, bound and required in Secret Manager when STRIPE_MODE=live in functions/.env.heartwood-9f37f
+// (the deploy CLI asks for every declared secret, so they must not be declared in test mode).
 // Until then the functions run in test mode and refuse live keys and live events.
 const STRIPE_MODE = stripeMode(process.env);
 const STRIPE_LIVE = STRIPE_MODE === "live";
-const STRIPE_LIVE_SECRET_KEY = defineSecret("STRIPE_LIVE_SECRET_KEY");
-const STRIPE_LIVE_WEBHOOK_SECRET = defineSecret("STRIPE_LIVE_WEBHOOK_SECRET");
-const STRIPE_LIVE_BASE_PRICE_ID = defineSecret("STRIPE_LIVE_BASE_PRICE_ID");
-const STRIPE_LIVE_EXTRA_PRICE_ID = defineSecret("STRIPE_LIVE_EXTRA_PRICE_ID");
+const STRIPE_LIVE_SECRET_KEY = STRIPE_LIVE ? defineSecret("STRIPE_LIVE_SECRET_KEY") : null;
+const STRIPE_LIVE_WEBHOOK_SECRET = STRIPE_LIVE ? defineSecret("STRIPE_LIVE_WEBHOOK_SECRET") : null;
+const STRIPE_LIVE_BASE_PRICE_ID = STRIPE_LIVE ? defineSecret("STRIPE_LIVE_BASE_PRICE_ID") : null;
+const STRIPE_LIVE_EXTRA_PRICE_ID = STRIPE_LIVE ? defineSecret("STRIPE_LIVE_EXTRA_PRICE_ID") : null;
 const STRIPE_KEY_SECRETS = STRIPE_LIVE ? [STRIPE_LIVE_SECRET_KEY, STRIPE_LIVE_BASE_PRICE_ID, STRIPE_LIVE_EXTRA_PRICE_ID] : [STRIPE_SECRET_KEY];
 const STRIPE_HOOK_SECRETS = STRIPE_LIVE ? [STRIPE_LIVE_WEBHOOK_SECRET] : [STRIPE_WEBHOOK_SECRET];
 function currentPrices() {
