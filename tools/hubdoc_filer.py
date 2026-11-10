@@ -12,6 +12,8 @@ the item's subject tag before resending, then mark sent with the found id or res
 
 Covers both sources:
   claim:<id>   reimbursementClaims with status "paid" (hubdocStatus missing/queued/failed). Receipt from Storage.
+  coclaim:<company>/<id>  another company's paid claim (companies/<company>/reimbursementClaims). Only when that
+               company has its own hubdocAddress set (and is not a test company); it goes to that address only.
   legacy:<rid> old receipts ledger: reimbursements/<rid>.paid == true and receipts/<rid>.status == "queued".
                On sent: receipts/<rid> -> status "filed" so receipts_worker never files it again. Chunks are kept.
 No deletes anywhere.
@@ -64,6 +66,46 @@ def hub_for(c, d, heartwood_hub):
     return hub, name
 
 
+def where_in(c, parent, coll, field, value):
+    """Equality query on a subcollection (parent like companies/acme)."""
+    q = {"structuredQuery": {"from": [{"collectionId": coll}],
+                             "where": {"fieldFilter": {"field": {"fieldPath": field}, "op": "EQUAL", "value": hwfire.enc(value)}}}}
+    res = hwfire._http("POST", f"{c.fs_base}/{c.root}/{parent}:runQuery", q, token=c.token())
+    return [(r["document"]["name"].rsplit("/", 1)[1], {k: hwfire.dec(v) for k, v in r["document"].get("fields", {}).items()})
+            for r in res if "document" in r]
+
+
+def company_hubs(c):
+    """[(companyId, hubdoc address, name)] for other companies that set their own Hubdoc address."""
+    out = []
+    try: comps = c.list("companies")
+    except hwfire.FirestoreError as e:
+        print("companies not readable, other companies skipped:", str(e)[:120], file=sys.stderr); return out
+    for cid, comp in comps:
+        if cid == "heartwood" or comp.get("isTest") is True: continue
+        hub = (comp.get("hubdocAddress") or "").strip().lower()
+        if re.fullmatch(r"[a-z0-9._+-]+@app\.hubdoc\.com", hub): out.append((cid, hub, (comp.get("name") or "Company").strip() or "Company"))
+    return out
+
+
+def claim_item(c, out, key, path, d, dest, brand, verify, cid):
+    if not d.get("receiptPath"):
+        b = c.batch(); b.update(path, {"hubdocStatus": "no-receipt", "hubdocUpdatedAt": iso()}); b.commit(); return None
+    ext = d["receiptPath"].rsplit(".", 1)[-1]
+    name = f"receipt_{d.get('date', '')}_{slug(d.get('supplier'))}_{slug(d.get('name'))}_{cid}.{ext}"
+    try: data = storage_get(c, d["receiptPath"])
+    except Exception as e:
+        mark_doc(c, path, "failed", err=f"download: {e}"[:300], d=d); return None
+    via = "Heartwood jobs app" if brand == "Heartwood" else f"{brand} jobs app"
+    it = item(out, key, dest, name, MIME[ext], data, verify,
+              f"Receipt {d.get('supplier', '')} {d.get('date', '')} - {d.get('name', '')} [HW {cid}]",
+              f"Reimbursement claim paid via {via}.\nStaff: {d.get('name', '')}\nSupplier: {d.get('supplier', '')}\n"
+              f"Date: {d.get('date', '')}\nAmount: {money(d.get('amountCents'))} inc GST\nCategory: {d.get('category', '')}\n"
+              + (f"Job: {d.get('jobLabel')}\n" if d.get("jobLabel") else "") + f"Ref: {cid}")
+    lock(c, path, d, verify)
+    return it
+
+
 def storage_get(c, path):
     bucket = os.environ.get("HW_BUCKET", "heartwood-9f37f.firebasestorage.app")
     url = f"https://firebasestorage.googleapis.com/v0/b/{bucket}/o/{urllib.parse.quote(path, safe='')}?alt=media"
@@ -90,20 +132,14 @@ def pending(out):
         if not ok: continue
         dest, brand = hub_for(c, d, hub)
         if not dest: continue
-        if not d.get("receiptPath"):
-            b = c.batch(); b.update(f"reimbursementClaims/{cid}", {"hubdocStatus": "no-receipt", "hubdocUpdatedAt": iso()}); b.commit(); continue
-        ext = d["receiptPath"].rsplit(".", 1)[-1]
-        name = f"receipt_{d.get('date', '')}_{slug(d.get('supplier'))}_{slug(d.get('name'))}_{cid}.{ext}"
-        try: data = storage_get(c, d["receiptPath"])
-        except Exception as e:
-            mark_doc(c, f"reimbursementClaims/{cid}", "failed", err=f"download: {e}"[:300], d=d); continue
-        via = "Heartwood jobs app" if brand == "Heartwood" else f"{brand} jobs app"
-        items.append(item(out, "claim:" + cid, dest, name, MIME[ext], data, verify,
-                          f"Receipt {d.get('supplier', '')} {d.get('date', '')} - {d.get('name', '')} [HW {cid}]",
-                          f"Reimbursement claim paid via {via}.\nStaff: {d.get('name', '')}\nSupplier: {d.get('supplier', '')}\n"
-                          f"Date: {d.get('date', '')}\nAmount: {money(d.get('amountCents'))} inc GST\nCategory: {d.get('category', '')}\n"
-                          + (f"Job: {d.get('jobLabel')}\n" if d.get("jobLabel") else "") + f"Ref: {cid}"))
-        lock(c, f"reimbursementClaims/{cid}", d, verify)
+        it = claim_item(c, out, "claim:" + cid, f"reimbursementClaims/{cid}", d, dest, brand, verify, cid)
+        if it: items.append(it)
+    for co, dest, brand in company_hubs(c):
+        for cid, d in where_in(c, f"companies/{co}", "reimbursementClaims", "status", "paid"):
+            ok, verify = due(d)
+            if not ok: continue
+            it = claim_item(c, out, f"coclaim:{co}/{cid}", f"companies/{co}/reimbursementClaims/{cid}", d, dest, brand, verify, cid)
+            if it: items.append(it)
     for rid, led in c.where("reimbursements", "paid", "==", True):
         r = c.get(f"receipts/{rid}") or {}
         if r.get("status") != "queued": continue
@@ -148,9 +184,14 @@ def mark_doc(c, path, status, msg="", err="", d=None):
 def mark(key, status, extra):
     c = hwfire.connect(); c = c[0] if isinstance(c, tuple) else c
     kind, _, id_ = key.partition(":")
-    if status not in ("sent", "failed") or kind not in ("claim", "legacy") or not re.fullmatch(r"[A-Za-z0-9_-]{6,40}", id_): sys.exit("usage: mark claim:<id>|legacy:<rid> sent <msgId>|failed <reason>")
-    if kind == "claim":
-        mark_doc(c, f"reimbursementClaims/{id_}", status, msg=extra if status == "sent" else "", err=extra if status == "failed" else "")
+    co = ""
+    if kind == "coclaim": co, _, id_ = id_.partition("/")
+    if (status not in ("sent", "failed") or kind not in ("claim", "coclaim", "legacy") or not re.fullmatch(r"[A-Za-z0-9_-]{6,40}", id_)
+            or (kind == "coclaim" and (co == "heartwood" or not re.fullmatch(r"[a-z0-9-]{2,60}", co)))):
+        sys.exit("usage: mark claim:<id>|coclaim:<company>/<id>|legacy:<rid> sent <msgId>|failed <reason>")
+    if kind in ("claim", "coclaim"):
+        path = f"reimbursementClaims/{id_}" if kind == "claim" else f"companies/{co}/reimbursementClaims/{id_}"
+        mark_doc(c, path, status, msg=extra if status == "sent" else "", err=extra if status == "failed" else "")
     else:
         b = c.batch()
         if status == "sent":
