@@ -223,7 +223,9 @@ export const inviteEmailWorker = onDocumentWritten(
       const c = snap.exists ? snap.data() : {};
       company = { name: c.name || "", email: c.email || "" };
     }
-    await queueInviteEmail(after, {
+    let result;
+    try {
+      result = await queueInviteEmail(after, {
       company,
       env: process.env,
       allowLiveMail: process.env.INVITE_EMAIL_ENABLED === "true",
@@ -239,6 +241,19 @@ export const inviteEmailWorker = onDocumentWritten(
         createdAt: FieldValue.serverTimestamp(),
       }),
     });
+    } catch (e) {
+      result = { sent: false, reason: "error", doc: { error: String((e && e.message) || e).slice(0, 200) } };
+    }
+    // Delivery status the inviting company's office can read (no token, no link, no message body).
+    const status = {
+      companyId,
+      delivery: (result && result.doc && result.doc.delivery) || (result && result.reason) || "unknown",
+      reason: String((result && result.reason) || ""),
+      error: String((result && result.doc && result.doc.error) || "").slice(0, 200),
+      updatedAt: FieldValue.serverTimestamp(),
+    };
+    console.log("invite email", event.params.inviteId, status.delivery, status.reason, status.error);
+    await db.collection("inviteStatus").doc(event.params.inviteId).set(status, { merge: true }).catch(() => {});
   },
 );
 

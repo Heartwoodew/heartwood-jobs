@@ -1153,6 +1153,13 @@ service cloud.firestore {
       allow read, write: if false;
     }
 // END INVITE RULES
+    // Written by inviteEmailWorker only: whether the invite email went out. Readable by that company's office.
+    match /inviteStatus/{id} {
+      allow get: if (isAdmin() && docCompany(resource.data) == "heartwood")
+        || (resource.data.get("companyId", "heartwood") != "heartwood" && incStaffOf(resource.data.companyId)
+          && cmRole() in ["admin", "supervisor"]);
+      allow write: if false;
+    }
 
 // BEGIN SERVICING RULES
     function svcSignedIn() { return request.auth != null; }

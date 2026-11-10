@@ -301,3 +301,18 @@ test("second-company audit: Heartwood admins, clients, SWMS, receipts, Find PO, 
   await assertFails(updateDoc(doc(db("hwAdm"), "timesheets/bravoOp_2026-11-09"), { sent: false, sentAt: null, sentBy: null }));
   await assertSucceeds(setDoc(doc(op, "timesheets/op1_2026-11-16"), { ...ts, uid: OP, name: "Sam", weekStart: "2026-11-16", weekEnd: "2026-11-22" }));
 });
+
+test("invite delivery status is readable by the inviting company's office only", async () => {
+  await env.withSecurityRulesDisabled(async ctx => {
+    const d = ctx.firestore();
+    await setDoc(doc(d, "users/bravoOp"), { role: "operator", name: "Bo", companyId: "bravo", tenantId: "bravo" });
+    await setDoc(doc(d, "inviteStatus/ib1"), { companyId: "bravo", delivery: "sent" });
+    await setDoc(doc(d, "inviteStatus/ih1"), { companyId: "heartwood", delivery: "held" });
+  });
+  await assertSucceeds(getDoc(doc(db(BRAVO), "inviteStatus/ib1")));
+  await assertFails(getDoc(doc(db("bravoOp"), "inviteStatus/ib1")));
+  await assertFails(getDoc(doc(db(ALEX), "inviteStatus/ib1")));
+  await assertSucceeds(getDoc(doc(db(ALEX), "inviteStatus/ih1")));
+  await assertFails(getDoc(doc(db(BRAVO), "inviteStatus/ih1")));
+  await assertFails(setDoc(doc(db(BRAVO), "inviteStatus/ib2"), { companyId: "bravo", delivery: "sent" }));
+});
