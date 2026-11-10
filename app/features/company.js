@@ -4,6 +4,7 @@
 // This module does not talk to Firestore.
 
 import { DEFAULT_ORG } from "../org-settings.js";
+import { appOriginFor } from "./staff-invites.js";
 
 export const HEARTWOOD_COMPANY_ID = "heartwood";
 export const PLATFORM_OWNER_EMAIL = "alex@heartwoodew.com";
@@ -193,8 +194,9 @@ export function newFriendCode(fill) {
   return out;
 }
 
-export function friendInviteLink(code) {
-  return "https://jobs.heartwoodew.com/app?friend=" + encodeURIComponent(String(code || ""));
+// Friend trials are new CallUp companies, so the link uses the CallUp address, not jobs.heartwoodew.com.
+export function friendInviteLink(code, currentOrigin = "") {
+  return appOriginFor("callup", currentOrigin) + "/app?friend=" + encodeURIComponent(String(code || ""));
 }
 
 export function friendCodeOk(code) {
@@ -471,6 +473,12 @@ export function timesheetMailParts(org, senderName) {
 export function builderSignoff(org, senderName) {
   if (isHeartwoodCompany(org && org.companyId)) return ["Alex Daly", (org && org.signoff) || "Heartwood Earthworx", "0499 802 812"];
   return [String(senderName || "").trim(), (org && org.signoff) || (org && org.name) || "", String((org && org.phone) || "").trim()].filter(Boolean);
+}
+
+// Remembered builder supervisors (PO-exceeded emails). Heartwood keeps meta/supervisors; others start empty.
+export function supervisorsPath(companyId) {
+  const id = String(companyId || HEARTWOOD_COMPANY_ID);
+  return isHeartwoodCompany(id) ? ["meta", "supervisors"] : ["companyMeta", id + "_supervisors"];
 }
 
 // Gmail address used for compose/search links. Heartwood: alex@heartwoodew.com. Others: the company email.

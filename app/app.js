@@ -19,7 +19,7 @@ import { installCompliance } from "./features/compliance.js";
 import { SWMS, SWMS_VERSION, sigMs, sigExp, latestSig, statusOf, swmsSignatureData, buildPlaceholderPdf } from "./features/swms-sign.js";
 import {
   acceptLoadingHtml, acceptScreenModel, acceptViewHtml, buildInviteDraft, inviteFailureText,
-  newInviteToken, pendingInviteForEmail, staffViewHtml,
+  newInviteToken, pendingInviteForEmail, staffViewHtml, appOriginFor,
 } from "./features/staff-invites.js";
 import { PRODUCT_NAME, POWERED_BY, orgSettings, saveOrgSettings, setActiveCompany } from "./org-settings.js";
 import {
@@ -27,6 +27,7 @@ import {
   friendCodeOk, friendInviteLink, hoursBrand, isPlatformOwner, newFriendCode,
   ownerProfile, scopeRecord, trialEnd, validateCompanyInput, masterRow,
   builderSignoff, clientDocId, companyClientNames, companyJobPrefix, companyMailbox, companyStdClients, timesheetMailParts,
+  supervisorsPath, docCompanyId,
 } from "./features/company.js";
 import { companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, signupFormHtml } from "./features/company-ui.js";
 import { exportAllowed, hoursCsv, invoiceCsv, jobsCsv, reimbursementsCsv } from "./features/company-exports.js";
@@ -128,6 +129,7 @@ onAuthStateChanged(auth, async user => {
     ? { uid: user.uid, name: (prof && prof.name) || (bootstrapAdmin ? "Alex" : "Admin"), role: "admin", staffRole: prof && prof.role }
     : { uid: user.uid, ...prof };
   me.cloudProfile = prof;
+  FOREIGN_UIDS = new Set(users ? users.docs.filter(d => docCompanyId(d.data()) !== docCompanyId(prof || {})).map(d => d.id) : []);
   const token = await user.getIdTokenResult().catch(() => null);
   me.platformOwner = isPlatformOwner({
     uid: user.uid,
@@ -456,9 +458,15 @@ function renderSignup(friendCode = "") {
 }
 function settingsView() {
   const org = orgSettings();
-  return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin") });
+  // Other companies edit their own quote rates and depot here (Heartwood keeps the Quotes-page button only).
+  const rates = me && me.role === "admin" && myCompanyId() !== "heartwood"
+    ? `<section class="pad setrates"><h3>Quote rates</h3><p class="sub">Your plant, labour, travel and tip rates for quotes. They start blank and are only used by your company.</p><button type="button" id="setrates" class="sm-btn">Edit quote rates</button></section>`
+    : "";
+  return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin") }) + rates;
 }
 function bindSettings(A) {
+  const rb = A.querySelector("#setrates");
+  if (rb) rb.onclick = () => QG && QG.openRatesEditor();
   const sub = A.querySelector("#billsub");
   const portal = A.querySelector("#billportal");
   if (sub) sub.onclick = () => openBilling("createBillingCheckout");
@@ -707,7 +715,7 @@ function jobsView(all) {
   const cnt = q => open.filter(j => queueOf(j) === q).length;
   const list = open.filter(j => ui.queue === "All" || queueOf(j) === ui.queue)
     .sort((a, b) => ((a.date || "9") + (a.time || "")).localeCompare((b.date || "9") + (b.time || "")));
-  return `<div class="sm-head"><h1>Jobs</h1><span class="headbtns">${canCompanyExport() ? `<button id="jobscsv" class="sm-btn">Download CSV</button>` : ""}<button id="findall" class="sm-btn" title="Run Find PO on every open and not-yet-invoiced job">🔎 Find all POs</button><button id="new" class="sm-btn primary">+ New Job</button></span></div>${searchBar()}
+  return `<div class="sm-head"><h1>Jobs</h1><span class="headbtns">${canCompanyExport() ? `<button id="jobscsv" class="sm-btn">Download CSV</button>` : ""}${canFindPo() ? `<button id="findall" class="sm-btn" title="Run Find PO on every open and not-yet-invoiced job">🔎 Find all POs</button>` : ""}<button id="new" class="sm-btn primary">+ New Job</button></span></div>${searchBar()}
     <div class="qtabs"><button data-q="All" class="${ui.queue === "All" ? "on" : ""}">All open <span>${open.length}</span></button>
       ${QUEUES.map(q => `<button data-q="${q}" class="${QCLS[q]} ${ui.queue === q ? "on" : ""}"><span class="qdot ${QCLS[q]}"></span>${q} <span>${cnt(q)}</span></button>`).join("")}</div>
     <div class="filters"><select id="fs"><option value="">All staff</option>${staff.map(s => `<option value="${esc(skey(s))}" ${ui.staffF === skey(s) ? "selected" : ""}>${esc(label(s.name))}</option>`).join("")}<option value="_none" ${ui.staffF === "_none" ? "selected" : ""}>Unallocated</option></select>
@@ -1159,7 +1167,9 @@ const canCompanyExport = () => exportAllowed({ role: me && me.role, companyId: m
 const canSeeMoney = () => !!me && (me.role === "admin" || me.role === "supervisor" || me.staffRole === "supervisor");
 const canInvite = () => !!(me && (me.role === "admin" || me.role === "supervisor" || me.staffRole === "supervisor"));
 // Inbox and import: admins and supervisors. Operators (staff) do not see the Inbox.
-const canImport = () => canImportInbox(me);
+// Builder-email Inbox and Find PO (Orbit portal, Alex's mailbox, box workers) are Heartwood-only.
+const canImport = () => canImportInbox(me) && myCompanyId() === "heartwood";
+const canFindPo = () => myCompanyId() === "heartwood";
 // Quotes: same people who see money (admins + users.role/staffRole supervisor). Ordinary staff: no Quotes nav or dollars.
 const canQuote = () => canSeeMoney();
 // Business quote rates (meta/quoteRates): admin edit only — supervisors can read/use rates while quoting, not change them.
@@ -1198,12 +1208,14 @@ function receiptDialog(j) {
     try {
       const b64 = await shrinkImage(file), CH = 700000, n = Math.ceil(b64.length / CH);
       const ref = doc(collection(db, "receipts"));
-      for (let i = 0; i < n; i++) await setDoc(doc(db, "receiptChunks", `${ref.id}_${i}`), { rid: ref.id, i, uid: me.uid, data: b64.slice(i * CH, (i + 1) * CH) });
+      // Other companies' receipts carry their companyId, so the Heartwood Hubdoc worker never files them.
+      const rco = myCompanyId() === "heartwood" ? {} : { companyId: myCompanyId(), tenantId: myCompanyId() };
+      for (let i = 0; i < n; i++) await setDoc(doc(db, "receiptChunks", `${ref.id}_${i}`), { rid: ref.id, i, uid: me.uid, data: b64.slice(i * CH, (i + 1) * CH), ...rco });
       const written = { id: ref.id, uid: me.uid, jobId: j ? j.id : null, status: "queued" };
       await setDoc(ref, { uid: me.uid, workerName: me.name, amountInc: amt, supplier: f.sup.value.trim(), paidPersonally: f.mine.checked,
         jobNo: f.job.value.trim().replace(/^#/, "") || null, jobId: written.jobId, address: j ? (j.address || null) : null, chunks: n, mime: "image/jpeg", bytes: Math.round(b64.length * 0.75),
-        status: "queued", createdAt: serverTimestamp(), createdAtIso: new Date().toISOString() });
-      d.close(); toast("Receipt uploaded - queued for Hubdoc"); if (j) loadJobReceipts(j);
+        status: "queued", createdAt: serverTimestamp(), createdAtIso: new Date().toISOString(), ...rco });
+      d.close(); toast(myCompanyId() === "heartwood" ? "Receipt uploaded - queued for Hubdoc" : "Receipt uploaded"); if (j) loadJobReceipts(j);
       mirrorReceipt(ref.id, b64, j || null, written).catch(e => console.warn("cloud receipt mirror", e && (e.code || e.message) || e));
     } catch (e) { $("#rerr").textContent = "Not uploaded: " + (e.code || e.message); $("#rsend").disabled = false; $("#rsend").textContent = "Upload"; }
   };
@@ -1214,7 +1226,7 @@ async function loadJobReceipts(j) {
   const box = $("#jrc"); if (!box) return;
   try {
     const qs = isOwner() ? query(collection(db, "receipts"), where("jobId", "==", j.id)) : query(collection(db, "receipts"), where("jobId", "==", j.id), where("uid", "==", me.uid));
-    const L = (await getDocs(qs)).docs.map(x => ({ id: x.id, ...x.data() })).sort((a, b) => String(b.createdAtIso || "").localeCompare(String(a.createdAtIso || "")));
+    const L = (await getDocs(qs)).docs.map(x => ({ id: x.id, ...x.data() })).filter(r => docCompanyId(r) === myCompanyId()).sort((a, b) => String(b.createdAtIso || "").localeCompare(String(a.createdAtIso || "")));
     if ($("#jrc") !== box) return;
     box.innerHTML = L.map(r => `<div class="rrow"><span>🧾 ${esc(String(r.createdAtIso || "").slice(0, 10))} · <b>${$$(r.amountInc || 0)}</b> · ${esc(r.supplier || "")}${isOwner() ? ` · ${esc(r.workerName || "")}${r.paidPersonally ? " (to reimburse)" : ""}` : ""}</span>
       <span class="qpill ${r.status === "filed" ? "q-comp" : ""}">${r.status === "filed" ? "Filed" : "Queued"}</span></div>`).join("") || "No receipts on this job yet.";
@@ -1228,7 +1240,7 @@ function reimbView() {
   const hd = ui.hubdocCfg?.email || "";
   return `<div class="sm-head"><h1>Reimbursements</h1><span class="sub">Owed to workers for receipts they paid personally (owner only)</span></div>
     <div class="filters"><label>Hubdoc email-in address <input id="hdmail" value="${esc(hd)}" placeholder="yourname.xxxx@app.hubdoc.com" size="34"></label>
-      <button id="hdsave" class="sm-btn">Save</button><span class="sub">${hd ? "Receipts are emailed here from alex@heartwoodew.com." : "<b>Not set</b> - receipts stay queued until it is."}</span></div>
+      <button id="hdsave" class="sm-btn">Save</button><span class="sub">${hd ? "Receipts are emailed here from the company mailbox." : "<b>Not set</b> - receipts stay queued until it is."}</span></div>
     ${Object.keys(by).length ? Object.entries(by).map(([w, rs]) => `<h3>${esc(w)} · owed <b>${$$(rs.reduce((t, r) => t + (+r.amountInc || 0), 0))}</b> inc GST (${rs.length})</h3>
       <table class="jt"><thead><tr><th>Date</th><th>Supplier / for</th><th>Job</th><th>Amount</th><th>Hubdoc</th><th></th></tr></thead><tbody>${rs.map(r => `<tr data-rb="${esc(r.id)}">
         <td>${esc(String(r.date || "").slice(0, 10))}</td><td>${esc(r.supplier || "")}</td><td>${r.jobNo ? "#" + esc(r.jobNo) : ""}</td><td>${$$(r.amountInc || 0)}</td>
@@ -1286,6 +1298,10 @@ function tsHours(d) { return shiftHours(d); }
 const tsTotal = days => Math.round(Object.values(days || {}).reduce((t, d) => t + shiftHours(d), 0) * 100) / 100;
 const hrs = h => (Math.round((+h || 0) * 100) / 100).toFixed(2).replace(/\.?0+$/, "") + " h";
 function tsWeek() { ui.tsWs = ui.tsWs || weekStartOf(todayStr()); return ui.tsWs; }
+// Other companies' timesheets carry companyId so their admins can read them and Heartwood never does.
+function tsCompanyField() { return myCompanyId() === "heartwood" ? {} : { companyId: myCompanyId() }; }
+// Heartwood admins can list every login; anyone belonging to another company is kept out of Heartwood lists.
+let FOREIGN_UIDS = new Set();
 function tsIsAdminSheet() { return !!(me && me.role === "admin" && !ui.myJobs && ui.view === "timesheet"); }
 function tsStop() {
   ui.hxSub?.(); ui.hxSub = null;
@@ -2008,6 +2024,7 @@ async function tsWrite(ws, sheet, entries, lastEntryId, opts = {}) {
     updatedAt: serverTimestamp(),
     updatedAtIso: new Date().toISOString(),
     lastEntryId,
+    ...tsCompanyField(),
   };
   if (opts.consent) data.locationConsentAt = serverTimestamp();
   // Update one shift key. Rewriting the whole entries map makes the rules re-check every stamp.
@@ -2142,8 +2159,12 @@ function bindTs(A, rerender) {
     ui.tsDirty = false; ui.tsEdit = null; ui.tsAsk = null; ui.tsWs = n ? addDays(ws, n) : weekStartOf(todayStr()); rerender(); });
   if (tsIsAdminSheet()) {
     if (ui.tsSubWs !== ws) { ui.tsSub?.(); ui.tsSubWs = ws; ui.tsAll = null;
-      ui.tsSub = onSnapshot(query(collection(db, "timesheets"), where("weekStart", "==", ws)), s => {
-        ui.tsAll = s.docs.map(x => ({ id: x.id, ...x.data() })); ui.tsAllWs = ws;
+      const tq = myCompanyId() === "heartwood"
+        ? query(collection(db, "timesheets"), where("weekStart", "==", ws))
+        : query(collection(db, "timesheets"), where("companyId", "==", myCompanyId()), where("weekStart", "==", ws));
+      ui.tsSub = onSnapshot(tq, s => {
+        // Only this company's people. Heartwood's week list never includes other CallUp companies' staff.
+        ui.tsAll = s.docs.map(x => ({ id: x.id, ...x.data() })).filter(t => docCompanyId(t) === myCompanyId() && !FOREIGN_UIDS.has(t.uid)); ui.tsAllWs = ws;
         if (!tsIsAdminSheet() || tsSnapshotBlocked()) return; rerender();
       }, e => { const w = A.querySelector(".ts-wrap"); if (w) w.innerHTML = tsNav() + `<p class="err pad">Timesheets not available: ${esc(e.code || e.message)}</p>`; }); }
   } else if (ui.tsWatchId !== `${me.uid}_${ws}`) {
@@ -2195,7 +2216,7 @@ function bindTs(A, rerender) {
     f.querySelectorAll(".ts-day").forEach(r => { const h = tsHours(days[r.dataset.ds]); r.querySelector(".ts-h").textContent = h ? hrs(h) : ""; }); const m = $("#tsmsg"); if (m) m.textContent = "Not saved"; ui.tsDirty = true; };
   f.onsubmit = async ev => { ev.preventDefault(); const days = read();
     for (const [ds, d] of Object.entries(days)) if ((d.start && !d.finish) || (!d.start && d.finish)) { const m = $("#tsmsg"); if (m) m.textContent = `${dmy(ds).slice(0, 5)}: enter both start and finish`; return; }
-    const data = { uid: me.uid, name: String(me.name || "Staff").slice(0, 80), weekStart: ws, weekEnd: addDays(ws, 6), days, totalHrs: tsTotal(days), updatedAt: serverTimestamp(), updatedAtIso: new Date().toISOString() };
+    const data = { uid: me.uid, name: String(me.name || "Staff").slice(0, 80), weekStart: ws, weekEnd: addDays(ws, 6), days, totalHrs: tsTotal(days), updatedAt: serverTimestamp(), updatedAtIso: new Date().toISOString() , ...tsCompanyField() };
     try { await setDoc(doc(db, "timesheets", `${me.uid}_${ws}`), data, { merge: true }); ui.tsMine = { ...(ui.tsMine || {}), ...data, weekStart: ws }; ui.tsDirty = false; const m = $("#tsmsg"); if (m) m.textContent = "Saved ✓"; toast("Hours saved"); }
     catch (e) { const m = $("#tsmsg"); if (m) m.textContent = "Not saved: " + (e.code || e.message); } };
 }
@@ -2204,7 +2225,7 @@ function bindTs(A, rerender) {
 function reimbSubs() {
   if (!isOwner() || ui.rpSubs) return; ui.rpSubs = true;
   if (!ui.reimbSub) ui.reimbSub = onSnapshot(collection(db, "reimbursements"), s => { ui.reimb = s.docs.map(x => ({ id: x.id, ...x.data() })); reimbPill(); if (ui.view === "reimb") renderAdmin(); }, () => {});
-  onSnapshot(query(collection(db, "receipts"), where("paidPersonally", "==", true)), s => { ui.rqueued = s.docs.map(x => ({ id: x.id, ...x.data() })); reimbPill(); }, () => {});
+  onSnapshot(query(collection(db, "receipts"), where("paidPersonally", "==", true)), s => { ui.rqueued = s.docs.map(x => ({ id: x.id, ...x.data() })).filter(r => docCompanyId(r) === "heartwood"); reimbPill(); }, () => {});
 }
 function owedList() {
   const led = ui.reimb || [], ids = new Set(led.map(r => r.receiptId || r.id));
@@ -2459,7 +2480,7 @@ function renderAdmin() {
   const fj = filtered(), und = (ui.undated || []).filter(j => (!ui.typeF || j.type === ui.typeF));
   const all = [...fj, ...und.filter(u => !fj.some(j => j.id === u.id))];
   const quotesHtml = ui.view === "quotes" ? adminViewRouter(ui.view, ui, { esc, $$, staff, jobs: all, todayStr, rerender: () => renderAdmin(), canEditQuoteRates }) : null;
-  const staffHtml = ui.view === "staff" ? staffViewHtml(ui.invites || [], { now: inviteDisplayNow(), error: ui.invitesErr || "" }) : null;
+  const staffHtml = ui.view === "staff" ? staffViewHtml(ui.invites || [], { now: inviteDisplayNow(), error: ui.invitesErr || "", origin: appOriginFor(myCompanyId(), location.origin) }) : null;
   paintBrand();
   $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "master" ? masterView() : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : quotesHtml != null ? quotesHtml : jobsView(all));
   const A = $("#app"); inboxBadge();
@@ -2588,7 +2609,7 @@ async function splitJob(j, pick) {
   const kindOf = ls => { const ks = [...new Set(ls.map(x => x.k).filter(Boolean))]; return ks.length === 1 ? ks[0] : (ks[0] || "other"); };
   const newType = kindOf(mv), keepType = kindOf(keep), origType = j.type || keepType;
   const poToNew = newType === origType && keepType !== origType;
-  const hold = new Date(Date.now() + 10 * 60000).toISOString(), at = new Date().toISOString(), lk = { poLookupStatus: "pending", poLookupAt: at, poLookupRequestedBy: me.name + " (split)", poLookupCandidates: [] };
+  const hold = new Date(Date.now() + 10 * 60000).toISOString(), at = new Date().toISOString(), lk = canFindPo() ? { poLookupStatus: "pending", poLookupAt: at, poLookupRequestedBy: me.name + " (split)", poLookupCandidates: [] } : {};
   const base = Object.fromEntries(SPLIT_COPY.filter(k => j[k] !== undefined).map(k => [k, j[k]]));
   const nj = scopeRecord({ ...base, type: newType, description: mv.map(x => x.t).join("\n"), po: poToNew ? (j.po || "") : "", source: "app", log: [],
     splitFrom: j.id, splitAt: at, splitBy: me.name, splitHoldUntil: hold, editedInApp: false, ...lk, createdAt: serverTimestamp(), updatedAt: serverTimestamp(), updatedBy: me.uid }, myCompanyId());
@@ -2648,7 +2669,7 @@ function editJob(j) {
       ${j.poAmount != null ? `<p class="hint">PO value $${esc(Number(j.poAmount).toFixed(2))} ex GST${j.poAmountBasis ? " · " + esc(j.poAmountBasis) : ""}${j.poAmountSource ? " · " + esc(j.poAmountSource) : ""}</p>` : ""}
       ${!n && overBy(j, invAmountDefault(j)) ? `<p class="hint"><span class="overpo">Over PO by ${$$(overBy(j, invAmountDefault(j)))}</span> (charged ${$$(invAmountDefault(j))} ex GST)</p>` : ""}
       ${n ? "" : `<div class="row"><button type="button" id="emailsupj" class="btn" title="Opens your email app (nothing is sent automatically)">✉ Email supervisor (PO exceeded)</button></div>`}` : `<input type="hidden" name="poAmount" value="${esc(j.poAmount ?? "")}">`}
-      ${n ? "" : `<div class="row"><button type="button" id="findpo" class="btn">🔎 Find PO</button><span id="polk" class="sub">${poLookupHtml(j)}</span></div>`}
+      ${n || !canFindPo() ? "" : `<div class="row"><button type="button" id="findpo" class="btn">🔎 Find PO</button><span id="polk" class="sub">${poLookupHtml(j)}</span></div>`}
     </div><div class="jc-col">
       <h4>Staff Allocation &amp; Schedule</h4>
       <div class="row"><label>Date<input type="date" name="date" value="${esc(j.date)}"></label>
@@ -2806,6 +2827,7 @@ function poLookupHtml(j) {
 }
 function wireFindPo(j) {
   const box = $("#polk");
+  if (!box || !canFindPo()) return;
   const wireUse = (cur) => box.querySelectorAll(".usepo").forEach(b => b.onclick = async () => {
     const c = cur.poLookupCandidates[+b.dataset.i];
     try { await updateDoc(doc(db, "jobs", j.id), { po: c.po, poAmount: c.amount ?? null, poAmountBasis: c.amount != null ? (c.basis || "ex GST") : null,
@@ -2831,8 +2853,12 @@ const overBy = (j, amt = j.invoiceAmount) => (amt == null || amt === "" || j.poA
 const $$ = v => canSeeMoney() ? ("$" + Number(v).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })) : "";
 const overPoHtml = (j, amt) => { if (!canSeeMoney()) return ""; const o = overBy(j, amt); return o ? `<span class="overpo">Over PO by ${$$(o)}</span> <button type="button" class="sm-btn emailsup" title="Opens your email app with a message to the supervisor (nothing is sent automatically)">✉ Email supervisor</button>` : ""; };
 // Supervisor email: job field, then meta/supervisors (Orbit Call Forward / Torsion PO sender, by PO), then Torsion default, then remembered per client.
-let SUPS = null;
-async function supervisors() { if (!SUPS) { try { SUPS = (await getDoc(doc(db, "meta", "supervisors"))).data() || {}; } catch { SUPS = {}; } } return SUPS; }
+let SUPS = null, SUPS_FOR = "";
+async function supervisors() {
+  const cid = myCompanyId();
+  if (!SUPS || SUPS_FOR !== cid) { SUPS_FOR = cid; try { SUPS = (await getDoc(doc(db, ...supervisorsPath(cid)))).data() || {}; } catch { SUPS = {}; } }
+  return SUPS;
+}
 async function supervisorFor(j) {
   if (j.supervisorEmail) return { email: j.supervisorEmail, name: j.supervisorName || "" };
   const m = await supervisors(), base = String(j.po || "").split("/")[0].replace(/\D/g, "");
@@ -3133,7 +3159,7 @@ let CLI = null, CLI_ERR = "";
 async function loadClients(force) {
   if (!CLI || force) {
     const ref = myCompanyId() === "heartwood" ? collection(db, "clients") : query(collection(db, "clients"), where("companyId", "==", myCompanyId()));
-    try { CLI = (await getDocs(ref)).docs.map(d => ({ id: d.id, ...d.data() })); CLI_ERR = ""; } catch (e) { CLI = []; CLI_ERR = e.code || e.message; }
+    try { CLI = (await getDocs(ref)).docs.map(d => ({ id: d.id, ...d.data() })).filter(c => docCompanyId(c) === myCompanyId()); CLI_ERR = ""; } catch (e) { CLI = []; CLI_ERR = e.code || e.message; }
     refreshClientLists();
   }
   return CLI;
@@ -3215,7 +3241,7 @@ async function emailSupervisor(j, amt) {
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) return toast(e ? "That doesn't look like an email address" : "No email entered");
     s = { email: e, name: "" };
     const k = (j.client || "unknown").replace(/[.\/]/g, "_");
-    setDoc(doc(db, "meta", "supervisors"), { remembered: { [k]: s } }, { merge: true }).then(() => { (SUPS ||= {}).remembered = { ...(SUPS.remembered || {}), [k]: s }; })
+    setDoc(doc(db, ...supervisorsPath(myCompanyId())), myCompanyId() === "heartwood" ? { remembered: { [k]: s } } : { remembered: { [k]: s }, companyId: myCompanyId() }, { merge: true }).then(() => { (SUPS ||= {}).remembered = { ...(SUPS.remembered || {}), [k]: s }; })
       .catch(e2 => toast("Email not remembered: " + (e2.code || e2.message)));
     updateDoc(doc(db, "jobs", j.id), { supervisorEmail: e, updatedAt: serverTimestamp(), updatedBy: me.uid }).catch(() => {});
   }
@@ -3364,7 +3390,7 @@ function invoicesView() {
     ? `<button id="inum" class="sm-btn primary${canXero() ? " xero" : ""}" ${sel.length ? "" : "disabled"}">${canXero() ? `Send to Xero (${sel.length})` : `Assign invoice numbers &amp; download invoice CSV (${sel.length})`}</button>`
     : `<button id="icsv" class="sm-btn" ${sel.length ? "" : "disabled"}>Download ${canXero() ? "Xero" : "invoice"} CSV (${sel.length})</button>
        ${ui.inv === "numbered" ? `<button id="imark" class="sm-btn primary" ${sel.length ? "" : "disabled"}>Mark invoiced (${sel.length})</button>${canXero() ? ` <button id="ixero" class="sm-btn xero" title="Creates DRAFT invoices in Xero (not approved, not emailed). The box sends them within a few minutes." ${sel.length ? "" : "disabled"}>Send to Xero as draft (${sel.length})</button>` : ""}` : ""}`;
-  return `<div class="sm-head"><h1>Invoices</h1><button id="findall" class="sm-btn" title="Run Find PO on every open and not-yet-invoiced job">🔎 Find all POs</button><span class="sub">Next invoice number: <b id="inext">${nextInvoiceGuess()}</b></span></div>
+  return `<div class="sm-head"><h1>Invoices</h1>${canFindPo() ? `<button id="findall" class="sm-btn" title="Run Find PO on every open and not-yet-invoiced job">🔎 Find all POs</button>` : ""}<span class="sub">Next invoice number: <b id="inext">${nextInvoiceGuess()}</b></span></div>
     ${searchBar()}${strip}
     <div class="qtabs">${tab("ready", "Ready to invoice", ready)}${tab("numbered", canXero() ? "Invoiced (numbered, import into Xero)" : "Invoiced (numbered)", numbered)}${tab("recent", "Recent (last 30 days)", recent)}${tab("removed", "Removed", removed)}</div>
     <div class="filters">${acts}<label class="ck sub"><input type="checkbox" id="iall"> select all</label>
@@ -3641,7 +3667,7 @@ function renderOperator() {
   if (ui.opTab === "staff" && document.activeElement?.closest?.("#invitef")) return;
   if (ui.opTab === "staff" && canInvite()) {
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Staff</div><div class="mob-sub">Invite operators and supervisors</div></div>
-      <div class="pad">${staffViewHtml(ui.invites || [], { now: inviteDisplayNow(), error: ui.invitesErr || "" })}</div>${opTabs("more")}</div>`;
+      <div class="pad">${staffViewHtml(ui.invites || [], { now: inviteDisplayNow(), error: ui.invitesErr || "", origin: appOriginFor(myCompanyId(), location.origin) })}</div>${opTabs("more")}</div>`;
     bindOp(mine); bindStaff($("#app")); return;
   }
   if (ui.opTab === "staff") ui.opTab = "more";
@@ -4286,7 +4312,7 @@ function signSwms(id, jobId) {
     const sig = out.toDataURL("image/png");
     if (sig.length > 90000) { v.querySelector("#swerr").textContent = "Signature too large, please clear and sign again."; go.disabled = false; go.textContent = "Sign SWMS"; return; }
     const jid = v.querySelector("#swjob").value, j = jid && jobs.find(x => x.id === jid), now = swNow();
-    const rec = { ...swmsSignatureData({ uid: me.uid, name: v.querySelector("#swnm").value, swmsId: id, swmsTitle: title, jobId: jid, jobLabel: j ? jl(j) : "", sig, now, device: navigator.userAgent }), signedAt: serverTimestamp() };
+    const rec = { ...swmsSignatureData({ uid: me.uid, name: v.querySelector("#swnm").value, swmsId: id, swmsTitle: title, jobId: jid, jobLabel: j ? jl(j) : "", sig, now, device: navigator.userAgent }), signedAt: serverTimestamp(), companyId: myCompanyId() };
     try {
       const r = await addDoc(collection(db, "swmsSignatures"), rec);
       ui.mySigs = [...(ui.mySigs || []).filter(x => x.id !== r.id), { id: r.id, ...rec }];
@@ -4307,7 +4333,8 @@ async function swmsChunkBytes(id) {
 }
 async function swmsBytes(id) {          // official SWMS PDF, or a labelled placeholder when the PDF is not in swmsChunks
   if (!swmsBin[id]) {
-    const got = await swmsChunkBytes(id);
+    // The uploaded SWMS PDFs are Heartwood's own documents. Other companies get the labelled placeholder.
+    const got = myCompanyId() === "heartwood" ? await swmsChunkBytes(id) : null;
     if (got) { swmsPlaceholder[id] = false; swmsBin[id] = got; }
     else {
       const known = SWMS.find(x => x[0] === id);
@@ -4514,7 +4541,7 @@ ROUTE = installRouteOrder({
 QG = installQuotes({
   db, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, collection, query, where, onSnapshot, serverTimestamp, arrayUnion,
   $, esc, toast, $$, CLIENTS, TYPES, canSeeMoney, canQuote, canEditQuoteRates, todayStr, jobNo,
-  getMe: () => me, getUi: () => ui,
+  getMe: () => me, getUi: () => ui, getCompanyId: () => myCompanyId(),
   isAdmin: () => !!(me && me.role === "admin"),
   renderAdmin: () => (me && me.role === "admin" ? renderAdmin() : renderOperator()),
   get staff() { return staff; }

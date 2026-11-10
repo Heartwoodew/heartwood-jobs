@@ -380,6 +380,16 @@ service cloud.firestore {
     match /meta/{docId} {
       allow read, write: if isAdmin() && docId != "profitHistory";
     }
+    // Per-company settings for companies other than Heartwood (Heartwood keeps meta/quoteRates and meta/supervisors).
+    // {companyId}_quoteRates: office reads, company admins write. {companyId}_supervisors: office reads and writes.
+    match /companyMeta/{docId} {
+      allow get: if companyOffice() && (docId == callerCompany() + "_quoteRates" || docId == callerCompany() + "_supervisors");
+      allow create, update: if companyOffice()
+        && request.resource.data.get("companyId", "") == callerCompany()
+        && ((docId == callerCompany() + "_quoteRates" && profile().role == "admin")
+          || docId == callerCompany() + "_supervisors");
+      allow delete: if false;
+    }
     // Xero monthly P&L for the Home profit chart: Xero users read; only the box (tools/xero_profit_sync.py) writes.
     match /meta/profitHistory {
       allow read: if xeroUser() || isSync();
@@ -395,15 +405,15 @@ service cloud.firestore {
     // Find PO requests (app 'Find PO' button -> box worker tools/po_lookup.py). Admins only (Alex, Patrick, sync).
     match /poLookups/{docId} {
       allow read, write: if isAdmin();
-      allow create: if companyOffice() && request.resource.data.companyId == callerCompany() && request.resource.data.jobId is string;
-      allow read: if companyOffice() && docCompany(resource.data) == callerCompany();
+      // Find PO is Heartwood-only (Orbit portal and Alex's mailbox). Other companies can't queue or read lookups.
     }
 
     // Receipts (Upload receipt button). Any signed-in admin/operator creates their OWN receipt + image chunks and reads only
     // their own; the box sync user (tools/receipts_worker.py) and Alex read/update/delete all.
     function isWorker() { return isAdmin() || isOperator(); }
     match /receipts/{rid} {
-      allow create: if isWorker() && request.resource.data.uid == request.auth.uid && request.resource.data.status == "queued";
+      allow create: if isWorker() && notOtherCompany() && docCompany(request.resource.data) == "heartwood"
+        && request.resource.data.uid == request.auth.uid && request.resource.data.status == "queued";
       allow create: if companyStaff() && request.resource.data.uid == request.auth.uid
         && request.resource.data.status == "queued" && request.resource.data.companyId == callerCompany();
       allow read: if isOwner() || isSync() || (signedIn() && resource.data.uid == request.auth.uid);
@@ -411,7 +421,10 @@ service cloud.firestore {
       allow update, delete: if isOwner() || isSync();
     }
     match /receiptChunks/{cid} {
-      allow create: if isWorker() && request.resource.data.uid == request.auth.uid && request.resource.data.data.size() < 800000;
+      allow create: if isWorker() && notOtherCompany() && docCompany(request.resource.data) == "heartwood"
+        && request.resource.data.uid == request.auth.uid && request.resource.data.data.size() < 800000;
+      allow create: if companyStaff() && request.resource.data.get("companyId", "") == callerCompany()
+        && request.resource.data.uid == request.auth.uid && request.resource.data.data.size() < 800000;
       allow read, update, delete: if isOwner() || isSync();
     }
     // Reimbursements ledger + owner settings (Hubdoc email-in address): ALEX ONLY (+ the box). Patrick (admin) cannot read.
@@ -423,7 +436,7 @@ service cloud.firestore {
       function mine() { return signedIn() && tid.matches(request.auth.uid + "_[0-9]{4}-[0-9]{2}-[0-9]{2}"); }
       function noSentChange() { return !request.resource.data.diff(resource == null ? {} : resource.data).affectedKeys().hasAny(["sent", "sentAt", "sentBy"]); }
       allow read: if isOwner() || isSync() || mine();
-      allow create, update: if isOwner() || (mine() && isWorker() && request.resource.data.uid == request.auth.uid && noSentChange());
+      allow create, update: if isOwner() || (mine() && isWorker() && notOtherCompany() && request.resource.data.uid == request.auth.uid && noSentChange());
       allow delete: if isOwner();
     }
 
@@ -475,7 +488,7 @@ service cloud.firestore {
         && (request.resource.data.status == "Open" || request.resource.data.closedBy == request.auth.uid);
     }
     match /incidentCounter/{id} {
-      allow read: if isWorker();
+      allow read: if isWorker() && notOtherCompany();
       allow create: if isWorker() && id == "main" && notOtherCompany() && request.resource.data.n == 1 && request.resource.data.keys().hasOnly(["n"]);
       allow update: if isWorker() && id == "main" && notOtherCompany() && request.resource.data.n == resource.data.n + 1 && request.resource.data.keys().hasOnly(["n"]);
     }
@@ -486,8 +499,11 @@ service cloud.firestore {
         && seqOk() && iid == request.resource.data.reportNo
         && request.resource.data.type in ["Incident", "Near miss", "Hazard", "Injury", "Property damage"]
         && !request.resource.data.keys().hasAny(["closedBy", "closedAt", "closedByName"]);
-      allow read: if isAdmin() || (signedIn() && resource.data.reportedBy == request.auth.uid);
-      allow update: if (isAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
+      // Heartwood admins read and investigate Heartwood incidents only; other companies' reports stay with that company.
+      allow read: if isSync() || (signedIn() && resource.data.reportedBy == request.auth.uid);
+      allow get: if isAdmin() && docCompany(resource.data) == "heartwood";
+      allow list: if isAdmin() && resource.data.companyId == "heartwood";
+      allow update: if (isAdmin() && docCompany(resource.data) == "heartwood" && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
              ["rootCause", "actions", "history", "status", "closedBy", "closedByName", "closedAt", "photosEmailedAt", "photosEmailedCount", "updatedAt", "updatedBy"])
           && resource.data.status == "Open" && request.resource.data.status in ["Open", "Closed"]
           && (request.resource.data.status == "Open" || request.resource.data.closedBy == request.auth.uid))
@@ -497,11 +513,12 @@ service cloud.firestore {
     }
 
     // SWMS PDFs (base64 chunks, uploaded by tools/upload_swms.py). Any logged-in worker reads; only Alex / the box write.
-    match /swmsChunks/{cid} { allow read: if isWorker(); allow write: if isOwner() || isSync(); }
+    // Heartwood's own SWMS PDFs: Heartwood staff only. Other companies see the labelled placeholder.
+    match /swmsChunks/{cid} { allow read: if isWorker() && notOtherCompany(); allow write: if isOwner() || isSync(); }
     // Clients + contacts (supervisor / accounts names, mobiles, emails from builders' emails). Workers read (job Supervisor
     // card, tap-to-call); admins (Alex, Patrick, box) add/edit.
     match /clients/{cid} {
-      allow read: if isWorker();
+      allow read: if isWorker() && notOtherCompany();
       allow get: if companyStaff() && docCompany(resource.data) == callerCompany();
       allow list: if companyOffice() && resource.data.companyId == callerCompany();
       allow write: if isAdmin();
@@ -531,6 +548,7 @@ service cloud.firestore {
             || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("role", "") == "supervisor"
           )
           && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("tenantId", "heartwood") == "heartwood"
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("companyId", "heartwood") == "heartwood"
         )
       );
     }
@@ -565,16 +583,19 @@ service cloud.firestore {
     // their OWN (uid = theirs, server timestamp, current SWMS id, PNG < 100 KB, fixed fields); they read only their own; admins
     // (Alex, Patrick, box) read all. Signatures are a record: only Alex (owner) may update or delete.
     match /swmsSignatures/{sid} {
-      allow create: if isWorker() && request.resource.data.uid == request.auth.uid
+      allow create: if isWorker() && notOtherCompany() && request.resource.data.get("companyId", "heartwood") == "heartwood"
+        && request.resource.data.uid == request.auth.uid
         && request.resource.data.keys().hasOnly(["uid", "name", "swmsId", "swmsTitle", "version", "jobId", "jobLabel", "sig",
-             "signedAt", "signedAtMs", "expiresAtMs", "device"])
+             "signedAt", "signedAtMs", "expiresAtMs", "device", "companyId"])
         && request.resource.data.keys().hasAll(["uid", "name", "swmsId", "version", "sig", "signedAt"])
         && request.resource.data.signedAt == request.time
         && request.resource.data.swmsId in ["working-near-roads", "mobile-plant", "working-with-silica", "hazardous-substances", "electrical"]
         && request.resource.data.name is string && request.resource.data.name.size() >= 2 && request.resource.data.name.size() <= 80
         && request.resource.data.sig is string && request.resource.data.sig.size() < 100000
         && request.resource.data.sig.matches("data:image/png;base64,[A-Za-z0-9+/=]+");
-      allow read: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow read: if isSync() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow get: if isAdmin() && docCompany(resource.data) == "heartwood";
+      allow list: if isAdmin() && resource.data.companyId == "heartwood";
       allow update, delete: if isOwner();
     }
     // BEGIN CHAT RULES
@@ -800,7 +821,10 @@ service cloud.firestore {
     }
     function swmsCreateOk() {
       return swmsCanSign()
-        && request.resource.data.keys().hasOnly(["uid", "name", "swmsId", "swmsTitle", "version", "jobId", "jobLabel", "sig", "signedAt", "signedAtMs", "expiresAtMs", "device"])
+        && request.resource.data.keys().hasOnly(["uid", "name", "swmsId", "swmsTitle", "version", "jobId", "jobLabel", "sig", "signedAt", "signedAtMs", "expiresAtMs", "device", "companyId"])
+        && (request.resource.data.get("companyId", "heartwood") == "heartwood"
+          ? notOtherCompany()
+          : incStaffOf(request.resource.data.companyId))
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.name is string
         && request.resource.data.name.size() >= 2
@@ -1363,7 +1387,8 @@ service cloud.firestore {
         && id == request.auth.uid + "_" + request.resource.data.weekStart;
     }
     function tsDocOk() {
-      return request.resource.data.keys().hasOnly(["uid", "name", "weekStart", "weekEnd", "days", "entries", "totalHrs", "updatedAt", "updatedAtIso", "lastEntryId", "locationConsentAt", "sent", "sentAt", "sentBy"])
+      return request.resource.data.keys().hasOnly(["uid", "name", "weekStart", "weekEnd", "days", "entries", "totalHrs", "updatedAt", "updatedAtIso", "lastEntryId", "locationConsentAt", "sent", "sentAt", "sentBy", "companyId"])
+        && tsCompanyOk()
         && request.resource.data.name is string
         && request.resource.data.name.size() > 0
         && request.resource.data.name.size() <= 80
@@ -1377,6 +1402,22 @@ service cloud.firestore {
         && request.resource.data.updatedAt == request.time
         && request.resource.data.updatedAtIso is string
         && request.resource.data.updatedAtIso.size() <= 40;
+    }
+    // Heartwood timesheets carry no companyId (unchanged). Everyone else's must name their own company,
+    // so Heartwood never sees them and their own admins can.
+    function tsCompanyOk() {
+      return request.resource.data.get("companyId", "heartwood") == "heartwood"
+        ? notOtherCompany()
+        : incStaffOf(request.resource.data.companyId);
+    }
+    function tsCompanySent() {
+      return resource.data.get("companyId", "heartwood") != "heartwood"
+        && incAdminOf(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["sent", "sentAt", "sentBy"])
+        && request.resource.data.sent is bool
+        && (request.resource.data.get("sentAt", null) == null || request.resource.data.sentAt is string)
+        && (request.resource.data.get("sentBy", null) == null || request.resource.data.sentBy == request.auth.uid);
     }
     function tsFix(m) {
       return m.keys().hasOnly(["at", "fix", "lat", "lng", "accuracy"])
@@ -1483,6 +1524,7 @@ service cloud.firestore {
     }
     function tsSentUpdate() {
       return tsHeartwoodAdmin()
+        && resource.data.get("companyId", "heartwood") == "heartwood"
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["sent", "sentAt", "sentBy"])
         && request.resource.data.sent is bool
         && (request.resource.data.get("sentAt", null) == null || request.resource.data.sentAt is string)
@@ -1495,8 +1537,10 @@ service cloud.firestore {
         || (resource == null && id.matches('^' + request.auth.uid + '_[0-9]{4}-[0-9]{2}-[0-9]{2}$'))
         || (resource != null && resource.data.uid == request.auth.uid)
       );
+      allow get: if resource.data.get("companyId", "heartwood") != "heartwood" && incAdminOf(resource.data.companyId);
+      allow list: if resource.data.companyId != "heartwood" && incAdminOf(resource.data.companyId);
       allow create: if tsWorkerCreate(id);
-      allow update: if tsWorkerUpdate(id) || tsSentUpdate();
+      allow update: if tsWorkerUpdate(id) || tsSentUpdate() || tsCompanySent();
       allow delete: if false;
     }
 

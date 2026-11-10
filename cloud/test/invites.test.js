@@ -236,14 +236,14 @@ test("email stays held unless explicitly enabled, and tests cannot queue a live 
   assert.equal(held.doc.delivery, "held");
   assert.equal(held.doc.link, inviteLink(TOKEN));
   assert.match(buildInviteEmail(invite).text, /set your own password/);
-  const queued = planInviteDelivery(invite, inviteEmailConfig({ INVITE_EMAIL_ENABLED: "true", INVITE_EMAIL_FROM: "Heartwood <jobs@heartwoodew.com>" }));
+  const queued = planInviteDelivery(invite, inviteEmailConfig({ INVITE_EMAIL_ENABLED: "true", INVITE_EMAIL_HEARTWOOD: "true", INVITE_EMAIL_PROVIDER: "extension", INVITE_EMAIL_FROM: "Heartwood <jobs@heartwoodew.com>" }));
   assert.equal(queued.sent, false);
   assert.equal(queued.collection, "mail");
   assert.equal(queued.doc.to, "casey.nguyen@example.com");
   assert.equal(queued.doc.message.subject, "You're invited to Heartwood Jobs");
   const writes = [];
   const blocked = await queueInviteEmail(invite, {
-    env: { INVITE_EMAIL_ENABLED: "true" },
+    env: { INVITE_EMAIL_ENABLED: "true", INVITE_EMAIL_HEARTWOOD: "true" },
     writeMail: (col, doc) => writes.push({ col, doc }),
   });
   assert.equal(blocked.reason, "live-mail-not-allowed");

@@ -64,6 +64,16 @@ export function installQuotes(a) {
   };
 }
 
+// Quote rates live per company. Heartwood keeps meta/quoteRates exactly as before; every other company has
+// companyMeta/{companyId}_quoteRates, which starts empty (no rates invented) until its admin fills it in.
+export function quoteRatesPath(companyId) {
+  const id = String(companyId || "heartwood");
+  return id === "heartwood" ? ["meta", "quoteRates"] : ["companyMeta", id + "_quoteRates"];
+}
+function ratesCompany() {
+  return (api && typeof api.getCompanyId === "function" && api.getCompanyId()) || "heartwood";
+}
+
 function emptyMachineRates() {
   const out = {};
   for (const m of FLEET_MACHINES) {
@@ -235,9 +245,11 @@ function mergeMachineRates(stored) {
 
 async function ensureRates(force) {
   const ui = api.getUi();
-  if (ui.quoteRates && !force) return ui.quoteRates;
+  const cid = ratesCompany();
+  if (ui.quoteRates && ui.quoteRatesFor === cid && !force) return ui.quoteRates;
+  ui.quoteRatesFor = cid;
   try {
-    const s = await api.getDoc(api.doc(api.db, "meta", "quoteRates"));
+    const s = await api.getDoc(api.doc(api.db, ...quoteRatesPath(cid)));
     ui.quoteRates = s.exists() ? { ...emptyRates(), ...s.data() } : emptyRates();
     ui.quoteRates.machineRates = mergeMachineRates(ui.quoteRates.machineRates);
     if (!ui.quoteRates.yardAddress) ui.quoteRates.yardAddress = DEFAULT_DEPOT.yardAddress;
@@ -371,7 +383,7 @@ function openRatesEditor() {
       </fieldset>`;
     }).join("");
     d.innerHTML = `<form method="dialog" id="qrf" class="jf"><h2>Quote rates &amp; depot</h2>
-      <p class="sub">Stored in <code>meta/quoteRates</code>. Dollar rates are ex GST — leave blank until you know them (nothing invented). Plant rates include the operator. Labourer is a separate optional add-on. Depot is travel start.</p>
+      <p class="sub">Saved for your company only. Dollar rates are ex GST — leave blank until you know them (nothing invented). Plant rates include the operator. Labourer is a separate optional add-on. Depot is travel start.</p>
       <h3>Plant (operator included)</h3>
       <p class="sub">Presets: Truck only · Truck + skid · Truck + excavator · Truck + skid + excavator · Excavator only. Selecting a combo charges each machine once (no double truck).</p>
       ${plantFields}
@@ -411,7 +423,7 @@ function openRatesEditor() {
         updatedAt: serverTimestamp(), updatedBy: me.uid
       };
       try {
-        await setDoc(doc(db, "meta", "quoteRates"), data, { merge: true });
+        await setDoc(doc(db, ...quoteRatesPath(ratesCompany())), ratesCompany() === "heartwood" ? data : { ...data, companyId: ratesCompany() }, { merge: true });
         getUi().quoteRates = { ...emptyRates(), ...data, machineRates: mergeMachineRates(machineRates), updatedAt: new Date().toISOString() };
         d.close(); toast("Quote rates saved"); renderAdmin();
       } catch (e) { toast("Not saved: " + (e.code || e.message)); }
