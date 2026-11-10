@@ -340,6 +340,11 @@ service cloud.firestore {
     match /users/{uid} {
       allow read: if isAdmin() || (signedIn() && request.auth.uid == uid);
       allow write: if isAdmin();
+      // CallUp self-signup: the new owner writes their own admin profile for the company they just created.
+      allow create: if signedIn() && request.auth.uid == uid && ownerProfileCreate();
+      // Company admins and supervisors (not Heartwood, which uses isAdmin above) read their own company's staff.
+      allow get: if companyOffice() && docCompany(resource.data) == callerCompany();
+      allow list: if companyOffice() && resource.data.companyId == callerCompany();
     }
 
     match /jobs/{jobId} {
@@ -966,7 +971,8 @@ service cloud.firestore {
     function inviteCreateOk(inviteId) {
       return inviteAdmin()
         && inviteBaseOk()
-        && request.resource.data.keys().hasOnly(["name", "email", "role", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId"])
+        && request.resource.data.keys().hasOnly(["name", "email", "role", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId", "companyId"])
+        && request.resource.data.get("companyId", request.resource.data.tenantId) == request.resource.data.tenantId
         && request.resource.data.status == "pending"
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.createdAt == request.time
@@ -981,6 +987,7 @@ service cloud.firestore {
         && request.resource.data.cancelledAt == request.time
         && inviteSame("name") && inviteSame("email") && inviteSame("role") && inviteSame("createdBy")
         && inviteSame("createdAt") && inviteSame("expiresAt") && inviteSame("token") && inviteSame("tenantId")
+        && inviteSame("companyId")
         && inviteSame("resentAt") && inviteSame("resentBy")
         && inviteLockAgrees(request.resource.data.email, inviteId);
     }
@@ -992,14 +999,14 @@ service cloud.firestore {
         && request.resource.data.resentAt == request.time
         && inviteExpiryWindow()
         && inviteSame("name") && inviteSame("email") && inviteSame("role") && inviteSame("createdBy")
-        && inviteSame("createdAt") && inviteSame("tenantId")
+        && inviteSame("createdAt") && inviteSame("tenantId") && inviteSame("companyId")
         && inviteSame("cancelledAt") && inviteSame("cancelledBy")
         && inviteLockAgrees(request.resource.data.email, inviteId);
     }
     function inviteUpdateOk(inviteId) {
       return inviteAdmin()
         && inviteBaseOk()
-        && request.resource.data.keys().hasOnly(["name", "email", "role", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId", "cancelledAt", "cancelledBy", "resentAt", "resentBy"])
+        && request.resource.data.keys().hasOnly(["name", "email", "role", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId", "companyId", "cancelledAt", "cancelledBy", "resentAt", "resentBy"])
         && (inviteCancelOk(inviteId) || inviteResendOk(inviteId));
     }
 
