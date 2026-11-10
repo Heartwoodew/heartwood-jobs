@@ -151,3 +151,78 @@ test("a second company's admin can create a staff invite (the app adds companyId
     tx.set(lockRef, { email: bad.invite.email, status: "pending", inviteId: badRef.id, expiresAt: badExp, role: "operator", tenantId: "bravo" });
   }));
 });
+
+// Multi-company audit batch 2 (10 Nov 2026): incidents per company, company clients, settings extras.
+const incData = (uid, companyId, n) => ({
+  type: "Near miss", occurredAt: "2026-11-10T09:00", jobId: "", jobNo: "", location: "1 Test St", people: "", what: "Slipped", injury: "", action: "Cleaned up",
+  reportedBy: uid, reportedByName: "Someone", reportedAt: "2026-11-10T09:05:00.000Z", status: "Open", companyId, ...(companyId === "heartwood" ? {} : { tenantId: companyId }),
+  rootCause: "", actions: [], history: [], seq: n, reportNo: "INC-" + String(n).padStart(4, "0"),
+});
+async function reportIncident(fdb, uid, companyId) {
+  return runTransaction(fdb, async tx => {
+    const cref = doc(fdb, "incidentCounter", companyId === "heartwood" ? "main" : companyId);
+    const c = await tx.get(cref);
+    const n = (c.exists() ? c.data().n : 0) + 1;
+    const data = incData(uid, companyId, n);
+    const id = companyId === "heartwood" ? data.reportNo : companyId + "_" + data.reportNo;
+    tx.set(cref, { n }); tx.set(doc(fdb, "incidents", id), data); return id;
+  });
+}
+
+test("incidents: each company numbers its own; admins see only their company's", async () => {
+  await env.withSecurityRulesDisabled(async ctx => {
+    const d = ctx.firestore();
+    await setDoc(doc(d, "companies/bravo"), { name: "Bravo", ownerUid: BRAVO, status: "active", plan: "trial", isTest: false });
+    await setDoc(doc(d, "users/bravoOp"), { role: "operator", name: "Bo", companyId: "bravo", tenantId: "bravo" });
+    await setDoc(doc(d, "incidentCounter/main"), { n: 41 });
+  });
+  // Heartwood continues from main (41 -> 42) exactly as before.
+  const hwId = await assertSucceeds(reportIncident(db(OP), OP, "heartwood"));
+  assert.equal(hwId, "INC-0042");
+  // Bravo starts at 1 on its own counter, in its own id space.
+  const bId = await assertSucceeds(reportIncident(db("bravoOp"), "bravoOp", "bravo"));
+  assert.equal(bId, "bravo_INC-0001");
+  await env.withSecurityRulesDisabled(async ctx => {
+    const main = await getDoc(doc(ctx.firestore(), "incidentCounter/main"));
+    assert.equal(main.data().n, 42);
+  });
+  // Bravo's admin lists Bravo incidents only.
+  const list = await assertSucceeds(getDocs(query(collection(db(BRAVO), "incidents"), where("companyId", "==", "bravo"))));
+  assert.deepEqual(list.docs.map(d => d.id), ["bravo_INC-0001"]);
+  await assertFails(getDocs(query(collection(db(BRAVO), "incidents"), where("companyId", "==", "heartwood"))));
+  await assertFails(getDoc(doc(db(BRAVO), "incidents/INC-0042")));
+  await assertSucceeds(updateDoc(doc(db(BRAVO), "incidents/bravo_INC-0001"), { rootCause: "Wet floor" }));
+  await assertFails(updateDoc(doc(db(BRAVO), "incidents/INC-0042"), { rootCause: "x" }));
+  // A Bravo operator can't list the company's incidents, only their own.
+  await assertFails(getDocs(query(collection(db("bravoOp"), "incidents"), where("companyId", "==", "bravo"))));
+  await assertSucceeds(getDocs(query(collection(db("bravoOp"), "incidents"), where("companyId", "==", "bravo"), where("reportedBy", "==", "bravoOp"))));
+  // Bravo staff can't take a Heartwood number or bump Heartwood's counter.
+  const bo = db("bravoOp");
+  await assertFails(runTransaction(bo, async tx => {
+    const cref = doc(bo, "incidentCounter", "main"); const c = await tx.get(cref); const n = c.data().n + 1;
+    tx.set(cref, { n }); tx.set(doc(bo, "incidents", "INC-" + String(n).padStart(4, "0")), incData("bravoOp", "bravo", n));
+  }));
+  await assertFails(updateDoc(doc(db("bravoOp"), "incidentCounter/main"), { n: 43 }));
+  // Heartwood admin still lists Heartwood incidents.
+  const hw = await assertSucceeds(getDocs(query(collection(db(ALEX), "incidents"), where("companyId", "==", "heartwood"))));
+  assert.ok(hw.docs.some(d => d.id === "INC-0042"));
+});
+
+test("company clients are scoped; settings accept a job prefix and accounts contact", async () => {
+  const bravo = db(BRAVO);
+  await assertSucceeds(setDoc(doc(bravo, "clients/bravo_acme-homes"), { name: "Acme Homes", office: {}, contacts: [], companyId: "bravo", tenantId: "bravo" }, { merge: true }));
+  await assertFails(setDoc(doc(bravo, "clients/acme-homes"), { name: "Acme Homes", office: {}, contacts: [] }));
+  const mine = await assertSucceeds(getDocs(query(collection(bravo, "clients"), where("companyId", "==", "bravo"))));
+  assert.deepEqual(mine.docs.map(d => d.id), ["bravo_acme-homes"]);
+  await assertFails(getDocs(collection(bravo, "clients")));
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), "companies/bravo"), {
+      name: "Bravo", legalName: "Bravo Pty Ltd", abn: "12 345 678 901", signoff: "Bravo", logoUrl: "", address: "1 B St", phone: "", email: "office@bravo.test",
+      accountsEmail: "acc@bravo.test", hubdocAddress: "", ownerUid: BRAVO, createdBy: BRAVO, status: "active", plan: "trial", origin: "signup", isTest: false,
+      staffCount: 1, jobCount: 0, billing: { provider: null, status: "not-configured", stripeCustomerId: null, stripeSubscriptionId: null },
+    });
+  });
+  await assertSucceeds(updateDoc(doc(bravo, "companies/bravo"), { jobPrefix: "BRV", accountsName: "Nina Numbers" }));
+  await assertFails(updateDoc(doc(bravo, "companies/bravo"), { jobPrefix: "br-v" }));
+  await assertFails(updateDoc(doc(bravo, "companies/bravo"), { plan: "paid" }));
+});

@@ -2,7 +2,7 @@
   "id": "/app/",
   "name": "CallUp",
   "short_name": "CallUp",
-  "description": "CallUp for Heartwood Earthworx. Jobs, SWMS and quotes for this business.",
+  "description": "CallUp. Jobs, SWMS, timesheets and quotes for your crew.",
   "start_url": "/app/",
   "scope": "/app/",
   "display": "standalone",

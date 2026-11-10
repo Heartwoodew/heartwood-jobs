@@ -9,8 +9,8 @@ import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager
 import { getStorage, ref as storageRef, uploadBytes, connectStorageEmulator, listAll, getMetadata, getBlob }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
 import { firebaseConfig, useEmulator } from "./firebase-config.js";
-import { installQuotes, adminViewRouter } from "./features/quotes.js";
-import { installRouteOrder, orderJobsForRun, runSheetId, geoPatch } from "./features/route-order.js";
+import { installQuotes, adminViewRouter, setDefaultDepot } from "./features/quotes.js";
+import { installRouteOrder, orderJobsForRun, runSheetId, geoPatch, setRouteDepot } from "./features/route-order.js";
 import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPlanned, jobPhotoPrefix, storageErrorCode, summarizePhotoListing } from "./features/cloud-storage.js";
 import { buildOperationalExport, retentionAdminText, retentionView } from "./features/cloud-retention.js";
 import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, lightboxHtml, photoFailureText } from "./features/photo-gallery.js";
@@ -26,6 +26,7 @@ import {
   buildCompanyCreate, buildFriendCompany, buildTestCompany, companyDetailPatch, companyIdFromName, demoBundle,
   friendCodeOk, friendInviteLink, hoursBrand, isPlatformOwner, newFriendCode,
   ownerProfile, scopeRecord, trialEnd, validateCompanyInput, masterRow,
+  builderSignoff, clientDocId, companyClientNames, companyJobPrefix, companyMailbox, companyStdClients, timesheetMailParts,
 } from "./features/company.js";
 import { companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, signupFormHtml } from "./features/company-ui.js";
 import { exportAllowed, hoursCsv, invoiceCsv, jobsCsv, reimbursementsCsv } from "./features/company-exports.js";
@@ -62,6 +63,7 @@ if (useEmulator) {
 if ("serviceWorker" in navigator && !useEmulator) navigator.serviceWorker.register("sw.js", { scope: "./" });
 
 // ------------------------------------------------------------------ constants / helpers
+// Client names for job/quote forms. Heartwood's builders by default; replaced in place per company (refreshClientLists).
 export const CLIENTS = ["Orbit Homes (Qld) Pty Ltd", "Torsion Built Pty Ltd", "Silkwood Homes", "OJ Pippin Homes", "Envision Homes", "Private"];
 const TYPES = { spoil: "Spoil removal", backslab: "Backslab", waterproof: "Waterproofing", clean: "Site clean", other: "Other" };
 const STATUSES = ["Scheduled", "In progress", "Done", "Cancelled"];
@@ -140,6 +142,8 @@ onAuthStateChanged(auth, async user => {
     if (cid) me.testCompanyId = cid;
   }
   await loadCompanyBrand();
+  CLI = null; refreshClientLists();
+  if (myCompanyId() !== "heartwood" && (me.role === "admin" || me.role === "supervisor")) loadClients().catch(() => {});
   $("#who").textContent = `${me.name} · ${me.role}`; $("#logout").classList.remove("hidden");
   CHAT.start();
   if (me.role === "admin") {
@@ -201,6 +205,9 @@ async function loadCompanyBrand() {
   const snap = await getDoc(doc(db, "companies", id)).catch(() => null);
   if (snap && snap.exists()) setActiveCompany({ ...snap.data(), companyId: id });
   else setActiveCompany(id === "heartwood" ? null : { companyId: id, name: "Your company" });
+  // Depot for quotes and run sheets: Heartwood's yard, or the company's own address.
+  const depot = id === "heartwood" ? "" : orgSettings().address;
+  setRouteDepot(depot); setDefaultDepot(depot);
   paintBrand();
 }
 function inviteDisplayNow() {
@@ -253,14 +260,14 @@ async function callInvite(name, data) {
   try {
     res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ data }) });
   } catch {
-    const err = new Error("unavailable");
-    err.code = "unavailable";
+    const err = new Error("offline");
+    err.code = "offline";
     throw err;
   }
   const body = await res.json().catch(() => ({}));
   if (!res.ok || body.error) {
     const err = new Error("invite-failed");
-    err.code = res.status === 404 ? "unavailable" : "unavailable";
+    err.code = res.status === 404 ? "unavailable" : res.status === 429 ? "busy" : "server-error";
     throw err;
   }
   return body.result || {};
@@ -279,8 +286,8 @@ function renderInviteAccept(token) {
     };
     $("#app").innerHTML = acceptViewHtml(model);
     if (model.ok) bindInviteAccept(token, false, model.email);
-  }).catch(() => {
-    $("#app").innerHTML = acceptViewHtml({ ok: false, reason: "unavailable" });
+  }).catch(e => {
+    $("#app").innerHTML = acceptViewHtml({ ok: false, reason: (e && e.code) || "server-error" });
   });
 }
 function bindInviteAccept(token, previewOnly, email) {
@@ -301,7 +308,7 @@ function bindInviteAccept(token, previewOnly, email) {
       history.replaceState({}, "", location.pathname);
       await signInWithEmailAndPassword(auth, address, form.p.value);
     } catch (e) {
-      err.textContent = created ? "Your login was created. Sign in with that password." : inviteFailureText("unavailable");
+      err.textContent = created ? "Your login was created. Sign in with that password." : inviteFailureText((e && e.code) || "server-error");
     }
   };
 }
@@ -311,6 +318,13 @@ function orgLogoHtml(org) {
 }
 function paintBrand() {
   const org = orgSettings();
+  // Signed out (sign-in, sign-up, invite screens): plain CallUp, no company name.
+  if (!me) {
+    const el0 = document.querySelector(".brand");
+    if (el0) el0.innerHTML = `<span class="wordmark" aria-label="${esc(PRODUCT_NAME)}">Call<span>Up</span></span>`;
+    document.title = PRODUCT_NAME;
+    return;
+  }
   const mark = org.isTest ? `<span class="co-badge co-test">TEST</span>` : org.plan === "friend" ? `<span class="co-badge co-friend">FRIEND</span>` : "";
   const exit = me && me.testCompanyId ? `<button type="button" class="ghost" id="testexit">Back to Heartwood</button>` : "";
   const el = document.querySelector(".brand");
@@ -351,13 +365,11 @@ function signInFailureText(e) {
   return "Sign-in failed: " + (code || (e && e.message) || "unknown error");
 }
 function renderLogin() {
-  const org = orgSettings();
   paintBrand();
   $("#app").innerHTML = `<form id="login" class="card login">
-    <div class="login-brand"><div class="wordmark" aria-label="${esc(PRODUCT_NAME)}">Call<span>Up</span></div>
-      <p class="orgline">${orgLogoHtml(org)}${esc(org.name)}</p></div>
+    <div class="login-brand"><div class="wordmark" aria-label="${esc(PRODUCT_NAME)}">Call<span>Up</span></div></div>
     <h2>Sign in</h2>
-    <p class="sub">CallUp for ${esc(org.legalName)}. Use the email this business gave you.</p>
+    <p class="sub">Use the email your company gave you.</p>
     <label>Email<input name="e" type="email" autocomplete="username" required></label>
     <label>Password<input name="p" type="password" autocomplete="current-password" required></label>
     <button class="big primary">Sign in</button>
@@ -460,6 +472,7 @@ function bindSettings(A) {
       name: form.name.value, legalName: form.legalName.value, abn: form.abn.value, address: form.address.value,
       phone: form.phone.value, email: form.email.value, accountsEmail: form.accountsEmail.value,
       hubdocAddress: form.hubdocAddress.value, signoff: form.signoff.value, logoUrl: form.logoUrl.value,
+      ...(form.jobPrefix ? { jobPrefix: form.jobPrefix.value } : {}), ...(form.accountsName ? { accountsName: form.accountsName.value } : {}),
     });
     if (!checked.ok) { toast(companyFailure(checked.reason)); return; }
     const typed = form.logoUrl.value.trim();
@@ -623,7 +636,7 @@ function queueOf(j) {
   if (j.sm8Status === "Quote") return "Quote";
   return "Work Order";
 }
-const jobNo = j => j.sm8JobNo ? j.sm8JobNo : "HW-" + String(j.id || "").slice(-4).toUpperCase();
+const jobNo = j => j.sm8JobNo ? j.sm8JobNo : companyJobPrefix(orgSettings()) + "-" + String(j.id || "").slice(-4).toUpperCase();
 const firstLine = s => String(s || "").split(/\n|\. /)[0];
 const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Unscheduled";
 const NAV = [["home", "⌂", "Home"], ["compliance", "🚐", "Compliance"], ["prestart", "☑", "Prestart"], ["chat", "💬", "Chat"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["staff", "👥", "Staff"], ["inbox", "✉", "Inbox", 0, 1],
@@ -1536,14 +1549,15 @@ const ampm = t => { const m = /^(\d{1,2}):(\d{2})$/.exec(t || ""); if (!m) retur
 const hr1 = h => { const r = Math.round(h * 100) / 100; return (Number.isInteger(r * 10) ? r.toFixed(1) : String(r)) + " hrs"; };
 function tsText(t, name, eol = "\n") {
   const ws = t.weekStart, entries = sortedEntries(t.entries).map(paidShift);
-  const L = ["Hi Nicole,", "", `Here are ${name}'s hours for the week of ${tsLong(ws, "Mon")} to ${tsLong(addDays(ws, 6), "Sun")}.`, ""];
+  const tm = timesheetMailParts(orgSettings(), me && me.name);
+  const L = [tm.greeting, "", `Here are ${name}'s hours for the week of ${tsLong(ws, "Mon")} to ${tsLong(addDays(ws, 6), "Sun")}.`, ""];
   if (!entries.length) {
     let worked = 0;
     TS_DAYS.forEach((n, i) => { const ds = addDays(ws, i), d = (t.days || {})[ds] || {}, h = tsHours(d);
       if (h) { worked++; L.push(`${tsDayLbl(ds, n)}   ${ampm(d.start)} to ${ampm(d.finish)}   ${hr1(h)}`); if (d.note) L.push(`      ${d.note}`); }
       else if (d.note) L.push(`${tsDayLbl(ds, n)}   not worked (${d.note})`); });
     if (!worked) L.push("No hours entered this week.");
-    L.push("", "A 30-minute lunch break has already been taken off each day.", "", `TOTAL: ${hr1(tsTotal(t.days))}`, "", "Thanks,", "Alex", orgSettings().signoff, POWERED_BY);
+    L.push("", "A 30-minute lunch break has already been taken off each day.", "", `TOTAL: ${hr1(tsTotal(t.days))}`, "", "Thanks,", tm.sender, orgSettings().signoff, POWERED_BY);
     return L.join(eol);
   }
   let worked = 0;
@@ -1565,7 +1579,7 @@ function tsText(t, name, eol = "\n") {
     if (h) { worked++; L.push(`${tsDayLbl(ds, n)}   ${ampm(d.start)} to ${ampm(d.finish)}   ${hr1(h)}`); if (d.note) L.push(`      ${d.note}`); }
   });
   if (!worked) L.push("No hours entered this week.");
-  L.push("", "Clocked rows were stamped at clock on and clock off. Manual rows were typed in.", "A 30-minute lunch is taken off unless a break was entered.", "", `TOTAL: ${hr1(sheetHours(t))}`, "", "Thanks,", "Alex", orgSettings().signoff, POWERED_BY);
+  L.push("", "Clocked rows were stamped at clock on and clock off. Manual rows were typed in.", "A 30-minute lunch is taken off unless a break was entered.", "", `TOTAL: ${hr1(sheetHours(t))}`, "", "Thanks,", tm.sender, orgSettings().signoff, POWERED_BY);
   return L.join(eol);
 }
 function tsPeople(L) {
@@ -2245,8 +2259,8 @@ function reimbPill() {
     if (j) editJob(j); else { ui.view = "reimb"; renderAdmin(); } });
 }
 // ---- Home: first screen after login. Today + tomorrow, quick counts, big buttons to the other screens.
-const GM = "https://mail.google.com/mail/u/?authuser=alex@heartwoodew.com";
-const jobPhotosUrl = j => GM + "#search/" + encodeURIComponent(`subject:"[Job Photos]" "${jobNo(j)}"`);
+const gmBase = () => { const box = companyMailbox(orgSettings()); return "https://mail.google.com/mail/u/" + (box ? "?authuser=" + encodeURIComponent(box) : ""); };
+const jobPhotosUrl = j => gmBase() + "#search/" + encodeURIComponent(`subject:"[Job Photos]" "${jobNo(j)}"`);
 const hasPhotos = j => !!(j.photosEmailedAt || j.photosEmailedCount);
 const jobPhotosIcon = j => hasPhotos(j) ? ` <a class="phicon" href="${jobPhotosUrl(j)}" target="_blank" rel="noopener" title="Photos in Gmail" onclick="event.stopPropagation()">📷</a>` : "";
 const jobPhotosLink = j => !hasPhotos(j) ? "" : ` <a class="phlink" href="${jobPhotosUrl(j)}" target="_blank" rel="noopener">📷 Photos (${j.photosEmailedCount || 1} sent)</a>`;
@@ -2751,6 +2765,11 @@ const INV_FLOOR = 5402;                  // last number used on the planner's Co
 const XERO_COLS = ["*ContactName", "EmailAddress", "POAddressLine1", "*InvoiceNumber", "Reference", "*InvoiceDate", "*DueDate",
   "InventoryItemCode", "*Description", "*Quantity", "*UnitAmount", "Discount", "*AccountCode", "*TaxType", "Currency"];
 const STD_CLIENTS = ["Orbit Homes (Qld) Pty Ltd", "Torsion Built Pty Ltd", "Silkwood Homes", "OJ Pippin Homes", "Envision Homes"];
+function refreshClientLists() {
+  const org = orgSettings();
+  CLIENTS.splice(0, CLIENTS.length, ...companyClientNames(org, CLI || []));
+  STD_CLIENTS.splice(0, STD_CLIENTS.length, ...companyStdClients(org, CLI || []));
+}
 const INV_TASK = { spoil: "Spoil removal", backslab: "Backslab", clean: "Site clean" };
 const ABBR = { street: "St", court: "Crt", circuit: "Cct", crescent: "Cres", avenue: "Ave", road: "Rd", drive: "Dr", place: "Pl", lane: "Lane", parade: "Pde", terrace: "Tce" };
 function tidyAddress(a) {          // port of hwdata.tidy_address
@@ -3112,7 +3131,11 @@ function bindInbox(A) {
 // Workers read, admins edit. Contacts come from builders' emails (see data/clients_contacts.json).
 let CLI = null, CLI_ERR = "";
 async function loadClients(force) {
-  if (!CLI || force) { try { CLI = (await getDocs(collection(db, "clients"))).docs.map(d => ({ id: d.id, ...d.data() })); CLI_ERR = ""; } catch (e) { CLI = []; CLI_ERR = e.code || e.message; } }
+  if (!CLI || force) {
+    const ref = myCompanyId() === "heartwood" ? collection(db, "clients") : query(collection(db, "clients"), where("companyId", "==", myCompanyId()));
+    try { CLI = (await getDocs(ref)).docs.map(d => ({ id: d.id, ...d.data() })); CLI_ERR = ""; } catch (e) { CLI = []; CLI_ERR = e.code || e.message; }
+    refreshClientLists();
+  }
   return CLI;
 }
 const normCo = s => String(s || "").toLowerCase().replace(/\(.*?\)|pty|ltd|homes?|built|[^a-z]/g, "");
@@ -3160,8 +3183,9 @@ function bindClients(A) {
   A.querySelectorAll("[data-ced]").forEach(b => b.onclick = () => { const [id, i] = b.dataset.ced.split(":"); editContact(CLI.find(c => c.id === id), i === "new" ? -1 : +i); });
   const nb = A.querySelector("[data-cnew]"); if (nb) nb.onclick = async () => {
     const name = (prompt("Client (company) name:") || "").trim(); if (!name) return;
-    const id = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "client";
-    try { await setDoc(doc(db, "clients", id), { name, office: {}, contacts: [], updatedAt: serverTimestamp() }, { merge: true }); await loadClients(true); renderAdmin(); } catch (e) { toast("Not saved: " + (e.code || e.message)); }
+    const cid = myCompanyId(), id = clientDocId(cid, name);
+    const scope = cid === "heartwood" ? {} : { companyId: cid, tenantId: cid };
+    try { await setDoc(doc(db, "clients", id), { name, office: {}, contacts: [], updatedAt: serverTimestamp(), ...scope }, { merge: true }); await loadClients(true); renderAdmin(); } catch (e) { toast("Not saved: " + (e.code || e.message)); }
   };
 }
 function editContact(c, i) {
@@ -3212,12 +3236,11 @@ Reason:
 Could you please raise a variation or send an amended PO to cover the difference?
 
 Thanks,
-Alex Daly
-${orgSettings().signoff}
-0499 802 812
+${builderSignoff(orgSettings(), me && me.name).join("\n")}
 
 ${POWERED_BY}`;
-  const url = "https://mail.google.com/mail/?authuser=" + encodeURIComponent("alex@heartwoodew.com") + "&view=cm&fs=1&to=" + encodeURIComponent(s.email)
+  const box = companyMailbox(orgSettings());
+  const url = "https://mail.google.com/mail/?" + (box ? "authuser=" + encodeURIComponent(box) + "&" : "") + "view=cm&fs=1&to=" + encodeURIComponent(s.email)
     + "&su=" + encodeURIComponent(`PO exceeded - ${j.address || ""} - PO ${po}`) + "&body=" + encodeURIComponent(body);
   window.HW_LAST_MAILTO = url;      // Gmail compose in a new tab; nothing is sent from here
   const a2 = document.createElement("a"); a2.href = url; a2.target = "_blank"; a2.rel = "noopener"; document.body.appendChild(a2); a2.click(); a2.remove();
@@ -3991,7 +4014,7 @@ const incPad = n => "INC-" + String(n).padStart(4, "0");
 const nowLocal = () => new Intl.DateTimeFormat("sv-SE", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date()).replace(" ", "T");
 const stamp = () => new Date().toLocaleString("en-AU", { timeZone: TZ, dateStyle: "short", timeStyle: "short" });
 const fmtDT = s => s ? new Date(s + ":00Z").toLocaleString("en-AU", { timeZone: "UTC", weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" }) : "-";
-const incPhotosUrl = r => GM + "#search/" + encodeURIComponent(`subject:"[Incident Photos] ${r.reportNo}"`);
+const incPhotosUrl = r => gmBase() + "#search/" + encodeURIComponent(`subject:"[Incident Photos] ${r.reportNo}"`);
 const incCls = r => r.status === "Closed" ? "q-comp" : "q-alert";
 const isAdm = () => me && me.role === "admin";
 document.addEventListener("click", e => {
@@ -4036,10 +4059,12 @@ function incidentForm(j) {
       const no = await runTransaction(db, async tx => {
         const cref = doc(db, "incidentCounter", myCompanyId() === "heartwood" ? "main" : myCompanyId()), c = await tx.get(cref);
         const n = (c.exists() ? c.data().n : 0) + 1, reportNo = incPad(n);
-        tx.set(cref, { n }); tx.set(doc(db, "incidents", reportNo), { ...data, seq: n, reportNo }); return reportNo;
+        // Heartwood keeps incidents/INC-0001. Other companies: incidents/{companyId}_INC-0001, so numbers never collide.
+        const id = myCompanyId() === "heartwood" ? reportNo : myCompanyId() + "_" + reportNo;
+        tx.set(cref, { n }); tx.set(doc(db, "incidents", id), { ...data, seq: n, reportNo }); return { id, reportNo };
       });
-      toast(`${no} saved`); v.remove();
-      incidentDetail({ id: no, reportNo: no, seq: 0, ...data });
+      toast(`${no.reportNo} saved`); v.remove();
+      incidentDetail({ id: no.id, reportNo: no.reportNo, seq: 0, ...data });
     } catch (e) { btn.disabled = false; toast("Not saved: " + (e.code || e.message)); }
   };
 }

@@ -397,11 +397,86 @@ const COMPANY_DETAIL_KEYS = ["name", "legalName", "abn", "signoff", "logoUrl", "
 export function companyDetailPatch(current, input) {
   const checked = validateCompanyInput({ ...current, ...input });
   if (!checked.ok) return checked;
+  const extras = validateCompanyExtras(input || {});
+  if (!extras.ok) return extras;
+  const value = { ...checked.value, ...extras.value };
   const patch = {};
   for (const key of COMPANY_DETAIL_KEYS) {
     if (checked.value[key] !== (current && current[key])) patch[key] = checked.value[key];
   }
-  return { ok: true, value: checked.value, patch };
+  // Optional settings fields. Only written when given, so Heartwood's record is untouched unless an admin sets them.
+  for (const key of COMPANY_EXTRA_KEYS) {
+    if (!(key in (input || {}))) continue;
+    if (value[key] !== ((current && current[key]) || "")) patch[key] = value[key];
+  }
+  return { ok: true, value, patch };
+}
+
+// ---- Per-company details used in place of Heartwood's (job numbers, clients, emails).
+export const COMPANY_EXTRA_KEYS = ["jobPrefix", "accountsName"];
+export const JOB_PREFIX_RE = /^[A-Z0-9]{1,5}$/;
+export const HEARTWOOD_JOB_PREFIX = "HW";
+export const HEARTWOOD_CLIENTS = Object.freeze(["Orbit Homes (Qld) Pty Ltd", "Torsion Built Pty Ltd", "Silkwood Homes", "OJ Pippin Homes", "Envision Homes"]);
+// Neutral sender for app emails from companies other than Heartwood. Replies go to the company's own email.
+export const CALLUP_SENDER = "CallUp <noreply@callupapp.com.au>";
+
+export function validateCompanyExtras(input = {}) {
+  const jobPrefix = clip(input.jobPrefix, 5).toUpperCase();
+  const accountsName = clip(input.accountsName, 80);
+  if (jobPrefix && !JOB_PREFIX_RE.test(jobPrefix)) return { ok: false, reason: "jobPrefix" };
+  if (/[\n\r\t<>]/.test(accountsName)) return { ok: false, reason: "accountsName" };
+  return { ok: true, value: { jobPrefix, accountsName } };
+}
+
+// "Acme Earthmoving" -> "AE", "Bravo" -> "BRA". Heartwood is always HW.
+export function derivedJobPrefix(name) {
+  const words = String(name || "").toUpperCase().replace(/[^A-Z0-9 ]+/g, " ").split(/\s+/)
+    .filter(w => w && !["PTY", "LTD", "THE", "AND", "CO", "CO.", "QLD"].includes(w));
+  if (!words.length) return "JOB";
+  const p = words.length === 1 ? words[0].slice(0, 3) : words.slice(0, 3).map(w => w[0]).join("");
+  return p || "JOB";
+}
+
+export function companyJobPrefix(org) {
+  if (isHeartwoodCompany(org && org.companyId)) return HEARTWOOD_JOB_PREFIX;
+  const set = String((org && org.jobPrefix) || "").trim().toUpperCase();
+  return JOB_PREFIX_RE.test(set) ? set : derivedJobPrefix(org && org.name);
+}
+
+// Builder/client names offered on job and quote forms. Heartwood keeps its fixed builder list;
+// other companies start empty and see only the clients they add (plus "Private").
+export function companyClientNames(org, savedClients = []) {
+  if (isHeartwoodCompany(org && org.companyId)) return [...HEARTWOOD_CLIENTS, "Private"];
+  const names = [...new Set((savedClients || []).map(c => String((c && c.name) || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  return [...names, "Private"];
+}
+export function companyStdClients(org, savedClients = []) {
+  return companyClientNames(org, savedClients).filter(n => n !== "Private");
+}
+
+// Client doc id. Heartwood keeps its plain slug ids; other companies are prefixed so ids never collide.
+export function clientDocId(companyId, name) {
+  const slug = String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "client";
+  return isHeartwoodCompany(companyId) ? slug : `${companyId}_${slug}`.slice(0, 100);
+}
+
+// Timesheet email text: greeting and sign-off. Heartwood keeps "Hi Nicole" / "Alex".
+export function timesheetMailParts(org, senderName) {
+  if (isHeartwoodCompany(org && org.companyId)) return { greeting: "Hi Nicole,", sender: "Alex" };
+  const who = String((org && org.accountsName) || "").trim();
+  return { greeting: who ? `Hi ${who.split(/\s+/)[0]},` : "Hi,", sender: String(senderName || "").trim() || (org && org.signoff) || "" };
+}
+
+// Sign-off lines for builder emails (PO exceeded). Heartwood keeps Alex Daly and his mobile.
+export function builderSignoff(org, senderName) {
+  if (isHeartwoodCompany(org && org.companyId)) return ["Alex Daly", (org && org.signoff) || "Heartwood Earthworx", "0499 802 812"];
+  return [String(senderName || "").trim(), (org && org.signoff) || (org && org.name) || "", String((org && org.phone) || "").trim()].filter(Boolean);
+}
+
+// Gmail address used for compose/search links. Heartwood: alex@heartwoodew.com. Others: the company email.
+export function companyMailbox(org) {
+  if (isHeartwoodCompany(org && org.companyId)) return HEARTWOOD_OFFICE_EMAIL;
+  return String((org && org.email) || "").trim();
 }
 
 export function heartwoodSeed(now = new Date()) {
