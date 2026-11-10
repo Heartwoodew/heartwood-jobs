@@ -70,8 +70,11 @@ function currentPrices() {
   return stripePrices(STRIPE_MODE, STRIPE_LIVE ? { base: STRIPE_LIVE_BASE_PRICE_ID.value(), extra: STRIPE_LIVE_EXTRA_PRICE_ID.value() } : {});
 }
 
+// firebase-functions creates its own "__admin__" app for Firestore triggers, so getApps().length is not enough:
+// check for the default app by name.
+function hasDefaultApp() { return getApps().some(a => a.name === "[DEFAULT]"); }
 function ensureAdmin() {
-  if (!getApps().length) initializeApp();
+  if (!hasDefaultApp()) initializeApp();
 }
 
 export const helperAsk = onCall(
@@ -124,7 +127,7 @@ export { retentionSweepHandler } from "./lib/retention-run.js";
 const INVITE_REGION = "australia-southeast1";
 
 function inviteBackend() {
-  if (!getApps().length) initializeApp();
+  ensureAdmin();
   const db = getFirestore();
   const auth = getAuth();
   return {
@@ -213,18 +216,24 @@ export const inviteEmailWorker = onDocumentWritten(
     const afterSnap = event.data && event.data.after;
     const before = beforeSnap && beforeSnap.exists ? beforeSnap.data() : null;
     const after = afterSnap && afterSnap.exists ? afterSnap.data() : null;
-    if (!shouldQueueInviteEmail(before, after)) return;
-    if (!getApps().length) initializeApp();
+    ensureAdmin();
     const db = getFirestore();
-    const companyId = String(after.companyId || after.tenantId || "heartwood");
+    const statusRef = db.collection("inviteStatus").doc(event.params.inviteId);
+    const statusCompany = String((after && (after.companyId || after.tenantId)) || (before && (before.companyId || before.tenantId)) || "heartwood");
+    const queue = shouldQueueInviteEmail(before, after);
+    console.log("inviteEmailWorker event", event.params.inviteId, "queue", queue, "mailOn", INVITE_MAIL_ON);
+    if (!queue) return;
+    await statusRef.set({ companyId: statusCompany, delivery: "received", reason: "", error: "", updatedAt: FieldValue.serverTimestamp() }, { merge: true })
+      .catch(e => console.error("inviteStatus write failed", e && e.message));
+    const companyId = statusCompany;
     let company = null;
+    let result;
+    try {
     if (companyId !== "heartwood") {
       const snap = await db.collection("companies").doc(companyId).get();
       const c = snap.exists ? snap.data() : {};
       company = { name: c.name || "", email: c.email || "" };
     }
-    let result;
-    try {
       result = await queueInviteEmail(after, {
       company,
       env: process.env,
@@ -253,7 +262,7 @@ export const inviteEmailWorker = onDocumentWritten(
       updatedAt: FieldValue.serverTimestamp(),
     };
     console.log("invite email", event.params.inviteId, status.delivery, status.reason, status.error);
-    await db.collection("inviteStatus").doc(event.params.inviteId).set(status, { merge: true }).catch(() => {});
+    await statusRef.set(status, { merge: true }).catch(e => console.error("inviteStatus write failed", e && e.message));
   },
 );
 

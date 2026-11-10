@@ -12,7 +12,7 @@ export const HEARTWOOD_APP_ORIGIN = "https://jobs.heartwoodew.com";
 export const CALLUP_APP_ORIGIN = "https://app.callupapp.com.au";
 export const CALLUP_FALLBACK_ORIGIN = "https://callupapp.web.app";
 // Flip to true once app.callupapp.com.au shows "Connected" in Firebase Hosting (DNS + certificate done).
-export const CALLUP_DOMAIN_LIVE = false;
+export const CALLUP_DOMAIN_LIVE = true;  // app.callupapp.com.au connected 10 Nov 2026
 export const CALLUP_ORIGINS = Object.freeze([CALLUP_APP_ORIGIN, CALLUP_FALLBACK_ORIGIN]);
 export const HEARTWOOD_TENANT = "heartwood";
 const ALEX_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";
