@@ -3398,8 +3398,15 @@ function invoicesView() {
       <span class="sub muted" style="margin-left:auto">${ui.inv === "ready" ? (canXero() ? "Completed jobs with no invoice number. Price and description save as you type. Send to Xero assigns numbers and queues DRAFT invoices (not approved or emailed). Invoice date = job date, due +7 days." : "Completed jobs with no invoice number. Price and description save as you type. Invoice date = job date, due +7 days.") : ui.inv === "numbered" ? (canXero() ? "Import the CSV into Xero, then Mark invoiced." : "Import the CSV, then Mark invoiced.") : ""}</span></div>
     <table class="jt inv"><thead><tr>${head}</tr></thead><tbody>${(ui.inv === "numbered" || ui.inv === "recent" ? list.map((j, i) => (i === 0 || monthOf(list[i - 1]) !== monthOf(j) ? `<tr class="mhead"><td colspan="8"><b>${esc(mName(monthOf(j) || "?"))}</b> · ${mStr(monthOf(j) || "?")}${ui.inv === "recent" ? " (whole month)" : ""}</td></tr>` : "") + row(j)) : list.map(row)).join("") || `<tr><td colspan="8" class="muted pad">Nothing here.</td></tr>`}</tbody></table>`;
 }
+// Heartwood numbers from meta/invoicing (floor 5402). Other companies keep their own counter from 1 in companyMeta.
+function invFloor() { return myCompanyId() === "heartwood" ? INV_FLOOR : 0; }
+function invMetaRefs() {
+  return myCompanyId() === "heartwood"
+    ? [doc(db, "meta", "invoicing"), doc(db, "meta", "boxInvoiceMax")]
+    : [doc(db, "companyMeta", myCompanyId() + "_invoicing"), null];
+}
 function nextInvoiceGuess() {
-  const m = Math.max(INV_FLOOR, ui.invMeta?.lastNo || 0, ui.invMeta?.boxMax || 0, ...(ui.done || []).map(j => parseInt(j.invoiceNo) || 0));
+  const m = Math.max(invFloor(), ui.invMeta?.lastNo || 0, ui.invMeta?.boxMax || 0, ...(ui.done || []).map(j => parseInt(j.invoiceNo) || 0));
   return m + 1;
 }
 async function loadInvHist() {
@@ -3411,7 +3418,8 @@ async function loadInvHist() {
   if (ui.view === "invoices") renderAdmin();
 }
 async function loadInvMeta() {
-  const [a, b] = await Promise.all([getDoc(doc(db, "meta", "invoicing")), getDoc(doc(db, "meta", "boxInvoiceMax"))]).catch(e => { toast("Invoicing rules not live: " + (e.code || e.message)); return []; });
+  const [mr, br] = invMetaRefs();
+  const [a, b] = await Promise.all([getDoc(mr), br ? getDoc(br) : Promise.resolve(null)]).catch(e => { toast("Invoicing rules not live: " + (e.code || e.message)); return []; });
   ui.invMeta = { lastNo: a?.data()?.lastNo || 0, boxMax: b?.data()?.max || 0 };
   const el = $("#inext"); if (el) el.textContent = nextInvoiceGuess();
 }
@@ -3473,17 +3481,17 @@ async function assignNumbers(list) {
   let out;
   try {
     out = await runTransaction(db, async tx => {
-      const mRef = doc(db, "meta", "invoicing"), bRef = doc(db, "meta", "boxInvoiceMax");
-      const [m, b] = [await tx.get(mRef), await tx.get(bRef)];
+      const [mRef, bRef] = invMetaRefs();
+      const m = await tx.get(mRef); const b = bRef ? await tx.get(bRef) : null;
       const snaps = []; for (const j of list) snaps.push(await tx.get(doc(db, "jobs", j.id)));
       const taken = snaps.filter(s => s.data()?.invoiceNo); if (taken.length) throw new Error(`already numbered: ${taken.map(s => s.data().invoiceNo).join(", ")}`);
-      let n = Math.max(INV_FLOOR, m.data()?.lastNo || 0, b.data()?.max || 0, ...(ui.done || []).map(j => parseInt(j.invoiceNo) || 0));
+      let n = Math.max(invFloor(), m.data()?.lastNo || 0, b?.data()?.max || 0, ...(ui.done || []).map(j => parseInt(j.invoiceNo) || 0));
       const res = [];
       for (const j of list) { n++;
         const f = { invoiceNo: String(n), invoiceAmount: j.invoiceAmount, invoiceDescription: j.invoiceDescription, invoiceContact: invContact(j),
           invoiceDate: j.date, invoiced: false, numberedAt: serverTimestamp(), numberedBy: me.uid, updatedAt: serverTimestamp(), updatedBy: me.uid };
         tx.update(doc(db, "jobs", j.id), f); res.push({ ...j, ...f }); }
-      tx.set(mRef, { lastNo: n, updatedAt: serverTimestamp(), updatedBy: me.uid }, { merge: true });
+      tx.set(mRef, { lastNo: n, updatedAt: serverTimestamp(), updatedBy: me.uid, ...(myCompanyId() === "heartwood" ? {} : { companyId: myCompanyId() }) }, { merge: true });
       return res;
     });
   } catch (e) { return alert("Numbers NOT assigned: " + (e.code || e.message)); }

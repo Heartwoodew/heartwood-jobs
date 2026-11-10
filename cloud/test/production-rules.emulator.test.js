@@ -285,6 +285,9 @@ test("second-company audit: Heartwood admins, clients, SWMS, receipts, Find PO, 
   await assertFails(getDoc(doc(op, "companyMeta/bravo_quoteRates")));
   await assertFails(getDoc(doc(bravo, "meta/quoteRates")));
   await assertSucceeds(setDoc(doc(bravo, "companyMeta/bravo_supervisors"), { companyId: "bravo", names: ["Bea"] }));
+  await assertSucceeds(setDoc(doc(bravo, "companyMeta/bravo_invoicing"), { companyId: "bravo", lastNo: 1 }));
+  await assertFails(setDoc(doc(bo, "companyMeta/bravo_invoicing"), { companyId: "bravo", lastNo: 9 }));
+  await assertFails(getDoc(doc(bravo, "meta/invoicing")));
 
   // Timesheets: Bravo's carry companyId; Bravo's admin reads them, never Heartwood's.
   const ts = { uid: "bravoOp", name: "Bo", weekStart: "2026-11-09", weekEnd: "2026-11-15", days: { "2026-11-10": { start: "07:00", finish: "15:00", note: "" } }, totalHrs: 8, updatedAt: serverTimestamp(), updatedAtIso: "2026-11-10T07:00:00.000Z" };
