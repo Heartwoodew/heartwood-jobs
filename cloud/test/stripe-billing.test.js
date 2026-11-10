@@ -128,7 +128,7 @@ test("webhook signature, plan and billing status, and staff prorations", async (
     stripe,
   });
   assert.equal(checkout.url, "https://checkout.stripe.test/session");
-  assert.equal(calls[1][1].success_url.startsWith("https://jobs.heartwoodew.com/"), true);
+  assert.equal(calls[1][1].success_url, "https://callupapp.web.app/app/?billing=success");
   assert.equal(calls[1][1].line_items[0].price, BASE_PRICE_ID);
   const portal = await handlePortalCall({
     uid: "adm", companyId: "acme", origin: "https://jobs.heartwoodew.com",

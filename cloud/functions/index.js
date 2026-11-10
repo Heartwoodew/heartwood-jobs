@@ -29,6 +29,7 @@ import {
   acceptStaffInvite as acceptInvite,
   previewStaffInvite as previewInvite,
   queueInviteEmail,
+  sendViaResend,
   shouldQueueInviteEmail,
   displayStatus,
   profileFromInvite,
@@ -38,8 +39,10 @@ import { adminReader } from "./helper/reader.js";
 import { createModelProvider, helperLiveEnabled } from "./helper/provider.js";
 import { firestoreHelperStore } from "./helper/apply.js";
 import {
-  assertTestKey,
+  assertKeyForMode,
   handleCheckoutCall,
+  stripeMode,
+  stripePrices,
   handlePortalCall,
   handleStripeWebhook,
   syncStaffQuantity,
@@ -47,7 +50,24 @@ import {
 } from "./billing/stripe-billing.js";
 
 const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
+// Resend API key for staff invite email. Only bound (and so only required in Secret Manager) once
+// INVITE_EMAIL_ENABLED is "true" in functions/.env.heartwood-9f37f. While off, no secret is needed and nothing is sent.
+const RESEND_API_KEY = defineSecret("RESEND_API_KEY");
+const INVITE_MAIL_ON = process.env.INVITE_EMAIL_ENABLED === "true";
 const STRIPE_WEBHOOK_SECRET = defineSecret("STRIPE_WEBHOOK_SECRET");
+// Live Stripe. Only bound (and required in Secret Manager) when STRIPE_MODE=live in functions/.env.heartwood-9f37f.
+// Until then the functions run in test mode and refuse live keys and live events.
+const STRIPE_MODE = stripeMode(process.env);
+const STRIPE_LIVE = STRIPE_MODE === "live";
+const STRIPE_LIVE_SECRET_KEY = defineSecret("STRIPE_LIVE_SECRET_KEY");
+const STRIPE_LIVE_WEBHOOK_SECRET = defineSecret("STRIPE_LIVE_WEBHOOK_SECRET");
+const STRIPE_LIVE_BASE_PRICE_ID = defineSecret("STRIPE_LIVE_BASE_PRICE_ID");
+const STRIPE_LIVE_EXTRA_PRICE_ID = defineSecret("STRIPE_LIVE_EXTRA_PRICE_ID");
+const STRIPE_KEY_SECRETS = STRIPE_LIVE ? [STRIPE_LIVE_SECRET_KEY, STRIPE_LIVE_BASE_PRICE_ID, STRIPE_LIVE_EXTRA_PRICE_ID] : [STRIPE_SECRET_KEY];
+const STRIPE_HOOK_SECRETS = STRIPE_LIVE ? [STRIPE_LIVE_WEBHOOK_SECRET] : [STRIPE_WEBHOOK_SECRET];
+function currentPrices() {
+  return stripePrices(STRIPE_MODE, STRIPE_LIVE ? { base: STRIPE_LIVE_BASE_PRICE_ID.value(), extra: STRIPE_LIVE_EXTRA_PRICE_ID.value() } : {});
+}
 
 function ensureAdmin() {
   if (!getApps().length) initializeApp();
@@ -185,7 +205,7 @@ export const acceptStaffInvite = onCall({ region: INVITE_REGION, invoker: "publi
 });
 
 export const inviteEmailWorker = onDocumentWritten(
-  { document: "invites/{inviteId}", region: INVITE_REGION },
+  { document: "invites/{inviteId}", region: INVITE_REGION, ...(INVITE_MAIL_ON ? { secrets: [RESEND_API_KEY] } : {}) },
   async event => {
     if (process.env.NODE_TEST_CONTEXT) return;
     const beforeSnap = event.data && event.data.before;
@@ -206,6 +226,12 @@ export const inviteEmailWorker = onDocumentWritten(
       company,
       env: process.env,
       allowLiveMail: process.env.INVITE_EMAIL_ENABLED === "true",
+      sendResend: payload => sendViaResend({
+        apiKey: INVITE_MAIL_ON ? RESEND_API_KEY.value() : "",
+        payload,
+        fetchImpl: globalThis.fetch,
+        idempotencyKey: `invite-${event.params.inviteId}-${String(after.token || "").slice(0, 12)}`,
+      }),
       writeMail: (collectionName, body) => db.collection(collectionName).add({
         ...body,
         inviteId: event.params.inviteId,
@@ -231,8 +257,8 @@ async function billingContext(uid, companyId) {
 }
 
 async function testStripe() {
-  const key = STRIPE_SECRET_KEY.value();
-  assertTestKey(key);
+  const key = STRIPE_LIVE ? STRIPE_LIVE_SECRET_KEY.value() : STRIPE_SECRET_KEY.value();
+  assertKeyForMode(key, STRIPE_MODE);
   const { default: Stripe } = await import("stripe");
   return new Stripe(key);
 }
@@ -245,7 +271,7 @@ function billingFailure(result) {
 }
 
 export const createBillingCheckout = onCall(
-  { region: INVITE_REGION, secrets: [STRIPE_SECRET_KEY] },
+  { region: INVITE_REGION, secrets: STRIPE_KEY_SECRETS },
   async request => {
     if (!request.auth) throw new HttpsError("unauthenticated", "sign-in");
     const result = await handleCheckoutCall({
@@ -254,6 +280,7 @@ export const createBillingCheckout = onCall(
       origin: request.data?.origin,
       getContext: billingContext,
       stripe: await testStripe(),
+      prices: currentPrices(),
     });
     if (!result.ok) billingFailure(result);
     return { url: result.url };
@@ -261,7 +288,7 @@ export const createBillingCheckout = onCall(
 );
 
 export const createBillingPortal = onCall(
-  { region: INVITE_REGION, secrets: [STRIPE_SECRET_KEY] },
+  { region: INVITE_REGION, secrets: STRIPE_KEY_SECRETS },
   async request => {
     if (!request.auth) throw new HttpsError("unauthenticated", "sign-in");
     const result = await handlePortalCall({
@@ -277,7 +304,7 @@ export const createBillingPortal = onCall(
 );
 
 export const stripeWebhook = onRequest(
-  { region: INVITE_REGION, secrets: [STRIPE_WEBHOOK_SECRET], invoker: "public" },
+  { region: INVITE_REGION, secrets: STRIPE_HOOK_SECRETS, invoker: "public" },
   async (req, res) => {
     if (req.method !== "POST") {
       res.status(405).send("POST");
@@ -288,7 +315,8 @@ export const stripeWebhook = onRequest(
     const outcome = await handleStripeWebhook({
       rawBody: req.rawBody,
       signature: req.get("stripe-signature") || "",
-      secret: STRIPE_WEBHOOK_SECRET.value(),
+      secret: STRIPE_LIVE ? STRIPE_LIVE_WEBHOOK_SECRET.value() : STRIPE_WEBHOOK_SECRET.value(),
+      mode: STRIPE_MODE,
       loadCompany: async companyId => {
         const snap = await db.collection("companies").doc(companyId).get();
         return snap.exists ? snap.data() : null;
@@ -311,7 +339,7 @@ export const stripeWebhook = onRequest(
 );
 
 export const syncStripeStaff = onDocumentWritten(
-  { document: "users/{uid}", region: INVITE_REGION, secrets: [STRIPE_SECRET_KEY] },
+  { document: "users/{uid}", region: INVITE_REGION, secrets: STRIPE_KEY_SECRETS },
   async event => {
     if (process.env.NODE_TEST_CONTEXT) return;
     const before = event.data?.before?.exists ? event.data.before.data() : null;
@@ -325,7 +353,7 @@ export const syncStripeStaff = onDocumentWritten(
       const snap = await db.collection("companies").doc(companyId).get();
       if (!snap.exists) continue;
       const staff = await db.collection("users").where("companyId", "==", companyId).get();
-      await syncStaffQuantity({ companyId, company: snap.data(), staffCount: staff.size, stripe });
+      await syncStaffQuantity({ companyId, company: snap.data(), staffCount: staff.size, stripe, prices: currentPrices() });
     }
   },
 );

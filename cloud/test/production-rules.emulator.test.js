@@ -226,3 +226,75 @@ test("company clients are scoped; settings accept a job prefix and accounts cont
   await assertFails(updateDoc(doc(bravo, "companies/bravo"), { jobPrefix: "br-v" }));
   await assertFails(updateDoc(doc(bravo, "companies/bravo"), { plan: "paid" }));
 });
+
+test("second-company audit: Heartwood admins, clients, SWMS, receipts, Find PO, settings and timesheets stay per company", async () => {
+  await env.withSecurityRulesDisabled(async ctx => {
+    const d = ctx.firestore();
+    await setDoc(doc(d, "companies/bravo"), { name: "Bravo", ownerUid: BRAVO, status: "active", plan: "trial", isTest: false });
+    await setDoc(doc(d, "users/bravoOp"), { role: "operator", name: "Bo", companyId: "bravo", tenantId: "bravo" });
+    await setDoc(doc(d, "incidents/bravo_INC-0099"), { companyId: "bravo", tenantId: "bravo", reportedBy: "bravoOp", status: "open" });
+    await setDoc(doc(d, "incidents/INC-0099"), { companyId: "heartwood", reportedBy: OP, status: "open" });
+    await setDoc(doc(d, "clients/orbit-homes"), { name: "Orbit Homes", companyId: "heartwood" });
+    await setDoc(doc(d, "swmsChunks/mobile-plant_0"), { data: "x" });
+    await setDoc(doc(d, "swmsSignatures/bs1"), { companyId: "bravo", uid: "bravoOp", name: "Bo", swmsId: "x" });
+    await setDoc(doc(d, "users/hwAdm"), { role: "admin", name: "Pat" });
+    await setDoc(doc(d, "timesheets/op1_2026-11-09"), { uid: OP, name: "Sam", weekStart: "2026-11-09", totalHrs: 1 });
+  });
+  const alex = db(ALEX), bravo = db(BRAVO), bo = db("bravoOp"), op = db(OP);
+
+  // Heartwood admins read Heartwood incidents only.
+  await assertSucceeds(getDoc(doc(alex, "incidents/INC-0099")));
+  await assertFails(getDoc(doc(alex, "incidents/bravo_INC-0099")));
+  await assertFails(getDocs(query(collection(alex, "incidents"), where("companyId", "==", "bravo"))));
+  await assertFails(updateDoc(doc(alex, "incidents/bravo_INC-0099"), { rootCause: "x" }));
+  await assertSucceeds(getDoc(doc(bo, "incidents/bravo_INC-0099")));
+  await assertSucceeds(getDoc(doc(bravo, "incidents/bravo_INC-0099")));
+  await assertFails(getDoc(doc(bo, "incidentCounter/main")));
+  await assertSucceeds(getDoc(doc(op, "incidentCounter/main")));
+
+  // Heartwood clients, SWMS PDFs and SWMS signatures.
+  await assertFails(getDoc(doc(bo, "clients/orbit-homes")));
+  await assertSucceeds(getDoc(doc(op, "clients/orbit-homes")));
+  await assertFails(getDoc(doc(bo, "swmsChunks/mobile-plant_0")));
+  await assertSucceeds(getDoc(doc(op, "swmsChunks/mobile-plant_0")));
+  await assertFails(getDoc(doc(alex, "swmsSignatures/bs1")));
+  await assertSucceeds(getDoc(doc(bravo, "swmsSignatures/bs1")));
+  const sig = { uid: "bravoOp", name: "Bo", swmsId: "mobile-plant", swmsTitle: "Mobile plant", version: "2026-11", jobId: "", jobLabel: "", sig: "data:image/png;base64," + "A".repeat(40), signedAt: serverTimestamp(), signedAtMs: Date.now(), expiresAtMs: Date.now() + 365 * 24 * 3600 * 1000, device: "test" };
+  await assertFails(setDoc(doc(bo, "swmsSignatures/bs2"), sig));
+  await assertSucceeds(setDoc(doc(bo, "swmsSignatures/bs3"), { ...sig, companyId: "bravo" }));
+  await assertFails(setDoc(doc(bo, "swmsSignatures/bs4"), { ...sig, companyId: "heartwood" }));
+  await assertSucceeds(setDoc(doc(op, "swmsSignatures/hs1"), { ...sig, uid: OP, name: "Sam", companyId: "heartwood" }));
+
+  // Receipts: other companies must tag their own company, so they never reach Heartwood's Hubdoc queue.
+  const r = { uid: "bravoOp", status: "queued", supplier: "Shop", amountInc: 5 };
+  await assertFails(setDoc(doc(bo, "receipts/br1"), r));
+  await assertSucceeds(setDoc(doc(bo, "receipts/br2"), { ...r, companyId: "bravo", tenantId: "bravo" }));
+  await assertFails(setDoc(doc(bo, "receiptChunks/brc1"), { uid: "bravoOp", data: "AA" }));
+  await assertSucceeds(setDoc(doc(bo, "receiptChunks/brc2"), { uid: "bravoOp", data: "AA", companyId: "bravo" }));
+  await assertSucceeds(setDoc(doc(op, "receipts/hr1"), { ...r, uid: OP }));
+
+  // Find PO is Heartwood-only.
+  await assertFails(setDoc(doc(bravo, "poLookups/bravo_j1"), { companyId: "bravo", jobId: "j1" }));
+
+  // Per-company quote rates and supervisors.
+  await assertSucceeds(setDoc(doc(bravo, "companyMeta/bravo_quoteRates"), { companyId: "bravo", travelPerKm: 2 }));
+  await assertSucceeds(getDoc(doc(bravo, "companyMeta/bravo_quoteRates")));
+  await assertFails(setDoc(doc(bo, "companyMeta/bravo_quoteRates"), { companyId: "bravo", travelPerKm: 9 }));
+  await assertFails(setDoc(doc(bravo, "companyMeta/bravo_quoteRates"), { travelPerKm: 2 }));
+  await assertFails(setDoc(doc(bravo, "companyMeta/heartwood_quoteRates"), { companyId: "bravo" }));
+  await assertFails(getDoc(doc(op, "companyMeta/bravo_quoteRates")));
+  await assertFails(getDoc(doc(bravo, "meta/quoteRates")));
+  await assertSucceeds(setDoc(doc(bravo, "companyMeta/bravo_supervisors"), { companyId: "bravo", names: ["Bea"] }));
+
+  // Timesheets: Bravo's carry companyId; Bravo's admin reads them, never Heartwood's.
+  const ts = { uid: "bravoOp", name: "Bo", weekStart: "2026-11-09", weekEnd: "2026-11-15", days: { "2026-11-10": { start: "07:00", finish: "15:00", note: "" } }, totalHrs: 8, updatedAt: serverTimestamp(), updatedAtIso: "2026-11-10T07:00:00.000Z" };
+  await assertFails(setDoc(doc(bo, "timesheets/bravoOp_2026-11-09"), ts));
+  await assertSucceeds(setDoc(doc(bo, "timesheets/bravoOp_2026-11-09"), { ...ts, companyId: "bravo" }));
+  await assertFails(setDoc(doc(bo, "timesheets/bravoOp_2026-11-16"), { ...ts, weekStart: "2026-11-16", weekEnd: "2026-11-22", companyId: "heartwood" }));
+  const list = await assertSucceeds(getDocs(query(collection(bravo, "timesheets"), where("companyId", "==", "bravo"), where("weekStart", "==", "2026-11-09"))));
+  assert.deepEqual(list.docs.map(x => x.id), ["bravoOp_2026-11-09"]);
+  await assertFails(getDoc(doc(bravo, "timesheets/op1_2026-11-09")));
+  await assertSucceeds(updateDoc(doc(bravo, "timesheets/bravoOp_2026-11-09"), { sent: true, sentAt: "2026-11-15T00:00:00.000Z", sentBy: BRAVO }));
+  await assertFails(updateDoc(doc(db("hwAdm"), "timesheets/bravoOp_2026-11-09"), { sent: false, sentAt: null, sentBy: null }));
+  await assertSucceeds(setDoc(doc(op, "timesheets/op1_2026-11-16"), { ...ts, uid: OP, name: "Sam", weekStart: "2026-11-16", weekEnd: "2026-11-22" }));
+});

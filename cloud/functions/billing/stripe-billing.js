@@ -1,9 +1,13 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { CALLUP_ORIGINS, HEARTWOOD_APP_ORIGIN, appOriginFor } from "../shared/staff-invites.js";
 
 // Sandbox Stripe for CallUp. One plan: A$20 includes 1 person, A$5 each extra person.
 // There is no second tier. Test companies, friend trials and Heartwood never call Stripe.
-// The secret key must be an sk_test_ key. Live mode is refused.
-// Secrets are STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in Secret Manager.
+// Test mode (default): the secret key must be an sk_test_ key and live events are refused.
+// Test secrets are STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in Secret Manager.
+// Live mode only when STRIPE_MODE=live is set in functions/.env.heartwood-9f37f AND the live secrets exist:
+// STRIPE_LIVE_SECRET_KEY (sk_live_), STRIPE_LIVE_WEBHOOK_SECRET, STRIPE_LIVE_BASE_PRICE_ID, STRIPE_LIVE_EXTRA_PRICE_ID.
+// In live mode, test keys and test events are refused instead. See /workspace/callup/stripe-go-live-steps.md.
 // Webhook URL, after a human deploys: https://australia-southeast1-heartwood-9f37f.cloudfunctions.net/stripeWebhook
 
 export const BASE_PRICE_ID = "price_1UZRdBHEbjZCMeDTohSuaIwr";
@@ -12,11 +16,30 @@ export const BASE_LOOKUP = "callup_base_monthly";
 export const EXTRA_LOOKUP = "callup_extra_staff_monthly";
 export const WEBHOOK_URL = "https://australia-southeast1-heartwood-9f37f.cloudfunctions.net/stripeWebhook";
 
-export function billingOrigin(value) {
+// Return address for Checkout / the billing portal. Only our own app addresses are accepted.
+// Anything else falls back to the company's preferred address (Heartwood: jobs.heartwoodew.com; others: CallUp).
+export function billingOrigin(value, companyId = "", domainLive) {
   const origin = String(value || "").replace(/\/$/, "");
-  if (origin === "https://jobs.heartwoodew.com") return origin;
+  if (origin === HEARTWOOD_APP_ORIGIN || CALLUP_ORIGINS.includes(origin)) return origin;
   if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return origin;
-  return "https://jobs.heartwoodew.com";
+  return appOriginFor(companyId || "heartwood", "", domainLive);
+}
+
+export function stripeMode(env = {}) {
+  return env.STRIPE_MODE === "live" ? "live" : "test";
+}
+
+// Prices for a mode. Live price ids come from Secret Manager values; test ids are the sandbox constants.
+export function stripePrices(mode = "test", live = {}) {
+  if (mode !== "live") return { base: BASE_PRICE_ID, extra: EXTRA_PRICE_ID };
+  const base = String(live.base || "").trim();
+  const extra = String(live.extra || "").trim();
+  if (!/^price_[A-Za-z0-9]+$/.test(base) || !/^price_[A-Za-z0-9]+$/.test(extra) || base === BASE_PRICE_ID || extra === EXTRA_PRICE_ID) {
+    const err = new Error("stripe-live-prices-missing");
+    err.code = "failed-precondition";
+    throw err;
+  }
+  return { base, extra };
 }
 
 export function extraStaffQuantity(staffCount) {
@@ -43,6 +66,17 @@ export function assertTestKey(secret) {
   }
 }
 
+// Key check for the configured mode. Live keys are refused unless mode is explicitly "live".
+export function assertKeyForMode(secret, mode = "test") {
+  if (mode !== "live") return assertTestKey(secret);
+  const key = String(secret || "");
+  if (!key.startsWith("sk_live_") && !key.startsWith("rk_live_")) {
+    const err = new Error("stripe-live-key-required");
+    err.code = "failed-precondition";
+    throw err;
+  }
+}
+
 export function authorizeCompanyAdmin({ uid, profile, company, companyId }) {
   const skip = billingSkipped(company, companyId);
   if (!uid) return { ok: false, code: "unauthenticated", reason: "sign-in" };
@@ -54,14 +88,14 @@ export function authorizeCompanyAdmin({ uid, profile, company, companyId }) {
   return { ok: true };
 }
 
-export function checkoutParams({ companyId, company, staffCount, successUrl, cancelUrl }) {
+export function checkoutParams({ companyId, company, staffCount, successUrl, cancelUrl, prices = stripePrices() }) {
   const skip = billingSkipped(company, companyId);
   if (skip) return { ok: false, reason: skip };
   const billing = company.billing || {};
   if (billing.stripeSubscriptionId && billing.status === "active") return { ok: false, reason: "already-subscribed" };
   const extra = extraStaffQuantity(staffCount);
-  const lineItems = [{ price: BASE_PRICE_ID, quantity: 1 }];
-  if (extra > 0) lineItems.push({ price: EXTRA_PRICE_ID, quantity: extra });
+  const lineItems = [{ price: prices.base, quantity: 1 }];
+  if (extra > 0) lineItems.push({ price: prices.extra, quantity: extra });
   const params = {
     mode: "subscription",
     client_reference_id: companyId,
@@ -114,8 +148,10 @@ function billingPatch(status, ids = {}) {
   return billing;
 }
 
-export function applyStripeEvent(event) {
-  if (!event || event.livemode === true) return { ok: false, reason: "live-mode" };
+export function applyStripeEvent(event, mode = "test") {
+  if (!event) return { ok: false, reason: "no-event" };
+  if (mode !== "live" && event.livemode === true) return { ok: false, reason: "live-mode" };
+  if (mode === "live" && event.livemode !== true) return { ok: false, reason: "test-mode" };
   const object = event.data && event.data.object;
   const companyId = companyIdOf(object);
   if (!companyId) return { ok: false, reason: "no-company" };
@@ -149,12 +185,12 @@ export function applyStripeEvent(event) {
   return { ok: false, reason: "ignored-event" };
 }
 
-export function staffItemChange({ subscription, staffCount }) {
+export function staffItemChange({ subscription, staffCount, prices = stripePrices() }) {
   const quantity = extraStaffQuantity(staffCount);
   const items = (subscription && subscription.items && subscription.items.data) || [];
-  const extra = items.find(item => item.price && (item.price.id === EXTRA_PRICE_ID || item.price.lookup_key === EXTRA_LOOKUP));
+  const extra = items.find(item => item.price && (item.price.id === prices.extra || item.price.lookup_key === EXTRA_LOOKUP));
   if (!extra && quantity === 0) return { action: "none", quantity };
-  if (!extra) return { action: "create", price: EXTRA_PRICE_ID, quantity, proration_behavior: "create_prorations" };
+  if (!extra) return { action: "create", price: prices.extra, quantity, proration_behavior: "create_prorations" };
   if (quantity === 0) return { action: "remove", itemId: extra.id, proration_behavior: "create_prorations" };
   if (extra.quantity === quantity) return { action: "none", quantity };
   return { action: "update", itemId: extra.id, quantity, proration_behavior: "create_prorations" };
@@ -170,14 +206,14 @@ export function companiesTouchedByUser(before, after) {
   return [...ids];
 }
 
-export async function syncStaffQuantity({ companyId, company, staffCount, stripe }) {
+export async function syncStaffQuantity({ companyId, company, staffCount, stripe, prices = stripePrices() }) {
   const skip = billingSkipped(company, companyId);
   if (skip) return { ok: true, skipped: skip };
   const billing = company.billing || {};
   if (billing.provider !== "stripe" || !billing.stripeSubscriptionId) return { ok: true, skipped: "no-subscription" };
   if (billing.status !== "active" && billing.status !== "past_due") return { ok: true, skipped: "not-billable" };
   const subscription = await stripe.subscriptions.retrieve(billing.stripeSubscriptionId);
-  const change = staffItemChange({ subscription, staffCount });
+  const change = staffItemChange({ subscription, staffCount, prices });
   if (change.action === "create") {
     await stripe.subscriptionItems.create({
       subscription: billing.stripeSubscriptionId,
@@ -196,8 +232,8 @@ export async function syncStaffQuantity({ companyId, company, staffCount, stripe
   return { ok: true, change };
 }
 
-export async function handleCheckoutCall({ uid, companyId, origin, getContext, stripe }) {
-  origin = billingOrigin(origin);
+export async function handleCheckoutCall({ uid, companyId, origin, getContext, stripe, prices = stripePrices() }) {
+  origin = billingOrigin(origin, companyId);
   const ctx = await getContext(uid, companyId);
   const authz = authorizeCompanyAdmin({ uid, profile: ctx.profile, company: ctx.company, companyId });
   if (!authz.ok) return authz;
@@ -205,8 +241,9 @@ export async function handleCheckoutCall({ uid, companyId, origin, getContext, s
     companyId,
     company: ctx.company,
     staffCount: ctx.staffCount,
-    successUrl: `${origin}/?billing=success`,
-    cancelUrl: `${origin}/?billing=cancel`,
+    successUrl: `${origin}/app/?billing=success`,
+    cancelUrl: `${origin}/app/?billing=cancel`,
+    prices,
   });
   if (!built.ok) return built;
   const session = await stripe.checkout.sessions.create(built.params);
@@ -214,11 +251,11 @@ export async function handleCheckoutCall({ uid, companyId, origin, getContext, s
 }
 
 export async function handlePortalCall({ uid, companyId, origin, getContext, stripe }) {
-  origin = billingOrigin(origin);
+  origin = billingOrigin(origin, companyId);
   const ctx = await getContext(uid, companyId);
   const authz = authorizeCompanyAdmin({ uid, profile: ctx.profile, company: ctx.company, companyId });
   if (!authz.ok) return authz;
-  const built = portalParams({ company: ctx.company, companyId, returnUrl: `${origin}/` });
+  const built = portalParams({ company: ctx.company, companyId, returnUrl: `${origin}/app/` });
   if (!built.ok) return built;
   const session = await stripe.billingPortal.sessions.create(built.params);
   return { ok: true, url: session.url };
@@ -245,14 +282,14 @@ export function constructStripeEvent(rawBody, header, secret, now = Date.now()) 
   return event;
 }
 
-export async function handleStripeWebhook({ rawBody, signature, secret, loadCompany, saveBilling, now }) {
+export async function handleStripeWebhook({ rawBody, signature, secret, loadCompany, saveBilling, now, mode = "test" }) {
   let event;
   try {
     event = constructStripeEvent(rawBody, signature, secret, now);
   } catch {
     return { status: 400, body: { error: "invalid-signature" } };
   }
-  const decision = applyStripeEvent(event);
+  const decision = applyStripeEvent(event, mode);
   if (!decision.ok) return { status: 200, body: { received: true, skipped: decision.reason } };
   const company = await loadCompany(decision.companyId);
   const skip = billingSkipped(company, decision.companyId);

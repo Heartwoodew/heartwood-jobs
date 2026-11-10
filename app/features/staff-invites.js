@@ -6,6 +6,14 @@
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const INVITE_ROLES = Object.freeze(["operator", "supervisor"]);
 export const INVITE_LINK_ORIGIN = "https://jobs.heartwoodew.com/app";
+// Where the app lives. Heartwood stays on jobs.heartwoodew.com (GitHub Pages). Every other company uses the CallUp
+// address on Firebase Hosting (site "callupapp"). Until app.callupapp.com.au is connected, CallUp links use callupapp.web.app.
+export const HEARTWOOD_APP_ORIGIN = "https://jobs.heartwoodew.com";
+export const CALLUP_APP_ORIGIN = "https://app.callupapp.com.au";
+export const CALLUP_FALLBACK_ORIGIN = "https://callupapp.web.app";
+// Flip to true once app.callupapp.com.au shows "Connected" in Firebase Hosting (DNS + certificate done).
+export const CALLUP_DOMAIN_LIVE = false;
+export const CALLUP_ORIGINS = Object.freeze([CALLUP_APP_ORIGIN, CALLUP_FALLBACK_ORIGIN]);
 export const HEARTWOOD_TENANT = "heartwood";
 const ALEX_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";
 const PATRICK_UID = "R7t41e54Ykcdk9WPdVZnDd697iI2";
@@ -41,8 +49,18 @@ export function newInviteToken(fill) {
   return btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
-export function inviteLink(token) {
-  return INVITE_LINK_ORIGIN + "?invite=" + encodeURIComponent(String(token || ""));
+// Origin to use in links for a company. currentOrigin (location.origin) wins when it is already a CallUp address.
+export function appOriginFor(companyId, currentOrigin = "", domainLive = CALLUP_DOMAIN_LIVE) {
+  const id = String(companyId || HEARTWOOD_TENANT);
+  if (id === HEARTWOOD_TENANT) return HEARTWOOD_APP_ORIGIN;
+  const cur = String(currentOrigin || "").replace(/\/$/, "");
+  if (CALLUP_ORIGINS.includes(cur)) return cur;
+  return domainLive === true || domainLive === "true" ? CALLUP_APP_ORIGIN : CALLUP_FALLBACK_ORIGIN;
+}
+
+export function inviteLink(token, origin = HEARTWOOD_APP_ORIGIN) {
+  const base = String(origin || HEARTWOOD_APP_ORIGIN).replace(/\/$/, "");
+  return base + "/app?invite=" + encodeURIComponent(String(token || ""));
 }
 
 export function inviteTime(value) {
@@ -179,13 +197,13 @@ function statusLabel(status) {
   return "Invite";
 }
 
-export function staffViewHtml(invites, { now = new Date(), error = "" } = {}) {
+export function staffViewHtml(invites, { now = new Date(), error = "", origin = HEARTWOOD_APP_ORIGIN } = {}) {
   const rows = (invites || []).map(row => ({ ...row, viewStatus: displayStatus(row, now) }));
   const rank = { pending: 0, expired: 1, accepted: 2, cancelled: 3, invalid: 4 };
   rows.sort((a, b) => (rank[a.viewStatus] ?? 9) - (rank[b.viewStatus] ?? 9) || String(a.email).localeCompare(String(b.email)));
   const cards = rows.filter(row => row.viewStatus !== "invalid").map(row => {
     const actions = row.viewStatus === "pending" || row.viewStatus === "expired";
-    const link = actions ? inviteLink(row.token) : "";
+    const link = actions ? inviteLink(row.token, origin) : "";
     return `<article class="inviterow" data-invite-status="${esc(row.viewStatus)}">
       <div>
         <b>${esc(row.name)}</b>
@@ -260,16 +278,62 @@ export const CALLUP_INVITE_FROM = "CallUp <noreply@callupapp.com.au>";
 export function inviteEmailConfig(env = {}) {
   return {
     enabled: env.INVITE_EMAIL_ENABLED === "true",
+    // "resend" sends through Resend's API with the RESEND_API_KEY secret. Anything else keeps the old
+    // Trigger Email extension plan (a mail/ document). Nothing is sent unless enabled is true.
+    provider: env.INVITE_EMAIL_PROVIDER === "extension" ? "extension" : "resend",
     from: env.INVITE_EMAIL_FROM || "Heartwood Jobs <jobs@heartwoodew.com>",
     replyTo: env.INVITE_EMAIL_REPLY_TO || "alex@heartwoodew.com",
     neutralFrom: env.INVITE_EMAIL_NEUTRAL_FROM || CALLUP_INVITE_FROM,
+    domainLive: env.CALLUP_DOMAIN_LIVE === "true" || CALLUP_DOMAIN_LIVE,
+    // Heartwood invites stay held (link shown to the admin, as today) unless this is also "true".
+    heartwood: env.INVITE_EMAIL_HEARTWOOD === "true",
+    // Optional comma list of allowed recipient prefixes, e.g. "callup932+" during testing. Others are held.
+    allowTo: String(env.INVITE_EMAIL_ALLOW_TO || "").split(",").map(x => x.trim().toLowerCase()).filter(Boolean),
   };
+}
+
+// Why an enabled config still holds this invite: "" means it may be sent.
+export function inviteHoldReason(invite, config = {}) {
+  const profile = profileFromInvite(invite);
+  if (!profile) return "invalid";
+  const companyId = profile.companyId || HEARTWOOD_TENANT;
+  if (companyId === HEARTWOOD_TENANT && config.heartwood !== true) return "heartwood-held";
+  const to = String(profile.email || "").toLowerCase();
+  const allow = Array.isArray(config.allowTo) ? config.allowTo : [];
+  if (allow.length && !allow.some(p => to.startsWith(p))) return "recipient-not-allowed";
+  return "";
+}
+
+// Resend can only send from a verified domain (callupapp.com.au), so Heartwood invites sent through Resend keep the
+// Heartwood name and reply-to but use the CallUp address.
+export const HEARTWOOD_RESEND_FROM = "Heartwood Jobs <noreply@callupapp.com.au>";
+export const RESEND_ENDPOINT = "https://api.resend.com/emails";
+
+export function resendPayload(message) {
+  if (!message) return null;
+  const body = { from: message.from, to: [message.to], subject: message.subject, text: message.text };
+  if (message.replyTo) body.reply_to = message.replyTo;
+  return body;
+}
+
+// One POST to Resend. fetchImpl and apiKey are injected so tests never touch the network.
+export async function sendViaResend({ apiKey, payload, fetchImpl, idempotencyKey = "" }) {
+  if (!apiKey || !String(apiKey).startsWith("re_")) return { ok: false, reason: "no-api-key" };
+  if (!payload || typeof fetchImpl !== "function") return { ok: false, reason: "invalid" };
+  const headers = { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" };
+  if (idempotencyKey) headers["Idempotency-Key"] = String(idempotencyKey).slice(0, 256);
+  const res = await fetchImpl(RESEND_ENDPOINT, { method: "POST", headers, body: JSON.stringify(payload) });
+  let data = {};
+  try { data = await res.json(); } catch { data = {}; }
+  if (!res.ok) return { ok: false, reason: "resend-" + res.status, error: String((data && (data.message || data.name)) || "").slice(0, 200) };
+  return { ok: true, id: String((data && data.id) || "") };
 }
 
 export function buildInviteEmail(invite, config = {}) {
   const profile = profileFromInvite(invite);
   if (!profile || !tokenOk(invite.token)) return null;
-  const link = inviteLink(invite.token);
+  const companyId = profile.companyId || HEARTWOOD_TENANT;
+  const link = inviteLink(invite.token, config.appOrigin || appOriginFor(companyId, "", config.domainLive));
   const role = roleLabel(profile.role).toLowerCase();
   const companyName = typeof config.companyName === "string" ? config.companyName.trim() : "";
   const heartwood = !companyName || companyName === "Heartwood" || companyName === "Heartwood Earthworx" || companyName === "Heartwood Jobs";
@@ -285,7 +349,9 @@ export function buildInviteEmail(invite, config = {}) {
   ].join("\n");
   return {
     to: profile.email,
-    from: heartwood ? (config.from || inviteEmailConfig().from) : (config.neutralFrom || CALLUP_INVITE_FROM),
+    from: heartwood
+      ? (config.enabled === true && config.provider === "resend" ? HEARTWOOD_RESEND_FROM : (config.from || inviteEmailConfig().from))
+      : (config.neutralFrom || CALLUP_INVITE_FROM),
     replyTo: heartwood ? (config.replyTo || "alex@heartwoodew.com") : (config.companyEmail || ""),
     subject: heartwood ? "You're invited to Heartwood Jobs" : `You're invited to ${companyName}`,
     text,
@@ -298,11 +364,12 @@ export function buildInviteEmail(invite, config = {}) {
 export function planInviteDelivery(invite, config = inviteEmailConfig()) {
   const message = buildInviteEmail(invite, config);
   if (!message) return { ok: false, sent: false, reason: "invalid" };
-  if (config.enabled !== true) {
+  const hold = config.enabled === true ? inviteHoldReason(invite, config) : "email-disabled";
+  if (hold) {
     return {
       ok: true,
       sent: false,
-      reason: "email-disabled",
+      reason: hold,
       collection: "inviteMail",
       doc: {
         to: message.to,
@@ -311,6 +378,16 @@ export function planInviteDelivery(invite, config = inviteEmailConfig()) {
         link: message.link,
         delivery: "held",
       },
+    };
+  }
+  if (config.provider === "resend") {
+    return {
+      ok: true,
+      sent: false,
+      reason: "send-via-resend",
+      collection: "inviteMail",
+      resend: resendPayload(message),
+      doc: { to: message.to, subject: message.subject, link: message.link, delivery: "resend" },
     };
   }
   return {
@@ -346,8 +423,16 @@ export async function queueInviteEmail(invite, deps = {}) {
     ...(company ? { companyName: String(company.name || "").trim() || "your company", companyEmail: String(company.email || "").trim() } : {}),
   });
   if (!plan.ok) return plan;
-  if (plan.collection === "mail" && deps.allowLiveMail !== true) {
+  if ((plan.collection === "mail" || plan.resend) && deps.allowLiveMail !== true) {
     return { ...plan, ok: false, sent: false, reason: "live-mail-not-allowed", written: false };
+  }
+  if (plan.resend) {
+    // Live send. Only reached when INVITE_EMAIL_ENABLED is "true" and the caller allows live mail.
+    if (typeof deps.sendResend !== "function") return { ...plan, ok: false, sent: false, reason: "no-sender", written: false };
+    const result = await deps.sendResend(plan.resend);
+    const doc = { ...plan.doc, delivery: result && result.ok ? "sent" : "failed", providerId: (result && result.id) || "", error: (result && (result.reason || result.error)) || "" };
+    if (typeof deps.writeMail === "function") await deps.writeMail("inviteMail", doc);
+    return { ...plan, doc, sent: !!(result && result.ok), reason: result && result.ok ? "sent" : ((result && result.reason) || "failed"), written: typeof deps.writeMail === "function" };
   }
   if (typeof deps.writeMail === "function") {
     await deps.writeMail(plan.collection, plan.doc);
