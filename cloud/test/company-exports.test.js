@@ -34,3 +34,19 @@ test("hours, reimbursements and jobs CSVs stay inside the company data", () => {
   assert.match(jobs, /44,01\/11\/2026,Sample Homes,12 Test Street,Spoil,Done,PO9,Sam Taylor/);
   assert.doesNotMatch(jobs, /200\.00|invoiceAmount/);
 });
+
+test("CSV cells typed by staff can't run as spreadsheet formulas", async () => {
+  const { hoursCsv, reimbursementsCsv, jobsCsv } = await import("../../app/features/company-exports.js");
+  const rep = { people: [{ name: "=1+1", days: [{ date: "2026-11-09", shifts: [{ date: "2026-11-09", start: "06:00", finish: "14:00", breakMins: null, hours: 7.5, job: "@SUM(A1)", source: "Manual", note: "+cmd|' /C calc'!A0" }] }] }] };
+  const csv = hoursCsv(rep);
+  assert.match(csv, /\r\n'=1\+1,/);
+  assert.match(csv, /,'@SUM\(A1\),/);
+  assert.match(csv, /"'\+cmd\|' \/C calc'!A0"|'\+cmd\|' \/C calc'!A0/);
+  const claims = reimbursementsCsv([{ date: "2026-11-09", amountCents: -1250, supplier: "-evil()", category: "", notes: "" }]);
+  assert.match(claims, /,'-evil\(\),/);
+  assert.match(claims, /,-11\.36,-1\.14,/);
+  const jobs = jobsCsv([{ jobNo: "-12", date: "2026-11-09", client: "=HYPERLINK(\"x\")", address: "\tTab", description: "", status: "Done" }]);
+  assert.match(jobs, /^Job number[^\r]*\r\n-12,/);
+  assert.match(jobs, /"'=HYPERLINK\(""x""\)"/);
+  assert.match(jobs, /,'\tTab,/);
+});
