@@ -103,6 +103,20 @@ service firebase.storage {
       let assigned = "assigned" in job && job.assigned is list && request.auth.uid in job.assigned;
       return signedIn() && tenantId is string && tenantId.size() > 0 && jobTenant == tenantId && assigned;
     }
+    // CallUp company owner/admin object read: one get of the caller's profile.
+    // Do not call canSeeJob, hasProfile, or profile() here. exists() plus get()
+    // of the same user would already use the two-document production cap.
+    // Staff keep jobPhotoStaff (assigned only). Heartwood bootstrap admins stay
+    // on the no-Firestore allow. Receipts are unchanged.
+    function jobPhotoCompanyAdmin(tenantId) {
+      let user = firestore.get(userPath()).data;
+      let accountCompany = "companyId" in user && user.companyId is string && user.companyId.size() > 0
+        ? user.companyId
+        : ("tenantId" in user && user.tenantId is string && user.tenantId.size() > 0 ? user.tenantId : "heartwood");
+      let isAdmin = "role" in user && user.role == "admin";
+      return signedIn() && tenantId is string && tenantId.size() > 0 && tenantId != "heartwood"
+        && accountCompany == tenantId && isAdmin;
+    }
     function jobPhotoFile(tenantId, jobId) {
       return request.resource.contentType.matches('image/(jpeg|png|webp|gif)')
         && request.resource.size > 0
@@ -123,6 +137,7 @@ service firebase.storage {
     match /tenants/{tenantId}/jobs/{jobId}/photos/{file} {
       allow read: if signedIn() && tenantId == "heartwood" && (isAlex() || isPatrick());
       allow read: if jobPhotoStaff(tenantId, jobId);
+      allow read: if jobPhotoCompanyAdmin(tenantId);
       allow create, update: if canSeeJob(tenantId, jobId) && jobPhotoFile(tenantId, jobId);
       allow delete: if false;
     }
@@ -222,11 +237,31 @@ service firebase.storage {
         );
     }
 
+    // Job-thread chat photo object read: one get of the job and one get of the
+    // caller. That is the production cap, so do not call canSeeJob. Admins of
+    // the same company are allowed; staff still need to be assigned and, when
+    // set, inside their customer scope.
+    function jobChatPhotoReader(tenantId, jobId) {
+      let job = firestore.get(jobPath(jobId)).data;
+      let user = firestore.get(userPath()).data;
+      let jobTenant = "tenantId" in job && job.tenantId is string && job.tenantId.size() > 0 ? job.tenantId : "heartwood";
+      let accountCompany = "companyId" in user && user.companyId is string && user.companyId.size() > 0
+        ? user.companyId
+        : ("tenantId" in user && user.tenantId is string && user.tenantId.size() > 0 ? user.tenantId : "heartwood");
+      let assigned = "assigned" in job && job.assigned is list && request.auth.uid in job.assigned;
+      let isAdmin = "role" in user && user.role == "admin";
+      let customerOk = !("customerIds" in user) || !(user.customerIds is list) || user.customerIds.size() == 0
+        || ("client" in job && job.client is string && job.client in user.customerIds);
+      return signedIn() && tenantId is string && tenantId.size() > 0
+        && jobTenant == tenantId && accountCompany == tenantId
+        && (isAdmin || assigned) && customerOk;
+    }
     match /tenants/{tenantId}/chat/jobs/{jobId}/photos {
       allow list: if canSeeJob(tenantId, jobId);
     }
     match /tenants/{tenantId}/chat/jobs/{jobId}/photos/{file} {
-      allow read: if canSeeJob(tenantId, jobId);
+      allow read: if signedIn() && tenantId == "heartwood" && (isAlex() || isPatrick());
+      allow read: if jobChatPhotoReader(tenantId, jobId);
       allow create: if canSeeJob(tenantId, jobId) && chatNameOk(file) && chatJobFile(tenantId, jobId);
       allow update: if false;
       allow delete: if canSeeJob(tenantId, jobId) && chatNameOk(file) && resource.metadata.purpose == "chat-photo"

@@ -978,6 +978,44 @@ test("reimbursement claims stay with the person; only admins decide and read rec
   await assertFails(deleteObject(ref(storageOf(ALEX), path)));
 });
 
+test("CallUp company owner can read own job and chat photos; other company and unassigned staff cannot", async () => {
+  await env.withSecurityRulesDisabled(async ctx => {
+    const dbx = ctx.firestore();
+    await setDoc(doc(dbx, "users/ownAdm"), { role: "admin", name: "Owner", companyId: "acme", tenantId: "acme" });
+    await setDoc(doc(dbx, "users/otherAdm"), { role: "admin", name: "OtherAdmin", companyId: "bravo", tenantId: "bravo" });
+    await setDoc(doc(dbx, "users/ownOp"), { role: "operator", name: "Assigned", companyId: "acme", tenantId: "acme" });
+    await setDoc(doc(dbx, "users/ownIdle"), { role: "operator", name: "Unassigned", companyId: "acme", tenantId: "acme" });
+    await setDoc(doc(dbx, "jobs/ownJob"), { companyId: "acme", tenantId: "acme", client: "Acme Client", assigned: ["ownOp"] });
+    await setDoc(doc(dbx, "receipts/ownR"), { uid: "ownOp", companyId: "acme", tenantId: "acme", amountInc: 10, status: "queued" });
+    const storage = ctx.storage();
+    await uploadBytes(ref(storage, "tenants/acme/jobs/ownJob/photos/p1.jpg"), jpeg, {
+      contentType: "image/jpeg",
+      customMetadata: { tenantId: "acme", jobId: "ownJob", uploaderUid: "ownOp", purpose: "job-photo", batchCount: "1" },
+    });
+    await uploadBytes(ref(storage, "tenants/acme/chat/jobs/ownJob/photos/c12345678"), jpeg, {
+      contentType: "image/jpeg",
+      customMetadata: { tenantId: "acme", jobId: "ownJob", threadId: "job_ownJob", uploaderUid: "ownOp", purpose: "chat-photo" },
+    });
+    await uploadBytes(ref(storage, "tenants/acme/receipts/ownR/original"), jpeg, {
+      contentType: "image/jpeg",
+      customMetadata: { tenantId: "acme", receiptId: "ownR", uploaderUid: "ownOp", purpose: "receipt" },
+    });
+  });
+  const jobPath = "tenants/acme/jobs/ownJob/photos/p1.jpg";
+  const chatPath = "tenants/acme/chat/jobs/ownJob/photos/c12345678";
+  const receiptPath = "tenants/acme/receipts/ownR/original";
+  await assertSucceeds(getBytes(ref(storageOf("ownAdm"), jobPath)));
+  await assertSucceeds(getBytes(ref(storageOf("ownAdm"), chatPath)));
+  await assertSucceeds(getBytes(ref(storageOf("ownOp"), jobPath)));
+  await assertSucceeds(getBytes(ref(storageOf("ownOp"), chatPath)));
+  await assertFails(getBytes(ref(storageOf("ownIdle"), jobPath)));
+  await assertFails(getBytes(ref(storageOf("ownIdle"), chatPath)));
+  await assertFails(getBytes(ref(storageOf("otherAdm"), jobPath)));
+  await assertFails(getBytes(ref(storageOf("otherAdm"), chatPath)));
+  await assertFails(getBytes(ref(storageOf("ownAdm"), receiptPath)));
+  await assertFails(getBytes(ref(storageOf("ownIdle"), receiptPath)));
+});
+
 function ownerDb() {
   return env.authenticatedContext(ALEX, {
     email: "alex@heartwoodew.com",
@@ -1041,6 +1079,7 @@ test("company A cannot read or write company B, and only the platform owner list
   await assertFails(updateDoc(doc(a, "users/coA"), { companyId: "bravo" }));
   await assertFails(updateDoc(doc(a, "users/coA"), { role: "admin", platformOwner: true }));
   await assertFails(getBytes(ref(storageOf("coA"), "tenants/bravo/jobs/bravoJob/photos/secret.jpg")));
+  await assertSucceeds(getBytes(ref(storageOf("coB"), "tenants/bravo/jobs/bravoJob/photos/secret.jpg")));
   await assertFails(getBytes(ref(storageOf("coB"), "tenants/heartwood/jobs/job1/photos/p1.jpg")));
   await assertSucceeds(getDoc(doc(b, "companies/bravo")));
   await assertFails(getDoc(doc(b, "companies/acme")));
