@@ -143,7 +143,7 @@ export function buildInviteDraft({ name, email, role, createdBy, now, token, ten
 }
 
 // Profile written by the accept function. Role comes only from the invite.
-// Heartwood keeps the existing "no tenantId means heartwood" profile shape.
+// Heartwood gets companyId "heartwood" (no tenantId) so admins' company-scoped staff list finds them.
 export function profileFromInvite(invite) {
   if (!invite || !INVITE_ROLES.includes(invite.role)) return null;
   const name = String(invite.name || "").trim();
@@ -155,6 +155,8 @@ export function profileFromInvite(invite) {
     if (!TENANT_RE.test(companyId)) return null;
     profile.tenantId = companyId;
     profile.companyId = companyId;
+  } else {
+    profile.companyId = HEARTWOOD_TENANT;
   }
   return profile;
 }

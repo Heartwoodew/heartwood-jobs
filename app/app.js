@@ -120,8 +120,10 @@ onAuthStateChanged(auth, async user => {
   // users/{uid}.role: "operator" (staff, no $) | "supervisor" (staff shell + canSeeMoney). Patrick is rules-admin with an operator profile (bookable).
   const snap = await getDoc(doc(db, "users", user.uid)).catch(() => null);
   const prof = snap && snap.exists() ? snap.data() : null;
+  // Heartwood admins list only Heartwood profiles (rules deny every other company's staff).
+  // Other companies' admins/supervisors use their own profile role below, so this list is Heartwood-only.
   let users = null;
-  users = await getDocs(collection(db, "users")).catch(() => null);
+  if (docCompanyId(prof || {}) === "heartwood") users = await getDocs(query(collection(db, "users"), where("companyId", "==", "heartwood"))).catch(() => null);
   if (!prof && !users) { renderNoAccess(user); return; }
   const bootstrapAdmin = user.uid === ALEX_UID || user.uid === "R7t41e54Ykcdk9WPdVZnDd697iI2";
   const roleAdmin = !!(prof && prof.role === "admin");
@@ -129,8 +131,8 @@ onAuthStateChanged(auth, async user => {
     ? { uid: user.uid, name: (prof && prof.name) || (bootstrapAdmin ? "Alex" : "Admin"), role: "admin", staffRole: prof && prof.role }
     : { uid: user.uid, ...prof };
   me.cloudProfile = prof;
-  FOREIGN_UIDS = new Set(users ? users.docs.filter(d => docCompanyId(d.data()) !== docCompanyId(prof || {})).map(d => d.id) : []);
-  HOME_UIDS = users ? users.docs.filter(d => docCompanyId(d.data()) === docCompanyId(prof || {})).map(d => d.id) : [];
+  FOREIGN_UIDS = new Set();
+  HOME_UIDS = users ? users.docs.filter(d => docCompanyId(d.data()) === "heartwood").map(d => d.id) : [];
   const token = await user.getIdTokenResult().catch(() => null);
   me.platformOwner = isPlatformOwner({
     uid: user.uid,
@@ -154,7 +156,7 @@ onAuthStateChanged(auth, async user => {
     if (window.HW_PREVIEW_VIEW === "settings" || window.HW_PREVIEW_VIEW === "company") ui.view = "settings";
     if (window.HW_PREVIEW_VIEW === "master" && me.platformOwner) ui.view = "master";
     const companyId = myCompanyId();
-    const staffSnap = users || await getDocs(query(collection(db, "users"), where("companyId", "==", companyId))).catch(() => null);
+    const staffSnap = (companyId === "heartwood" && users) || await getDocs(query(collection(db, "users"), where("companyId", "==", companyId))).catch(() => null);
     // When the unscoped users list is denied, still know this company's own staff so legacy (no companyId) Heartwood sheets load.
     if (!users && staffSnap) HOME_UIDS = staffSnap.docs.filter(d => docCompanyId(d.data()) === companyId).map(d => d.id);
     const logins = (staffSnap ? staffSnap.docs : []).map(d => ({ uid: d.id, ...d.data() }))
