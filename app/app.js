@@ -879,7 +879,8 @@ async function mirrorJobPhotos(j, files) {
   });
   // Not a retention anchor, including on a completed job. Listing still uses the
   // job's completion or existing activity date. This only asks other open phones to list again.
-  updateDoc(doc(db, "jobs", j.id), { cloudPhotosAt: at.toISOString() }).catch(e => console.warn("cloud photo stamp not saved", e.code || e.message));
+  // Staff can't write cloudPhotosAt (rules). Their upload already bumps photosEmailedAt, which photoMark also watches.
+  if (me && me.role === "admin") updateDoc(doc(db, "jobs", j.id), { cloudPhotosAt: at.toISOString() }).catch(e => console.warn("cloud photo stamp not saved", e.code || e.message));
   await ensurePhotoList(j, true);
   paintPhotoSlots();
 }
@@ -1864,6 +1865,14 @@ function bindLeave(A) {
   const form = A.querySelector("#leaveform");
   if (form) form.onsubmit = async ev => {
     ev.preventDefault();
+    // One request per tap: a second tap while the first is uploading or saving made a duplicate request.
+    if (form.dataset.busy === "1") return;
+    form.dataset.busy = "1";
+    const btn = form.querySelector("button[type=submit]");
+    if (btn) btn.disabled = true;
+    try { await submitLeave(form, A); } finally { delete form.dataset.busy; if (btn) btn.disabled = false; }
+  };
+  async function submitLeave(form, A) {
     const err = A.querySelector("#leaveerr");
     const file = form.certificate.files[0];
     const id = newLeaveId();
@@ -1900,7 +1909,7 @@ function bindLeave(A) {
     } catch (e) {
       if (err) err.textContent = "Not saved: " + (e.code || e.message);
     }
-  };
+  }
   A.querySelectorAll(".lv-decide").forEach(decide => {
     decide.onsubmit = async ev => {
       ev.preventDefault();
@@ -2206,6 +2215,12 @@ function bindTs(A, rerender) {
     ui.tsWatch?.(); ui.tsWatchId = `${me.uid}_${ws}`; ui.tsMine = undefined;
     ui.tsWatch = onSnapshot(doc(db, "timesheets", `${me.uid}_${ws}`), s => {
       ui.tsMine = s.exists() ? { id: s.id, ...s.data() } : null;
+      // The machine question belongs to an open shift. If the server says that shift is closed (clocked off on
+      // another phone, or the cached screen was stale), drop the question so the real state paints.
+      if (ui.tsMachineShift && !s.metadata.fromCache) {
+        const e = ui.tsMine && ui.tsMine.entries && ui.tsMine.entries[ui.tsMachineShift];
+        if (!e || e.status === "closed" || e.machineChoice) ui.tsMachineShift = null;
+      }
       if (tsSnapshotBlocked()) return;
       if ((ui.opTab === "hours" && !ui.opSel) || (ui.view === "timesheet" && !tsIsAdminSheet())) rerender();
     }, e => { const w = A.querySelector(".ts-wrap") || A.querySelector(".pad"); if (w) w.innerHTML = tsNav() + `<p class="err pad">Timesheet not available: ${esc(e.code || e.message)}</p>`; });
@@ -3381,7 +3396,7 @@ function downloadHoursCsv() {
 }
 function downloadJobsCsv(list) {
   if (!canCompanyExport()) return;
-  downloadText(`jobs-${todayStr()}.csv`, jobsCsv(list));
+  downloadText(`jobs-${todayStr()}.csv`, jobsCsv((list || []).map(j => ({ ...j, jobNo: j.jobNo || jobNo(j) }))));
 }
 function downloadClaimsCsv() {
   if (!canCompanyExport()) return;

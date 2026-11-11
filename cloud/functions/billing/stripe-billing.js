@@ -80,13 +80,15 @@ export function assertKeyForMode(secret, mode = "test") {
 }
 
 export function authorizeCompanyAdmin({ uid, profile, company, companyId }) {
-  const skip = billingSkipped(company, companyId);
   if (!uid) return { ok: false, code: "unauthenticated", reason: "sign-in" };
-  if (!company) return { ok: false, code: "not-found", reason: "missing-company" };
-  if (skip) return { ok: false, code: "failed-precondition", reason: skip };
+  // Check the caller is this company's admin before saying anything about the company, so a signed-in user
+  // can't probe which company ids exist or which are test, friend, archived or Heartwood.
   const role = profile && profile.role;
   const home = (profile && (profile.companyId || profile.tenantId)) || "";
   if (role !== "admin" || home !== companyId) return { ok: false, code: "permission-denied", reason: "company-admin" };
+  if (!company) return { ok: false, code: "not-found", reason: "missing-company" };
+  const skip = billingSkipped(company, companyId);
+  if (skip) return { ok: false, code: "failed-precondition", reason: skip };
   return { ok: true };
 }
 
