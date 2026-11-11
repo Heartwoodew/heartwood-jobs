@@ -179,3 +179,41 @@ From `cloud/` after `npm install`:
 - `npm run test:emulator` — Auth, Firestore, and Storage emulators on `demo-heartwood` only.
 
 `npm run deploy` exits 1.
+
+## Job money off the job document (round 3, Q6, Nov 2026)
+
+Assigned crew can read the whole job document, and their phone keeps an offline copy of it. So the job no longer
+carries the PO value or the accepted-quote total.
+
+- New collection `jobMoney/{jobId}`: `jobId`, `companyId` (`tenantId` for companies), `poAmount`, `poAmountBasis`,
+  `poAmountSource`, `quoteAmount`, `splitUndoPoAmount`, `migratedAt`, `updatedAt`, `updatedBy`.
+  Read/write: Heartwood admins (Alex, Patrick, the box) for Heartwood; company admins and supervisors for their own
+  company (supervisors already read quotes). Crew (operators, staff) never. No deletes.
+- Jobs rules: app writers (Heartwood admins, company office, the master page) may not add or change `poAmount`,
+  `poAmountBasis`, `poAmountSource` or `quoteAmount` on a job, and a job's `quote` copy may not hold `totalEx`, `gst`,
+  `totalInc`, `lines`, `priceOverrides` or `ratesSnapshot`. Removing a legacy copy is allowed.
+  The box sync user may still write `poAmount` on Heartwood jobs (tools/po_lookup.py, sm8_import.py) until those workers
+  are moved to `jobMoney`; the app reads jobMoney first and falls back to the job's own field.
+- The app: office lists are merged with `jobMoney`; job form, Find PO "Use this", split/undo split and Accept quote
+  write money to `jobMoney` and clear any legacy copy on the job.
+- Not moved: invoice fields (`invoiceAmount`, `invoiceNo`, ...). tools/export_completed.py and the Xero queue still read
+  and write them on the job. They are only set on Done jobs at invoicing. Moving them needs those box workers changed first.
+
+### Existing jobs: `cloud/scripts/migrate-job-money.mjs` (admin-run, after merge)
+
+Order: merge the PR, deploy the Firestore rules (firestore.production.rules) and the app (service worker
+`callup-shell-v90-job-money`), then run the migration. Dry run is the default and writes nothing.
+
+```
+cd cloud
+# emulator rehearsal (fake data)
+firebase emulators:exec --only firestore --project demo-heartwood "node scripts/migrate-job-money.mjs"
+# production: dry run first, read the report (paths and keys only, no amounts), then commit
+node scripts/migrate-job-money.mjs --project heartwood-9f37f
+node scripts/migrate-job-money.mjs --project heartwood-9f37f --commit
+```
+
+Per job it copies the money keys into `jobMoney/{jobId}` (never overwriting a value already there), then deletes them
+from the job; strips quote prices from `job.quote` (keeping `quote.totalEx` as `quoteAmount` when that is missing) and
+`unitPrice` from `job.quote.extraItems`; moves `splitUndo.poAmount` to `jobMoney.splitUndoPoAmount`. Safe to re-run.
+Crew phones drop the old values from their offline cache when the job document next syncs.

@@ -169,6 +169,7 @@ export function where(field, op, value) { return { _where: { field, op, value } 
 export function orderBy() { return {}; }
 export function limitToLast() { return {}; }
 export function serverTimestamp() { return { _server: true }; }
+export function deleteField() { return { _delete: true }; }
 function chatStamp(value) {
   const d = value instanceof Date ? value : new Date(value || Date.now());
   const ms = Number.isNaN(d.getTime()) ? Date.now() : d.getTime();
@@ -326,7 +327,7 @@ export function setDoc(ref, data) {
     keys: data ? Object.keys(data) : [],
     jobIds: data && data.jobIds, status: data && data.status,
     workerUid: data && data.workerUid,
-    ...(ref && ref._col === "jobs" ? { data } : {}),
+    ...(ref && (ref._col === "jobs" || ref._col === "jobMoney") ? { data } : {}),
   });
   return Promise.resolve();
 }

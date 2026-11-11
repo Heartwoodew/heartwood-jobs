@@ -79,9 +79,11 @@ test("company saved presets live on the quote-rates doc: admin writes, superviso
 
 test("accepted quote → job with extras, amounts and place geo is allowed for the office; crew reads the job", async () => {
   const job = { companyId: "bravo", tenantId: "bravo", client: "Acme", address: "1 Test St", assigned: ["bOp"], status: "Scheduled", source: "quote",
-    quote: { extraItems: [item(1)], priceOverrides: {}, gst: 10, totalInc: 110, totalEx: 100, lines: [] },
+    quote: { extraItems: [{ ...item(1), unitPrice: undefined }].map(({ unitPrice, ...rest }) => rest) },
     workAmounts: ["Rubbish removal — Green waste: 6 m³"], addressPlace: place,
     geo: { lat: place.lat, lng: place.lng, query: "1 Test St", source: "google-places", at: "2026-11-11T00:00:00Z" } };
+  // Round 3 (Q6): quote prices never go on the job (crew read it); they stay on the quote and jobMoney.
+  await assertFails(setDoc(doc(db("bAdm"), "jobs/bq0"), { ...job, quote: { ...job.quote, gst: 10, totalInc: 110, totalEx: 100, lines: [] } }));
   await assertSucceeds(setDoc(doc(db("bAdm"), "jobs/bq1"), job));
   const seen = await assertSucceeds(getDoc(doc(db("bOp"), "jobs/bq1")));
   assert.deepEqual(seen.data().workAmounts, ["Rubbish removal — Green waste: 6 m³"]);

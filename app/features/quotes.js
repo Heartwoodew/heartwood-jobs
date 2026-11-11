@@ -1,6 +1,7 @@
 // CallUp guided Quotes (Nov 2026). Prices always ex GST.
 import { orgSettings, POWERED_BY, PRODUCT_NAME } from "../org-settings.js";
 import { scopeRecord } from "./company.js";
+import { JOB_MONEY_COLLECTION, jobMoneyDoc } from "./job-money.js";
 import { attachAddressSearch, placesEnabled, sanitizePlace } from "./places.js";
 // Rates from meta/quoteRates only — never invent business rates.
 // Draft/Accepted are explicit quoteStatus fields.
@@ -1237,20 +1238,22 @@ ${q.description ? `<b>Scope</b><span>${e(q.description)}</span>` : ""}${q.quoteI
 }
 
 async function createJobFromQuote(qid, q) {
-  const { db, addDoc, collection, serverTimestamp, getMe } = api;
+  const { db, doc, setDoc, collection, serverTimestamp, getMe } = api;
   const me = getMe();
   if (q.totalEx == null) throw new Error("Cannot create job from incomplete quote");
   const presetLab = EQUIPMENT_PRESETS.find(p => p.id === q.presetId)?.label
     || (q.machines || []).map(fleetName).join(" + ");
   // The job description is visible to assigned crew, so it carries scope and amounts only — never dollars.
-  // Line prices stay on the quote (office only). quoteAmount / poAmount (ex GST total) are still on the job for the
-  // office job form and invoicing; assigned crew can read the job document, so see the round 3 report.
+  // Line prices stay on the quote (office only). The ex GST total (quoteAmount / poAmount) goes to jobMoney/{jobId},
+  // which only the office reads (round 3, Q6): assigned crew can read the job document and keep it offline.
   const amounts = workAmounts(q);
   const desc = [noDollars(q.description || ""), "",
     presetLab ? `Equipment: ${presetLab}${q.includeLabourer ? " + labourer" : ""}` : "",
     q.travelNote ? `Travel: ${noDollars(q.travelNote)}` : ""].filter(Boolean).join("\n");
   // Amounts (rubbish / concrete / material …) go on job.workAmounts, shown on the job card, job form and run sheet.
-  const ref = await addDoc(collection(db, "jobs"), scopeRecord({
+  const ref = doc(collection(db, "jobs"));
+  const companyId = orgSettings().companyId;
+  const jobDoc = scopeRecord({
     client: q.client, address: q.address, type: q.type || "other", description: desc,
     date: "", time: "", status: "Scheduled", assigned: [], assignedNames: [],
     source: "quote", quoteId: qid, quoteStatus: "Accepted",
@@ -1271,9 +1274,12 @@ async function createJobFromQuote(qid, q) {
       geo: { lat: q.addressPlace.lat, lng: q.addressPlace.lng, query: String(q.address || "").replace(/\s+/g, " ").trim(), source: "google-places", at: new Date().toISOString() }
     } : {}),
     machines: q.machines || [], presetId: q.presetId || null, includeLabourer: !!q.includeLabourer,
-    quoteAmount: q.totalEx, poAmount: q.totalEx, poAmountBasis: "accepted quote (ex GST)", poAmountSource: "quote",
     log: [], createdAt: serverTimestamp(), updatedAt: serverTimestamp(), updatedBy: me.uid, editedInApp: true
-  }, orgSettings().companyId));
+  }, companyId);
+  await setDoc(ref, jobDoc);
+  await setDoc(doc(db, JOB_MONEY_COLLECTION, ref.id), jobMoneyDoc(ref.id, jobDoc.companyId,
+    { quoteAmount: q.totalEx, poAmount: q.totalEx, poAmountBasis: "accepted quote (ex GST)", poAmountSource: "quote" },
+    { updatedAt: serverTimestamp(), updatedBy: me.uid }));
   return ref.id;
 }
 
