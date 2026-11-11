@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { CALLUP_ORIGINS, HEARTWOOD_APP_ORIGIN, appOriginFor } from "../shared/staff-invites.js";
 
-// Sandbox Stripe for CallUp. One plan: A$20 includes 1 person, A$5 each extra person.
+// Stripe for CallUp (live since 11 Nov 2026 via STRIPE_MODE=live). One plan: A$20 includes 1 person, A$5 each extra person.
 // There is no second tier. Test companies, friend trials and Heartwood never call Stripe.
 // Test mode (default): the secret key must be an sk_test_ key and live events are refused.
 // Test secrets are STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in Secret Manager.
