@@ -4,7 +4,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/fireba
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, signOut, connectAuthEmulator }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator,
-  collection, doc, getDoc, getDocs, query, where, orderBy, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, serverTimestamp, arrayUnion, runTransaction, Timestamp }
+  collection, doc, getDoc, getDocFromCache, getDocs, query, where, orderBy, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, serverTimestamp, arrayUnion, runTransaction, Timestamp }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { getStorage, ref as storageRef, uploadBytes, connectStorageEmulator, listAll, getMetadata, getBlob }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
@@ -2052,9 +2052,21 @@ function bindClaims(A, rerender) {
   A.querySelectorAll("[data-rc-receipt]").forEach(btn => { btn.onclick = () => downloadClaimReceipt(btn.dataset.rcReceipt); });
   A.querySelectorAll("[data-rc-filter]").forEach(btn => { btn.onclick = () => { ui.claimsFilter = btn.dataset.rcFilter; rerender(); }; });
 }
-async function tsLoad(ws) {
-  const snap = await getDoc(doc(db, "timesheets", `${me.uid}_${ws}`));
-  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+async function tsLoad(ws, opts = {}) {
+  const ref = doc(db, "timesheets", `${me.uid}_${ws}`);
+  try {
+    const snap = await getDoc(ref);
+    return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+  } catch (e) {
+    // No signal: a clock punch must still work. Use this phone's copy (the watched week is always cached).
+    if (!opts.offlineOk || (e.code !== "unavailable" && e.code !== "failed-precondition")) throw e;
+    try { const snap = await getDocFromCache(ref); return snap.exists() ? { id: snap.id, ...snap.data() } : null; }
+    catch { return ui.tsWatchId === `${me.uid}_${ws}` && ui.tsMine !== undefined ? ui.tsMine : null; }
+  }
+}
+// A queued punch that the server later refuses must not stay silent.
+function tsLate(write) {
+  return write.catch(e => { toast("Clock time not saved: " + (e.code || e.message)); throw e; });
 }
 async function tsWrite(ws, sheet, entries, lastEntryId, opts = {}) {
   const days = daysForSheet({ days: (sheet && sheet.days) || {}, entries });
@@ -2073,14 +2085,17 @@ async function tsWrite(ws, sheet, entries, lastEntryId, opts = {}) {
   };
   if (opts.consent) data.locationConsentAt = serverTimestamp();
   // Update one shift key. Rewriting the whole entries map makes the rules re-check every stamp.
+  // opts.fields: only these keys of the shift changed. Rewriting the whole shift resends its pending server
+  // times as null when the phone is offline, and the rules then refuse the clock-off after the fact.
   if (sheet) {
-    data[`entries.${lastEntryId}`] = entries[lastEntryId];
-    await updateDoc(ref, data);
-    return;
+    if (opts.fields && opts.fields.length) for (const k of opts.fields) data[`entries.${lastEntryId}.${k}`] = entries[lastEntryId][k];
+    else data[`entries.${lastEntryId}`] = entries[lastEntryId];
+    return settleOrQueue(tsLate(updateDoc(ref, data)));
   }
   data.entries = { [lastEntryId]: entries[lastEntryId] };
-  await setDoc(ref, data);
+  return settleOrQueue(tsLate(setDoc(ref, data)));
 }
+const tsQueuedNote = r => (r && r.queued ? " · saved on this phone, sends when there's signal" : "");
 function tsFixAt(fix) { return { ...locationMap(fix), at: serverTimestamp() }; }
 function tsDiffSummary(prev, next) {
   const bits = [];
@@ -2103,11 +2118,11 @@ async function tsPunch(kind) {
   try {
     const fix = await captureFix();
     const ws = kind === "on" ? weekStartOf(todayStr()) : active.ws;
-    const sheet = await tsLoad(ws);
+    const sheet = await tsLoad(ws, { offlineOk: true });
     const entries = { ...(sheet?.entries || {}) };
     const hm = brisbaneHM(new Date());
     if (kind === "on") {
-      const prev = await tsLoad(addDays(weekStartOf(todayStr()), -7));
+      const prev = await tsLoad(addDays(weekStartOf(todayStr()), -7), { offlineOk: true });
       if (openClock(entries) || openClock(prev?.entries)) { toast("Clock off the open shift first"); ui.tsPrev = prev; return; }
       const id = newTsId();
       entries[id] = {
@@ -2115,10 +2130,10 @@ async function tsPunch(kind) {
         clockOn: tsFixAt(fix), enteredBy: me.uid, enteredByName: String(me.name || "Staff").slice(0, 80), enteredAt: serverTimestamp(),
         edits: {}, lastEditId: "",
       };
-      await tsWrite(ws, sheet, entries, id, { consent: !(sheet && sheet.locationConsentAt) });
+      const r = await tsWrite(ws, sheet, entries, id, { consent: !(sheet && sheet.locationConsentAt) });
       ui.tsMachineShift = id;
       ui.tsMachineWs = ws;
-      toast(fix.fix === "gps" ? "Clocked on" : "Clocked on · no location");
+      toast((fix.fix === "gps" ? "Clocked on" : "Clocked on · no location") + tsQueuedNote(r));
     } else {
       const e = openClock(entries);
       if (!e) { toast("No open shift on this week"); return; }
@@ -2134,8 +2149,9 @@ async function tsPunch(kind) {
         if (e.status === "break") { next.breakEnd = next.breakEnd || hm; next.breakOff = tsFixAt(fix); }
       }
       entries[e.id] = next;
-      await tsWrite(ws, sheet, entries, e.id, { consent: !(sheet && sheet.locationConsentAt) });
-      toast(kind === "off" ? (fix.fix === "gps" ? "Clocked off" : "Clocked off · no location") : "Break saved");
+      const fields = Object.keys(next).filter(k => next[k] !== e[k]);
+      const r = await tsWrite(ws, sheet, entries, e.id, { consent: !(sheet && sheet.locationConsentAt), fields });
+      toast((kind === "off" ? (fix.fix === "gps" ? "Clocked off" : "Clocked off · no location") : "Break saved") + tsQueuedNote(r));
       ui.tsPrevFor = "";
     }
   } catch (err) {

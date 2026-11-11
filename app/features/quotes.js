@@ -206,6 +206,10 @@ const r2 = v => Math.round(v * 100) / 100;
  * Price-free amounts for the crew (job card, run sheet): "Rubbish removal — Green waste: 6 m³ (note)".
  * Covers extra items with a quantity and the guided materials / rubbish quantities. Never includes dollars.
  */
+// Crew-visible text built from a quote: drop anything that looks like a price ("$450", "$ 1,200.50", "A$90").
+export function noDollars(text) {
+  return String(text == null ? "" : text).replace(/(?:A|AU)?\$\s?\d[\d,]*(?:\.\d+)?(?:\s?(?:ex|inc|incl)\.?\s?GST)?/gi, "[price removed]").replace(/\$/g, "");
+}
 export function workAmounts(q) {
   const out = [];
   const r = q.ratesSnapshot || {};
@@ -216,7 +220,7 @@ export function workAmounts(q) {
     const desc = it.description || EXTRA_PRESETS.find(p => p.id === it.kind)?.label || "Extra item";
     const type = TYPE_FIELD_KINDS.includes(it.kind) && it.material ? ` — ${it.material}` : "";
     const note = it.note ? ` (${it.note})` : "";
-    out.push(`${desc}${type}: ${it.qty} ${unitLabel(it.unit)}${note}`.slice(0, 200));
+    out.push(noDollars(`${desc}${type}: ${it.qty} ${unitLabel(it.unit)}${note}`).slice(0, 200));
   }
   return out.slice(0, 20);
 }
@@ -430,7 +434,8 @@ export function calcQuote(inputs, rates) {
   const adjustmentEx = r2(rounded.filter(l => l.overridden && l.originalAmount != null)
     .reduce((t, l) => t + (l.amount - l.originalAmount), 0));
   const extrasEx = r2(rounded.filter(l => l.extra && l.amount != null).reduce((t, l) => t + l.amount, 0));
-  const gst = totalEx == null ? null : r2(totalEx * GST_RATE);
+  // GST in whole cents, half a cent rounds up (10.35 ex GST → 1.04, not the 1.03 that float maths gives).
+  const gst = totalEx == null ? null : Math.round(Math.round(totalEx * 100) / 10) / 100;
   const totalInc = totalEx == null ? null : r2(totalEx + gst);
   return {
     lines: rounded, totalEx, subtotalEx: totalEx, gst, totalInc, gstRate: GST_RATE,
@@ -1226,24 +1231,26 @@ async function createJobFromQuote(qid, q) {
   const presetLab = EQUIPMENT_PRESETS.find(p => p.id === q.presetId)?.label
     || (q.machines || []).map(fleetName).join(" + ");
   // The job description is visible to assigned crew, so it carries scope and amounts only — never dollars.
-  // Prices stay on job.quote / quoteAmount / poAmount, which the app only shows to people who see money.
+  // Line prices stay on the quote (office only). quoteAmount / poAmount (ex GST total) are still on the job for the
+  // office job form and invoicing; assigned crew can read the job document, so see the round 3 report.
   const amounts = workAmounts(q);
-  const desc = [q.description || "", "",
+  const desc = [noDollars(q.description || ""), "",
     presetLab ? `Equipment: ${presetLab}${q.includeLabourer ? " + labourer" : ""}` : "",
-    q.travelNote ? `Travel: ${q.travelNote}` : ""].filter(Boolean).join("\n");
+    q.travelNote ? `Travel: ${noDollars(q.travelNote)}` : ""].filter(Boolean).join("\n");
   // Amounts (rubbish / concrete / material …) go on job.workAmounts, shown on the job card, job form and run sheet.
   const ref = await addDoc(collection(db, "jobs"), scopeRecord({
     client: q.client, address: q.address, type: q.type || "other", description: desc,
     date: "", time: "", status: "Scheduled", assigned: [], assignedNames: [],
     source: "quote", quoteId: qid, quoteStatus: "Accepted",
+    // Assigned crew can read the whole job document (and it sits in their phone's offline cache), so the
+    // copy on the job holds amounts only. Line prices, overrides and GST stay on the office-only quote (quoteId).
     quote: {
       travelKm: q.travelKm, hoursOnSite: q.hoursOnSite, machineDays: q.machineDays,
       materialQty: q.materialQty, tipLoads: q.tipLoads,
       machines: q.machines || [], presetId: q.presetId || null, includeLabourer: !!q.includeLabourer,
-      lines: q.lines, totalEx: q.totalEx, travelMode: q.travelMode || "oneway", travelNote: q.travelNote || "",
+      travelMode: q.travelMode || "oneway", travelNote: noDollars(q.travelNote || ""),
       yardAddress: q.yardAddress || DEFAULT_DEPOT.yardAddress,
-      extraItems: sanitizeExtraItems(q.extraItems), priceOverrides: sanitizeOverrides(q.priceOverrides),
-      gst: q.gst ?? null, totalInc: q.totalInc ?? null
+      extraItems: sanitizeExtraItems(q.extraItems).map(({ unitPrice, ...rest }) => ({ ...rest, description: noDollars(rest.description), note: noDollars(rest.note) }))
     },
     workAmounts: amounts,
     // A Google-picked site seeds the run-sheet geocode, so route ordering uses the exact spot.

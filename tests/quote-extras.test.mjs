@@ -211,3 +211,29 @@ test("accepted job description carries amounts and no dollar figures", () => {
   assert.match(fn, /workAmounts: amounts/);
   assert.match(fn, /extraItems: sanitizeExtraItems\(q\.extraItems\)/);
 });
+
+test("round 3: GST is whole cents with half a cent rounding up", () => {
+  for (const [ex, gst, inc] of [[10.35, 1.04, 11.39], [0.35, 0.04, 0.39], [1.45, 0.15, 1.6], [100, 10, 110], [0.04, 0, 0.04]]) {
+    const c = calcQuote({ extraItems: [{ id: "a", kind: "misc", description: "x", qty: 1, unit: "each", unitPrice: ex }] }, {});
+    assert.equal(c.totalEx, ex);
+    assert.equal(c.gst, gst, `gst for ${ex}`);
+    assert.equal(c.totalInc, inc, `inc for ${ex}`);
+  }
+});
+
+test("round 3: crew amounts never carry a typed price", async () => {
+  const { noDollars } = await import("../app/features/quotes.js");
+  const out = workAmounts({ extraItems: [{ id: "a", kind: "rubbish", description: "Rubbish $450 + GST", qty: 6, unit: "m3", unitPrice: 75, note: "quoted A$1,200.50 inc GST" }] });
+  assert.equal(out.length, 1);
+  assert.ok(!out[0].includes("$"), out[0]);
+  assert.ok(!/450|1,200/.test(out[0]), out[0]);
+  assert.equal(noDollars("5 loads, no price"), "5 loads, no price");
+});
+
+test("round 3: the job copy of a quote carries no prices", () => {
+  const src = readFileSync(new URL("../app/features/quotes.js", import.meta.url), "utf8");
+  const block = src.slice(src.indexOf("async function createJobFromQuote"), src.indexOf("export function adminViewRouter"));
+  const quoteObj = block.slice(block.indexOf("quote: {"), block.indexOf("workAmounts: amounts"));
+  for (const k of ["lines", "totalEx", "gst", "totalInc", "priceOverrides"]) assert.ok(!new RegExp(`\\b${k}:`).test(quoteObj), k);
+  assert.match(quoteObj, /unitPrice, \.\.\.rest/);
+});

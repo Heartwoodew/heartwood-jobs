@@ -205,6 +205,10 @@ export function getDoc(ref) {
   return Promise.resolve({ exists: () => false, data: () => undefined });
 }
 
+export function getDocFromCache(ref) {
+  record("getDocFromCache", { col: ref && ref._col, id: ref && ref._id });
+  return getDoc(ref);
+}
 export function getDocs(ref) {
   const col = ref && ref._col;
   record("getDocs", { col });
