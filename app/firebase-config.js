@@ -8,6 +8,11 @@ export const firebaseConfig = {
   messagingSenderId: "414325106644",
   appId: "1:414325106644:web:0163e3ccfe965dd6fa9841",
 };
+// Public Web Push certificate key from Firebase console > Project settings >
+// Cloud Messaging > Web configuration > Key pair. Paste the public key here.
+// Leave this empty until that certificate exists. The private key stays in
+// Firebase. Do not put a private key in this file.
+export const vapidKey = "";
 // Local testing: open the app with ?emu=1 (or on localhost) to use the Firebase Emulator Suite.
 export const useEmulator = location.hostname === "localhost" || location.hostname === "127.0.0.1" || new URLSearchParams(location.search).has("emu");
 // Email capture stays on. features/cloud-storage.js also mirrors new photos and receipts

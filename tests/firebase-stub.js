@@ -232,6 +232,10 @@ export function onSnapshot(ref, onNext) {
   record("onSnapshot", { col, id, path });
   queueMicrotask(() => {
     try {
+      if (path.includes("/chatSettings/")) {
+        onNext({ id, exists: () => false, data: () => undefined });
+        return;
+      }
       if (path.includes("/chatSeen/")) {
         onNext({ id, exists: () => false, data: () => undefined });
         return;

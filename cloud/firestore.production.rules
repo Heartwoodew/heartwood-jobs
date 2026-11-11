@@ -774,7 +774,70 @@ service cloud.firestore {
         && request.resource.data.seenAt == request.time;
       allow delete: if false;
     }
+
+    function chatExplicitCompany() {
+      return chatHasProfile() && "companyId" in chatProfile() && chatProfile().companyId is string && chatProfile().companyId.size() > 0;
+    }
+    function chatTokenCompany() {
+      return chatExplicitCompany()
+        ? chatProfile().companyId
+        : (chatExplicitTenant()
+          ? chatProfile().tenantId
+          : ((chatHasProfile() || chatIsAlex() || chatIsPatrick()) ? "heartwood" : ""));
+    }
+    function chatCompanyIdOk(id) {
+      return id is string && id.size() >= 2 && id.size() <= 40 && id.matches('^[a-z0-9][a-z0-9-]{0,39}$');
+    }
+    function chatPushOriginOk() {
+      return request.resource.data.origin in [
+        "https://jobs.heartwoodew.com",
+        "https://app.callupapp.com.au",
+        "https://callupapp.web.app"
+      ];
+    }
+    function chatTokenOk() {
+      return request.resource.data.keys().hasOnly(["token", "companyId", "origin", "platform", "updatedAt"])
+        && request.resource.data.token is string
+        && request.resource.data.token.size() >= 20
+        && request.resource.data.token.size() <= 4096
+        && chatCompanyIdOk(request.resource.data.companyId)
+        && request.resource.data.companyId == chatTokenCompany()
+        && chatPushOriginOk()
+        && request.resource.data.platform == "web"
+        && request.resource.data.updatedAt == request.time;
+    }
+    function chatPrefsOk() {
+      return request.resource.data.keys().hasOnly(["sound", "push", "dailyJobs"])
+        && request.resource.data.keys().hasAll(["sound", "push"])
+        && request.resource.data.sound is bool
+        && request.resource.data.push is bool
+        && (!("dailyJobs" in request.resource.data) || request.resource.data.dailyJobs is bool);
+    }
+
+    match /users/{uid}/fcmTokens/{tokenId} {
+      allow read: if chatSignedIn() && request.auth.uid == uid;
+      allow create, update: if chatSignedIn()
+        && request.auth.uid == uid
+        && tokenId.matches('^[a-f0-9]{32}$')
+        && chatTokenOk();
+      allow delete: if chatSignedIn() && request.auth.uid == uid;
+    }
+
+    match /users/{uid}/chatSettings/{docId} {
+      allow read: if chatSignedIn() && request.auth.uid == uid && docId == "prefs";
+      allow create, update: if chatSignedIn()
+        && request.auth.uid == uid
+        && docId == "prefs"
+        && chatPrefsOk();
+      allow delete: if false;
+    }
 // END CHAT RULES
+
+// BEGIN DAILY JOB RULES
+    match /dailyJobDigest/{id} {
+      allow read, write: if false;
+    }
+// END DAILY JOB RULES
 
 // BEGIN RUN SHEET RULES
     function routeSignedIn() { return request.auth != null; }

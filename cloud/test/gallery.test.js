@@ -302,7 +302,8 @@ test("gallery code does not schedule deletion or rewrite retention anchors", () 
   assert.doesNotMatch(rules, /match \/tenants\/\{tenantId\}\/receipts\/\{receiptId\} \{\s*allow list/);
   assert.match(life, /PROPOSED ONLY/);
   assert.match(life, /_expired\//);
-  assert.doesNotMatch(index, /onSchedule/);
+  assert.equal((index.match(/onSchedule/g) || []).length, 2);
+  assert.match(index, /dailyJobPush = onSchedule/);
   assert.equal(prodJson.firestore, undefined);
   assert.doesNotMatch(app, /updateMetadata|deleteObject/);
   assert.equal(app.split("photosEmailedAt:").length - 1, 1);

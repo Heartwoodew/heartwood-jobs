@@ -13,6 +13,7 @@ import {
   newChatFileId, orderedMessages, planChatPhoto, readSeenMap, shouldStickToBottom, threadJobId, unreadCount,
   writeSeenMap,
 } from "./chat.js";
+import { alertsModel, bindChatAlerts, chatAlertsHtml, noteHead, noteMessages, startChatAlerts, stopChatAlerts } from "./chat-notify.js";
 
 const urls = new Map();
 const state = {
@@ -182,6 +183,7 @@ function listenMessages(threadId) {
     state.messages[threadId] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     state.loaded[threadId] = true;
     state.errors[threadId] = "";
+    noteMessages(threadId, state.messages[threadId], state.me?.uid);
     refresh();
   }, err => {
     state.errors[threadId] = err.code || err.message || "permission-denied";
@@ -195,6 +197,7 @@ function listenHead(threadId) {
   if (!deps || !tenantId()) return () => {};
   return onSnapshot(doc(deps.db, "tenants", tenantId(), "chats", threadId), snap => {
     state.heads[threadId] = snap.exists() ? snap.data() : null;
+    noteHead(threadId, state.heads[threadId], state.me?.uid, !!state.loaded[threadId]);
     paintBadges();
   }, () => { state.heads[threadId] = null; paintBadges(); });
 }
@@ -378,6 +381,7 @@ function teamHtml() {
     threadId: STAFF_THREAD,
     title: "Team chat",
     subtitle: `Everyone signed in at ${orgName}`,
+    extra: chatAlertsHtml(alertsModel()),
   });
 }
 
@@ -408,6 +412,7 @@ export function installChatApp({ db, storage, getMe, toast }) {
       state.me = me;
       state.membership = membershipOf(me);
       state.seen = readSeenMap(localStorage, me?.uid);
+      startChatAlerts();
       if (!canUseTeamChat(state.membership)) return;
       listenMessages(STAFF_THREAD);
       listenSeen(STAFF_THREAD);
@@ -415,6 +420,7 @@ export function installChatApp({ db, storage, getMe, toast }) {
       state.unsubs.push(stopHead);
     },
     stop() {
+      stopChatAlerts();
       state.unsubs.splice(0).forEach(fn => { try { fn(); } catch { /* already stopped */ } });
       state.headUnsubs.forEach(fn => { try { fn(); } catch { /* already stopped */ } });
       state.headUnsubs.clear();
@@ -452,6 +458,7 @@ export function installChatApp({ db, storage, getMe, toast }) {
       const screen = root?.querySelector(`.chat-screen[data-thread="${STAFF_THREAD}"]`);
       placeholder(screen, "Message the team");
       bindScreen(screen, STAFF_THREAD, null);
+      bindChatAlerts(root);
     },
     openJob(container, job) {
       if (!container || !job) return;

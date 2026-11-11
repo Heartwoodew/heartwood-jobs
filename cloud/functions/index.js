@@ -17,13 +17,23 @@
  * helperAsk stays deployed and refuses every request. HELPER_ENABLED defaults
  * to "false", and HELPER_HARD_OFF returns before Auth, Firestore, or Vertex.
  * An environment change cannot turn it back on. See helper/DEPLOY.md.
+ *
+ * chatMessagePush sends a web push when a chat message is created.
+ * It notifies the other people who can see that chat, in that company only.
+ * dailyJobPush runs at 06:00 Australia/Brisbane and sends each person their
+ * own jobs for that day. Retention stays unscheduled.
+ * Deploy is still blocked by cloud/scripts/refuse-live-deploy.js.
  */
 import { onDocumentCreated, onDocumentWritten } from "firebase-functions/v2/firestore";
+import { onSchedule } from "firebase-functions/v2/scheduler";
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
 import { defineSecret } from "firebase-functions/params";
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
+import { getMessaging } from "firebase-admin/messaging";
+import { dispatchChatPush } from "./chat-push.js";
+import { brisbaneDate, dispatchDailyJobs } from "./daily-jobs.js";
 import { handlePhotoIntake } from "./lib/photo-intake.js";
 import {
   acceptStaffInvite as acceptInvite,
@@ -386,6 +396,151 @@ export const syncStripeStaff = onDocumentWritten(
       const staff = await db.collection("users").where("companyId", "==", companyId).get();
       await syncStaffQuantity({ companyId, company: snap.data(), staffCount: staff.size, stripe, prices: currentPrices() });
     }
+  },
+);
+
+async function loadChatPeople(db, tenantId) {
+  const snap = await db.collectionGroup("fcmTokens").where("companyId", "==", tenantId).get();
+  const grouped = new Map();
+  snap.forEach(docSnap => {
+    const parent = docSnap.ref.parent && docSnap.ref.parent.parent;
+    const uid = parent && parent.id;
+    if (!uid) return;
+    const data = docSnap.data() || {};
+    if (!grouped.has(uid)) grouped.set(uid, { uid, tokens: [] });
+    grouped.get(uid).tokens.push({
+      id: docSnap.id,
+      token: data.token,
+      companyId: data.companyId,
+      origin: data.origin,
+    });
+  });
+  const people = [];
+  for (const person of grouped.values()) {
+    const userRef = db.collection("users").doc(person.uid);
+    const [userSnap, prefsSnap] = await Promise.all([
+      userRef.get(),
+      userRef.collection("chatSettings").doc("prefs").get(),
+    ]);
+    person.profile = userSnap.exists ? userSnap.data() : null;
+    const prefs = prefsSnap.exists ? prefsSnap.data() : null;
+    person.push = !!(prefs && prefs.push === true);
+    people.push(person);
+  }
+  return people;
+}
+
+export const chatMessagePush = onDocumentCreated(
+  {
+    document: "tenants/{tenantId}/chats/{threadId}/messages/{messageId}",
+    region: "australia-southeast1",
+  },
+  async (event) => {
+    if (process.env.NODE_TEST_CONTEXT) return;
+    const snap = event.data;
+    if (!snap) return;
+    const message = snap.data() || {};
+    const { tenantId, threadId } = event.params;
+    ensureAdmin();
+    const db = getFirestore();
+    const result = await dispatchChatPush({
+      tenantId,
+      threadId,
+      message,
+      loadJob: async (jobId) => {
+        const jobSnap = await db.collection("jobs").doc(jobId).get();
+        return jobSnap.exists ? { id: jobSnap.id, ...jobSnap.data() } : null;
+      },
+      loadPeople: () => loadChatPeople(db, tenantId),
+      sendEach: (messages) => getMessaging().sendEach(messages),
+      deleteToken: (target) => db.collection("users").doc(target.uid).collection("fcmTokens").doc(target.tokenId).delete(),
+    });
+    console.log("chat push", tenantId, threadId, result.sent, result.dropped, result.skipped || "");
+  },
+);
+
+async function loadDailyCompanies(db) {
+  const snap = await db.collection("companies").get();
+  return snap.docs.map(docSnap => ({ id: docSnap.id, ...(docSnap.data() || {}) }));
+}
+
+async function loadDailyJobs(db, companyId, date) {
+  const snap = await db.collection("jobs").where("companyId", "==", companyId).where("date", "==", date).get();
+  return snap.docs.map(docSnap => ({ id: docSnap.id, ...(docSnap.data() || {}) }));
+}
+
+async function loadDailyPeople(db, companyId) {
+  const snap = await db.collectionGroup("fcmTokens").where("companyId", "==", companyId).get();
+  const grouped = new Map();
+  snap.forEach(docSnap => {
+    const parent = docSnap.ref.parent && docSnap.ref.parent.parent;
+    const uid = parent && parent.id;
+    if (!uid) return;
+    const data = docSnap.data() || {};
+    if (!grouped.has(uid)) grouped.set(uid, { uid, tokens: [] });
+    grouped.get(uid).tokens.push({
+      id: docSnap.id,
+      token: data.token,
+      companyId: data.companyId,
+      origin: data.origin,
+    });
+  });
+  const people = [];
+  for (const person of grouped.values()) {
+    const userRef = db.collection("users").doc(person.uid);
+    const [userSnap, prefsSnap] = await Promise.all([
+      userRef.get(),
+      userRef.collection("chatSettings").doc("prefs").get(),
+    ]);
+    const prefs = prefsSnap.exists ? (prefsSnap.data() || {}) : null;
+    person.profile = userSnap.exists ? userSnap.data() : null;
+    person.push = !!(prefs && prefs.push === true);
+    person.dailyJobs = !(prefs && prefs.dailyJobs === false);
+    people.push(person);
+  }
+  return people;
+}
+
+async function claimDailyDigest(db, digest) {
+  try {
+    await db.collection("dailyJobDigest").doc(digest.id).create({
+      companyId: digest.companyId,
+      date: digest.date,
+      uid: digest.uid,
+      jobIds: digest.jobIds,
+      sentAt: FieldValue.serverTimestamp(),
+    });
+    return true;
+  } catch (err) {
+    const code = err && (err.code || err.message);
+    if (code === 6 || code === "already-exists" || code === "ALREADY_EXISTS") return false;
+    throw err;
+  }
+}
+
+export const dailyJobPush = onSchedule(
+  {
+    schedule: "0 6 * * *",
+    timeZone: "Australia/Brisbane",
+    region: "australia-southeast1",
+    timeoutSeconds: 300,
+    memory: "256MiB",
+  },
+  async () => {
+    if (process.env.NODE_TEST_CONTEXT) return;
+    ensureAdmin();
+    const db = getFirestore();
+    const date = brisbaneDate(new Date());
+    const result = await dispatchDailyJobs({
+      date,
+      loadCompanies: () => loadDailyCompanies(db),
+      loadJobs: (companyId, day) => loadDailyJobs(db, companyId, day),
+      loadPeople: companyId => loadDailyPeople(db, companyId),
+      claim: digest => claimDailyDigest(db, digest),
+      sendEach: messages => getMessaging().sendEach(messages),
+      deleteToken: target => db.collection("users").doc(target.uid).collection("fcmTokens").doc(target.tokenId).delete(),
+    });
+    console.log("daily jobs", date, result.sent, result.skipped, result.dropped);
   },
 );
 

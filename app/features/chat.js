@@ -232,9 +232,10 @@ export function messagesHtml(messages, { myUid, canDelete } = {}) {
   }).join("");
 }
 
-export function chatShellHtml({ threadId, title, subtitle }) {
+export function chatShellHtml({ threadId, title, subtitle, extra = "" }) {
   return `<section class="chat-screen" data-thread="${esc(threadId)}">
     <div class="chat-head"><h2>${esc(title)}</h2>${subtitle ? `<p>${esc(subtitle)}</p>` : ""}</div>
+    ${extra || ""}
     <div class="chat-log" role="log" aria-relevant="additions" aria-label="${esc(title)}" data-thread="${esc(threadId)}"></div>
     <div class="chat-pending" hidden></div>
     <div class="chat-compose" data-compose="${esc(threadId)}">
