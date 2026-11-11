@@ -155,6 +155,8 @@ onAuthStateChanged(auth, async user => {
     if (window.HW_PREVIEW_VIEW === "master" && me.platformOwner) ui.view = "master";
     const companyId = myCompanyId();
     const staffSnap = users || await getDocs(query(collection(db, "users"), where("companyId", "==", companyId))).catch(() => null);
+    // When the unscoped users list is denied, still know this company's own staff so legacy (no companyId) Heartwood sheets load.
+    if (!users && staffSnap) HOME_UIDS = staffSnap.docs.filter(d => docCompanyId(d.data()) === companyId).map(d => d.id);
     const logins = (staffSnap ? staffSnap.docs : []).map(d => ({ uid: d.id, ...d.data() }))
       .filter(u => (u.companyId || u.tenantId || "heartwood") === companyId)
       .filter(u => u.role === "operator" || u.role === "supervisor");
