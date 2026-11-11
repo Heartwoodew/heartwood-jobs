@@ -22,6 +22,10 @@ import {
   newInviteToken, pendingInviteForEmail, staffViewHtml, appOriginFor,
 } from "./features/staff-invites.js";
 import { saveGuard, settleOrQueue } from "./features/pending-write.js";
+import {
+  CLEANUP_STATUSES, DEFAULT_CUTOFF_DAYS, MAX_JOBS_PER_RUN, buildCleanupExport, confirmOk, confirmPhrase, cutoffDate, cutoffDays,
+  exportRecord, finishedOn, jobLabel as cleanupJobLabel, selectOldJobs,
+} from "./features/job-cleanup.js";
 import { PRODUCT_NAME, POWERED_BY, orgSettings, saveOrgSettings, setActiveCompany } from "./org-settings.js";
 import {
   buildCompanyCreate, buildFriendCompany, buildTestCompany, companyDetailPatch, companyIdFromName, demoBundle,
@@ -653,7 +657,7 @@ function queueOf(j) {
 const jobNo = j => j.sm8JobNo ? j.sm8JobNo : companyJobPrefix(orgSettings()) + "-" + String(j.id || "").slice(-4).toUpperCase();
 const firstLine = s => String(s || "").split(/\n|\. /)[0];
 const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Unscheduled";
-const NAV = [["home", "⌂", "Home"], ["compliance", "🚐", "Compliance"], ["prestart", "☑", "Prestart"], ["chat", "💬", "Chat"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["staff", "👥", "Staff"], ["inbox", "✉", "Inbox", 0, 1],
+const NAV = [["home", "⌂", "Home"], ["compliance", "🚐", "Compliance"], ["prestart", "☑", "Prestart"], ["chat", "💬", "Chat"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["cleanup", "🧹", "Clean up old jobs"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["staff", "👥", "Staff"], ["inbox", "✉", "Inbox", 0, 1],
   ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["leave", "🌴", "Leave"], ["claims", "🧾", "Reimbursements"], ["reimb", "💵", "Receipt ledger", 0, 1], ["settings", "⚙", "Company"], ["master", "▣", "Master"]];
 ui.view = "home"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
 const PHONE = matchMedia("(max-width:760px)");
@@ -662,12 +666,12 @@ PHONE.addEventListener?.("change", () => { if (me && me.role === "admin") render
 // Grouped side menu: top items, then collapsible groups (open/closed remembered on this device; the group holding the current screen is always open).
 const NAV_TOP = ["home", "chat", "inbox", "clients", "staff", "master"];
 const NAV_FOOT = ["settings"];
-const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "jobs", "unscheduled", "quotes", "completed", "myjobs"]], ["money", "$", "Money", ["invoices", "claims", "reimb", "timesheet", "leave"]], ["safety", "⚠", "Safety", ["safety", "swms", "prestart", "compliance"]]];
+const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "jobs", "unscheduled", "quotes", "completed", "cleanup", "myjobs"]], ["money", "$", "Money", ["invoices", "claims", "reimb", "timesheet", "leave"]], ["safety", "⚠", "Safety", ["safety", "swms", "prestart", "compliance"]]];
 const NAV_LBL = { safety: "Incidents" };
 ui.navCol = (() => { try { return JSON.parse(localStorage.getItem("hwNavCol") || "{}"); } catch { return {}; } })();
 function shell(inner) {
   const cur = NAV.find(n => n[0] === ui.view);
-  const item = k => { const x = NAV.find(n => n[0] === k); if (!x || x[3] || (k === "inbox" ? !canImport() : (x[4] && !isOwner())) || (k === "invoices" && (!me || me.role !== "admin")) || (k === "staff" && !canInvite()) || (k === "quotes" && !canQuote()) || (k === "compliance" && !COMP.canSee()) || (k === "prestart" && !COMP.canPrestart())) return "";
+  const item = k => { const x = NAV.find(n => n[0] === k); if (!x || x[3] || (k === "inbox" ? !canImport() : (x[4] && !isOwner())) || ((k === "invoices" || k === "cleanup") && (!me || me.role !== "admin")) || (k === "staff" && !canInvite()) || (k === "quotes" && !canQuote()) || (k === "compliance" && !COMP.canSee()) || (k === "prestart" && !COMP.canPrestart())) return "";
     const badge = k === "chat" ? CHAT.badge("staff") : "";
     if (k === "master" && !(me && me.platformOwner)) return "";
     return `<button class="sm-nav ${ui.view === k ? "on" : ""}" data-view="${k}" title="${esc(NAV_LBL[k] || x[2])}"><span class="ic">${x[1]}</span><span class="lbl">${esc(NAV_LBL[k] || x[2])}</span>${badge}</button>`; };
@@ -852,6 +856,114 @@ function doneToday() {
 }
 // Parallel private Storage mirror. Email and receiptChunks stay until a reviewed cutover.
 // Failures here must not block the existing queue. Tenant comes from the profile, not the page.
+// ---- Clean up old jobs (admins only, never automatic). Download first, then type the confirmation, then delete.
+// The cleanupOldJobs function re-checks everything and keeps receipts, claims and invoices.
+ui.cl = { days: DEFAULT_CUTOFF_DAYS, jobs: null, err: "", note: "", exported: null, photos: false, ts: false, typed: "", busy: "", result: null };
+function cleanupView() {
+  const c = ui.cl, list = c.jobs || [];
+  const shown = list.slice(0, 200);
+  const canDelete = !!(c.exported && list.length && c.exported.jobIds.length === list.length && confirmOk(c.typed, list.length) && !c.busy);
+  return `<div class="sm-head"><h1>Clean up old jobs</h1></div>
+  <div class="card cleanup">
+    <p class="sub">Finished jobs (Done, Cancelled or Invoiced) older than the cut-off. Download a copy first. Nothing is deleted automatically. Receipts, claims, invoices and Xero records are kept.</p>
+    <div class="row"><label>Older than <input id="cldays" type="number" min="30" max="3650" step="1" value="${esc(c.days)}" style="width:6em"> days</label>
+      <span class="sub">(before ${esc(cutoffDate(Date.now(), c.days))})</span>
+      <button class="sm-btn" id="clfind" ${c.busy ? "disabled" : ""}>Find old jobs</button></div>
+    ${c.err ? `<p class="err">${esc(c.err)}</p>` : ""}
+    ${c.jobs == null ? "" : `<p><b>${list.length}</b> job${list.length === 1 ? "" : "s"} to clean up${list.length > MAX_JOBS_PER_RUN ? ` (the oldest ${MAX_JOBS_PER_RUN} are shown; run it again for the rest)` : ""}.</p>`}
+    ${shown.length ? `<div class="tblwrap"><table class="tbl"><thead><tr><th>Job</th><th>Finished</th><th>Status</th><th>Client / Site</th></tr></thead><tbody>
+      ${shown.map(j => `<tr><td>${esc(cleanupJobLabel(j))}</td><td>${esc(finishedOn(j))}</td><td>${esc(j.status || j.sm8Status || "")}</td><td>${esc(j.client || "")}<div class="sub">${esc(j.address || "")}</div></td></tr>`).join("")}
+      </tbody></table></div>${list.length > shown.length ? `<p class="sub">…and ${list.length - shown.length} more (all are in the download).</p>` : ""}` : ""}
+    ${list.length ? `<h3>1. Download a copy</h3>
+      <label class="ck"><input type="checkbox" id="clphotos" ${c.photos ? "checked" : ""}> Include photos (bigger zip)</label>
+      <div class="row"><button class="sm-btn primary" id="clexport" ${c.busy ? "disabled" : ""}>${c.busy === "export" ? "Building download…" : "Download copy (.zip with Excel/CSV files)"}</button>
+      ${c.exported ? `<span class="sub">✔ Downloaded ${esc(c.exported.filename)}</span>` : ""}</div>
+      ${c.note ? `<p class="sub">${esc(c.note)}</p>` : ""}
+      <h3>2. Delete</h3>
+      <label class="ck"><input type="checkbox" id="clts" ${c.ts ? "checked" : ""} ${c.exported ? "" : "disabled"}> Also remove timesheet entries that name these jobs (payroll records). Off by default; sheets already sent are never changed.</label>
+      <label>Type <b>${esc(confirmPhrase(list.length))}</b> to confirm<input id="cltyped" autocomplete="off" value="${esc(c.typed)}" ${c.exported ? "" : "disabled"}></label>
+      <div class="row"><button class="sm-btn danger" id="cldelete" ${canDelete ? "" : "disabled"}>${c.busy === "delete" ? "Deleting…" : `Delete ${list.length} job${list.length === 1 ? "" : "s"}`}</button>
+      ${c.exported ? "" : `<span class="sub">Download the copy first.</span>`}</div>` : ""}
+    ${c.result ? `<p class="ok">✔ Deleted ${esc(c.result.deleted)} jobs and ${esc(c.result.photosDeleted)} photos${c.result.timesheetEntriesRemoved ? `, removed ${esc(c.result.timesheetEntriesRemoved)} timesheet entries` : ""}. Logged as ${esc(c.result.logId)}.</p>` : ""}
+  </div>`;
+}
+async function cleanupFind() {
+  const c = ui.cl;
+  c.busy = "find"; c.err = ""; c.exported = null; c.typed = ""; c.result = null; renderAdmin();
+  try {
+    const snap = await getDocs(companyJobs([where("status", "in", CLEANUP_STATUSES)]));
+    const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    c.jobs = selectOldJobs(all, { companyId: myCompanyId(), now: Date.now(), days: c.days }).slice(0, MAX_JOBS_PER_RUN);
+  } catch (e) { c.jobs = null; c.err = "Couldn't load jobs: " + (e.code || e.message); }
+  c.busy = ""; renderAdmin();
+}
+async function cleanupExport() {
+  const c = ui.cl, list = c.jobs || [], companyId = myCompanyId(), notes = [];
+  if (!list.length) return;
+  c.busy = "export"; renderAdmin();
+  try {
+    const dates = list.map(j => j.date || finishedOn(j)).filter(Boolean).sort();
+    let sheets = [];
+    try {
+      const from = addDays(dates[0], -7), to = dates[dates.length - 1];
+      sheets = (await getDocs(query(collection(db, "timesheets"), where("companyId", "==", companyId), where("weekStart", ">=", from), where("weekStart", "<=", to))))
+        .docs.map(d => ({ id: d.id, ...d.data() }));
+    } catch (e) { notes.push("Timesheets not included (" + (e.code || e.message) + ")."); }
+    let receipts = [];
+    try {
+      const ids = list.map(j => j.id);
+      for (let i = 0; i < ids.length; i += 30) {
+        const s = await getDocs(query(collection(db, "receipts"), where("companyId", "==", companyId), where("jobId", "in", ids.slice(i, i + 30))));
+        receipts.push(...s.docs.map(d => ({ id: d.id, ...d.data() })));
+      }
+    } catch (e) { receipts = []; notes.push("Receipt details not included (" + (e.code || e.message) + ")."); }
+    const photos = [];
+    if (c.photos) {
+      for (const j of list) {
+        try {
+          const res = await listAll(storageRef(storage, `tenants/${companyId}/jobs/${j.id}/photos`));
+          for (const item of res.items) photos.push({ jobId: j.id, name: item.name, bytes: new Uint8Array(await (await getBlob(item)).arrayBuffer()) });
+        } catch (e) { notes.push(`Photos for ${cleanupJobLabel(j)} not included (${e.code || e.message}).`); }
+      }
+    }
+    const built = buildCleanupExport({ companyId, jobs: list, sheets, receipts, photos, now: Date.now(), days: c.days, by: me.name });
+    const ref = doc(collection(db, "cleanupExports"));
+    await setDoc(ref, { ...exportRecord({ companyId, uid: me.uid, jobIds: list.map(j => j.id), days: c.days, photos: c.photos, counts: built.counts }), createdAt: serverTimestamp() });
+    const url = URL.createObjectURL(new Blob([built.zip], { type: "application/zip" }));
+    const a = document.createElement("a"); a.href = url; a.download = built.filename; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    c.exported = { id: ref.id, jobIds: list.map(j => j.id), filename: built.filename };
+    c.note = notes.slice(0, 5).join(" ") + (notes.length > 5 ? ` (+${notes.length - 5} more)` : "");
+  } catch (e) { c.err = "Download not made: " + (e.code || e.message); }
+  c.busy = ""; renderAdmin();
+}
+async function cleanupDelete() {
+  const c = ui.cl, list = c.jobs || [];
+  if (!c.exported || !confirmOk(c.typed, list.length) || c.busy) return;
+  c.busy = "delete"; c.err = ""; renderAdmin();
+  try {
+    c.result = await callAuthed("cleanupOldJobs", { exportId: c.exported.id, jobIds: c.exported.jobIds, typed: c.typed, includeTimesheets: !!c.ts });
+    c.jobs = []; c.exported = null; c.typed = "";
+  } catch (e) { c.err = "Not deleted: " + (e.message || e.code); }
+  c.busy = ""; renderAdmin();
+}
+function bindCleanup(A) {
+  const c = ui.cl;
+  const days = A.querySelector("#cldays");
+  if (days) days.onchange = () => { c.days = cutoffDays(days.value); c.jobs = null; c.exported = null; renderAdmin(); };
+  const on = (id, fn) => { const el = A.querySelector(id); if (el) el.onclick = fn; };
+  on("#clfind", () => cleanupFind());
+  on("#clexport", () => cleanupExport());
+  on("#cldelete", () => cleanupDelete());
+  const ph = A.querySelector("#clphotos"); if (ph) ph.onchange = () => { c.photos = ph.checked; c.exported = null; renderAdmin(); };
+  const ts = A.querySelector("#clts"); if (ts) ts.onchange = () => { c.ts = ts.checked; };
+  const typed = A.querySelector("#cltyped");
+  if (typed) typed.oninput = () => {
+    c.typed = typed.value;
+    const btn = A.querySelector("#cldelete");
+    if (btn) btn.disabled = !(c.exported && confirmOk(c.typed, (c.jobs || []).length) && !c.busy);
+  };
+}
 function cloudMembership() {
   if (!me) return { ok: false, reason: "no-membership" };
   return resolveMembership({ uid: me.uid, profile: me.cloudProfile || null });
@@ -2511,7 +2623,7 @@ function renderAdmin() {
   const quotesHtml = ui.view === "quotes" ? adminViewRouter(ui.view, ui, { esc, $$, staff, jobs: all, todayStr, rerender: () => renderAdmin(), canEditQuoteRates }) : null;
   const staffHtml = ui.view === "staff" ? staffViewHtml(ui.invites || [], { now: inviteDisplayNow(), error: ui.invitesErr || "", origin: appOriginFor(myCompanyId(), location.origin) }) : null;
   paintBrand();
-  $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "master" ? masterView() : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : quotesHtml != null ? quotesHtml : jobsView(all));
+  $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "master" ? masterView() : ui.view === "cleanup" ? cleanupView() : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : quotesHtml != null ? quotesHtml : jobsView(all));
   const A = $("#app"); inboxBadge();
   CHAT.watch([...(jobs || []), ...(ui.undated || [])]);
   if (ui.view === "chat") CHAT.mount(A);
@@ -2527,10 +2639,11 @@ function renderAdmin() {
   if (ui.view === "compliance" || ui.view === "prestart") COMP.bind(A);
   if (ui.view === "settings") bindSettings(A);
   if (ui.view === "master") bindMaster(A);
+  if (ui.view === "cleanup") bindCleanup(A);
   A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.navOpen = false;
     if (b.dataset.view === "myjobs") { ui.myJobs = true; ui.opSel = null; window.scrollTo(0, 0); return renderAdmin(); }
     if (b.dataset.view !== "compliance") COMP.abandon();
-    ui.view = b.dataset.view; if (ui.view === "invoices" && me.role !== "admin") ui.view = "home"; ui.forceRender = true; renderAdmin(); });
+    ui.view = b.dataset.view; if ((ui.view === "invoices" || ui.view === "cleanup") && me.role !== "admin") ui.view = "home"; ui.forceRender = true; renderAdmin(); });
   if ($("#burger")) $("#burger").onclick = () => { ui.navOpen = !ui.navOpen; renderAdmin(); };
   A.querySelectorAll("[data-grp]").forEach(b => b.onclick = () => { const g = b.dataset.grp; if (NAV_GROUPS.find(x => x[0] === g)[3].includes(ui.view)) return;
     ui.navCol[g] = !ui.navCol[g]; try { localStorage.setItem("hwNavCol", JSON.stringify(ui.navCol)); } catch {} renderAdmin(); });

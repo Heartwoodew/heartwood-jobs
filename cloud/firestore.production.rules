@@ -642,6 +642,32 @@ service cloud.firestore {
       allow list: if isAdmin() && resource.data.companyId == "heartwood";
       allow update, delete: if isOwner();
     }
+// BEGIN JOB CLEANUP RULES
+    // Clean up old jobs (admin button, never scheduled). The webpage records each download here; the
+    // cleanupOldJobs function deletes only jobs listed in an unused download made by the same admin.
+    function jcHeartwoodAdmin() { return signedIn() && request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "R7t41e54Ykcdk9WPdVZnDd697iI2"]; }
+    function jcAdminOf(c) {
+      return c is string && (c == "heartwood" ? jcHeartwoodAdmin() : incAdminOf(c));
+    }
+    match /cleanupExports/{id} {
+      allow create: if signedIn() && id.matches('^[A-Za-z0-9_-]{8,64}$')
+        && request.resource.data.keys().hasOnly(["companyId", "createdBy", "createdAt", "jobIds", "cutoffDays", "photos", "counts", "used"])
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.used == false
+        && request.resource.data.jobIds is list && request.resource.data.jobIds.size() > 0 && request.resource.data.jobIds.size() <= 300
+        && request.resource.data.cutoffDays is int && request.resource.data.cutoffDays >= 30 && request.resource.data.cutoffDays <= 3650
+        && request.resource.data.photos is bool
+        && request.resource.data.counts is map
+        && jcAdminOf(request.resource.data.companyId);
+      allow read: if signedIn() && resource.data.createdBy == request.auth.uid;
+      allow update, delete: if false;
+    }
+    match /jobCleanupLog/{id} {
+      allow read: if jcAdminOf(resource.data.companyId);
+      allow write: if false;
+    }
+// END JOB CLEANUP RULES
     // BEGIN CHAT RULES
     function chatSignedIn() { return request.auth != null; }
     function chatIsAlex() { return chatSignedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
