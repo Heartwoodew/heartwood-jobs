@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 test("functions bundle matches the webpage modules", () => {
-  for (const name of ["cloud-storage.js", "cloud-retention.js", "staff-invites.js"]) {
+  for (const name of ["cloud-storage.js", "cloud-retention.js", "staff-invites.js", "job-cleanup.js"]) {
     const web = readFileSync(new URL(`../../app/features/${name}`, import.meta.url));
     const fn = readFileSync(new URL(`../functions/shared/${name}`, import.meta.url));
     assert.equal(fn.equals(web), true, name);

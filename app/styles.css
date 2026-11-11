@@ -1063,3 +1063,8 @@ body.admin .mdisp .route-open{display:block;width:calc(100% - 24px);margin:10px 
 dialog.comp-alert { max-width: 420px; border: 0; border-radius: 12px; padding: 18px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
 dialog.comp-alert::backdrop { background: rgba(0,0,0,.35); }
 dialog.comp-alert h2 { margin: 0 0 8px; font-size: 1.1rem; }
+/* Clean up old jobs */
+.sm-btn.danger { background: #b42318; color: #fff; border-color: #b42318; }
+.sm-btn.danger:disabled { background: #e4e7ec; color: #98a2b3; border-color: #e4e7ec; }
+.cleanup h3 { margin: 18px 0 6px; font-size: 1rem; }
+.cleanup .tblwrap { max-height: 360px; overflow: auto; }

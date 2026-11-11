@@ -24,7 +24,9 @@ import { defineSecret } from "firebase-functions/params";
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
+import { getStorage } from "firebase-admin/storage";
 import { handlePhotoIntake } from "./lib/photo-intake.js";
+import { runJobCleanup } from "./lib/job-cleanup-run.js";
 import {
   acceptStaffInvite as acceptInvite,
   previewStaffInvite as previewInvite,
@@ -386,6 +388,20 @@ export const syncStripeStaff = onDocumentWritten(
       const staff = await db.collection("users").where("companyId", "==", companyId).get();
       await syncStaffQuantity({ companyId, company: snap.data(), staffCount: staff.size, stripe, prices: currentPrices() });
     }
+  },
+);
+
+// Clean up old jobs: admin button only, never scheduled. See lib/job-cleanup-run.js.
+export const cleanupOldJobs = onCall(
+  { region: INVITE_REGION, timeoutSeconds: 300, memory: "512MiB" },
+  async request => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "sign-in");
+    ensureAdmin();
+    let bucket = null;
+    try { bucket = getStorage().bucket(); } catch { bucket = null; }
+    const result = await runJobCleanup({ uid: request.auth.uid, data: request.data, db: getFirestore(), bucket });
+    if (!result.ok) throw new HttpsError(result.code || "failed-precondition", result.reason || "cleanup-refused", result.blocked ? { blocked: result.blocked } : undefined);
+    return result;
   },
 );
 
