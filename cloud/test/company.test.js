@@ -99,7 +99,7 @@ test("migration only adds a missing companyId and never replaces one", () => {
   assert.equal(scopeRecord({ client: "Orbit" }, "heartwood").tenantId, undefined);
   assert.equal(scopeRecord({ client: "Orbit" }, "acme").companyId, "acme");
   const invite = { name: "Casey Nguyen", role: "operator", email: "casey.nguyen@example.com", tenantId: "heartwood", token: "a".repeat(43) };
-  assert.deepEqual(profileFromInvite(invite), { name: "Casey Nguyen", role: "operator", email: "casey.nguyen@example.com" });
+  assert.deepEqual(profileFromInvite(invite), { name: "Casey Nguyen", role: "operator", email: "casey.nguyen@example.com", companyId: "heartwood" });
   const patch = companyDetailPatch({ name: "Acme Civil", legalName: "Acme Civil Pty Ltd", abn: "12 345 678 901", address: "1 Yard St", email: "office@acme.test", accountsEmail: "accounts@acme.test", signoff: "Acme", phone: "", hubdocAddress: "", logoUrl: "" }, { phone: "0400111222" });
   assert.equal(patch.ok, true);
   assert.deepEqual(patch.patch, { phone: "0400111222" });
