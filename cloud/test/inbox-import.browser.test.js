@@ -47,7 +47,7 @@ test("import reviews a fake email before anything is saved", async () => {
     await page.goto(`http://127.0.0.1:${port}/tests/phone-preview.html?role=admin&open=inbox`, { waitUntil: "domcontentloaded" });
     await page.locator("[data-iimport='fake-orbit-spoil']").waitFor({ timeout: 15000 });
     await shot(page, "inbox-list.png");
-    const before = await page.evaluate(() => (window.__fbCalls || []).filter(c => c.op === "addDoc" && c.col === "jobs").length);
+    const before = await page.evaluate(() => (window.__fbCalls || []).filter(c => (c.op === "addDoc" || c.op === "setDoc") && c.col === "jobs").length);
     assert.equal(before, 0);
 
     await page.locator("[data-iimport='fake-orbit-spoil']").click();
@@ -80,9 +80,9 @@ test("import reviews a fake email before anything is saved", async () => {
     await page.locator("#dlg").screenshot({ path: join(OUT, "inbox-import-form.png") });
 
     await page.locator("#jf button[value=save]").click();
-    await page.waitForFunction(() => (window.__fbCalls || []).some(c => c.op === "addDoc" && c.col === "jobs"));
+    await page.waitForFunction(() => (window.__fbCalls || []).some(c => (c.op === "addDoc" || c.op === "setDoc") && c.col === "jobs"));
     const calls = await page.evaluate(() => window.__fbCalls);
-    const created = calls.filter(c => c.op === "addDoc" && c.col === "jobs").pop();
+    const created = calls.filter(c => (c.op === "addDoc" || c.op === "setDoc") && c.col === "jobs").pop();
     assert.equal(created.data.client, "Orbit Homes (Qld) Pty Ltd");
     assert.equal(created.data.source, "inbox");
     assert.equal(created.data.inboxId, "fake-orbit-spoil");
@@ -119,7 +119,7 @@ test("import reviews a fake email before anything is saved", async () => {
     await slab.locator("input[value=date]").waitFor();
     assert.equal(await slab.locator("input[value=date]").isChecked(), true);
     await shot(page, "inbox-bulk-review.png");
-    const writesBeforeSave = await page.evaluate(() => (window.__fbCalls || []).filter(c => c.op === "addDoc" && c.col === "jobs").length);
+    const writesBeforeSave = await page.evaluate(() => (window.__fbCalls || []).filter(c => (c.op === "addDoc" || c.op === "setDoc") && c.col === "jobs").length);
     assert.equal(writesBeforeSave, 1);
     assert.equal(errors.length, 0, errors.join("\n"));
 

@@ -319,6 +319,7 @@ export function setDoc(ref, data) {
     keys: data ? Object.keys(data) : [],
     jobIds: data && data.jobIds, status: data && data.status,
     workerUid: data && data.workerUid,
+    ...(ref && ref._col === "jobs" ? { data } : {}),
   });
   return Promise.resolve();
 }
