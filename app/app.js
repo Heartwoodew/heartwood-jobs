@@ -2713,7 +2713,7 @@ async function splitJob(j, pick) {
   const kindOf = ls => { const ks = [...new Set(ls.map(x => x.k).filter(Boolean))]; return ks.length === 1 ? ks[0] : (ks[0] || "other"); };
   const newType = kindOf(mv), keepType = kindOf(keep), origType = j.type || keepType;
   const poToNew = newType === origType && keepType !== origType;
-  const hold = new Date(Date.now() + 10 * 60000).toISOString(), at = new Date().toISOString(), lk = canFindPo() ? { poLookupStatus: "pending", poLookupAt: at, poLookupRequestedBy: me.name + " (split)", poLookupCandidates: [] } : {};
+  const hold = new Date(Date.now() + 10 * 60000).toISOString(), at = new Date().toISOString(), lk = canFindPo() ? { poLookupStatus: "pending", poLookupAt: at, poLookupRequestedBy: me.name + " (split)" } : {};
   const base = Object.fromEntries(SPLIT_COPY.filter(k => j[k] !== undefined).map(k => [k, j[k]]));
   const nj = scopeRecord({ ...base, type: newType, description: mv.map(x => x.t).join("\n"), po: poToNew ? (j.po || "") : "", source: "app", log: [],
     splitFrom: j.id, splitAt: at, splitBy: me.name, splitHoldUntil: hold, editedInApp: false, ...lk, createdAt: serverTimestamp(), updatedAt: serverTimestamp(), updatedBy: me.uid }, myCompanyId());
@@ -2721,7 +2721,9 @@ async function splitJob(j, pick) {
   // The undo copy on the job holds no money; the PO value to restore is kept on jobMoney (office only).
   const undo = { description: j.description || "", type: j.type || null, po: j.po || "", editedInApp: !!j.editedInApp };
   await writeJob(j.id, { description: keep.map(x => x.t).join("\n"), type: keepType, ...(poToNew ? { po: "", poAmount: null } : {}),
-    splitTo: ref.id, splitAt: at, splitUndo: undo, splitHoldUntil: hold, editedInApp: true, ...lk, updatedAt: serverTimestamp(), updatedBy: me.uid });
+    splitTo: ref.id, splitAt: at, splitUndo: undo, splitHoldUntil: hold, editedInApp: true, ...lk,
+    // Old Find PO suggestions (they carry amounts) are cleared on jobMoney, never written onto the job.
+    ...(canFindPo() && canSeeMoney() ? { poLookupCandidates: [] } : {}), updatedAt: serverTimestamp(), updatedBy: me.uid });
   if (canSeeMoney()) await jobMoneyWrite(j.id, {}, { splitUndoPoAmount: j.poAmount ?? null }).catch(() => {});
   $("#dlg").close();
   undoToast(`Split #${jobNo(j)}: new ${TYPES[newType] || newType} job created (syncs to ServiceM8 in ~10 min)`, () => undoSplit({ ...j, splitTo: ref.id, splitUndo: undo }));
@@ -2939,7 +2941,8 @@ function invDescDefault(j) {        // hwdata.xero_description: "<Task> - <tidy 
 // hwdata.py has no per-m³ / per-load rule (spoil has been priced by hours, e.g. 4 hrs = $2000), so no price is guessed.
 // PO value (poAmount, ex GST, from the builder's PO) pre-fills the price until one is typed (invoiceAmount wins).
 // ---- Find PO: the button flags the job (poLookupStatus 'pending'); the box worker tools/po_lookup.py (cron, 2 min,
-// 6am-8pm) searches saved PO PDFs / Gmail hits and writes status + candidates back onto the job doc.
+// 6am-8pm) searches saved PO PDFs / Gmail hits and writes the status onto the job doc. The suggestions list
+// (poLookupCandidates, with PO amounts) lives on the office-only jobMoney/{jobId}; a legacy list on the job is a fallback.
 const PO_ST = { "orbit login needed": "🔒 Orbit login needed", pending: "⏳ queued", searching: "🔍 searching", found: "✅ found", choose: "☝️ pick one", "not found": "❌ not found", "needs portal": "🌐 needs Orbit portal" };
 function poLookupHtml(j) {
   if (!j.poLookupStatus) return "";
@@ -2957,15 +2960,22 @@ function wireFindPo(j) {
       editedInApp: true, updatedAt: serverTimestamp(), updatedBy: me.uid }); toast("PO set to " + c.po); $("#dlg").close(); }
     catch (e) { toast("Not saved: " + (e.code || e.message)); } });
   wireUse(j);
-  const unsub = onSnapshot(doc(db, "jobs", j.id), s => { if (!s.exists()) return; const cur = withMoney({ id: s.id, ...s.data() }); box.innerHTML = poLookupHtml(cur); wireUse(cur); });
-  $("#dlg").addEventListener("close", unsub, { once: true });
+  let raw = j;
+  const render = () => { const cur = withMoney(raw); box.innerHTML = poLookupHtml(cur); wireUse(cur); };
+  const unsub = onSnapshot(doc(db, "jobs", j.id), s => { if (!s.exists()) return; raw = { id: s.id, ...s.data() }; render(); });
+  // Suggestions arrive on jobMoney (office only); keep the dialog live when the box writes them.
+  const unsubMoney = canSeeMoney() ? onSnapshot(doc(db, JOB_MONEY_COLLECTION, j.id), s => { if (s.exists()) MONEY.set(j.id, s.data()); render(); },
+    e => console.warn("job money", e.code || e.message)) : () => {};
+  $("#dlg").addEventListener("close", () => { unsub(); unsubMoney(); }, { once: true });
   $("#findpo").onclick = async () => {
     const at = new Date().toISOString();
     let rid = null;
     try { rid = (await addDoc(collection(db, "poLookups"), { jobId: j.id, address: j.address || "", lot: (String(j.address || "").match(/lot\s*(?:no\.?\s*)?(\w+)/i) || [])[1] || "",
       client: j.client || "", type: j.type || "", requestedBy: me.name, requestedByUid: me.uid, status: "pending", createdAt: serverTimestamp() })).id; } catch (e) { /* rules not pasted yet: job flag alone still works */ }
     try { await updateDoc(doc(db, "jobs", j.id), { poLookupStatus: "pending", poLookupMsg: "waiting for the box (checks every 2 min, 6am-8pm)", poLookupAt: at,
-      poLookupRequestedBy: me.name, poLookupCandidates: [], ...(rid ? { poLookupId: rid } : {}), updatedAt: serverTimestamp(), updatedBy: me.uid }); toast("Find PO requested"); }
+      poLookupRequestedBy: me.name, poLookupCandidates: deleteField(), ...(rid ? { poLookupId: rid } : {}), updatedAt: serverTimestamp(), updatedBy: me.uid });
+      if (canSeeMoney()) await jobMoneyWrite(j.id, { poLookupCandidates: [] }).catch(e => console.warn("job money", e.code || e.message));
+      toast("Find PO requested"); }
     catch (e) { toast("Not requested: " + (e.code || e.message)); }
   };
 }

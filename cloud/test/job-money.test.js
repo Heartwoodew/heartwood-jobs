@@ -31,7 +31,7 @@ test("planJobMoney moves amounts, cleans the quote copy and the split undo copy"
       extraItems: [{ id: "x", qty: 6, unit: "m3", unitPrice: 55 }] },
     splitUndo: { description: "d", poAmount: 400 } };
   const p = planJobMoney("j1", job);
-  assert.deepEqual(p.remove.sort(), [...JOB_MONEY_KEYS].sort());
+  assert.deepEqual(p.remove.sort(), JOB_MONEY_KEYS.filter(k => k !== "poLookupCandidates").sort());
   assert.deepEqual(p.set.quote, { travelKm: 5, extraItems: [{ id: "x", qty: 6, unit: "m3" }] });
   assert.deepEqual(p.set.splitUndo, { description: "d" });
   assert.deepEqual(p.money, { jobId: "j1", companyId: "bravo", tenantId: "bravo", quoteAmount: 2085, poAmount: 2085,
@@ -63,3 +63,29 @@ test("the app never writes money keys straight onto a job", () => {
   }
   assert.doesNotMatch(quotes.slice(quotes.indexOf("async function createJobFromQuote"), quotes.indexOf("export function adminViewRouter")).split("const jobDoc")[1].split("await setDoc(ref, jobDoc)")[0], /quoteAmount|poAmount/);
 });
+
+test("Find PO suggestions (with PO amounts) are job money: off the job, on jobMoney", () => {
+  assert.ok(JOB_MONEY_KEYS.includes("poLookupCandidates"));
+  const cands = [{ po: "3008309", kind: "clean", amount: 640, basis: "ex GST", source: "pdf", confidence: "high", match: 2 }];
+  const sp = splitJobMoney({ poLookupStatus: "pending", poLookupCandidates: [] }, () => "DELETE");
+  assert.deepEqual(sp.money, { poLookupCandidates: [] });
+  assert.deepEqual(sp.job, { poLookupStatus: "pending", poLookupCandidates: "DELETE" });
+  assert.deepEqual(mergeJobMoney({ id: "a", poLookupCandidates: [{ po: "old" }] }, { poLookupCandidates: cands }).poLookupCandidates, cands);
+  assert.deepEqual(mergeJobMoney({ id: "a", poLookupCandidates: [{ po: "old" }] }, { poAmount: 1 }).poLookupCandidates, [{ po: "old" }], "legacy list is the fallback");
+  assert.equal("poLookupCandidates" in stripJobMoney({ id: "a", poLookupCandidates: cands }), false);
+  assert.deepEqual(jobMoneyDoc("j1", "heartwood", { poLookupCandidates: cands }).poLookupCandidates, cands);
+  const p = planJobMoney("j9", { po: "", poLookupStatus: "choose", poLookupCandidates: cands });
+  assert.deepEqual(p.remove, ["poLookupCandidates"]);
+  assert.deepEqual(p.money.poLookupCandidates, cands);
+  assert.deepEqual(planJobMoney("j9", { poLookupCandidates: cands }, { poLookupCandidates: [] }).money, null, "never overwrites a list already on jobMoney");
+});
+
+test("the app clears Find PO suggestions on jobMoney and never writes a list onto a job", () => {
+  const app = readFileSync(new URL("../../app/app.js", import.meta.url), "utf8");
+  for (const m of app.matchAll(/updateDoc\(doc\(db, "jobs"[^;]*;/g)) assert.doesNotMatch(m[0], /poLookupCandidates: \[/, m[0].slice(0, 120));
+  for (const m of app.matchAll(/addDoc\(collection\(db, "jobs"\)[^;]*;/g)) assert.doesNotMatch(m[0], /poLookupCandidates/);
+  assert.doesNotMatch(app.slice(app.indexOf("async function splitJob"), app.indexOf("const ref = await addDoc")), /lk = [^;]*poLookupCandidates/);
+  assert.match(app, /jobMoneyWrite\(j\.id, \{ poLookupCandidates: \[\] \}\)/);
+  assert.match(app, /onSnapshot\(doc\(db, JOB_MONEY_COLLECTION, j\.id\)/);
+});
+
