@@ -88,13 +88,16 @@ export function unitLabel(u) {
   return (EXTRA_UNITS.find(x => x[0] === u) || [u, u || "each"])[1];
 }
 function cleanStr(v, max) { return String(v == null ? "" : v).replace(/[\u0000-\u001f]+/g, " ").trim().slice(0, max); }
+// Caps keep totals exact in cents (a 1e12 qty × $1e6 printed a $1e18 total with the cents lost).
+export const MAX_ITEM_QTY = 100000;
+export const MAX_ITEM_PRICE = 1000000;
 function cleanQty(v) {
-  if (v === "" || v == null || Number.isNaN(+v)) return 0;
-  return Math.max(0, Math.round(+v * 1000) / 1000);
+  if (v === "" || v == null || !Number.isFinite(+v)) return 0;
+  return Math.min(MAX_ITEM_QTY, Math.max(0, Math.round(+v * 1000) / 1000));
 }
 function cleanPrice(v) {
   const n = numOrNull(v);
-  return n == null ? null : Math.max(0, n);
+  return n == null || !Number.isFinite(n) ? null : Math.min(MAX_ITEM_PRICE, Math.max(0, Math.round(n * 100) / 100));
 }
 let xSeq = 0;
 function newItemId() {
@@ -741,7 +744,7 @@ function openQuoteWizard(existing, opts = {}) {
           ${step < 2 ? `<button type="button" class="sm-btn primary" id="qwnext">${step === 0 ? "Choose equipment" : "Continue"}</button>
              <button type="button" class="sm-btn qw-later" id="qwsave">Save &amp; finish later</button>` :
             `<button type="button" class="sm-btn qw-later" id="qwsave">Save draft</button>
-             <button type="button" class="sm-btn primary" id="qwaccept" ${canAccept ? "" : "disabled"} title="${canAccept ? "" : already ? "Already accepted" : "Complete site + rates first"}">Accept → create job</button>`}
+             <button type="button" class="sm-btn primary" id="qwaccept" data-can-accept="${canAccept ? "1" : ""}" ${canAccept ? "" : "disabled"} title="${canAccept ? "" : already ? "Already accepted" : "Complete site + rates first"}">Accept → create job</button>`}
         </div></form>`;
       d.showModal();
       $("#qwback").onclick = () => { syncFormToState(); step--; paint(); };
@@ -878,7 +881,7 @@ function openQuoteWizard(existing, opts = {}) {
       if (warn) { warn.hidden = calc.complete; warn.textContent = calc.complete ? "" : `Missing rates for: ${calc.missingRates.map(k => missingLabel(k, calc)).join(", ")}. Save as draft, or set the price. Total is not shown as valid until every used line has a price.`; }
       const acc = d.querySelector("#qwaccept");
       const already = !!(existing?.jobId && (existing.quoteStatus === "Accepted" || state.quoteStatus === "Accepted"));
-      if (acc) acc.disabled = !(!already && calc.complete && calc.totalEx != null && !!(state.client && state.address));
+      if (acc) { const ok = !already && calc.complete && calc.totalEx != null && !!(state.client && state.address); acc.dataset.canAccept = ok ? "1" : ""; acc.disabled = !ok || saving; }
     };
     const openCustomerQuote = () => {
       const calc = calcQuote({ ...state, machines: normalizeMachineIds(state.machines) }, rates);
@@ -957,7 +960,16 @@ function openQuoteWizard(existing, opts = {}) {
         : `One-way road ≈ ${r.km} km (${r.source} depot → site)`;
       paint();
     };
+    // One save at a time: a double tap on Save or Accept made two (or three) quotes and jobs.
+    let saving = false;
     const saveQuote = async (accept) => {
+      if (saving) return;
+      saving = true;
+      d.querySelectorAll("#qwsave, #qwaccept").forEach(b => { b.disabled = true; });
+      try { await saveQuoteOnce(accept); }
+      finally { saving = false; if (d.open) d.querySelectorAll("#qwsave, #qwaccept").forEach(b => { b.disabled = b.id === "qwaccept" ? b.dataset.canAccept !== "1" : false; }); }
+    };
+    const saveQuoteOnce = async (accept) => {
       const data = { ...state, machines: normalizeMachineIds(state.machines) };
       if (!validateStep(0, data)) return;
       if (accept && !validateStep(1, data)) { step = 1; paint(); return; }
@@ -1106,7 +1118,7 @@ function stepHtml(step, d, calc, rates, esc, TYPES, CLIENTS, canSeeMoney, $$, is
 }
 
 function missingLabel(key, calc) {
-  if (key.startsWith("extra:")) {
+  if (key.startsWith("extra:") || key.startsWith("machine:")) {
     const l = calc.lines.find(x => x.key === key);
     return l ? l.label : "extra item";
   }

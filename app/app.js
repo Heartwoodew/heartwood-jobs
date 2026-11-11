@@ -9,7 +9,7 @@ import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager
 import { getStorage, ref as storageRef, uploadBytes, connectStorageEmulator, listAll, getMetadata, getBlob }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
 import { firebaseConfig, useEmulator } from "./firebase-config.js";
-import { installQuotes, adminViewRouter, setDefaultDepot } from "./features/quotes.js";
+import { installQuotes, adminViewRouter, setDefaultDepot, noDollars } from "./features/quotes.js";
 import { installRouteOrder, orderJobsForRun, runSheetId, geoPatch, setRouteDepot } from "./features/route-order.js";
 import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPlanned, jobPhotoPrefix, storageErrorCode, summarizePhotoListing } from "./features/cloud-storage.js";
 import { buildOperationalExport, retentionAdminText, retentionView } from "./features/cloud-retention.js";
@@ -3641,7 +3641,9 @@ const adminBack = () => me.role === "admin" ? `<button class="mback adminback" i
 const opSeg = on => `<div class="seg mob-seg" role="group" aria-label="When">${[["today", "Today"], ["week", "Upcoming"]].map(([k, n]) => `<button type="button" data-tab="${k}" class="${on === k ? "on" : ""}">${n}</button>`).join("")}</div>`;
 // Quote amounts for the crew (rubbish / concrete / material amounts). Price-free by construction (quotes.js workAmounts).
 function workAmountsHtml(j, cls) {
-  const list = Array.isArray(j && j.workAmounts) ? j.workAmounts.filter(a => typeof a === "string" && a && !/\$\s?\d/.test(a)).slice(0, 8) : [];
+  // Older jobs can carry a typed price in a note ("$450 cash"). Blank the price, keep the line: dropping it hid the
+  // whole rubbish / concrete amount from the crew.
+  const list = Array.isArray(j && j.workAmounts) ? j.workAmounts.filter(a => typeof a === "string" && a).map(noDollars).slice(0, 8) : [];
   return list.length ? `<ul class="${cls}">${list.map(a => `<li>${esc(a)}</li>`).join("")}</ul>` : "";
 }
 function opCard(j) {
