@@ -120,6 +120,8 @@ export function initializeApp() { return { name: "stub" }; }
 export function getAuth() { return {}; }
 export function connectAuthEmulator() {}
 export function signOut() { return Promise.resolve(); }
+export function createUserWithEmailAndPassword() { return Promise.resolve({ user: { uid: uidFor(role()) } }); }
+export function sendPasswordResetEmail() { return Promise.resolve(); }
 export function signInWithEmailAndPassword() { return Promise.resolve({ user: { uid: uidFor(role()) } }); }
 export class Timestamp {
   constructor(seconds, nanoseconds = 0) {
@@ -137,7 +139,7 @@ export function onAuthStateChanged(_auth, cb) {
     return () => {};
   }
   const r = role();
-  queueMicrotask(() => cb(r === "signedout" ? null : { uid: uidFor(r), email: r + "@heartwood.test" }));
+  queueMicrotask(() => cb(r === "signedout" ? null : { uid: uidFor(r), email: r + "@heartwood.test", emailVerified: false, getIdTokenResult: () => Promise.resolve({ claims: {} }), getIdToken: () => Promise.resolve("stub-token") }));
   return () => {};
 }
 

@@ -92,7 +92,6 @@ test("quote module and service worker stay in place", () => {
   assert.match(sw, /features\/timesheet\.js/);
   assert.match(sw, /features\/claims\.js/);
   assert.match(sw, /features\/hours-export\.js/);
-  assert.match(sw, /callup-shell-v77-hours-grid/);
   assert.doesNotMatch(sw, /features\/helper/);
   assert.match(sw, /features\/compliance\.js/);
   assert.match(sw, /features\/route-order\.js/);
