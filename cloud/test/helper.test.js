@@ -299,7 +299,7 @@ test("helper callable is hard-off and the phone has no helper UI", () => {
   assert.equal(existsSync(new URL("../../app/features/helper-ui.js", import.meta.url)), false);
   assert.doesNotMatch(app, /installHelperApp|helper-ui|helperAsk|helper-launch|SpeechRecognition|speechSynthesis/);
   assert.doesNotMatch(sw, /features\/helper/);
-  assert.match(sw, /callup-shell-v86-chat-ping/);
+  assert.match(sw, /callup-shell-v87-daily-jobs/);
   assert.doesNotMatch(css, /helper-launch|helper-panel|helper-mic|helper-speech|Ask Helper/);
   assert.match(index, /region: "australia-southeast1"/);
   assert.match(index, /helperAsk/);
@@ -309,6 +309,9 @@ test("helper callable is hard-off and the phone has no helper UI", () => {
   const gate = body.indexOf("if (!helperLiveEnabled())");
   const model = body.indexOf("createModelProvider(");
   assert.ok(gate >= 0 && model > gate);
-  assert.doesNotMatch(index, /onSchedule/);
+  assert.equal((index.match(/onSchedule/g) || []).length, 2);
+  assert.match(index, /export const dailyJobPush = onSchedule/);
+  assert.match(index, /timeZone: "Australia\/Brisbane"/);
+  assert.doesNotMatch(index, /retentionSweep[\s\S]{0,180}onSchedule/);
   assert.doesNotMatch(server + index, /AIza|sk-[A-Za-z0-9]{10,}/);
 });

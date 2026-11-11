@@ -86,14 +86,15 @@ export function chatAlertsHtml(model = {}, { open = false } = {}) {
   const note = model.emulator
     ? `<p class="sub">Notifications are off in the emulator. Use the installed phone app.</p>`
     : (!model.vapidReady ? `<p class="sub">Notifications need the Web Push key in the app config before this phone can subscribe.</p>` : "");
-  const body = `<h3>Chat alerts</h3>
+  const body = `<h3>Notifications</h3>
     <label class="ck"><input type="checkbox" data-chat-sound ${sound ? "checked" : ""}> Ping sound when the app is open</label>
     <label class="ck"><input type="checkbox" data-chat-push ${push ? "checked" : ""} ${push ? "" : "disabled"}> Notifications when the app is closed</label>
+    <label class="ck"><input type="checkbox" data-daily-jobs ${model.dailyJobs !== false ? "checked" : ""} ${push ? "" : "disabled"}> Morning job list at 6:00</label>
     <button type="button" class="chat-enable primary" ${push ? "hidden" : ""} ${(!model.vapidReady || model.emulator) ? "disabled" : ""}>Enable chat notifications</button>
     ${hint}${note}
     <p class="chat-alerts-err" data-chat-alerts-err></p>`;
   if (open) return `<section class="chat-alerts card" data-chat-alerts>${body}</section>`;
-  return `<details class="chat-alerts" data-chat-alerts><summary>Chat alerts</summary>${body}</details>`;
+  return `<details class="chat-alerts" data-chat-alerts><summary>Notifications</summary>${body}</details>`;
 }
 
 export async function tokenDocId(token) {
@@ -108,4 +109,10 @@ export function readChatParam(search) {
   const thread = new URLSearchParams(q).get("chat") || "";
   if (thread === "staff" || /^job_[A-Za-z0-9_-]{1,200}$/.test(thread)) return thread;
   return "";
+}
+
+export function readJobsParam(search) {
+  const raw = String(search || "");
+  const q = raw.startsWith("?") ? raw.slice(1) : raw;
+  return new URLSearchParams(q).get("jobs") === "today";
 }

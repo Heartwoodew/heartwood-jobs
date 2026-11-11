@@ -1,5 +1,5 @@
 // App-shell cache. Bump VERSION on every deploy so phones pick up the new files.
-const VERSION = "callup-shell-v86-chat-ping";
+const VERSION = "callup-shell-v87-daily-jobs";
 const SHELL = ["./", "index.html", "styles.css", "app.js", "org-settings.js", "firebase-config.js", "route-config.js", "features/quotes.js", "features/route-order.js", "features/swms-sign.js", "features/cloud-storage.js", "features/cloud-retention.js", "features/photo-gallery.js", "features/chat.js", "features/chat-ui.js", "features/chat-notify.js", "features/chat-notify-logic.js", "features/compliance.js", "features/servicing.js", "features/prestart.js", "features/timesheet.js", "features/leave.js", "features/claims.js", "features/hours-export.js", "features/inbox-import.js", "features/company.js", "features/company-ui.js", "features/company-exports.js", "manifest.webmanifest", "icons/callup-wordmark.svg", "icons/apple-touch-icon-180.png",
   "icons/icon-192.png", "icons/icon-512.png", "sounds/chat-ping.wav", "vendor/pdf-lib.min.js"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL))); self.skipWaiting(); });
@@ -39,14 +39,18 @@ self.addEventListener("notificationclick", event => {
   const data = event.notification.data || {};
   const nested = data.FCM_MSG && data.FCM_MSG.data ? data.FCM_MSG.data : {};
   const thread = data.threadId || nested.threadId || "";
+  const view = data.view || nested.view || "";
   const linked = data.url || nested.url || (data.FCM_MSG && data.FCM_MSG.fcmOptions && data.FCM_MSG.fcmOptions.link) || "";
-  const url = linked || (thread ? new URL("./?chat=" + encodeURIComponent(thread), self.registration.scope).href : self.registration.scope);
+  const url = linked || (view === "today"
+    ? new URL("./?jobs=today", self.registration.scope).href
+    : (thread ? new URL("./?chat=" + encodeURIComponent(thread), self.registration.scope).href : self.registration.scope));
   event.waitUntil((async () => {
     const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const message = view === "today" ? { type: "open-today" } : { type: "open-chat", threadId: thread };
     for (const client of all) {
       if (client.url && client.url.startsWith(self.registration.scope) && "focus" in client) {
         await client.focus();
-        client.postMessage({ type: "open-chat", threadId: thread });
+        client.postMessage(message);
         return;
       }
     }

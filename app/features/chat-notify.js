@@ -3,13 +3,13 @@
 
 import { doc, setDoc, getDocs, collection, deleteDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import {
-  chatAlertsHtml, incomingPing, iosPushHint, PUSH_ORIGINS, readChatParam, takeHead, takeIncoming, tokenDocId,
+  chatAlertsHtml, incomingPing, iosPushHint, PUSH_ORIGINS, readChatParam, readJobsParam, takeHead, takeIncoming, tokenDocId,
 } from "./chat-notify-logic.js";
 
-export { chatAlertsHtml, incomingPing, iosPushHint, readChatParam, takeHead, takeIncoming, tokenDocId };
+export { chatAlertsHtml, incomingPing, iosPushHint, readChatParam, readJobsParam, takeHead, takeIncoming, tokenDocId };
 
 const slots = new Map();
-const alertState = { sound: true, push: false };
+const alertState = { sound: true, push: false, dailyJobs: true };
 let deps = null;
 let prefsUnsub = null;
 let audio = null;
@@ -19,6 +19,7 @@ export function alertsModel() {
   return {
     sound: alertState.sound !== false,
     push: alertState.push === true,
+    dailyJobs: alertState.dailyJobs !== false,
     iosHint: browserIosHint(),
     vapidReady: !!(deps && deps.vapidKey),
     emulator: !!(deps && deps.emulator),
@@ -107,6 +108,7 @@ export function resetChatAlerts() {
   }
   alertState.sound = true;
   alertState.push = false;
+  alertState.dailyJobs = true;
 }
 
 function audioEl() {
@@ -165,6 +167,11 @@ function paintAlerts() {
       push.disabled = alertState.push !== true;
     }
     if (button) button.hidden = alertState.push === true;
+    const daily = el.querySelector("[data-daily-jobs]");
+    if (daily) {
+      daily.checked = alertState.dailyJobs !== false;
+      daily.disabled = alertState.push !== true;
+    }
   });
 }
 
@@ -173,9 +180,11 @@ async function writePrefs(next) {
   if (!deps || !uid) return;
   const sound = next.sound !== false;
   const push = next.push === true;
-  await setDoc(doc(deps.db, "users", uid, "chatSettings", "prefs"), { sound, push });
+  const dailyJobs = next.dailyJobs !== false;
+  await setDoc(doc(deps.db, "users", uid, "chatSettings", "prefs"), { sound, push, dailyJobs });
   alertState.sound = sound;
   alertState.push = push;
+  alertState.dailyJobs = dailyJobs;
   paintAlerts();
 }
 
@@ -230,7 +239,7 @@ async function enableChatNotifications(button) {
       platform: "web",
       updatedAt: serverTimestamp(),
     });
-    await writePrefs({ sound: alertState.sound !== false, push: true });
+    await writePrefs({ sound: alertState.sound !== false, push: true, dailyJobs: alertState.dailyJobs !== false });
     deps.toast("Chat notifications are on for this phone.");
   } catch (err) {
     const code = (err && (err.code || err.message)) || "not-enabled";
@@ -249,14 +258,19 @@ export function bindChatAlerts(root) {
     const push = el.querySelector("[data-chat-push]");
     const button = el.querySelector(".chat-enable");
     if (sound) sound.addEventListener("change", () => {
-      writePrefs({ sound: sound.checked, push: alertState.push === true }).catch(() => deps && deps.toast("Couldn't save that setting."));
+      writePrefs({ sound: sound.checked, push: alertState.push === true, dailyJobs: alertState.dailyJobs !== false }).catch(() => deps && deps.toast("Couldn't save that setting."));
     });
     if (push) push.addEventListener("change", () => {
       if (push.checked) return;
-      writePrefs({ sound: alertState.sound !== false, push: false })
+      writePrefs({ sound: alertState.sound !== false, push: false, dailyJobs: alertState.dailyJobs !== false })
         .then(() => deleteOwnTokens())
         .then(() => deps && deps.toast("Notifications are off on this phone."))
         .catch(() => deps && deps.toast("Couldn't turn notifications off."));
+    });
+    const daily = el.querySelector("[data-daily-jobs]");
+    if (daily) daily.addEventListener("change", () => {
+      if (alertState.push !== true) return;
+      writePrefs({ sound: alertState.sound !== false, push: true, dailyJobs: daily.checked }).catch(() => deps && deps.toast("Couldn't save that setting."));
     });
     if (button) button.addEventListener("click", () => enableChatNotifications(button));
   });
@@ -273,6 +287,7 @@ export function startChatAlerts() {
     const data = snap.exists() ? (snap.data() || {}) : {};
     alertState.sound = data.sound !== false;
     alertState.push = data.push === true;
+    alertState.dailyJobs = data.dailyJobs !== false;
     paintAlerts();
   }, () => {});
 }

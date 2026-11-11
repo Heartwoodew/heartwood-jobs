@@ -15,7 +15,7 @@ import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPla
 import { buildOperationalExport, retentionAdminText, retentionView } from "./features/cloud-retention.js";
 import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, lightboxHtml, photoFailureText } from "./features/photo-gallery.js";
 import { installChatApp } from "./features/chat-ui.js";
-import { alertsModel, bindChatAlerts, bindPingUnlock, chatAlertsHtml, installChatAlerts, readChatParam } from "./features/chat-notify.js";
+import { alertsModel, bindChatAlerts, bindPingUnlock, chatAlertsHtml, installChatAlerts, readChatParam, readJobsParam } from "./features/chat-notify.js";
 import { installCompliance } from "./features/compliance.js";
 import { SWMS, SWMS_VERSION, sigMs, sigExp, latestSig, statusOf, swmsSignatureData, buildPlaceholderPdf } from "./features/swms-sign.js";
 import {
@@ -669,6 +669,13 @@ readChatLink();
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.addEventListener("message", (event) => {
     const data = event.data || {};
+    if (data.type === "open-today") {
+      ui.pendingToday = true;
+      if (!me) return;
+      if (me.role === "admin") renderAdmin();
+      else renderOperator();
+      return;
+    }
     if (data.type !== "open-chat") return;
     const thread = data.threadId || "";
     if (thread !== "staff" && !/^job_[A-Za-z0-9_-]{1,200}$/.test(thread)) return;
@@ -2514,13 +2521,24 @@ function bindStaff(A) {
 function readChatLink() {
   try {
     const thread = readChatParam(location.search);
-    if (!thread) return;
-    ui.pendingChat = thread;
+    const today = readJobsParam(location.search);
+    if (!thread && !today) return;
+    if (thread) ui.pendingChat = thread;
+    if (today) ui.pendingToday = true;
     const params = new URLSearchParams(location.search);
     params.delete("chat");
+    params.delete("jobs");
     const next = params.toString();
     history.replaceState(null, "", location.pathname + (next ? "?" + next : "") + location.hash);
   } catch { /* keep the query */ }
+}
+function primeTodayLink() {
+  if (!ui.pendingToday || !me) return;
+  ui.pendingToday = false;
+  ui.opSel = null;
+  ui.opTab = "today";
+  ui.jobPane = "job";
+  if (me.role === "admin") ui.myJobs = true;
 }
 function primeChatLink() {
   const thread = ui.pendingChat;
@@ -2575,6 +2593,7 @@ function finishChatLink() {
 function renderAdmin() {
   donePill(); reimbPill(); inboxSub();
   if (!me || me.role !== "admin") return;
+  primeTodayLink();
   if (ui.view === "invoices" && me.role !== "admin") ui.view = "home";
   if (ui.myJobs) return renderOperator();
   if ($("#dlg").open) return;          // don't redraw under an open job card
@@ -3734,6 +3753,7 @@ function renderOperator() {
   if (canImport()) inboxSub();
   if (!ui.forceRender && document.querySelector("#compform, #prestartform")) return;
   ui.forceRender = false;
+  primeTodayLink();
   primeChatLink();
   document.body.className = "operator";
   ui.runStops = {};

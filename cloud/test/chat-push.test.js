@@ -257,7 +257,7 @@ test("opt-in copy never asks on load, and iPhone gets the Home Screen hint", asy
   assert.match(notify, /Notification\.requestPermission/);
   assert.match(config, /export const vapidKey = "";/);
   assert.doesNotMatch(config, /BEGIN PRIVATE|-----BEGIN/);
-  assert.match(sw, /callup-shell-v86-chat-ping/);
+  assert.match(sw, /callup-shell-v87-daily-jobs/);
   assert.match(sw, /notificationclick/);
   assert.match(sw, /sounds\/chat-ping\.wav/);
   assert.match(index, /chatMessagePush/);

@@ -281,6 +281,8 @@ test("chat push tokens and alert prefs stay on the signed-in user and their comp
   await assertFails(setDoc(doc(db("op2"), "users", "op1", "fcmTokens", TOKEN_ID), chatToken("otherco", "https://app.callupapp.com.au")));
   const prefs = doc(db("op1"), "users", "op1", "chatSettings", "prefs");
   await assertSucceeds(setDoc(prefs, { sound: false, push: true }));
+  await assertSucceeds(setDoc(prefs, { sound: true, push: true, dailyJobs: false }));
+  await assertFails(setDoc(prefs, { sound: true, push: true, dailyJobs: "yes" }));
   await assertSucceeds(getDoc(prefs));
   await assertFails(setDoc(prefs, { sound: true, push: false, companyId: "otherco" }));
   await assertFails(setDoc(doc(db("op1"), "users", "idle", "chatSettings", "prefs"), { sound: true, push: true }));
@@ -288,6 +290,8 @@ test("chat push tokens and alert prefs stay on the signed-in user and their comp
   await assertFails(deleteDoc(prefs));
   await assertSucceeds(deleteDoc(opToken));
   await assertSucceeds(deleteDoc(otherToken));
+  await assertFails(setDoc(doc(db("op1"), "dailyJobDigest", "heartwood_2026-11-11_op1"), { companyId: "heartwood", date: "2026-11-11", uid: "op1" }));
+  await assertFails(getDoc(doc(db("op1"), "dailyJobDigest", "heartwood_2026-11-11_op1")));
 });
 
 test("chat photos stay private to the thread and are not receipt or finance files", async () => {

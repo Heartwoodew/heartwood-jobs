@@ -743,9 +743,11 @@ service cloud.firestore {
         && request.resource.data.updatedAt == request.time;
     }
     function chatPrefsOk() {
-      return request.resource.data.keys().hasOnly(["sound", "push"])
+      return request.resource.data.keys().hasOnly(["sound", "push", "dailyJobs"])
+        && request.resource.data.keys().hasAll(["sound", "push"])
         && request.resource.data.sound is bool
-        && request.resource.data.push is bool;
+        && request.resource.data.push is bool
+        && (!("dailyJobs" in request.resource.data) || request.resource.data.dailyJobs is bool);
     }
 
     match /users/{uid}/fcmTokens/{tokenId} {
@@ -766,6 +768,12 @@ service cloud.firestore {
       allow delete: if false;
     }
 // END CHAT RULES
+
+// BEGIN DAILY JOB RULES
+    match /dailyJobDigest/{id} {
+      allow read, write: if false;
+    }
+// END DAILY JOB RULES
 
 // BEGIN FLEET RULES
     function fleetSignedIn() { return request.auth != null; }

@@ -285,6 +285,8 @@ test("invite rules fragment matches the emulator block and does not open mail", 
   assert.match(index, /acceptStaffInvite/);
   assert.match(index, /inviteEmailWorker/);
   assert.match(index, /NODE_TEST_CONTEXT/);
-  assert.doesNotMatch(index, /onSchedule|nodemailer|smtp|createTransport/);
+  assert.doesNotMatch(index, /nodemailer|smtp|createTransport/);
+  assert.equal((index.match(/onSchedule/g) || []).length, 2);
+  assert.match(index, /dailyJobPush = onSchedule/);
   assert.match(readFileSync(new URL("../MIGRATION.md", import.meta.url), "utf8"), /Staff invites/);
 });
