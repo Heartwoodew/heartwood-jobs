@@ -316,3 +316,59 @@ test("invite delivery status is readable by the inviting company's office only",
   await assertFails(getDoc(doc(db(BRAVO), "inviteStatus/ih1")));
   await assertFails(setDoc(doc(db(BRAVO), "inviteStatus/ib2"), { companyId: "bravo", delivery: "sent" }));
 });
+
+// Site supervisor on a job. Heartwood supervisors may set only the contact fields
+// on jobs they are assigned to. Operators cannot. Money fields stay closed.
+const SUP = "supHW";
+function supervisorPatch(uid, extra = {}) {
+  return {
+    supervisorName: "Dave Brown", contactName: "Dave Brown",
+    supervisorEmail: "dave.brown@example.test", contactPhone: "0412 345 678",
+    updatedAt: serverTimestamp(), updatedBy: uid, ...extra,
+  };
+}
+
+test("a Heartwood supervisor can set the site supervisor on an assigned job, and nothing else", async () => {
+  await env.withSecurityRulesDisabled(async ctx => {
+    const d = ctx.firestore();
+    await setDoc(doc(d, "users/supHW"), { role: "supervisor", name: "Sue" });
+    await setDoc(doc(d, "users/bravoSup"), { role: "supervisor", name: "Bea Sup", companyId: "bravo", tenantId: "bravo" });
+    await setDoc(doc(d, "users/bravoOp"), { role: "operator", name: "Bo", companyId: "bravo", tenantId: "bravo" });
+    await setDoc(doc(d, "jobs/supjob"), { companyId: "heartwood", client: "Orbit Homes", address: "1 Supervisor St", assigned: [SUP, OP], status: "Scheduled" });
+    await setDoc(doc(d, "jobs/suplegacy"), { client: "Orbit Homes", address: "Legacy Rd", assigned: [SUP], status: "Scheduled" });
+    await setDoc(doc(d, "jobs/bravoSupJob"), { companyId: "bravo", tenantId: "bravo", client: "Acme", address: "1 B St", assigned: ["bravoOp"], status: "Scheduled" });
+    await setDoc(doc(d, "clients/orbit-homes"), { name: "Orbit Homes", contacts: [], companyId: "heartwood" });
+  });
+  const sup = db(SUP), op = db(OP), alex = db(ALEX), bravoSup = db("bravoSup"), bravoOp = db("bravoOp");
+
+  await assertSucceeds(getDoc(doc(sup, "jobs/supjob")));
+  await assertFails(getDoc(doc(sup, "jobs/hw2")));
+  await assertFails(getDoc(doc(sup, "jobs/bravo1")));
+  const mine = await assertSucceeds(getDocs(query(collection(sup, "jobs"), where("companyId", "==", "heartwood"), where("assigned", "array-contains", SUP))));
+  assert.ok(mine.docs.some(d => d.id === "supjob"));
+  await assertFails(getDocs(query(collection(sup, "jobs"), where("companyId", "==", "heartwood"))));
+
+  await assertSucceeds(updateDoc(doc(sup, "jobs/supjob"), supervisorPatch(SUP)));
+  await assertSucceeds(updateDoc(doc(sup, "jobs/suplegacy"), supervisorPatch(SUP, { supervisorEmail: "" })));
+  await assertFails(updateDoc(doc(sup, "jobs/hw2"), supervisorPatch(SUP)));
+  await assertFails(updateDoc(doc(sup, "jobs/bravoSupJob"), supervisorPatch(SUP)));
+  await assertFails(updateDoc(doc(sup, "jobs/supjob"), supervisorPatch(SUP, { supervisorEmail: "not an email" })));
+  await assertFails(updateDoc(doc(sup, "jobs/supjob"), supervisorPatch(SUP, { contactName: "Someone else" })));
+  await assertFails(updateDoc(doc(sup, "jobs/supjob"), supervisorPatch(SUP, { supervisorName: "", contactName: "" })));
+  await assertFails(updateDoc(doc(sup, "jobs/supjob"), supervisorPatch(SUP, { invoiceAmount: 99 })));
+  await assertFails(updateDoc(doc(sup, "jobs/supjob"), supervisorPatch(SUP, { address: "Stolen St" })));
+  await assertFails(updateDoc(doc(sup, "jobs/supjob"), supervisorPatch(SUP, { companyId: "bravo" })));
+  await assertFails(updateDoc(doc(sup, "jobs/supjob"), { ...supervisorPatch(SUP), updatedBy: OP }));
+
+  await assertFails(updateDoc(doc(op, "jobs/supjob"), supervisorPatch(OP, { supervisorName: "Not allowed", contactName: "Not allowed" })));
+  await assertSucceeds(updateDoc(doc(op, "jobs/supjob"), { status: "In progress", updatedAt: serverTimestamp(), updatedBy: OP }));
+  await assertSucceeds(updateDoc(doc(alex, "jobs/supjob"), supervisorPatch(ALEX, { supervisorName: "Alex Set", contactName: "Alex Set" })));
+
+  await assertSucceeds(updateDoc(doc(bravoSup, "jobs/bravoSupJob"), supervisorPatch("bravoSup")));
+  await assertFails(updateDoc(doc(bravoSup, "jobs/supjob"), supervisorPatch("bravoSup")));
+  await assertFails(updateDoc(doc(bravoOp, "jobs/bravoSupJob"), supervisorPatch("bravoOp", { supervisorName: "Not allowed", contactName: "Not allowed" })));
+  await assertSucceeds(updateDoc(doc(bravoOp, "jobs/bravoSupJob"), { status: "In progress", updatedAt: serverTimestamp(), updatedBy: "bravoOp" }));
+
+  await assertFails(updateDoc(doc(sup, "clients/orbit-homes"), { contacts: [{ kind: "supervisor", name: "Dave Brown" }] }));
+  await assertSucceeds(updateDoc(doc(alex, "clients/orbit-homes"), { contacts: [{ kind: "supervisor", name: "Dave Brown", mobile: "0412 345 678", email: "dave.brown@example.test" }] }));
+});

@@ -351,7 +351,48 @@ service cloud.firestore {
       allow list: if companyOffice() && resource.data.companyId == callerCompany();
     }
 
+    // Heartwood supervisors use the staff shell. They may open jobs they are on, and
+    // may set only the site-supervisor contact. Operators stay on the field list below.
+    // Money, Xero, assignment and companyId are not in this patch. Other companies'
+    // office already updates their own jobs through companyOffice().
+    function isHeartwoodSupervisor() {
+      let user = /databases/$(database)/documents/users/$(request.auth.uid);
+      return signedIn()
+        && !(request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "38SU5waAy4f9UI9N6JTqDMaYpQg2", "R7t41e54Ykcdk9WPdVZnDd697iI2"])
+        && exists(user)
+        && get(user).data.get("role", "") == "supervisor"
+        && get(user).data.get("companyId", get(user).data.get("tenantId", "heartwood")) == "heartwood";
+    }
+    function jobSupervisorEmail(v) {
+      return v is string && v.size() <= 120 && (
+        v == "" || v.matches('^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$')
+      );
+    }
+    function jobSupervisorPatch() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      let name = request.resource.data.supervisorName;
+      return changed.hasOnly(["supervisorName", "supervisorEmail", "contactPhone", "contactName", "updatedAt", "updatedBy"])
+        && changed.hasAny(["supervisorName", "supervisorEmail", "contactPhone", "contactName"])
+        && name is string && name.size() > 0 && name.size() <= 80 && name.matches('^[^\\n\\r<>]*$')
+        && request.resource.data.contactName == name
+        && jobSupervisorEmail(request.resource.data.supervisorEmail)
+        && request.resource.data.contactPhone is string
+        && request.resource.data.contactPhone.size() <= 40
+        && request.resource.data.contactPhone.matches('^[^\\n\\r<>]*$')
+        && request.resource.data.updatedBy == request.auth.uid
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.get("companyId", "") == resource.data.get("companyId", "")
+        && request.resource.data.get("tenantId", "") == resource.data.get("tenantId", "");
+    }
     match /jobs/{jobId} {
+      // Checked first so a Heartwood supervisor is not pushed through the heavier office rules.
+      allow get: if isHeartwoodSupervisor() && docCompany(resource.data) == "heartwood" && request.auth.uid in resource.data.assigned;
+      allow list: if isHeartwoodSupervisor() && resource.data.companyId == "heartwood" && request.auth.uid in resource.data.assigned;
+      allow update: if isHeartwoodSupervisor()
+        && request.auth.uid in resource.data.assigned
+        && docCompany(resource.data) == "heartwood"
+        && docCompany(request.resource.data) == "heartwood"
+        && jobSupervisorPatch();
       allow read: if isSync() || (signedIn() && isAssigned(resource.data) && isOperator());
       allow get: if isAdmin() && docCompany(resource.data) == "heartwood";
       allow list: if isAdmin() && resource.data.companyId == "heartwood";

@@ -49,6 +49,10 @@ import {
   addressWithSuburb, bulkCandidates, canImportInbox, composeAddress, defaultImportMode, duplicateWarning,
   findExistingJob, isImported, parseInboxEmail,
 } from "./features/inbox-import.js";
+import {
+  canEditJobSupervisor, canSaveSupervisorContact, clientSupervisors, explicitSupervisor,
+  mergeSupervisorContact, resolveJobSupervisor, supervisorContactDefaultOn, supervisorJobFields,
+} from "./features/job-supervisor.js";
 
 const cfg = useEmulator ? { ...firebaseConfig, apiKey: "demo-key", projectId: "demo-heartwood" } : firebaseConfig;
 const fb = initializeApp(cfg);
@@ -3189,24 +3193,104 @@ async function loadClients(force) {
 const normCo = s => String(s || "").toLowerCase().replace(/\(.*?\)|pty|ltd|homes?|built|[^a-z]/g, "");
 const clientOf = name => (CLI || []).find(c => normCo(c.name) && normCo(c.name) === normCo(name)) || null;
 const telHref = m => "tel:" + String(m || "").replace(/[^\d+]/g, "");
-// Job supervisor: job fields / meta (admins) first, then the client's contact list (adds the mobile); a client with
-// one supervisor (or one marked default) is used when nothing else matches.
+// Job supervisor: explicit job fields, then meta/supervisors, then the client's contacts.
 async function jobSupervisor(j) {
   await loadClients();
-  const s = await supervisorFor(j).catch(() => null), c = clientOf(j.client), sups = (c?.contacts || []).filter(x => x.kind === "supervisor");
-  const hit = s && sups.find(x => (s.email && x.email && x.email.toLowerCase() === s.email.toLowerCase()) || (s.name && x.name.toLowerCase().startsWith(s.name.toLowerCase())));
-  if (s) return { ...s, ...(hit || {}), email: s.email || hit?.email, name: hit?.name || s.name };
-  const base = String(j.po || "").split("/")[0].replace(/\D/g, ""), byPo = base && sups.find(x => (x.pos || []).includes(base));
-  if (byPo) return byPo;
-  if (sups.length === 1) return sups[0];
-  return sups.find(x => x.default) || null;
+  const contacts = clientOf(j.client)?.contacts || [];
+  const meta = explicitSupervisor(j) ? null : await supervisorFor(j).catch(() => null);
+  return resolveJobSupervisor(j, meta, contacts);
+}
+function supervisorDialogEl() {
+  let d = document.getElementById("supdlg");
+  if (!d) { d = document.createElement("dialog"); d.id = "supdlg"; document.body.appendChild(d); }
+  return d;
+}
+function openSupervisorForm(j, current) {
+  if (!canEditJobSupervisor(me)) return;
+  const sups = clientSupervisors(clientOf(j.client));
+  const cur = current || {};
+  const saveClient = canSaveSupervisorContact(me, myCompanyId());
+  const picked = sups.findIndex(x => (cur.email && x.email && x.email.toLowerCase() === String(cur.email).toLowerCase())
+    || (cur.name && x.name && x.name.toLowerCase() === String(cur.name).toLowerCase()));
+  const d = supervisorDialogEl();
+  d.className = "";
+  d.innerHTML = `<form method="dialog" id="supform" class="jf">
+    <h2>${current ? "Change supervisor" : "Add supervisor"}</h2>
+    <p class="hint">${esc(j.client || "This job")}${j.address ? " · " + esc(j.address) : ""}</p>
+    ${sups.length ? `<label>Use a saved contact<select name="pick"><option value="">Type a new one</option>${sups.map((x, i) => `<option value="${i}" ${i === picked ? "selected" : ""}>${esc(x.name || x.email || "Supervisor")}${x.mobile || x.phone ? " · " + esc(x.mobile || x.phone) : ""}</option>`).join("")}</select></label>` : ""}
+    <label>Name<input name="name" autocomplete="name" value="${esc(cur.name || "")}" required></label>
+    <label>Mobile<input name="mobile" type="tel" inputmode="tel" autocomplete="tel" value="${esc(cur.mobile || "")}"></label>
+    <label>Email<input name="email" type="email" inputmode="email" autocomplete="email" value="${esc(cur.email || "")}"></label>
+    ${saveClient ? `<label class="ck"><input type="checkbox" name="saveclient" ${supervisorContactDefaultOn(me) ? "checked" : ""}> Also save to ${esc(j.client || "this client")}'s contacts</label>` : ""}
+    <p id="sferr" class="err"></p>
+    <div class="btns"><button value="cancel" formnovalidate class="ghost big">Cancel</button><button value="ok" class="primary big">Save</button></div>
+  </form>`;
+  const jobDlg = document.getElementById("dlg");
+  if (jobDlg && jobDlg.open) jobDlg.addEventListener("close", () => { if (d.open) d.close(); }, { once: true });
+  if (!d.open) d.showModal();
+  const f = d.querySelector("#supform");
+  if (f.pick) f.pick.onchange = () => {
+    const x = sups[+f.pick.value];
+    if (!x) return;
+    f.name.value = x.name || "";
+    f.mobile.value = x.mobile || x.phone || "";
+    f.email.value = x.email || "";
+  };
+  f.onsubmit = ev => {
+    if (ev.submitter?.value !== "ok") return;
+    ev.preventDefault();
+    saveJobSupervisor(j, f, d).catch(e => {
+      const err = f.querySelector("#sferr");
+      if (err) err.textContent = "Not saved: " + (e.code || e.message);
+    });
+  };
+}
+async function saveJobSupervisor(j, f, d) {
+  const parsed = supervisorJobFields({ name: f.name.value, email: f.email.value, mobile: f.mobile.value });
+  const err = f.querySelector("#sferr");
+  if (!parsed.ok) { if (err) err.textContent = parsed.error; return; }
+  try {
+    await updateDoc(doc(db, "jobs", j.id), { ...parsed.fields, updatedAt: serverTimestamp(), updatedBy: me.uid });
+  } catch (e) {
+    if (err) err.textContent = "Not saved: " + (e.code || e.message);
+    return;
+  }
+  Object.assign(j, parsed.fields);
+  for (const list of [jobs, ui.undated, ui.done]) {
+    const row = (list || []).find(x => x && x.id === j.id);
+    if (row && row !== j) Object.assign(row, parsed.fields);
+  }
+  let note = "Supervisor saved";
+  if (f.saveclient && f.saveclient.checked && canSaveSupervisorContact(me, myCompanyId())) {
+    const c = clientOf(j.client);
+    if (!c) note = "Saved on the job. That client isn't in Clients yet.";
+    else {
+      try {
+        const contacts = mergeSupervisorContact(c.contacts, {
+          name: parsed.fields.supervisorName, email: parsed.fields.supervisorEmail, mobile: parsed.fields.contactPhone,
+        });
+        await updateDoc(doc(db, "clients", c.id), { contacts, updatedAt: serverTimestamp(), updatedBy: me.uid });
+        c.contacts = contacts;
+      } catch (e) { note = "Saved on the job. Not added to Clients: " + (e.code || e.message); }
+    }
+  }
+  if (d.open) d.close();
+  fillSupCard(j);
+  toast(note);
+}
+function supervisorActions(j, s) {
+  const call = s && s.mobile ? `<a class="sm-btn primary" href="${telHref(s.mobile)}">📞 Call</a>` : "";
+  const mail = s && s.email ? `<a class="sm-btn" href="mailto:${esc(s.email)}?subject=${encodeURIComponent((j.address || "") + (j.po ? " PO " + j.po : ""))}">✉ Email</a>` : "";
+  const edit = canEditJobSupervisor(me) ? `<button type="button" class="sm-btn${s ? "" : " primary"}" data-supedit>${s ? "Change" : "Add supervisor"}</button>` : "";
+  return (call || mail || edit) ? `<span class="sup-btns">${call}${mail}${edit}</span>` : "";
 }
 async function fillSupCard(j) {
   const box = document.querySelector(`.supcard[data-sup="${CSS.escape(j.id)}"]`); if (!box) return;
   const s = await jobSupervisor(j).catch(() => null);
-  box.innerHTML = s ? `<div class="sup"><div class="sup-who"><span class="mlbl">Supervisor</span><b>${esc(s.name || s.email)}</b>${s.mobile ? `<span class="sub">${esc(s.mobile)}</span>` : ""}</div>
-    <span class="sup-btns">${s.mobile ? `<a class="sm-btn primary" href="${telHref(s.mobile)}">📞 Call</a>` : ""}${s.email ? `<a class="sm-btn" href="mailto:${esc(s.email)}?subject=${encodeURIComponent((j.address || "") + (j.po ? " PO " + j.po : ""))}">✉ Email</a>` : ""}</span></div>`
-    : `<div class="sup none"><span class="mlbl">Supervisor</span> <span class="sub muted">Not known for this job${isAdm() ? " - add one in Clients" : ""}</span></div>`;
+  box.innerHTML = s ? `<div class="sup"><div class="sup-who"><span class="mlbl">Supervisor</span><b>${esc(s.name || s.email)}</b>${s.mobile ? `<span class="sub">${esc(s.mobile)}</span>` : ""}</div>${supervisorActions(j, s)}</div>`
+    : `<div class="sup none"><div class="sup-who"><span class="mlbl">Supervisor</span><span class="sub muted">Not known for this job</span></div>${supervisorActions(j, null)}</div>`;
+  const btn = box.querySelector("[data-supedit]");
+  if (btn) btn.onclick = ev => { ev.preventDefault(); ev.stopPropagation(); openSupervisorForm(j, s); };
 }
 const KIND = { supervisor: "Supervisors", accounts: "Accounts", admin: "Admin / ordering" };
 function contactRow(c, x, i) {

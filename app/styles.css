@@ -431,8 +431,20 @@ tr.mhead td{background:#eef2f7;font-size:13px;padding:6px 8px}
 .ct-btns,.sup-btns{display:flex;gap:6px;flex-shrink:0}.ct-btns a,.sup-btns a{text-decoration:none}
 .supcard:empty{display:none}
 .sup{display:flex;justify-content:space-between;align-items:center;gap:10px;background:#f1f6ff;border:1px solid #cfe0ff;border-radius:8px;padding:8px 10px;margin:6px 0 8px}
-.sup-who{display:flex;flex-direction:column}.sup-who b{font-size:15px}.sup.none{background:#f8fafc;border-color:#e3e8ef;display:block}
-.mcard .sup{margin:8px 0 0}.mcard .sup-btns a{padding:10px 14px;font-size:15px}
+.sup-who{display:flex;flex-direction:column;min-width:0}.sup-who b{font-size:15px}.sup.none{background:#f8fafc;border-color:#e3e8ef}
+.mcard .sup{margin:8px 0 0}.mcard .sup-btns a,.mcard .sup-btns .sm-btn{padding:10px 14px;font-size:15px}
+#supdlg{max-width:420px}
+#supdlg .jf label{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:600}
+#supdlg .jf input,#supdlg .jf select{font:inherit;font-weight:400;width:100%;min-height:44px;padding:8px 10px}
+#supdlg .jf label.ck{flex-direction:row;align-items:center;font-weight:500;font-size:15px}
+#supdlg .btns{flex-wrap:wrap}
+#supdlg .btns button{flex:1}
+@media (max-width:760px){
+  .sup{flex-wrap:wrap;align-items:stretch}
+  .sup-btns{width:100%}
+  .sup-btns .sm-btn,.sup-btns a.sm-btn{flex:1 1 auto}
+  #supdlg{width:calc(100vw - 16px);max-width:none}
+}
 @media (max-width:760px){.clgrid{grid-template-columns:1fr;padding:0 10px 20px}.ct-btns a,.ct-btns button{padding:9px 12px}}
 /* Inbox (owner only) */
 .nbadge{display:inline-block;min-width:18px;padding:0 5px;border-radius:9px;background:#dc2626;color:#fff;font-size:11px;font-weight:700;line-height:18px;text-align:center;margin-left:auto}
