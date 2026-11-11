@@ -53,3 +53,27 @@ Rate editor (`openRatesEditor`): admin only. Others get `Only an admin can chang
 The accepted job description includes the ex GST lines (`createJobFromQuote`, lines 714–719). Anyone who can open that job can read that description, including an assigned operator. The quotes **screen** is still hidden from operators.
 
 Provenance: `app/features/quotes.js` functions `calcQuote`, `saveQuote`, `createJobFromQuote`, `stepHtml`, `installQuotes`; `app/app.js` `canQuote` and `renderOperator`; commit `01f2c5a6f407e123f7f48432f07f1e9445a36007`.
+
+## Extra items, price adjustments and GST (PR: editable quotes, Nov 2026)
+
+On the Review step, **Extra items** adds lines on top of the guided machine and labour lines:
+
+- Quick-add: **Rubbish removal** (amount in m³, t, loads, bags or skips, optional waste type such as green waste, general, concrete / bricks, soil), **Concrete removal** (m³, t or loads, note for reinforced / slab or footpath / break-up), **Bring material to site** (material name such as road base or topsoil, m³, t or loads), **Tip fees**, **Travel**, **Misc**, and **Blank item**.
+- Each line: description, amount / qty, unit, $ per unit ex GST, optional note. Move up / down, Remove. Line amount = amount × unit price.
+- Preset prices come from the company's quote rates when set (rubbish = tip $/load, material = materials $/unit, travel = $/km). Otherwise the price is blank (never invented) and an item with an amount but no price keeps the total incomplete.
+- Admins can **Save as preset**: saved on the company's quote-rates doc (`extraPresets`, up to 20) and shown as ★ chips. Remove them in Quote rates.
+- Admins only: **Adjust guided prices** replaces a guided line's amount. The summary shows the old price struck through, "adjusted", and a Price adjustments line.
+- Totals: Subtotal ex GST, GST 10%, Total inc GST, updated live while typing. `totalEx` stays the ex GST subtotal (used for `quoteAmount` / `poAmount`).
+- **Customer quote (print / PDF)** opens a printable page with the items, subtotal, GST and total (no internal rates).
+- Accepting copies `extraItems`, `priceOverrides`, `gst` and `totalInc` to `job.quote`, and writes price-free `job.workAmounts` (e.g. "Concrete removal: 3 t (reinforced slab)"). The crew sees those amounts on the run-sheet card and job details. The job description no longer carries dollar figures.
+- Quotes saved before this change have no `extraItems` / `priceOverrides` and calculate exactly as before.
+
+## Google Places address search (optional)
+
+The quote's Job address can search Google Maps (Places API New, AutocompleteSuggestion), limited to Australia and biased to South East Queensland. A pick stores `addressPlace` (formatted address, lat/lng, place id); Calculate travel then routes from the depot to that exact spot, and the accepted job gets a matching `geo` pin for run-sheet ordering. With no key (the default) the field is plain typing.
+
+To turn it on:
+
+1. Google Cloud project `heartwood-9f37f` → APIs & Services → enable **Maps JavaScript API** and **Places API (New)** (billing must be on; it already is for Blaze).
+2. Create a **separate browser API key**. Application restriction: websites `https://jobs.heartwoodew.com/*`, `https://callupapp.web.app/*`, `https://callupapp.com.au/*` (and `http://localhost:*` for testing). API restriction: Maps JavaScript API + Places API (New) only.
+3. Put the key in `app/maps-config.js` → `placesApiKey`. A browser key is public by design; the restrictions are what protect it.
