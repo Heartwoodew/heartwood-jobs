@@ -96,6 +96,24 @@ test("app writers can't put money or quote prices on a job; removing a legacy co
   await assertSucceeds(updateDoc(doc(db(ALEX), "jobs/hw1"), { po: "PO-2" }));
 });
 
+test("Find PO suggestions: jobMoney holds the list (office + box), app writers can't put it on a job, crew can't read it", async () => {
+  const cands = [{ po: "3008309", kind: "clean", amount: 640, basis: "ex GST", source: "pdf", confidence: "high", match: 2 }];
+  await assertSucceeds(setDoc(doc(db(SYNC), "jobMoney/hw1"), { jobId: "hw1", companyId: "heartwood", poLookupCandidates: cands }, { merge: true }));
+  await assertSucceeds(setDoc(doc(db(ALEX), "jobMoney/hw1"), { jobId: "hw1", companyId: "heartwood", poLookupCandidates: [] }, { merge: true }));
+  await assertSucceeds(setDoc(doc(db("bSup"), "jobMoney/b1"), { jobId: "b1", companyId: "bravo", poLookupCandidates: cands }, { merge: true }));
+  await assertFails(setDoc(doc(db(ALEX), "jobMoney/hw1"), { jobId: "hw1", companyId: "heartwood", poLookupCandidates: "3008309" }, { merge: true }));
+  await assertFails(setDoc(doc(db("op1"), "jobMoney/hw1"), { jobId: "hw1", companyId: "heartwood", poLookupCandidates: [] }, { merge: true }));
+  await assertFails(getDoc(doc(db("op1"), "jobMoney/hw1")));
+  // on the job: not even an empty list from the app; removing a legacy copy is fine; the box still may (until it switches)
+  await assertFails(updateDoc(doc(db(ALEX), "jobs/hw1"), { poLookupCandidates: [] }));
+  await assertFails(updateDoc(doc(db("bAdm"), "jobs/b1"), { poLookupCandidates: cands }));
+  await assertFails(setDoc(doc(db("bAdm"), "jobs/bn9"), { companyId: "bravo", tenantId: "bravo", client: "Acme", assigned: [], status: "Scheduled", poLookupCandidates: [] }));
+  await env.withSecurityRulesDisabled(async ctx => { await updateDoc(doc(ctx.firestore(), "jobs/hw1"), { poLookupCandidates: cands }); });
+  await assertSucceeds(updateDoc(doc(db(ALEX), "jobs/hw1"), { poLookupStatus: "pending", poLookupCandidates: deleteField() }));
+  await assertSucceeds(updateDoc(doc(db(SYNC), "jobs/hw1"), { poLookupStatus: "choose", poLookupCandidates: cands }));
+  await assertSucceeds(updateDoc(doc(db(SYNC), "jobs/hw1"), { poLookupCandidates: deleteField() }));
+});
+
 test("the box (sync) may still write poAmount on a job until its workers move", async () => {
   await assertSucceeds(updateDoc(doc(db(SYNC), "jobs/hw1"), { poAmount: 123, poAmountBasis: "ex GST", poAmountSource: "Find PO: test" }));
 });
@@ -115,6 +133,12 @@ test("migration moves legacy money off the job; crew then see no money and the o
     assert.equal((await getDoc(doc(ctx.firestore(), "jobs/bOld"))).data().poAmount, 1500, "dry run writes nothing");
     const done = await migrateJobMoney(ctx.firestore(), { commit: true });
     assert.equal(JSON.stringify(done).match(/1500|1650|\b80\b/), null, "report holds no amounts");
+    // a legacy Find PO suggestions list (with amounts) moves too
+    await setDoc(doc(ctx.firestore(), "jobs/hwSug"), { companyId: "heartwood", client: "Torsion", assigned: ["op1"], status: "Scheduled", poLookupStatus: "choose",
+      poLookupCandidates: [{ po: "3008777", amount: 777, basis: "ex GST", source: "pdf" }] });
+    await migrateJobMoney(ctx.firestore(), { commit: true });
+    assert.equal("poLookupCandidates" in (await getDoc(doc(ctx.firestore(), "jobs/hwSug"))).data(), false);
+    assert.equal((await getDoc(doc(ctx.firestore(), "jobMoney/hwSug"))).data().poLookupCandidates[0].amount, 777);
     const again = await migrateJobMoney(ctx.firestore(), { commit: true });
     assert.equal(again.jobsChanged, 0, "second run has nothing to do");
   });

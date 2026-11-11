@@ -1,5 +1,6 @@
 // Round 3 (Q6): move money off job documents, which assigned crew can read (and keep in their phone's offline cache).
-// For every job it copies poAmount / poAmountBasis / poAmountSource / quoteAmount into jobMoney/{jobId} (office only),
+// For every job it copies poAmount / poAmountBasis / poAmountSource / quoteAmount and the Find PO suggestions list
+// (poLookupCandidates, it carries PO amounts; added Nov 2026) into jobMoney/{jobId} (office only),
 // then removes them from the job. It also drops quote prices from the job's quote copy (totalEx, gst, totalInc, lines,
 // priceOverrides, ratesSnapshot, extraItems[].unitPrice; quote.totalEx is kept as quoteAmount when that is missing)
 // and moves splitUndo.poAmount to jobMoney.splitUndoPoAmount. Values already in jobMoney are never overwritten.

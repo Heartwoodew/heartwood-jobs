@@ -217,3 +217,18 @@ Per job it copies the money keys into `jobMoney/{jobId}` (never overwriting a va
 from the job; strips quote prices from `job.quote` (keeping `quote.totalEx` as `quoteAmount` when that is missing) and
 `unitPrice` from `job.quote.extraItems`; moves `splitUndo.poAmount` to `jobMoney.splitUndoPoAmount`. Safe to re-run.
 Crew phones drop the old values from their offline cache when the job document next syncs.
+
+### Find PO suggestions off the job (Nov 2026)
+
+`poLookupCandidates` (the Find PO suggestions list: PO, kind, source, confidence and the PO amount) is now a job money
+key: it lives on `jobMoney/{jobId}` (office only) like `poAmount`. The app reads it from jobMoney (a legacy list on the
+job is a fallback until migrated), the Find PO dialog listens to jobMoney, "Use this" works from it, and Find PO / split
+clear the list on jobMoney and remove any copy on the job. Rules: app writers may not add or change
+`poLookupCandidates` on a job (removing a legacy copy is allowed); jobMoney accepts it as a list (max 50) for Heartwood
+admins, company office and the box. The box sync user is still allowed to write it on a job until the box worker
+switches over (tools/po_lookup.py `--suggestions-to-jobmoney`, or the flag file `/home/box/.heartwood_po_suggestions_jobmoney`).
+
+After merge: deploy the rules and the app (service worker `callup-shell-v91-po-suggestions`), switch the box worker
+over, then run `scripts/migrate-job-money.mjs` (dry run, then `--commit`): it moves existing suggestion lists off jobs
+into jobMoney without overwriting a list already there. It is the same idempotent script as above.
+

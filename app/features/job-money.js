@@ -4,7 +4,8 @@
 // Legacy jobs (and the box workers that still write poAmount onto the job) fall back to the job's own field
 // until cloud/scripts/migrate-job-money.mjs moves it.
 
-export const JOB_MONEY_KEYS = Object.freeze(["poAmount", "poAmountBasis", "poAmountSource", "quoteAmount"]);
+// poLookupCandidates (Nov 2026): Find PO suggestions carry PO amounts, so the list lives on jobMoney too.
+export const JOB_MONEY_KEYS = Object.freeze(["poAmount", "poAmountBasis", "poAmountSource", "quoteAmount", "poLookupCandidates"]);
 export const JOB_MONEY_COLLECTION = "jobMoney";
 
 /** Split a job write into the crew-readable job part and the office-only money part. */
