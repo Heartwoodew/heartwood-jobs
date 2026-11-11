@@ -21,6 +21,7 @@ import {
   acceptLoadingHtml, acceptScreenModel, acceptViewHtml, buildInviteDraft, inviteFailureText,
   newInviteToken, pendingInviteForEmail, staffViewHtml, appOriginFor,
 } from "./features/staff-invites.js";
+import { saveGuard, settleOrQueue } from "./features/pending-write.js";
 import { PRODUCT_NAME, POWERED_BY, orgSettings, saveOrgSettings, setActiveCompany } from "./org-settings.js";
 import {
   buildCompanyCreate, buildFriendCompany, buildTestCompany, companyDetailPatch, companyIdFromName, demoBundle,
@@ -2665,6 +2666,8 @@ function editJob(j) {
   const n = !j || !j.id;
   j = j || { date: todayStr(), time: "07:00", durationHrs: 4, status: "Scheduled", type: "spoil", assigned: [], client: CLIENTS[0] };
   const d = $("#dlg");
+  // One id per New Job form, so a second tap (or a retry after no signal) cannot make a second job.
+  const newRef = n ? doc(collection(db, "jobs")) : null, guard = saveGuard();
   const qq = n ? "Work Order" : queueOf(j), hist = [];
   if (j.source === "sm8") hist.push(["ServiceM8", `Imported from ServiceM8 job #${j.sm8JobNo || "?"} (${j.sm8Status || "?"})`]);
   if (j.editedInApp) hist.push(["App", "Edited in the app – ServiceM8 import will no longer overwrite this job"]);
@@ -2751,6 +2754,9 @@ function editJob(j) {
       ...(String(j.poAmount ?? "") !== f.poAmount.value ? { poAmount: f.poAmount.value === "" ? null : Math.round(+f.poAmount.value * 100) / 100, poAmountBasis: f.poAmount.value === "" ? null : "entered in app (ex GST)", poAmountSource: "app" } : {}), updatedAt: serverTimestamp(), updatedBy: me.uid };
     if (data.status === "Done" && j.status !== "Done") Object.assign(data, { completedAt: serverTimestamp(), completedBy: me.uid });
     if (!confirmIfOnLeave(data.date, data.assignedNames)) return;
+    if (!guard.start()) return;
+    const saveBtn = f.querySelector("button[value=save]");
+    if (saveBtn) saveBtn.disabled = true;
     try {
       if (importing && !canImport()) { $("#ferr").textContent = "Supervisors and admins only."; return; }
       if (importing) {
@@ -2758,13 +2764,18 @@ function editJob(j) {
         if (!cur) { $("#ferr").textContent = "That email is no longer in the inbox."; return; }
         if (isImported(cur)) { $("#ferr").textContent = "That email is already imported."; return; }
       }
+      let write;
       if (n) {
         const extra = importing ? importFieldExtras(j, f) : {};
-        const ref = await addDoc(collection(db, "jobs"), scopeRecord({ ...data, ...extra, source: importing ? "inbox" : "app", log: [], createdAt: serverTimestamp() }, myCompanyId()));
-        if (importing) await markInboxImported(j._import.emailId, ref.id);
-      } else await updateDoc(doc(db, "jobs", j.id), data);
-      d.close(); toast("Saved"); refreshAfterImport(); if (!data.date) location.reload();
+        write = setDoc(newRef, scopeRecord({ ...data, ...extra, source: importing ? "inbox" : "app", log: [], createdAt: serverTimestamp() }, myCompanyId()));
+        if (importing) write = write.then(() => markInboxImported(j._import.emailId, newRef.id));
+      } else write = updateDoc(doc(db, "jobs", j.id), data);
+      const r = await settleOrQueue(write);
+      if (r.queued) write.catch(e => toast("Job not saved: " + (e.code || e.message)));
+      d.close(); toast(r.queued ? "Saved on this phone. It uploads when you have signal." : "Saved"); refreshAfterImport();
+      if (!data.date && !r.queued) location.reload();
     } catch (e) { $("#ferr").textContent = e.message; }
+    finally { guard.end(); if (saveBtn) saveBtn.disabled = false; }
   };
 }
 
