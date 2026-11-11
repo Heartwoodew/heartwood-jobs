@@ -58,3 +58,18 @@ test("the live capture handlers call the storage feature after the receipt doc",
   assert.match(submit, /status: "queued"/);
   assert.match(app, /inp\.multiple = true/);
 });
+
+test("putPlanned hands each upload the picked file it was planned for (not undefined)", async () => {
+  const { putPlanned } = await import("../../app/features/cloud-storage.js");
+  const { stampExpiresAfter } = await import("../../app/features/photo-gallery.js");
+  const picked = [{ bytes: "A" }, { bytes: "note" }, { bytes: "B" }];
+  const files = [jpeg("pphoto011", "a.jpg"), { photoId: "pphoto012", name: "note.txt", type: "text/plain", size: 20 }, jpeg("pphoto013", "b.jpg")];
+  let plan = planJobPhotoMirrors({ membership: staff, job, files });
+  plan = stampExpiresAfter(plan, { ...job, status: "Scheduled" }, new Date("2026-11-11T02:00:00Z"));
+  const sent = await putPlanned(plan, target => ({ path: target.path, body: picked[target.sourceIndex] }));
+  assert.deepEqual(sent.map(s => s.body && s.body.bytes), ["A", "B"]);
+  assert.deepEqual(sent.map(s => s.path.split("/").pop()), ["pphoto011", "pphoto013"]);
+  // The app refuses to upload a missing file instead of sending the string "undefined".
+  const app = readFileSync(new URL("../../app/app.js", import.meta.url), "utf8");
+  assert.match(app, /photo-file-missing/);
+});

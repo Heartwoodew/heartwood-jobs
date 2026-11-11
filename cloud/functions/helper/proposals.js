@@ -76,7 +76,17 @@ export async function confirmHelperAction({ membership, proposalId, reader, stor
     await store.markProposal(proposal.id, { status: "denied" });
     return { ok: true, reply: "That job isn't yours to change. Nothing was changed." };
   }
-  await store.apply(prepared.action, { uid: membership.uid, name, tenantId: membership.tenantId });
+  // Two taps on Confirm (or a retried request) must not apply the action twice. The store claims the proposal
+  // atomically (pending -> applying); only the caller that wins the claim writes.
+  if (typeof store.claimProposal === "function" && !(await store.claimProposal(proposal.id))) {
+    return { ok: true, reply: "That preview is already closed. Nothing new was changed." };
+  }
+  try {
+    await store.apply(prepared.action, { uid: membership.uid, name, tenantId: membership.tenantId });
+  } catch (err) {
+    await store.markProposal(proposal.id, { status: "failed" });
+    throw err;
+  }
   await store.markProposal(proposal.id, { status: "confirmed", confirmedAtMs: clock });
   await store.audit({
     uid: membership.uid,

@@ -39,7 +39,7 @@ async function shot(page, name) {
 test("import reviews a fake email before anything is saved", async () => {
   const server = await start();
   const { port } = server.address();
-  const browser = await chromium.launch({ executablePath: "/usr/local/bin/google-chrome", headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || "/usr/local/bin/google-chrome", headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const errors = [];

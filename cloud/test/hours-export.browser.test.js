@@ -68,12 +68,16 @@ function startStatic() {
   return new Promise(resolve => server.listen(0, "127.0.0.1", () => resolve(server)));
 }
 
-async function signUp(address) {
+async function signUp(address, localId) {
   const auth = hostPort(process.env.FIREBASE_AUTH_EMULATOR_HOST, 9099);
-  const res = await fetch(`http://${auth.host}:${auth.port}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=demo-key`, {
+  // Emulator-only admin create so the test can use a fixed uid (the live rules allowlist Heartwood admins by uid).
+  const url = localId
+    ? `http://${auth.host}:${auth.port}/identitytoolkit.googleapis.com/v1/projects/demo-heartwood/accounts`
+    : `http://${auth.host}:${auth.port}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=demo-key`;
+  const res = await fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email: address, password, returnSecureToken: true }),
+    headers: { "content-type": "application/json", ...(localId ? { authorization: "Bearer owner" } : {}) },
+    body: JSON.stringify({ email: address, password, returnSecureToken: true, ...(localId ? { localId } : {}) }),
   });
   const body = await res.json();
   if (!res.ok) throw new Error("sign up failed " + JSON.stringify(body));
@@ -85,7 +89,7 @@ async function signInPage(page, email) {
   await page.locator("#login").waitFor({ timeout: 20000 });
   await page.locator("#login input[name=e]").fill(email);
   await page.locator("#login input[name=p]").fill(password);
-  await page.locator("#login button").click();
+  await page.locator("#login button.primary").click();
   const logout = page.locator("#logout");
   const err = page.locator("#lerr");
   const start = Date.now();
@@ -100,17 +104,18 @@ async function signInPage(page, email) {
 
 test("timesheet download and make-and-send work against the emulator", { timeout: 120000 }, async () => {
   assert.ok(process.env.FIRESTORE_EMULATOR_HOST, "start this with npm run test:hours-browser");
-  const adminId = await signUp(adminEmail);
+  // Patrick uid: a Heartwood admin in the live rules. Emulator only.
+  const adminId = await signUp(adminEmail, "R7t41e54Ykcdk9WPdVZnDd697iI2");
   const patrickId = await signUp(patrickEmail);
   const env = await initializeTestEnvironment({
     projectId: "demo-heartwood",
-    firestore: { rules: readFileSync(new URL("../emulator/firestore.rules", import.meta.url), "utf8") },
+    firestore: { rules: readFileSync(new URL("../firestore.production.rules", import.meta.url), "utf8") },
     storage: { rules: readFileSync(new URL("../emulator/storage.rules", import.meta.url), "utf8") },
   });
   const server = await startStatic();
   const { port } = server.address();
   const browser = await chromium.launch({
-    executablePath: "/usr/local/bin/google-chrome",
+    executablePath: process.env.CHROME_PATH || "/usr/local/bin/google-chrome",
     headless: true,
     args: ["--no-sandbox", "--disable-dev-shm-usage"],
   });
@@ -118,8 +123,8 @@ test("timesheet download and make-and-send work against the emulator", { timeout
   try {
     await env.withSecurityRulesDisabled(async ctx => {
       const db = ctx.firestore();
-      await setDoc(doc(db, "users", adminId), { name: "Alex Admin", role: "admin" });
-      await setDoc(doc(db, "users", patrickId), { name: "Patrick", role: "operator" });
+      await setDoc(doc(db, "users", adminId), { name: "Alex Admin", role: "admin", companyId: "heartwood" });
+      await setDoc(doc(db, "users", patrickId), { name: "Patrick", role: "operator", companyId: "heartwood" });
       await setDoc(doc(db, "timesheets", `${patrickId}_2026-11-02`), {
         uid: patrickId, name: "Patrick", weekStart: "2026-11-02", weekEnd: "2026-11-08",
         days: {
@@ -129,7 +134,7 @@ test("timesheet download and make-and-send work against the emulator", { timeout
         entries: {}, totalHrs: 14.5, updatedAt: Timestamp.now(), updatedAtIso: "2026-11-08T06:00:00.000Z",
       });
       await setDoc(doc(db, "leaveRequests", "lv1111111111111111"), {
-        uid: patrickId, name: "Patrick", type: "sick", start: "2026-11-04", end: "2026-11-04",
+        uid: patrickId, companyId: "heartwood", name: "Patrick", type: "sick", start: "2026-11-04", end: "2026-11-04",
         startHalf: "", endHalf: "", reason: "Flu",
         certificatePath: `leaveCertificates/${patrickId}/lv1111111111111111/cert.pdf`,
         certificateName: "secret-scan.pdf", status: "approved", decisionNote: "Ok",
@@ -137,13 +142,13 @@ test("timesheet download and make-and-send work against the emulator", { timeout
         createdAt: Timestamp.now(), updatedAt: Timestamp.now(),
       });
       await setDoc(doc(db, "leaveRequests", "lv2222222222222222"), {
-        uid: patrickId, name: "Patrick", type: "annual", start: "2026-11-06", end: "2026-11-06",
+        uid: patrickId, companyId: "heartwood", name: "Patrick", type: "annual", start: "2026-11-06", end: "2026-11-06",
         startHalf: "", endHalf: "", reason: "Family", certificatePath: "", certificateName: "",
         status: "pending", decisionNote: "", decidedBy: "", decidedByName: "", decidedAt: null,
         createdAt: Timestamp.now(), updatedAt: Timestamp.now(),
       });
       await setDoc(doc(db, "leaveRequests", "lv3333333333333333"), {
-        uid: patrickId, name: "Patrick", type: "other", start: "2026-11-07", end: "2026-11-07",
+        uid: patrickId, companyId: "heartwood", name: "Patrick", type: "other", start: "2026-11-07", end: "2026-11-07",
         startHalf: "", endHalf: "", reason: "Declined holiday", certificatePath: "", certificateName: "",
         status: "declined", decisionNote: "No", decidedBy: adminId, decidedByName: "Alex Admin",
         decidedAt: Timestamp.now(), createdAt: Timestamp.now(), updatedAt: Timestamp.now(),
@@ -158,7 +163,7 @@ test("timesheet download and make-and-send work against the emulator", { timeout
     await signInPage(page, adminEmail);
     await page.locator("[data-view=timesheet]").click();
     await page.locator("#hxdl").waitFor({ timeout: 15000 });
-    await page.locator(".ts-card h3", { hasText: "Patrick" }).waitFor({ timeout: 10000 });
+    await page.locator(".ts-card h3", { hasText: /Patrick.*14\.5 h/ }).waitFor({ timeout: 10000 });
     assert.match(await page.locator(".ts-card h3", { hasText: "Patrick" }).innerText(), /14\.5 h/);
     await page.getByText("Sick leave").first().waitFor({ timeout: 10000 });
 
