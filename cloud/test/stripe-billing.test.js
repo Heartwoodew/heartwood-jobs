@@ -145,3 +145,14 @@ test("webhook signature, plan and billing status, and staff prorations", async (
   assert.equal(WEBHOOK_URL, "https://australia-southeast1-heartwood-9f37f.cloudfunctions.net/stripeWebhook");
   assert.doesNotMatch(index, /sk_live_|whsec_[A-Za-z0-9]{8,}/);
 });
+
+test("billing callables say nothing about a company to someone who is not its admin (round 3)", () => {
+  const outsider = { role: "admin", companyId: "mine" };
+  for (const company of [null, { isTest: true }, { plan: "friend" }, { status: "archived" }, { plan: "trial" }]) {
+    const r = authorizeCompanyAdmin({ uid: "u1", profile: outsider, company, companyId: "theirs" });
+    assert.equal(r.code, "permission-denied");
+    assert.equal(r.reason, "company-admin");
+  }
+  assert.equal(authorizeCompanyAdmin({ uid: "u1", profile: outsider, company: { name: "H" }, companyId: "heartwood" }).reason, "company-admin");
+  assert.equal(authorizeCompanyAdmin({ uid: "u1", profile: { role: "admin", companyId: "t1" }, company: { isTest: true }, companyId: "t1" }).reason, "test-company");
+});

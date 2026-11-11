@@ -37,7 +37,7 @@ export const ACCOUNTING_FIELDS = Object.freeze([
 ]);
 
 export const NEVER_PURGE_COLLECTIONS = Object.freeze([
-  "xeroQueue", "reimbursements", "timesheets", "users",
+  "xeroQueue", "reimbursements", "timesheets", "users", "jobMoney",
   "swmsChunks", "swmsSignatures", "incidents", "incidentCounter", "ownerSettings",
 ]);
 

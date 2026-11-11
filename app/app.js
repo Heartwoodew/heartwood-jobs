@@ -4,12 +4,13 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/fireba
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, signOut, connectAuthEmulator }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator,
-  collection, doc, getDoc, getDocs, query, where, orderBy, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, serverTimestamp, arrayUnion, runTransaction, Timestamp }
+  collection, doc, getDoc, getDocFromCache, getDocs, query, where, orderBy, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, deleteField, serverTimestamp, arrayUnion, runTransaction, Timestamp }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { getStorage, ref as storageRef, uploadBytes, connectStorageEmulator, listAll, getMetadata, getBlob }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
 import { firebaseConfig, useEmulator } from "./firebase-config.js";
-import { installQuotes, adminViewRouter, setDefaultDepot } from "./features/quotes.js";
+import { installQuotes, adminViewRouter, setDefaultDepot, noDollars } from "./features/quotes.js";
+import { JOB_MONEY_COLLECTION, jobMoneyDoc, mergeJobMoney, splitJobMoney } from "./features/job-money.js";
 import { installRouteOrder, orderJobsForRun, runSheetId, geoPatch, setRouteDepot } from "./features/route-order.js";
 import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPlanned, jobPhotoPrefix, storageErrorCode, summarizePhotoListing } from "./features/cloud-storage.js";
 import { buildOperationalExport, retentionAdminText, retentionView } from "./features/cloud-retention.js";
@@ -168,20 +169,23 @@ onAuthStateChanged(auth, async user => {
       : logins;
     // two weeks back (catch overdue work) to 4 weeks ahead, plus anything undated
     const q = companyJobs([where("date", ">=", addDays(todayStr(), -14)), where("date", "<=", addDays(todayStr(), 28)), orderBy("date")]);
-    const u1 = onSnapshot(q, s => { jobs = s.docs.map(d => ({ id: d.id, ...d.data() })); addNameOnlyStaff(jobs); renderAdmin(); }, e => { console.warn("jobs", e.code, e.message); jobs = []; renderAdmin(); });
+    const u1 = onSnapshot(q, s => { jobs = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); addNameOnlyStaff(jobs); renderAdmin(); }, e => { console.warn("jobs", e.code, e.message); jobs = []; renderAdmin(); });
     // Invoicing: every Done job (any date), admin only.
-    const u2 = onSnapshot(companyJobs([where("status", "==", "Done")]), s => { ui.done = s.docs.map(d => ({ id: d.id, ...d.data() })); donePill(); if (ui.view === "invoices" || ui.view === "completed" || ui.view === "home") renderAdmin(); }, e => console.warn("done jobs", e.code || e.message));
+    const u2 = onSnapshot(companyJobs([where("status", "==", "Done")]), s => { ui.done = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); donePill(); if (ui.view === "invoices" || ui.view === "completed" || ui.view === "home") renderAdmin(); }, e => console.warn("done jobs", e.code || e.message));
     const u3 = onSnapshot(query(collection(db, "incidents"), where("companyId", "==", myCompanyId())), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); if (ui.view === "safety" || ui.view === "home") renderAdmin(); incRefresh(); }, e => console.warn("incidents", e.code));
     const u4 = onSnapshot(query(collection(db, "invites"), where("tenantId", "==", myTenant())), s => {
       ui.invites = s.docs.map(d => ({ id: d.id, ...d.data() })); ui.invitesErr = "";
       if (ui.view === "staff") renderAdmin();
     }, e => { ui.invites = []; ui.invitesErr = e.code || "permission-denied"; if (ui.view === "staff") renderAdmin(); });
-    unsub = () => { u1(); u2(); u3(); u4(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; }; swmsSub(); COMP.start(); leaveStart(); claimsStart(); if (me.platformOwner) watchMaster();
-    getDocs(companyJobs([where("date", "==", "")])).then(s => { ui.undated = s.docs.map(d => ({ id: d.id, ...d.data() })); addNameOnlyStaff(ui.undated); renderAdmin(); }).catch(e => console.warn("undated", e.code, e.message));
+    moneyStart(renderAdmin);
+    unsub = () => { u1(); u2(); u3(); u4(); moneyStop(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; }; swmsSub(); COMP.start(); leaveStart(); claimsStart(); if (me.platformOwner) watchMaster();
+    getDocs(companyJobs([where("date", "==", "")])).then(s => { ui.undated = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); addNameOnlyStaff(ui.undated); renderAdmin(); }).catch(e => console.warn("undated", e.code, e.message));
   } else {
     // Operators may only list jobs assigned to them (enforced by firestore.rules).
     const q = companyJobs([where("assigned", "array-contains", user.uid)]);
-    const u1 = onSnapshot(q, s => { jobs = s.docs.map(d => ({ id: d.id, ...d.data() })); renderOperator(); });
+    const u1 = onSnapshot(q, s => { jobs = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); renderOperator(); });
+    // Company supervisors are office (they already read quotes); crew never subscribe and the rules refuse them.
+    moneyStart(renderOperator);
     const u3 = onSnapshot(query(collection(db, "incidents"), where("companyId", "==", myCompanyId()), where("reportedBy", "==", user.uid)), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); if (!ui.opSel && (ui.opTab || "today") === "today") renderOperator(); incRefresh(); }, e => console.warn("incidents", e.code));
     const u4 = canInvite()
       ? onSnapshot(query(collection(db, "invites"), where("tenantId", "==", myTenant())), s => {
@@ -190,7 +194,7 @@ onAuthStateChanged(auth, async user => {
       }, e => { ui.invites = []; ui.invitesErr = e.code || "permission-denied"; if ((ui.opTab || "today") === "staff") renderOperator(); })
       : () => {};
     if (canInvite() && window.HW_PREVIEW_VIEW === "staff") ui.opTab = "staff";
-    unsub = () => { u1(); u3(); u4(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start(); leaveStart(); claimsStart();
+    unsub = () => { u1(); u3(); u4(); moneyStop(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start(); leaveStart(); claimsStart();
   }
 });
 
@@ -207,6 +211,31 @@ function myTenant() {
 }
 function companyJobs(constraints = []) {
   return query(collection(db, "jobs"), where("companyId", "==", myCompanyId()), ...constraints);
+}
+// ---- Job money (round 3, Q6): PO value and accepted-quote total live in jobMoney/{jobId}, office only.
+// Assigned crew read the whole job document (and their phone caches it), so the job carries no dollars.
+// Office lists are merged with jobMoney; a legacy amount still on the job shows until the migration moves it.
+const MONEY = new Map();
+let moneyUnsub = null;
+const withMoney = j => mergeJobMoney(j, MONEY.get(j.id));
+function moneyStart(rerender) {
+  if (moneyUnsub || !canSeeMoney()) return;
+  moneyUnsub = onSnapshot(query(collection(db, JOB_MONEY_COLLECTION), where("companyId", "==", myCompanyId())), s => {
+    MONEY.clear(); s.docs.forEach(d => MONEY.set(d.id, d.data()));
+    jobs = jobs.map(withMoney);
+    if (ui.done) ui.done = ui.done.map(withMoney);
+    if (ui.undated) ui.undated = ui.undated.map(withMoney);
+    rerender();
+  }, e => console.warn("job money", e.code || e.message));
+}
+function moneyStop() { if (moneyUnsub) moneyUnsub(); moneyUnsub = null; MONEY.clear(); }
+function jobMoneyWrite(id, money, extra = {}) {
+  return setDoc(doc(db, JOB_MONEY_COLLECTION, id), jobMoneyDoc(id, myCompanyId(), money, { ...extra, updatedAt: serverTimestamp(), updatedBy: me.uid }), { merge: true });
+}
+// Update a job: money keys go to jobMoney (and clear any legacy copy on the job); the rest to the job.
+function writeJob(id, patch) {
+  const { job, money, hasMoney } = splitJobMoney(patch, deleteField);
+  return Promise.all([updateDoc(doc(db, "jobs", id), job), ...(hasMoney ? [jobMoneyWrite(id, money)] : [])]);
 }
 async function loadCompanyBrand() {
   const id = myCompanyId();
@@ -879,7 +908,8 @@ async function mirrorJobPhotos(j, files) {
   });
   // Not a retention anchor, including on a completed job. Listing still uses the
   // job's completion or existing activity date. This only asks other open phones to list again.
-  updateDoc(doc(db, "jobs", j.id), { cloudPhotosAt: at.toISOString() }).catch(e => console.warn("cloud photo stamp not saved", e.code || e.message));
+  // Staff can't write cloudPhotosAt (rules). Their upload already bumps photosEmailedAt, which photoMark also watches.
+  if (me && me.role === "admin") updateDoc(doc(db, "jobs", j.id), { cloudPhotosAt: at.toISOString() }).catch(e => console.warn("cloud photo stamp not saved", e.code || e.message));
   await ensurePhotoList(j, true);
   paintPhotoSlots();
 }
@@ -1864,6 +1894,14 @@ function bindLeave(A) {
   const form = A.querySelector("#leaveform");
   if (form) form.onsubmit = async ev => {
     ev.preventDefault();
+    // One request per tap: a second tap while the first is uploading or saving made a duplicate request.
+    if (form.dataset.busy === "1") return;
+    form.dataset.busy = "1";
+    const btn = form.querySelector("button[type=submit]");
+    if (btn) btn.disabled = true;
+    try { await submitLeave(form, A); } finally { delete form.dataset.busy; if (btn) btn.disabled = false; }
+  };
+  async function submitLeave(form, A) {
     const err = A.querySelector("#leaveerr");
     const file = form.certificate.files[0];
     const id = newLeaveId();
@@ -1900,7 +1938,7 @@ function bindLeave(A) {
     } catch (e) {
       if (err) err.textContent = "Not saved: " + (e.code || e.message);
     }
-  };
+  }
   A.querySelectorAll(".lv-decide").forEach(decide => {
     decide.onsubmit = async ev => {
       ev.preventDefault();
@@ -2043,9 +2081,21 @@ function bindClaims(A, rerender) {
   A.querySelectorAll("[data-rc-receipt]").forEach(btn => { btn.onclick = () => downloadClaimReceipt(btn.dataset.rcReceipt); });
   A.querySelectorAll("[data-rc-filter]").forEach(btn => { btn.onclick = () => { ui.claimsFilter = btn.dataset.rcFilter; rerender(); }; });
 }
-async function tsLoad(ws) {
-  const snap = await getDoc(doc(db, "timesheets", `${me.uid}_${ws}`));
-  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+async function tsLoad(ws, opts = {}) {
+  const ref = doc(db, "timesheets", `${me.uid}_${ws}`);
+  try {
+    const snap = await getDoc(ref);
+    return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+  } catch (e) {
+    // No signal: a clock punch must still work. Use this phone's copy (the watched week is always cached).
+    if (!opts.offlineOk || (e.code !== "unavailable" && e.code !== "failed-precondition")) throw e;
+    try { const snap = await getDocFromCache(ref); return snap.exists() ? { id: snap.id, ...snap.data() } : null; }
+    catch { return ui.tsWatchId === `${me.uid}_${ws}` && ui.tsMine !== undefined ? ui.tsMine : null; }
+  }
+}
+// A queued punch that the server later refuses must not stay silent.
+function tsLate(write) {
+  return write.catch(e => { toast("Clock time not saved: " + (e.code || e.message)); throw e; });
 }
 async function tsWrite(ws, sheet, entries, lastEntryId, opts = {}) {
   const days = daysForSheet({ days: (sheet && sheet.days) || {}, entries });
@@ -2064,14 +2114,17 @@ async function tsWrite(ws, sheet, entries, lastEntryId, opts = {}) {
   };
   if (opts.consent) data.locationConsentAt = serverTimestamp();
   // Update one shift key. Rewriting the whole entries map makes the rules re-check every stamp.
+  // opts.fields: only these keys of the shift changed. Rewriting the whole shift resends its pending server
+  // times as null when the phone is offline, and the rules then refuse the clock-off after the fact.
   if (sheet) {
-    data[`entries.${lastEntryId}`] = entries[lastEntryId];
-    await updateDoc(ref, data);
-    return;
+    if (opts.fields && opts.fields.length) for (const k of opts.fields) data[`entries.${lastEntryId}.${k}`] = entries[lastEntryId][k];
+    else data[`entries.${lastEntryId}`] = entries[lastEntryId];
+    return settleOrQueue(tsLate(updateDoc(ref, data)));
   }
   data.entries = { [lastEntryId]: entries[lastEntryId] };
-  await setDoc(ref, data);
+  return settleOrQueue(tsLate(setDoc(ref, data)));
 }
+const tsQueuedNote = r => (r && r.queued ? " · saved on this phone, sends when there's signal" : "");
 function tsFixAt(fix) { return { ...locationMap(fix), at: serverTimestamp() }; }
 function tsDiffSummary(prev, next) {
   const bits = [];
@@ -2094,11 +2147,11 @@ async function tsPunch(kind) {
   try {
     const fix = await captureFix();
     const ws = kind === "on" ? weekStartOf(todayStr()) : active.ws;
-    const sheet = await tsLoad(ws);
+    const sheet = await tsLoad(ws, { offlineOk: true });
     const entries = { ...(sheet?.entries || {}) };
     const hm = brisbaneHM(new Date());
     if (kind === "on") {
-      const prev = await tsLoad(addDays(weekStartOf(todayStr()), -7));
+      const prev = await tsLoad(addDays(weekStartOf(todayStr()), -7), { offlineOk: true });
       if (openClock(entries) || openClock(prev?.entries)) { toast("Clock off the open shift first"); ui.tsPrev = prev; return; }
       const id = newTsId();
       entries[id] = {
@@ -2106,10 +2159,10 @@ async function tsPunch(kind) {
         clockOn: tsFixAt(fix), enteredBy: me.uid, enteredByName: String(me.name || "Staff").slice(0, 80), enteredAt: serverTimestamp(),
         edits: {}, lastEditId: "",
       };
-      await tsWrite(ws, sheet, entries, id, { consent: !(sheet && sheet.locationConsentAt) });
+      const r = await tsWrite(ws, sheet, entries, id, { consent: !(sheet && sheet.locationConsentAt) });
       ui.tsMachineShift = id;
       ui.tsMachineWs = ws;
-      toast(fix.fix === "gps" ? "Clocked on" : "Clocked on · no location");
+      toast((fix.fix === "gps" ? "Clocked on" : "Clocked on · no location") + tsQueuedNote(r));
     } else {
       const e = openClock(entries);
       if (!e) { toast("No open shift on this week"); return; }
@@ -2125,8 +2178,9 @@ async function tsPunch(kind) {
         if (e.status === "break") { next.breakEnd = next.breakEnd || hm; next.breakOff = tsFixAt(fix); }
       }
       entries[e.id] = next;
-      await tsWrite(ws, sheet, entries, e.id, { consent: !(sheet && sheet.locationConsentAt) });
-      toast(kind === "off" ? (fix.fix === "gps" ? "Clocked off" : "Clocked off · no location") : "Break saved");
+      const fields = Object.keys(next).filter(k => next[k] !== e[k]);
+      const r = await tsWrite(ws, sheet, entries, e.id, { consent: !(sheet && sheet.locationConsentAt), fields });
+      toast((kind === "off" ? (fix.fix === "gps" ? "Clocked off" : "Clocked off · no location") : "Break saved") + tsQueuedNote(r));
       ui.tsPrevFor = "";
     }
   } catch (err) {
@@ -2206,6 +2260,12 @@ function bindTs(A, rerender) {
     ui.tsWatch?.(); ui.tsWatchId = `${me.uid}_${ws}`; ui.tsMine = undefined;
     ui.tsWatch = onSnapshot(doc(db, "timesheets", `${me.uid}_${ws}`), s => {
       ui.tsMine = s.exists() ? { id: s.id, ...s.data() } : null;
+      // The machine question belongs to an open shift. If the server says that shift is closed (clocked off on
+      // another phone, or the cached screen was stale), drop the question so the real state paints.
+      if (ui.tsMachineShift && !s.metadata.fromCache) {
+        const e = ui.tsMine && ui.tsMine.entries && ui.tsMine.entries[ui.tsMachineShift];
+        if (!e || e.status === "closed" || e.machineChoice) ui.tsMachineShift = null;
+      }
       if (tsSnapshotBlocked()) return;
       if ((ui.opTab === "hours" && !ui.opSel) || (ui.view === "timesheet" && !tsIsAdminSheet())) rerender();
     }, e => { const w = A.querySelector(".ts-wrap") || A.querySelector(".pad"); if (w) w.innerHTML = tsNav() + `<p class="err pad">Timesheet not available: ${esc(e.code || e.message)}</p>`; });
@@ -2658,9 +2718,11 @@ async function splitJob(j, pick) {
   const nj = scopeRecord({ ...base, type: newType, description: mv.map(x => x.t).join("\n"), po: poToNew ? (j.po || "") : "", source: "app", log: [],
     splitFrom: j.id, splitAt: at, splitBy: me.name, splitHoldUntil: hold, editedInApp: false, ...lk, createdAt: serverTimestamp(), updatedAt: serverTimestamp(), updatedBy: me.uid }, myCompanyId());
   const ref = await addDoc(collection(db, "jobs"), nj);
-  const undo = { description: j.description || "", type: j.type || null, po: j.po || "", poAmount: j.poAmount ?? null, editedInApp: !!j.editedInApp };
-  await updateDoc(doc(db, "jobs", j.id), { description: keep.map(x => x.t).join("\n"), type: keepType, ...(poToNew ? { po: "", poAmount: null } : {}),
+  // The undo copy on the job holds no money; the PO value to restore is kept on jobMoney (office only).
+  const undo = { description: j.description || "", type: j.type || null, po: j.po || "", editedInApp: !!j.editedInApp };
+  await writeJob(j.id, { description: keep.map(x => x.t).join("\n"), type: keepType, ...(poToNew ? { po: "", poAmount: null } : {}),
     splitTo: ref.id, splitAt: at, splitUndo: undo, splitHoldUntil: hold, editedInApp: true, ...lk, updatedAt: serverTimestamp(), updatedBy: me.uid });
+  if (canSeeMoney()) await jobMoneyWrite(j.id, {}, { splitUndoPoAmount: j.poAmount ?? null }).catch(() => {});
   $("#dlg").close();
   undoToast(`Split #${jobNo(j)}: new ${TYPES[newType] || newType} job created (syncs to ServiceM8 in ~10 min)`, () => undoSplit({ ...j, splitTo: ref.id, splitUndo: undo }));
 }
@@ -2671,7 +2733,10 @@ async function undoSplit(j) {
   const o = (await getDoc(doc(db, "jobs", j.id))).data() || {}, u = o.splitUndo || j.splitUndo;
   if (!u) throw new Error("no undo data");
   if (nd.exists()) await deleteDoc(doc(db, "jobs", j.splitTo));
-  await updateDoc(doc(db, "jobs", j.id), { description: u.description, type: u.type, po: u.po, poAmount: u.poAmount, editedInApp: u.editedInApp,
+  const m = MONEY.get(j.id) || {};
+  // Older split undo copies held poAmount on the job; newer ones keep it on jobMoney.
+  const pa = "poAmount" in u ? u.poAmount : ("splitUndoPoAmount" in m ? m.splitUndoPoAmount : undefined);
+  await writeJob(j.id, { description: u.description, type: u.type, po: u.po, ...(pa !== undefined ? { poAmount: pa } : {}), editedInApp: u.editedInApp,
     splitTo: null, splitUndo: null, splitHoldUntil: null, updatedAt: serverTimestamp(), updatedBy: me.uid });
   if ($("#dlg").open) $("#dlg").close();
   toast("Split undone");
@@ -2783,9 +2848,11 @@ function editJob(j) {
       let write;
       if (n) {
         const extra = importing ? importFieldExtras(j, f) : {};
-        write = setDoc(newRef, scopeRecord({ ...data, ...extra, source: importing ? "inbox" : "app", log: [], createdAt: serverTimestamp() }, myCompanyId()));
+        const sp = splitJobMoney(data);
+        write = setDoc(newRef, scopeRecord({ ...sp.job, ...extra, source: importing ? "inbox" : "app", log: [], createdAt: serverTimestamp() }, myCompanyId()));
+        if (sp.hasMoney) write = Promise.all([write, jobMoneyWrite(newRef.id, sp.money)]);
         if (importing) write = write.then(() => markInboxImported(j._import.emailId, newRef.id));
-      } else write = updateDoc(doc(db, "jobs", j.id), data);
+      } else write = writeJob(j.id, data);
       const r = await settleOrQueue(write);
       if (r.queued) write.catch(e => toast("Job not saved: " + (e.code || e.message)));
       d.close(); toast(r.queued ? "Saved on this phone. It uploads when you have signal." : "Saved"); refreshAfterImport();
@@ -2885,12 +2952,12 @@ function wireFindPo(j) {
   if (!box || !canFindPo()) return;
   const wireUse = (cur) => box.querySelectorAll(".usepo").forEach(b => b.onclick = async () => {
     const c = cur.poLookupCandidates[+b.dataset.i];
-    try { await updateDoc(doc(db, "jobs", j.id), { po: c.po, poAmount: c.amount ?? null, poAmountBasis: c.amount != null ? (c.basis || "ex GST") : null,
+    try { await writeJob(j.id, { po: c.po, poAmount: c.amount ?? null, poAmountBasis: c.amount != null ? (c.basis || "ex GST") : null,
       poAmountSource: c.amount != null ? "Find PO: " + (c.source || "") : null, poLookupStatus: "found", poLookupMsg: `picked ${c.po} by ${me.name}`,
       editedInApp: true, updatedAt: serverTimestamp(), updatedBy: me.uid }); toast("PO set to " + c.po); $("#dlg").close(); }
     catch (e) { toast("Not saved: " + (e.code || e.message)); } });
   wireUse(j);
-  const unsub = onSnapshot(doc(db, "jobs", j.id), s => { if (!s.exists()) return; const cur = { id: s.id, ...s.data() }; box.innerHTML = poLookupHtml(cur); wireUse(cur); });
+  const unsub = onSnapshot(doc(db, "jobs", j.id), s => { if (!s.exists()) return; const cur = withMoney({ id: s.id, ...s.data() }); box.innerHTML = poLookupHtml(cur); wireUse(cur); });
   $("#dlg").addEventListener("close", unsub, { once: true });
   $("#findpo").onclick = async () => {
     const at = new Date().toISOString();
@@ -3381,7 +3448,7 @@ function downloadHoursCsv() {
 }
 function downloadJobsCsv(list) {
   if (!canCompanyExport()) return;
-  downloadText(`jobs-${todayStr()}.csv`, jobsCsv(list));
+  downloadText(`jobs-${todayStr()}.csv`, jobsCsv((list || []).map(j => ({ ...j, jobNo: j.jobNo || jobNo(j) }))));
 }
 function downloadClaimsCsv() {
   if (!canCompanyExport()) return;
@@ -3610,7 +3677,9 @@ const adminBack = () => me.role === "admin" ? `<button class="mback adminback" i
 const opSeg = on => `<div class="seg mob-seg" role="group" aria-label="When">${[["today", "Today"], ["week", "Upcoming"]].map(([k, n]) => `<button type="button" data-tab="${k}" class="${on === k ? "on" : ""}">${n}</button>`).join("")}</div>`;
 // Quote amounts for the crew (rubbish / concrete / material amounts). Price-free by construction (quotes.js workAmounts).
 function workAmountsHtml(j, cls) {
-  const list = Array.isArray(j && j.workAmounts) ? j.workAmounts.filter(a => typeof a === "string" && a && !/\$\s?\d/.test(a)).slice(0, 8) : [];
+  // Older jobs can carry a typed price in a note ("$450 cash"). Blank the price, keep the line: dropping it hid the
+  // whole rubbish / concrete amount from the crew.
+  const list = Array.isArray(j && j.workAmounts) ? j.workAmounts.filter(a => typeof a === "string" && a).map(noDollars).slice(0, 8) : [];
   return list.length ? `<ul class="${cls}">${list.map(a => `<li>${esc(a)}</li>`).join("")}</ul>` : "";
 }
 function opCard(j) {

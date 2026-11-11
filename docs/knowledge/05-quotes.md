@@ -39,7 +39,7 @@ Accept is blocked when the total is incomplete: `Set quote rates for every used 
 **Save draft** writes `quotes/{id}` with `quoteStatus: "Draft"`. **Accept**:
 
 - If that quote already has `jobId` and is Accepted: `Already accepted — existing job {id}` (lines 577–579).
-- Otherwise `createJobFromQuote` (lines 708–736) adds a job with empty date and time, `status: "Scheduled"`, `source: "quote"`, `quoteStatus: "Accepted"`, the quote snapshot, `quoteAmount` and `poAmount` set to the ex GST total, `poAmountBasis: "accepted quote (ex GST)"`. Toast: `Quote accepted — unscheduled job created`.
+- Otherwise `createJobFromQuote` (lines 708–736) adds a job with empty date and time, `status: "Scheduled"`, `source: "quote"`, `quoteStatus: "Accepted"`, the quote snapshot (amounts only, no prices), and writes `jobMoney/{jobId}` (office only) with `quoteAmount` and `poAmount` set to the ex GST total, `poAmountBasis: "accepted quote (ex GST)"`. Crew can read the job, so it carries no dollar amounts. Toast: `Quote accepted — unscheduled job created`.
 - The new job is unscheduled. It shows on the Unscheduled screen, not on the board, until someone sets a date.
 
 Rate editor (`openRatesEditor`): admin only. Others get `Only an admin can change quote rates` (line 350). Save toast: `Quote rates saved`. Failure: `Not saved: {code}`.

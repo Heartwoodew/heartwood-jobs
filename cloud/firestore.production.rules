@@ -337,15 +337,20 @@ service cloud.firestore {
           && d.addressPlace.keys().hasOnly(["formattedAddress", "lat", "lng", "placeId", "source"])
           && d.addressPlace.lat is number && d.addressPlace.lng is number));
     }
+    // Guided price overrides are admin only (Nov 2026 round 3): a supervisor may save a quote but must leave them as they were.
+    function quoteOverridesKept(before) {
+      return isAdmin() || profile().role == "admin" || request.resource.data.get("priceOverrides", {}) == before;
+    }
     match /quotes/{id} {
       allow get: if (isAdmin() && docCompany(resource.data) == "heartwood")
         || (companyOffice() && docCompany(resource.data) == callerCompany());
       allow list: if isAdmin() && resource.data.companyId == "heartwood";
       allow list: if companyOffice() && resource.data.companyId == callerCompany();
       allow create: if quoteFieldsOk(request.resource.data) && ((isAdmin() && request.resource.data.get("companyId", "heartwood") == "heartwood")
-        || (companyOffice() && request.resource.data.companyId == callerCompany()));
+        || (companyOffice() && request.resource.data.companyId == callerCompany() && quoteOverridesKept({})));
       allow update: if quoteFieldsOk(request.resource.data) && ((isAdmin() && docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood")
-        || (companyOffice() && docCompany(resource.data) == callerCompany() && docCompany(request.resource.data) == callerCompany()));
+        || (companyOffice() && docCompany(resource.data) == callerCompany() && docCompany(request.resource.data) == callerCompany()
+          && quoteOverridesKept(resource.data.get("priceOverrides", {}))));
       allow delete: if false;
     }
 
@@ -378,6 +383,21 @@ service cloud.firestore {
       allow list: if companyOffice() && resource.data.companyId == callerCompany();
     }
 
+    // Job money (Nov 2026 round 3, Q6). Assigned crew read the whole job document and keep it in their phone's
+    // offline cache, so app writers may not put the PO value, the accepted-quote total or quote prices on a job.
+    // Removing a legacy copy is allowed. The box (isSync) still writes poAmount for Find PO / ServiceM8 until its
+    // workers move to jobMoney; cloud/scripts/migrate-job-money.mjs moves existing amounts.
+    function jobMoneyKeys() { return ["poAmount", "poAmountBasis", "poAmountSource", "quoteAmount"]; }
+    function quotePriceKeys() { return ["totalEx", "gst", "totalInc", "lines", "priceOverrides", "ratesSnapshot"]; }
+    function jobQuoteNoPrices(d) { return !(d.get("quote", null) is map) || !d.quote.keys().hasAny(quotePriceKeys()); }
+    function jobMoneyFreeCreate() {
+      return !request.resource.data.keys().hasAny(jobMoneyKeys()) && jobQuoteNoPrices(request.resource.data);
+    }
+    function jobMoneyFreeUpdate() {
+      let df = request.resource.data.diff(resource.data);
+      return !df.addedKeys().hasAny(jobMoneyKeys()) && !df.changedKeys().hasAny(jobMoneyKeys())
+        && (!df.affectedKeys().hasAny(["quote"]) || jobQuoteNoPrices(request.resource.data));
+    }
     match /jobs/{jobId} {
       allow read: if isSync() || (signedIn() && isAssigned(resource.data) && isOperator());
       allow get: if isAdmin() && docCompany(resource.data) == "heartwood";
@@ -386,17 +406,20 @@ service cloud.firestore {
       allow get: if companyStaff() && docCompany(resource.data) == callerCompany() && isAssigned(resource.data);
       allow list: if companyOffice() && resource.data.companyId == callerCompany();
       allow list: if companyStaff() && resource.data.companyId == callerCompany() && request.auth.uid in resource.data.assigned;
-      allow create: if companyOffice() && request.resource.data.companyId == callerCompany();
+      allow create: if companyOffice() && request.resource.data.companyId == callerCompany() && jobMoneyFreeCreate();
       allow update: if companyOffice()
         && resource.data.get("companyId", "") == callerCompany()
-        && request.resource.data.get("companyId", "") == callerCompany();
-      allow create: if isSync() || (isAdmin() && docCompany(request.resource.data) == "heartwood");
+        && request.resource.data.get("companyId", "") == callerCompany()
+        && jobMoneyFreeUpdate();
+      allow create: if isSync() || (isAdmin() && docCompany(request.resource.data) == "heartwood" && jobMoneyFreeCreate());
       allow delete: if isSync() || (isAdmin() && docCompany(resource.data) == "heartwood");
       // Master page: Alex adds demo jobs to a test company only.
       allow create: if platformOwner() && request.resource.data.get("demo", false) == true
+        && jobMoneyFreeCreate()
         && docCompany(request.resource.data) != "heartwood"
         && get(/databases/$(database)/documents/companies/$(docCompany(request.resource.data))).data.get("isTest", false) == true;
-      allow update: if (isAdmin() && (isSync() || (docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood"))
+      allow update: if (isAdmin() && (isSync() || (docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood"
+          && jobMoneyFreeUpdate()))
         && (xeroUser() || isSync() || !request.resource.data.diff(resource.data).affectedKeys().hasAny(
           ["xeroStatus", "xeroInvoiceId", "xeroInvoiceNo", "xeroError", "xeroQueuedAt"]))) || (
         signedIn() && isAssigned(resource.data) && isOperator()
@@ -411,6 +434,31 @@ service cloud.firestore {
             || (request.resource.data.log is list && request.resource.data.log.size() <= 200
                 && request.resource.data.log.size() >= resource.data.get("log", []).size()))
       );
+    }
+
+    // Job money: office only. Heartwood admins (Alex, Patrick, the box) for Heartwood jobs; company admins and
+    // supervisors (who already read quotes) for their own company. Crew (operators, staff) never read it.
+    function jobMoneyOk(d, jobId) {
+      return d.keys().hasOnly(["jobId", "companyId", "tenantId", "poAmount", "poAmountBasis", "poAmountSource", "quoteAmount",
+          "splitUndoPoAmount", "migratedAt", "updatedAt", "updatedBy"])
+        && d.jobId == jobId
+        && (d.get("poAmount", null) == null || d.poAmount is number)
+        && (d.get("quoteAmount", null) == null || d.quoteAmount is number)
+        && (d.get("splitUndoPoAmount", null) == null || d.splitUndoPoAmount is number);
+    }
+    match /jobMoney/{jobId} {
+      allow read, write: if isSync();
+      allow get: if isAdmin() && docCompany(resource.data) == "heartwood";
+      allow list: if isAdmin() && resource.data.companyId == "heartwood";
+      allow create: if isAdmin() && docCompany(request.resource.data) == "heartwood" && jobMoneyOk(request.resource.data, jobId);
+      allow update: if isAdmin() && docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood"
+        && jobMoneyOk(request.resource.data, jobId);
+      allow get: if companyOffice() && docCompany(resource.data) == callerCompany();
+      allow list: if companyOffice() && resource.data.companyId == callerCompany();
+      allow create: if companyOffice() && request.resource.data.companyId == callerCompany() && jobMoneyOk(request.resource.data, jobId);
+      allow update: if companyOffice() && resource.data.get("companyId", "") == callerCompany()
+        && request.resource.data.get("companyId", "") == callerCompany() && jobMoneyOk(request.resource.data, jobId);
+      allow delete: if false;
     }
 
     // Invoicing counters (invoice numbers). Admins only; operators can neither read nor write.

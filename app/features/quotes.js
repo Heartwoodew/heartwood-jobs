@@ -1,6 +1,7 @@
 // CallUp guided Quotes (Nov 2026). Prices always ex GST.
 import { orgSettings, POWERED_BY, PRODUCT_NAME } from "../org-settings.js";
 import { scopeRecord } from "./company.js";
+import { JOB_MONEY_COLLECTION, jobMoneyDoc } from "./job-money.js";
 import { attachAddressSearch, placesEnabled, sanitizePlace } from "./places.js";
 // Rates from meta/quoteRates only — never invent business rates.
 // Draft/Accepted are explicit quoteStatus fields.
@@ -88,13 +89,16 @@ export function unitLabel(u) {
   return (EXTRA_UNITS.find(x => x[0] === u) || [u, u || "each"])[1];
 }
 function cleanStr(v, max) { return String(v == null ? "" : v).replace(/[\u0000-\u001f]+/g, " ").trim().slice(0, max); }
+// Caps keep totals exact in cents (a 1e12 qty × $1e6 printed a $1e18 total with the cents lost).
+export const MAX_ITEM_QTY = 100000;
+export const MAX_ITEM_PRICE = 1000000;
 function cleanQty(v) {
-  if (v === "" || v == null || Number.isNaN(+v)) return 0;
-  return Math.max(0, Math.round(+v * 1000) / 1000);
+  if (v === "" || v == null || !Number.isFinite(+v)) return 0;
+  return Math.min(MAX_ITEM_QTY, Math.max(0, Math.round(+v * 1000) / 1000));
 }
 function cleanPrice(v) {
   const n = numOrNull(v);
-  return n == null ? null : Math.max(0, n);
+  return n == null || !Number.isFinite(n) ? null : Math.min(MAX_ITEM_PRICE, Math.max(0, Math.round(n * 100) / 100));
 }
 let xSeq = 0;
 function newItemId() {
@@ -206,6 +210,10 @@ const r2 = v => Math.round(v * 100) / 100;
  * Price-free amounts for the crew (job card, run sheet): "Rubbish removal — Green waste: 6 m³ (note)".
  * Covers extra items with a quantity and the guided materials / rubbish quantities. Never includes dollars.
  */
+// Crew-visible text built from a quote: drop anything that looks like a price ("$450", "$ 1,200.50", "A$90").
+export function noDollars(text) {
+  return String(text == null ? "" : text).replace(/(?:A|AU)?\$\s?\d[\d,]*(?:\.\d+)?(?:\s?(?:ex|inc|incl)\.?\s?GST)?/gi, "[price removed]").replace(/\$/g, "");
+}
 export function workAmounts(q) {
   const out = [];
   const r = q.ratesSnapshot || {};
@@ -216,7 +224,7 @@ export function workAmounts(q) {
     const desc = it.description || EXTRA_PRESETS.find(p => p.id === it.kind)?.label || "Extra item";
     const type = TYPE_FIELD_KINDS.includes(it.kind) && it.material ? ` — ${it.material}` : "";
     const note = it.note ? ` (${it.note})` : "";
-    out.push(`${desc}${type}: ${it.qty} ${unitLabel(it.unit)}${note}`.slice(0, 200));
+    out.push(noDollars(`${desc}${type}: ${it.qty} ${unitLabel(it.unit)}${note}`).slice(0, 200));
   }
   return out.slice(0, 20);
 }
@@ -430,7 +438,8 @@ export function calcQuote(inputs, rates) {
   const adjustmentEx = r2(rounded.filter(l => l.overridden && l.originalAmount != null)
     .reduce((t, l) => t + (l.amount - l.originalAmount), 0));
   const extrasEx = r2(rounded.filter(l => l.extra && l.amount != null).reduce((t, l) => t + l.amount, 0));
-  const gst = totalEx == null ? null : r2(totalEx * GST_RATE);
+  // GST in whole cents, half a cent rounds up (10.35 ex GST → 1.04, not the 1.03 that float maths gives).
+  const gst = totalEx == null ? null : Math.round(Math.round(totalEx * 100) / 10) / 100;
   const totalInc = totalEx == null ? null : r2(totalEx + gst);
   return {
     lines: rounded, totalEx, subtotalEx: totalEx, gst, totalInc, gstRate: GST_RATE,
@@ -736,7 +745,7 @@ function openQuoteWizard(existing, opts = {}) {
           ${step < 2 ? `<button type="button" class="sm-btn primary" id="qwnext">${step === 0 ? "Choose equipment" : "Continue"}</button>
              <button type="button" class="sm-btn qw-later" id="qwsave">Save &amp; finish later</button>` :
             `<button type="button" class="sm-btn qw-later" id="qwsave">Save draft</button>
-             <button type="button" class="sm-btn primary" id="qwaccept" ${canAccept ? "" : "disabled"} title="${canAccept ? "" : already ? "Already accepted" : "Complete site + rates first"}">Accept → create job</button>`}
+             <button type="button" class="sm-btn primary" id="qwaccept" data-can-accept="${canAccept ? "1" : ""}" ${canAccept ? "" : "disabled"} title="${canAccept ? "" : already ? "Already accepted" : "Complete site + rates first"}">Accept → create job</button>`}
         </div></form>`;
       d.showModal();
       $("#qwback").onclick = () => { syncFormToState(); step--; paint(); };
@@ -873,7 +882,7 @@ function openQuoteWizard(existing, opts = {}) {
       if (warn) { warn.hidden = calc.complete; warn.textContent = calc.complete ? "" : `Missing rates for: ${calc.missingRates.map(k => missingLabel(k, calc)).join(", ")}. Save as draft, or set the price. Total is not shown as valid until every used line has a price.`; }
       const acc = d.querySelector("#qwaccept");
       const already = !!(existing?.jobId && (existing.quoteStatus === "Accepted" || state.quoteStatus === "Accepted"));
-      if (acc) acc.disabled = !(!already && calc.complete && calc.totalEx != null && !!(state.client && state.address));
+      if (acc) { const ok = !already && calc.complete && calc.totalEx != null && !!(state.client && state.address); acc.dataset.canAccept = ok ? "1" : ""; acc.disabled = !ok || saving; }
     };
     const openCustomerQuote = () => {
       const calc = calcQuote({ ...state, machines: normalizeMachineIds(state.machines) }, rates);
@@ -952,7 +961,16 @@ function openQuoteWizard(existing, opts = {}) {
         : `One-way road ≈ ${r.km} km (${r.source} depot → site)`;
       paint();
     };
+    // One save at a time: a double tap on Save or Accept made two (or three) quotes and jobs.
+    let saving = false;
     const saveQuote = async (accept) => {
+      if (saving) return;
+      saving = true;
+      d.querySelectorAll("#qwsave, #qwaccept").forEach(b => { b.disabled = true; });
+      try { await saveQuoteOnce(accept); }
+      finally { saving = false; if (d.open) d.querySelectorAll("#qwsave, #qwaccept").forEach(b => { b.disabled = b.id === "qwaccept" ? b.dataset.canAccept !== "1" : false; }); }
+    };
+    const saveQuoteOnce = async (accept) => {
       const data = { ...state, machines: normalizeMachineIds(state.machines) };
       if (!validateStep(0, data)) return;
       if (accept && !validateStep(1, data)) { step = 1; paint(); return; }
@@ -1101,7 +1119,7 @@ function stepHtml(step, d, calc, rates, esc, TYPES, CLIENTS, canSeeMoney, $$, is
 }
 
 function missingLabel(key, calc) {
-  if (key.startsWith("extra:")) {
+  if (key.startsWith("extra:") || key.startsWith("machine:")) {
     const l = calc.lines.find(x => x.key === key);
     return l ? l.label : "extra item";
   }
@@ -1220,30 +1238,34 @@ ${q.description ? `<b>Scope</b><span>${e(q.description)}</span>` : ""}${q.quoteI
 }
 
 async function createJobFromQuote(qid, q) {
-  const { db, addDoc, collection, serverTimestamp, getMe } = api;
+  const { db, doc, setDoc, collection, serverTimestamp, getMe } = api;
   const me = getMe();
   if (q.totalEx == null) throw new Error("Cannot create job from incomplete quote");
   const presetLab = EQUIPMENT_PRESETS.find(p => p.id === q.presetId)?.label
     || (q.machines || []).map(fleetName).join(" + ");
   // The job description is visible to assigned crew, so it carries scope and amounts only — never dollars.
-  // Prices stay on job.quote / quoteAmount / poAmount, which the app only shows to people who see money.
+  // Line prices stay on the quote (office only). The ex GST total (quoteAmount / poAmount) goes to jobMoney/{jobId},
+  // which only the office reads (round 3, Q6): assigned crew can read the job document and keep it offline.
   const amounts = workAmounts(q);
-  const desc = [q.description || "", "",
+  const desc = [noDollars(q.description || ""), "",
     presetLab ? `Equipment: ${presetLab}${q.includeLabourer ? " + labourer" : ""}` : "",
-    q.travelNote ? `Travel: ${q.travelNote}` : ""].filter(Boolean).join("\n");
+    q.travelNote ? `Travel: ${noDollars(q.travelNote)}` : ""].filter(Boolean).join("\n");
   // Amounts (rubbish / concrete / material …) go on job.workAmounts, shown on the job card, job form and run sheet.
-  const ref = await addDoc(collection(db, "jobs"), scopeRecord({
+  const ref = doc(collection(db, "jobs"));
+  const companyId = orgSettings().companyId;
+  const jobDoc = scopeRecord({
     client: q.client, address: q.address, type: q.type || "other", description: desc,
     date: "", time: "", status: "Scheduled", assigned: [], assignedNames: [],
     source: "quote", quoteId: qid, quoteStatus: "Accepted",
+    // Assigned crew can read the whole job document (and it sits in their phone's offline cache), so the
+    // copy on the job holds amounts only. Line prices, overrides and GST stay on the office-only quote (quoteId).
     quote: {
       travelKm: q.travelKm, hoursOnSite: q.hoursOnSite, machineDays: q.machineDays,
       materialQty: q.materialQty, tipLoads: q.tipLoads,
       machines: q.machines || [], presetId: q.presetId || null, includeLabourer: !!q.includeLabourer,
-      lines: q.lines, totalEx: q.totalEx, travelMode: q.travelMode || "oneway", travelNote: q.travelNote || "",
+      travelMode: q.travelMode || "oneway", travelNote: noDollars(q.travelNote || ""),
       yardAddress: q.yardAddress || DEFAULT_DEPOT.yardAddress,
-      extraItems: sanitizeExtraItems(q.extraItems), priceOverrides: sanitizeOverrides(q.priceOverrides),
-      gst: q.gst ?? null, totalInc: q.totalInc ?? null
+      extraItems: sanitizeExtraItems(q.extraItems).map(({ unitPrice, ...rest }) => ({ ...rest, description: noDollars(rest.description), note: noDollars(rest.note) }))
     },
     workAmounts: amounts,
     // A Google-picked site seeds the run-sheet geocode, so route ordering uses the exact spot.
@@ -1252,9 +1274,12 @@ async function createJobFromQuote(qid, q) {
       geo: { lat: q.addressPlace.lat, lng: q.addressPlace.lng, query: String(q.address || "").replace(/\s+/g, " ").trim(), source: "google-places", at: new Date().toISOString() }
     } : {}),
     machines: q.machines || [], presetId: q.presetId || null, includeLabourer: !!q.includeLabourer,
-    quoteAmount: q.totalEx, poAmount: q.totalEx, poAmountBasis: "accepted quote (ex GST)", poAmountSource: "quote",
     log: [], createdAt: serverTimestamp(), updatedAt: serverTimestamp(), updatedBy: me.uid, editedInApp: true
-  }, orgSettings().companyId));
+  }, companyId);
+  await setDoc(ref, jobDoc);
+  await setDoc(doc(db, JOB_MONEY_COLLECTION, ref.id), jobMoneyDoc(ref.id, jobDoc.companyId,
+    { quoteAmount: q.totalEx, poAmount: q.totalEx, poAmountBasis: "accepted quote (ex GST)", poAmountSource: "quote" },
+    { updatedAt: serverTimestamp(), updatedBy: me.uid }));
   return ref.id;
 }
 

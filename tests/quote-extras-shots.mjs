@@ -91,18 +91,20 @@ try {
       await new Promise(r => setTimeout(r, 400));
       const calls = window.__fbCalls || [];
       const q = calls.find(c => c.op === "addDoc" && c.col === "quotes");
-      const j = calls.find(c => c.op === "addDoc" && c.col === "jobs");
-      return JSON.stringify({ q: q && q.data, j: j && j.data });
+      const j = calls.find(c => c.op === "setDoc" && c.col === "jobs");
+      const m = calls.find(c => c.op === "setDoc" && c.col === "jobMoney");
+      return JSON.stringify({ q: q && q.data, j: j && j.data, m: m && m.data });
     })()`, awaitPromise: true, returnByValue: true });
-    const { q, j } = JSON.parse(r.result.value);
-    if (!q || !j) throw new Error("accept did not write a quote and a job");
+    const { q, j, m } = JSON.parse(r.result.value);
+    if (!q || !j || !m) throw new Error("accept did not write a quote, a job and its jobMoney");
     if (q.extraItems.length !== 4 || q.priceOverrides["machine:truck"] !== 360) throw new Error("quote extras/overrides not saved");
     if (q.totalEx !== 2085 || q.gst !== 208.5 || q.totalInc !== 2293.5) throw new Error("quote totals wrong " + [q.totalEx, q.gst, q.totalInc]);
     if (/\$\s?\d/.test(j.description)) throw new Error("job description shows a price: " + j.description);
     if (!j.workAmounts.some(a => /Concrete removal: 3 t/.test(a))) throw new Error("job amounts missing");
-    if (j.quote.extraItems.length !== 4 || j.quoteAmount !== 2085) throw new Error("job quote snapshot wrong");
+    if (j.quote.extraItems.length !== 4 || "quoteAmount" in j || "poAmount" in j || m.quoteAmount !== 2085 || m.poAmount !== 2085) throw new Error("job quote snapshot wrong");
+    if (/unitPrice|totalEx|totalInc|"gst"/.test(JSON.stringify(j))) throw new Error("job carries quote prices");
     if (errors.length) throw new Error(errors.join("\n"));
-    results.acceptToJob = { description: j.description, workAmounts: j.workAmounts, quoteAmount: j.quoteAmount };
+    results.acceptToJob = { description: j.description, workAmounts: j.workAmounts, jobMoney: { quoteAmount: m.quoteAmount, poAmount: m.poAmount } };
     page.close();
   }
   // Machine picker (no truck-only option) and an older truck-only quote opening as legacy.

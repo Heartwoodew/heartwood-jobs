@@ -317,7 +317,18 @@ service cloud.firestore {
         && d.client is string && d.client.size() <= 80
         && d.address is string && d.address.size() <= 160
         && d.description is string && d.description.size() <= 400
-        && !d.keys().hasAny(["invoiceAmount", "invoiceNo", "amountInc", "quoteAmount"]);
+        && !d.keys().hasAny(["invoiceAmount", "invoiceNo", "amountInc", "quoteAmount", "poAmount", "poAmountBasis", "poAmountSource"]);
+    }
+    // Job money (round 3, Q6): PO value and accepted-quote total, office only (see firestore.production.rules).
+    // Read model only here: Heartwood finance, company admins and supervisors of the same company. Crew never.
+    function jobMoneyReader(data) {
+      return signedIn() && callerCompany() != "" && docCompany(data) == callerCompany()
+        && (isAlex() || isPatrick() || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor")));
+    }
+    match /jobMoney/{id} {
+      allow get: if jobMoneyReader(resource.data);
+      allow list: if jobMoneyReader(resource.data) && resource.data.companyId == callerCompany();
+      allow write: if false;
     }
     match /jobs/{id} {
       allow get: if signedIn() && callerCompany() != "" && docCompany(resource.data) == callerCompany();
