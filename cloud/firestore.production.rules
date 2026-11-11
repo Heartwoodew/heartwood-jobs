@@ -337,15 +337,20 @@ service cloud.firestore {
           && d.addressPlace.keys().hasOnly(["formattedAddress", "lat", "lng", "placeId", "source"])
           && d.addressPlace.lat is number && d.addressPlace.lng is number));
     }
+    // Guided price overrides are admin only (Nov 2026 round 3): a supervisor may save a quote but must leave them as they were.
+    function quoteOverridesKept(before) {
+      return isAdmin() || profile().role == "admin" || request.resource.data.get("priceOverrides", {}) == before;
+    }
     match /quotes/{id} {
       allow get: if (isAdmin() && docCompany(resource.data) == "heartwood")
         || (companyOffice() && docCompany(resource.data) == callerCompany());
       allow list: if isAdmin() && resource.data.companyId == "heartwood";
       allow list: if companyOffice() && resource.data.companyId == callerCompany();
       allow create: if quoteFieldsOk(request.resource.data) && ((isAdmin() && request.resource.data.get("companyId", "heartwood") == "heartwood")
-        || (companyOffice() && request.resource.data.companyId == callerCompany()));
+        || (companyOffice() && request.resource.data.companyId == callerCompany() && quoteOverridesKept({})));
       allow update: if quoteFieldsOk(request.resource.data) && ((isAdmin() && docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood")
-        || (companyOffice() && docCompany(resource.data) == callerCompany() && docCompany(request.resource.data) == callerCompany()));
+        || (companyOffice() && docCompany(resource.data) == callerCompany() && docCompany(request.resource.data) == callerCompany()
+          && quoteOverridesKept(resource.data.get("priceOverrides", {}))));
       allow delete: if false;
     }
 

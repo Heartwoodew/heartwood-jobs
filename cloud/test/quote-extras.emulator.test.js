@@ -87,3 +87,17 @@ test("accepted quote → job with extras, amounts and place geo is allowed for t
   assert.deepEqual(seen.data().workAmounts, ["Rubbish removal — Green waste: 6 m³"]);
   await assertFails(updateDoc(doc(db("bOp"), "jobs/bq1"), { workAmounts: ["tampered"] }));
 });
+
+test("round 3: guided price overrides are admin only, a supervisor saves quotes but leaves them as they were", async () => {
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), "quotes/bOv"), { companyId: "bravo", tenantId: "bravo", client: "Acme", quoteStatus: "Draft", priceOverrides: { travel: 90 } });
+    await setDoc(doc(ctx.firestore(), "quotes/bLegacy"), { companyId: "bravo", tenantId: "bravo", client: "Acme", quoteStatus: "Draft", totalEx: 300, lines: [] });
+  });
+  const s = db("bSup");
+  await assertFails(updateDoc(doc(s, "quotes/bOv"), { priceOverrides: { travel: 1 } }));
+  await assertFails(updateDoc(doc(s, "quotes/bOv"), { priceOverrides: {} }));
+  await assertSucceeds(updateDoc(doc(s, "quotes/bOv"), { client: "Acme Homes", priceOverrides: { travel: 90 } }));
+  await assertSucceeds(updateDoc(doc(s, "quotes/bLegacy"), { client: "Acme old", priceOverrides: {} }));
+  await assertFails(addDoc(collection(s, "quotes"), { companyId: "bravo", tenantId: "bravo", client: "A", quoteStatus: "Draft", priceOverrides: { "machine:truck": 0.01 } }));
+  await assertSucceeds(updateDoc(doc(db("bAdm"), "quotes/bOv"), { priceOverrides: { travel: 120 } }));
+});
