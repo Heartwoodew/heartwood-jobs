@@ -41,6 +41,12 @@ export function machinePromptNeeded(entry, sessionShiftId) {
   return !!(entry && entry.source === "clock" && sessionShiftId && entry.id === sessionShiftId && !entry.machineChoice);
 }
 
+// After a reload (phone killed the tab, PWA restarted) the session no longer knows which shift was just clocked on.
+// An open clock shift with no machine answer still needs the question, or it can never be asked for that shift.
+export function machineShiftToResume(entry) {
+  return !!(entry && entry.source === "clock" && entry.id && entry.status !== "closed" && !entry.machineChoice);
+}
+
 export function machineChoicePatch(choice, asset) {
   if (choice === "skip") return { machineChoice: "skip", machineId: "", machineName: "" };
   if (choice === "none") return { machineChoice: "none", machineId: "", machineName: "" };
