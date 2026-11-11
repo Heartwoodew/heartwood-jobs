@@ -14,6 +14,8 @@ export const BASE_PRICE_ID = "price_1UZRdBHEbjZCMeDTohSuaIwr";
 export const EXTRA_PRICE_ID = "price_1UZRdDHEbjZCMeDTrPHYbfnK";
 export const BASE_LOOKUP = "callup_base_monthly";
 export const EXTRA_LOOKUP = "callup_extra_staff_monthly";
+// Pinned Stripe API version. Managed Payments (live account) needs 2025-03-31.basil or newer.
+export const STRIPE_API_VERSION = "2025-03-31.basil";
 export const WEBHOOK_URL = "https://australia-southeast1-heartwood-9f37f.cloudfunctions.net/stripeWebhook";
 
 // Return address for Checkout / the billing portal. Only our own app addresses are accepted.

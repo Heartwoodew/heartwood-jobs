@@ -78,6 +78,13 @@ test("inviteEmailWorker always declares RESEND_API_KEY; sending stays behind the
   assert.match(index, /allowLiveMail: process\.env\.INVITE_EMAIL_ENABLED === "true"/);
 });
 
+test("Stripe client pins an API version that supports Managed Payments (basil or newer)", () => {
+  const index = readFileSync(new URL("../functions/index.js", import.meta.url), "utf8");
+  const billing = readFileSync(new URL("../functions/billing/stripe-billing.js", import.meta.url), "utf8");
+  assert.match(index, /new Stripe\(key, \{ apiVersion: STRIPE_API_VERSION \}\)/);
+  assert.match(billing, /export const STRIPE_API_VERSION = "2025-03-31\.basil"/);
+});
+
 test("Stripe stays in test mode until STRIPE_MODE=live and live prices exist", () => {
   assert.equal(stripeMode({}), "test");
   assert.equal(stripeMode({ STRIPE_MODE: "live" }), "live");
