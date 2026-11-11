@@ -152,3 +152,13 @@ test("daily job rules stay closed to the client and match the paste block", asyn
   assert.equal(slice(emu), slice(prod));
   assert.match(slice(frag), /allow read, write: if false/);
 });
+
+test("quotes that are not accepted yet stay out of the morning list", () => {
+  const base = { companyId: "heartwood", date: day, status: "Scheduled", assigned: ["u1"] };
+  assert.equal(jobOpenToday({ ...base, quoteStatus: "Draft" }, day), false);
+  assert.equal(jobOpenToday({ ...base, sm8Status: "Quote" }, day), false);
+  assert.equal(jobOpenToday({ ...base, quoteStatus: "Accepted", sm8Status: "Quote" }, day), true);
+  assert.equal(jobOpenToday({ ...base, quoteStatus: "Accepted" }, day), true);
+  assert.equal(jobOpenToday({ ...base, sm8Status: "Work Order" }, day), true);
+  assert.equal(jobOpenToday(base, day), true);
+});

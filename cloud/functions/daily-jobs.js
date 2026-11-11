@@ -48,6 +48,9 @@ export function jobOpenToday(job, date) {
   const legacy = String(job.sm8Status || "");
   if (status === "Cancelled" || status === "Done") return false;
   if (legacy === "Unsuccessful" || legacy === "Completed") return false;
+  // A quote that is not accepted yet is not work for today. Same order as queueOf() in app.js.
+  if (job.quoteStatus === "Draft") return false;
+  if (job.quoteStatus !== "Accepted" && legacy === "Quote") return false;
   return true;
 }
 
