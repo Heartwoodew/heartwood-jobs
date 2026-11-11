@@ -39,6 +39,7 @@ test("storage rules add chat photos without opening receipts, finance, or job-ph
   assert.equal(prod.equals(Buffer.from(storage)), true);
   assert.match(storage, /match \/tenants\/\{tenantId\}\/chat\/staff\/photos\/\{file\}/);
   assert.match(storage, /match \/tenants\/\{tenantId\}\/chat\/jobs\/\{jobId\}\/photos\/\{file\}/);
+  assert.match(storage, /allow read: if jobChatPhotoReader\(tenantId, jobId\)/);
   assert.match(storage, /purpose == "chat-photo"/);
   assert.match(storage, /allow delete: if false/);
   assert.match(storage, /match \/tenants\/\{tenantId\}\/finance\/\{allPaths=\*\*\}/);
