@@ -22,6 +22,15 @@ service cloud.firestore {
       return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "operator";
     }
+    // Heartwood supervisors do the same field work as operators (assigned jobs, receipts, incidents, SWMS, clients).
+    // Heartwood only: notOtherCompany() keeps other companies' supervisors on their own company rules (companyOffice etc.).
+    // No admin or money rights come from this; those stay on isAdmin(), xeroUser() and the Heartwood admin uid list.
+    function isFieldSupervisor() {
+      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("role", "") == "supervisor"
+        && notOtherCompany();
+    }
+    function isFieldWorker() { return isOperator() || isFieldSupervisor(); }
     function isAssigned(d) { return request.auth.uid in d.assigned; }
 
     function platformOwner() {
@@ -370,7 +379,8 @@ service cloud.firestore {
     }
 
     match /jobs/{jobId} {
-      allow read: if isSync() || (signedIn() && isAssigned(resource.data) && isOperator());
+      allow read: if isSync() || (signedIn() && isAssigned(resource.data)
+        && (isOperator() || (isFieldSupervisor() && docCompany(resource.data) == "heartwood")));
       allow get: if isAdmin() && docCompany(resource.data) == "heartwood";
       allow list: if isAdmin() && resource.data.companyId == "heartwood";
       allow get: if companyOffice() && docCompany(resource.data) == callerCompany();
@@ -390,7 +400,8 @@ service cloud.firestore {
       allow update: if (isAdmin() && (isSync() || (docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood"))
         && (xeroUser() || isSync() || !request.resource.data.diff(resource.data).affectedKeys().hasAny(
           ["xeroStatus", "xeroInvoiceId", "xeroInvoiceNo", "xeroError", "xeroQueuedAt"]))) || (
-        signedIn() && isAssigned(resource.data) && isOperator()
+        signedIn() && isAssigned(resource.data)
+        && (isOperator() || (isFieldSupervisor() && docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood"))
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
              ["status", "log", "loads", "startedAt", "completedAt", "completedBy", "completedByName",
               "photos", "photosEmailedAt", "photosEmailedCount", "updatedAt", "updatedBy"])
@@ -450,7 +461,7 @@ service cloud.firestore {
 
     // Receipts (Upload receipt button). Any signed-in admin/operator creates their OWN receipt + image chunks and reads only
     // their own; the box sync user (tools/receipts_worker.py) and Alex read/update/delete all.
-    function isWorker() { return isAdmin() || isOperator(); }
+    function isWorker() { return isAdmin() || isFieldWorker(); }
     match /receipts/{rid} {
       allow create: if isWorker() && notOtherCompany() && docCompany(request.resource.data) == "heartwood"
         && request.resource.data.uid == request.auth.uid && request.resource.data.status == "queued";
@@ -538,7 +549,7 @@ service cloud.firestore {
     }
     match /incidents/{iid} {
       function seqOk() { return request.resource.data.seq == getAfter(/databases/$(database)/documents/incidentCounter/main).data.n; }
-      allow create: if isWorker() && request.resource.data.reportedBy == request.auth.uid && request.resource.data.status == "Open"
+      allow create: if isWorker() && notOtherCompany() && request.resource.data.reportedBy == request.auth.uid && request.resource.data.status == "Open"
         && docCompany(request.resource.data) == "heartwood"
         && seqOk() && iid == request.resource.data.reportNo
         && request.resource.data.type in ["Incident", "Near miss", "Hazard", "Injury", "Property damage"]

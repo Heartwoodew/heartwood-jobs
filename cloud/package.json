@@ -10,7 +10,7 @@
     "test:hours-browser": "firebase emulators:exec --only auth,firestore,storage --project demo-heartwood \"node --test --test-concurrency=1 test/hours-export.browser.test.js\"",
     "test:emulator": "firebase emulators:exec --only auth,firestore,storage --project demo-heartwood \"node --test --test-concurrency=1 test/rules.emulator.test.js test/production-rules.emulator.test.js test/company-isolation.emulator.test.js test/stress.emulator.test.js test/profile-scope.emulator.test.js\"",
     "deploy": "node scripts/refuse-live-deploy.js",
-    "test:stress-emulator": "firebase emulators:exec --only firestore --project demo-heartwood \"node --test --test-concurrency=1 test/stress.emulator.test.js\""
+    "test:stress-emulator": "firebase emulators:exec --only firestore --project demo-heartwood \"node --test --test-concurrency=1 test/stress.emulator.test.js test/supervisor-field.emulator.test.js\""
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^4.0.1",
