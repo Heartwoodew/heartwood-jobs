@@ -70,6 +70,14 @@ test("Resend invites: off by default, Heartwood held, test recipients only when 
   assert.equal(bad.reason, "resend-422");
 });
 
+test("inviteEmailWorker always declares RESEND_API_KEY; sending stays behind the runtime flag", () => {
+  const index = readFileSync(new URL("../functions/index.js", import.meta.url), "utf8");
+  assert.match(index, /export const inviteEmailWorker = onDocumentWritten\(/);
+  assert.match(index, /secrets: \[RESEND_API_KEY\]/);
+  assert.doesNotMatch(index, /INVITE_MAIL_ON \? \{ secrets: \[RESEND_API_KEY\] \}/);
+  assert.match(index, /allowLiveMail: process\.env\.INVITE_EMAIL_ENABLED === "true"/);
+});
+
 test("Stripe stays in test mode until STRIPE_MODE=live and live prices exist", () => {
   assert.equal(stripeMode({}), "test");
   assert.equal(stripeMode({ STRIPE_MODE: "live" }), "live");

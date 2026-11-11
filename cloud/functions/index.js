@@ -50,8 +50,9 @@ import {
 } from "./billing/stripe-billing.js";
 
 const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
-// Resend API key for staff invite email. Only bound (and so only required in Secret Manager) once
-// INVITE_EMAIL_ENABLED is "true" in functions/.env.heartwood-9f37f. While off, no secret is needed and nothing is sent.
+// Resend API key for staff invite email. Always declared so a deploy binds it even if
+// INVITE_EMAIL_ENABLED is not set in the analyze-time environment. Runtime INVITE_EMAIL_ENABLED
+// and INVITE_EMAIL_ALLOW_TO still control whether mail is actually sent.
 const RESEND_API_KEY = defineSecret("RESEND_API_KEY");
 const INVITE_MAIL_ON = process.env.INVITE_EMAIL_ENABLED === "true";
 const STRIPE_WEBHOOK_SECRET = defineSecret("STRIPE_WEBHOOK_SECRET");
@@ -209,7 +210,7 @@ export const acceptStaffInvite = onCall({ region: INVITE_REGION, invoker: "publi
 });
 
 export const inviteEmailWorker = onDocumentWritten(
-  { document: "invites/{inviteId}", region: INVITE_REGION, ...(INVITE_MAIL_ON ? { secrets: [RESEND_API_KEY] } : {}) },
+  { document: "invites/{inviteId}", region: INVITE_REGION, secrets: [RESEND_API_KEY] },
   async event => {
     if (process.env.NODE_TEST_CONTEXT) return;
     const beforeSnap = event.data && event.data.before;
