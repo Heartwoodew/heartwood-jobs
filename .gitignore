@@ -7,3 +7,7 @@ cloud/ui-debug.log
 cloud/hosting-dist/
 cloud/.dryrun*.mjs
 cloud/.firebase/
+
+# local symlinks to a shared install
+cloud/node_modules
+cloud/functions/node_modules
