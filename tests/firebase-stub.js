@@ -121,6 +121,8 @@ export function getAuth() { return {}; }
 export function connectAuthEmulator() {}
 export function signOut() { return Promise.resolve(); }
 export function signInWithEmailAndPassword() { return Promise.resolve({ user: { uid: uidFor(role()) } }); }
+export function createUserWithEmailAndPassword() { return Promise.resolve({ user: { uid: "new-user" } }); }
+export function sendPasswordResetEmail() { return Promise.resolve(); }
 export class Timestamp {
   constructor(seconds, nanoseconds = 0) {
     this.seconds = seconds;
@@ -137,7 +139,10 @@ export function onAuthStateChanged(_auth, cb) {
     return () => {};
   }
   const r = role();
-  queueMicrotask(() => cb(r === "signedout" ? null : { uid: uidFor(r), email: r + "@heartwood.test" }));
+  queueMicrotask(() => cb(r === "signedout" ? null : {
+    uid: uidFor(r), email: r + "@heartwood.test", emailVerified: true,
+    getIdTokenResult: () => Promise.resolve({ claims: {} }),
+  }));
   return () => {};
 }
 
@@ -220,6 +225,7 @@ export function getDocs(ref) {
     }]));
   }
   if (col === "jobs") return Promise.resolve(snap([]));
+  if (col === "clients") return Promise.resolve(snap((typeof window !== "undefined" && window.HW_CLIENTS) || []));
   return Promise.resolve(snap([]));
 }
 
@@ -297,7 +303,9 @@ export function onSnapshot(ref, onNext) {
 }
 
 export function updateDoc(ref, data) {
-  record("updateDoc", { col: ref && ref._col, id: ref && ref._id, status: data && data.status, keys: data ? Object.keys(data) : [] });
+  const plain = {};
+  if (data) Object.entries(data).forEach(([k, v]) => { plain[k] = v && v._server ? "server" : v && v._union ? v._union : v; });
+  record("updateDoc", { col: ref && ref._col, id: ref && ref._id, status: data && data.status, keys: data ? Object.keys(data) : [], data: plain });
   if (typeof window !== "undefined" && ref && ref._col === "inbox" && Array.isArray(window.HW_INBOX)) {
     const row = window.HW_INBOX.find(r => r.id === ref._id);
     if (row && data) {
