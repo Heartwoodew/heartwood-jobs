@@ -1232,11 +1232,13 @@ service cloud.firestore {
       return tsEntryCore(e) && e.enteredAt == request.time && e.edits.size() == 0 && e.lastEditId == ""
         && tsFixSame({}, e, "clockOn") && tsFixSame({}, e, "clockOff") && tsFixSame({}, e, "breakOn") && tsFixSame({}, e, "breakOff");
     }
+    // One diff, reused: each extra diff of the entries/edits maps counts against the 1000-expression limit.
     function tsEditOk(b, a) {
-      return a.edits.diff(b.edits).removedKeys().size() == 0
-        && a.edits.diff(b.edits).changedKeys().size() == 0
-        && (a.edits.diff(b.edits).addedKeys().size() == 0
-          || (a.edits.diff(b.edits).addedKeys().hasOnly([a.lastEditId])
+      let d = a.edits.diff(b.edits);
+      return d.removedKeys().size() == 0
+        && d.changedKeys().size() == 0
+        && (d.addedKeys().size() == 0
+          || (d.addedKeys().hasOnly([a.lastEditId])
             && a.edits[a.lastEditId].at == request.time
             && a.edits[a.lastEditId].by == request.auth.uid
             && a.edits[a.lastEditId].byName is string
@@ -1244,19 +1246,35 @@ service cloud.firestore {
             && a.edits[a.lastEditId].summary.size() > 0
             && a.edits[a.lastEditId].summary.size() <= 200));
     }
-    function tsMachineLock(b, a) {
-      return (!("machineChoice" in a) && !("machineChoice" in b))
-        || ("machineChoice" in b && a.machineChoice == b.machineChoice && a.get("machineId", "") == b.get("machineId", "") && a.get("machineName", "") == b.get("machineName", ""))
-        || (!("machineChoice" in b) && (
-          ((a.machineChoice == "none" || a.machineChoice == "skip") && a.machineId == "" && a.machineName is string && a.machineName.size() <= 80)
-          || (a.machineChoice == "asset" && a.machineId.matches('^[A-Za-z0-9_-]{1,80}$') && a.machineName is string && a.machineName.size() > 0 && a.machineName.size() <= 80)
-        ));
+    // A machine pick is written once, all three fields together.
+    function tsMachinePick(b, a) {
+      return !("machineChoice" in b)
+        && (((a.machineChoice == "none" || a.machineChoice == "skip") && a.machineId == "" && a.machineName is string && a.machineName.size() <= 80)
+          || (a.machineChoice == "asset" && a.machineId.matches('^[A-Za-z0-9_-]{1,80}$') && a.machineName is string && a.machineName.size() > 0 && a.machineName.size() <= 80));
     }
+    // An existing shift: check only what changed. id, source, author, enteredAt and the clock-on stamp never change;
+    // a recorded stamp or machine pick is never rewritten or removed; a new stamp is a valid fix taken now (clock shifts only).
+    // Re-validating the whole shift on every tap pushed clock-off after a break past Firestore's 1000-expression limit
+    // (permission-denied, user test 11 Nov 2026).
     function tsEntryNext(b, a) {
-      return tsEntryCore(a) && a.source == b.source && a.enteredBy == b.enteredBy && a.enteredAt == b.enteredAt && a.id == b.id
-        && tsFixSame(b, a, "clockOn") && tsFixSame(b, a, "clockOff") && tsFixSame(b, a, "breakOn") && tsFixSame(b, a, "breakOff")
-        && tsMachineLock(b, a)
-        && tsEditOk(b, a);
+      let d = a.diff(b);
+      let ch = d.affectedKeys();
+      let added = d.addedKeys();
+      return d.removedKeys().size() == 0
+        && ch.hasOnly(["status", "date", "start", "finish", "breakStart", "breakEnd", "note", "job", "clockOff", "breakOn", "breakOff", "enteredByName", "edits", "lastEditId", "machineChoice", "machineId", "machineName"])
+        && !d.changedKeys().hasAny(["clockOff", "breakOn", "breakOff", "machineChoice", "machineId", "machineName"])
+        && (!ch.hasAny(["clockOff", "breakOn", "breakOff"]) || (a.source == "clock"
+          && (!("clockOff" in added) || tsFix(a.clockOff))
+          && (!("breakOn" in added) || tsFix(a.breakOn))
+          && (!("breakOff" in added) || tsFix(a.breakOff))))
+        && (!ch.hasAny(["machineChoice", "machineId", "machineName"]) || tsMachinePick(b, a))
+        && (!("date" in ch) || (a.date is string && a.date.size() == 10))
+        && (!("start" in ch) || (a.start is string && a.start.size() <= 5))
+        && (!("finish" in ch) || (a.finish is string && a.finish.size() <= 5))
+        && (!("note" in ch) || (a.note is string && a.note.size() <= 200))
+        && (!("job" in ch) || (a.job is string && a.job.size() <= 200))
+        && (!("enteredByName" in ch) || (a.enteredByName is string && a.enteredByName.size() > 0 && a.enteredByName.size() <= 80))
+        && (!ch.hasAny(["edits", "lastEditId"]) || (a.edits is map && tsEditOk(b, a)));
     }
     function tsFleetReader(tenantId) {
       return signedIn()
@@ -1270,19 +1288,20 @@ service cloud.firestore {
           ))
         );
     }
+    // Clock-off after a break and a machine pick used to hit Firestore's 1000-expression limit (permission-denied):
+    // the entries map was diffed three times and compared whole. Diff once and look the shift up once.
     function tsOneEntry() {
-      return request.resource.data.entries is map
-        && request.resource.data.entries.size() <= 40
-        && request.resource.data.lastEntryId is string
-        && request.resource.data.entries.diff(resource.data.get("entries", {})).removedKeys().size() == 0
-        && request.resource.data.entries.diff(resource.data.get("entries", {})).affectedKeys().size() == 1
-        && request.resource.data.entries.diff(resource.data.get("entries", {})).affectedKeys().hasOnly([request.resource.data.lastEntryId])
-        && (
-          (request.resource.data.lastEntryId in resource.data.get("entries", {})
-            && tsEntryNext(resource.data.entries[request.resource.data.lastEntryId], request.resource.data.entries[request.resource.data.lastEntryId]))
-          || (!(request.resource.data.lastEntryId in resource.data.get("entries", {}))
-            && tsEntryNew(request.resource.data.entries[request.resource.data.lastEntryId]))
-        );
+      let after = request.resource.data.entries;
+      let before = resource.data.get("entries", {});
+      let key = request.resource.data.lastEntryId;
+      let d = after.diff(before);
+      return after is map
+        && after.size() <= 40
+        && key is string
+        && d.removedKeys().size() == 0
+        && d.affectedKeys().size() == 1
+        && d.affectedKeys().hasOnly([key])
+        && (key in before ? tsEntryNext(before[key], after[key]) : tsEntryNew(after[key]));
     }
     function tsWorkerCreate(id) {
       return tsMine(id) && tsDocOk()
@@ -1301,7 +1320,8 @@ service cloud.firestore {
         && (!("locationConsentAt" in resource.data) && !("locationConsentAt" in request.resource.data)
           || !("locationConsentAt" in resource.data) && request.resource.data.locationConsentAt == request.time
           || request.resource.data.get("locationConsentAt", null) == resource.data.get("locationConsentAt", null))
-        && (request.resource.data.get("entries", {}) == resource.data.get("entries", {}) || tsOneEntry());
+        // Shift change first: comparing the whole entries map is only needed when no shift changed.
+        && (tsOneEntry() || request.resource.data.get("entries", {}) == resource.data.get("entries", {}));
     }
     function tsSentUpdate() {
       return tsHeartwoodAdmin()

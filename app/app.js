@@ -34,7 +34,7 @@ import { companySettingsHtml, failureText as companyFailure, masterDetailHtml, m
 import { exportAllowed, hoursCsv, invoiceCsv, jobsCsv, reimbursementsCsv } from "./features/company-exports.js";
 import {
   accuracyText, brisbaneHM, captureFix, coordText, daysForSheet, editList, entryList, locationConsent,
-  locationMap, machineChoicePatch, machinePromptNeeded, mapsHref, needsLocationConsent, newTsId, openClock,
+  locationMap, machineChoicePatch, machinePromptNeeded, machineShiftToResume, mapsHref, needsLocationConsent, newTsId, openClock,
   paidShift, prestartStatus, sheetHours, shiftHours, sortedEntries, stampText,
 } from "./features/timesheet.js";
 import {
@@ -1481,6 +1481,10 @@ function tsEnsurePrestarts() {
   }).catch(() => { ui.tsPrestarts = []; ui.tsPrestartState = "absent"; tsRerender(); });
 }
 function tsMachineHtml() {
+  if (!ui.tsMachineShift) {
+    const open = tsSheets();
+    if (open.entry && machineShiftToResume(open.entry)) { ui.tsMachineShift = open.entry.id; ui.tsMachineWs = open.ws; }
+  }
   const entry = tsShiftById(ui.tsMachineShift);
   if (!ui.tsMachineShift || (entry && entry.machineChoice)) return "";
   if (entry && !machinePromptNeeded(entry, ui.tsMachineShift)) return "";
@@ -1892,6 +1896,7 @@ function bindLeave(A) {
       form.reset();
       if (err) err.textContent = "";
       toast("Leave request sent");
+      redrawAfterSave();
     } catch (e) {
       if (err) err.textContent = "Not saved: " + (e.code || e.message);
     }
@@ -1906,6 +1911,7 @@ function bindLeave(A) {
       try {
         await updateDoc(lvDoc(decide.dataset.id), { ...built.data, decidedAt: serverTimestamp(), updatedAt: serverTimestamp() });
         toast(status === "approved" ? "Leave approved" : "Leave declined");
+        redrawAfterSave();
       } catch (e) {
         if (msg) msg.textContent = "Not saved: " + (e.code || e.message);
       }
@@ -2468,6 +2474,12 @@ async function cancelInvite(id) {
     tx.update(doc(db, "inviteEmails", row.email), { status: "cancelled" });
   });
 }
+// A form that stays focused blocks the live redraw (so typing isn't wiped). After a successful save, let go of
+// focus and redraw so the new invite / leave decision shows straight away instead of after a reload.
+function redrawAfterSave() {
+  try { document.activeElement?.blur?.(); } catch { /* ignore */ }
+  if (me && me.role === "admin" && !ui.myJobs) renderAdmin(); else renderOperator();
+}
 function bindStaff(A) {
   const form = A.querySelector("#invitef");
   if (form) form.onsubmit = async ev => {
@@ -2475,7 +2487,9 @@ function bindStaff(A) {
     const err = A.querySelector("#inviteerr");
     const reason = await saveInvite({ name: form.name.value, email: form.email.value, role: form.role.value });
     if (reason) { if (err) err.textContent = inviteFailureText(reason); return; }
+    form.reset();
     toast("Invite saved. Copy the link. Mail was not sent.");
+    redrawAfterSave();
   };
   A.querySelectorAll("[data-invite-copy]").forEach(b => b.onclick = async () => {
     try { await navigator.clipboard.writeText(b.dataset.inviteCopy); toast("Link copied. Mail was not sent."); }
@@ -2531,7 +2545,8 @@ function renderAdmin() {
     if (b.dataset.view === "myjobs") { ui.myJobs = true; ui.opSel = null; window.scrollTo(0, 0); return renderAdmin(); }
     if (b.dataset.view !== "compliance") COMP.abandon();
     ui.view = b.dataset.view; if (ui.view === "invoices" && me.role !== "admin") ui.view = "home"; ui.forceRender = true; renderAdmin(); });
-  if ($("#burger")) $("#burger").onclick = () => { ui.navOpen = !ui.navOpen; renderAdmin(); };
+  // The menu is a deliberate tap: force the redraw, or an open Prestart/Compliance form swallows it and the admin is stuck there.
+  if ($("#burger")) $("#burger").onclick = () => { ui.navOpen = !ui.navOpen; ui.forceRender = true; renderAdmin(); };
   A.querySelectorAll("[data-grp]").forEach(b => b.onclick = () => { const g = b.dataset.grp; if (NAV_GROUPS.find(x => x[0] === g)[3].includes(ui.view)) return;
     ui.navCol[g] = !ui.navCol[g]; try { localStorage.setItem("hwNavCol", JSON.stringify(ui.navCol)); } catch {} renderAdmin(); });
   if (ui.view === "dispatch" && PHONE.matches) bindMobileDispatch(A, [...jobs, ...(ui.undated || [])]);
@@ -3450,6 +3465,8 @@ function nextInvoiceGuess() {
 }
 async function loadInvHist() {
   if (loadInvHist.busy) return; loadInvHist.busy = true;
+  // meta/invHist_* is Heartwood's imported history. Other companies have none, and reading it is (rightly) denied.
+  if (myCompanyId() !== "heartwood") { ui.invHist = []; return; }
   try { const ix = (await getDoc(doc(db, "meta", "invHistIndex"))).data();
     const parts = await Promise.all((ix?.years || []).map(y => getDoc(doc(db, "meta", "invHist_" + y))));
     ui.invHist = parts.flatMap(p => { try { return JSON.parse(p.data()?.rows || "[]"); } catch { return []; } });
@@ -3607,7 +3624,8 @@ function opCard(j) {
 }
 function bindOp(mine) {
   if ($("#toadmin")) $("#toadmin").onclick = () => { ui.myJobs = false; ui.opSel = null; renderAdmin(); };
-  $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; renderOperator(); window.scrollTo(0, 0); });
+  // A tab tap is a deliberate move: force the redraw, or an open Prestart/Compliance form keeps the screen (stuck until reload).
+  $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; ui.forceRender = true; renderOperator(); window.scrollTo(0, 0); });
   $("#app").querySelectorAll("[data-go]").forEach(b => b.onclick = () => { if (b.dataset.go === "swms") return swmsOverlay(); ui.opTab = b.dataset.go; renderOperator(); window.scrollTo(0, 0); });
   const openJob = id => { if (ui.opSel !== id) ui.jobPane = "job"; ui.opSel = id; renderOperator(); window.scrollTo(0, 0); };
   $("#app").querySelectorAll(".mrow").forEach(r => {

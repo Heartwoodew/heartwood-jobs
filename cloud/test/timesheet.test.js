@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  accuracyText, captureFix, coordText, daysForSheet, machineChoicePatch, machinePromptNeeded, mapsHref,
+  accuracyText, captureFix, coordText, daysForSheet, machineChoicePatch, machinePromptNeeded, machineShiftToResume, mapsHref,
   needsLocationConsent, paidShift, prestartStatus, sheetHours, shiftHours,
 } from "../../app/features/timesheet.js";
 
@@ -117,4 +117,24 @@ test("timesheet rules fragment matches the emulator block and does not replace o
   assert.match(slice(frag), /m\.fix == "no location"/);
   assert.match(slice(frag), /allow delete: if false/);
   assert.doesNotMatch(slice(frag), /match \/receipts\/|match \/xeroQueue\/|watchPosition/);
+});
+
+test("machine question comes back after a reload for an open clock shift with no answer", () => {
+  const open = { id: "e1", source: "clock", status: "open" };
+  assert.equal(machineShiftToResume(open), true);
+  assert.equal(machineShiftToResume({ ...open, status: "break" }), true);
+  assert.equal(machineShiftToResume({ ...open, machineChoice: "skip" }), false);
+  assert.equal(machineShiftToResume({ ...open, status: "closed" }), false);
+  assert.equal(machineShiftToResume({ ...open, source: "manual" }), false);
+  assert.equal(machineShiftToResume(null), false);
+});
+
+test("operator tab taps force a redraw, and saves let go of focus so lists refresh", async () => {
+  const { readFileSync } = await import("node:fs");
+  const app = readFileSync(new URL("../../app/app.js", import.meta.url), "utf8");
+  assert.match(app, /\[data-tab\]"\)\.forEach\(b => b\.onclick = \(\) => \{ ui\.opTab = b\.dataset\.tab; ui\.forceRender = true;/);
+  assert.match(app, /\$\("#burger"\)\.onclick = \(\) => \{ ui\.navOpen = !ui\.navOpen; ui\.forceRender = true; renderAdmin\(\); \}/);
+  assert.match(app, /toast\("Leave request sent"\);\n\s*redrawAfterSave\(\);/);
+  assert.match(app, /toast\(status === "approved" \? "Leave approved" : "Leave declined"\);\n\s*redrawAfterSave\(\);/);
+  assert.match(app, /toast\("Invite saved\. Copy the link\. Mail was not sent\."\);\n\s*redrawAfterSave\(\);/);
 });
