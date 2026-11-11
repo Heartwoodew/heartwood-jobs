@@ -54,7 +54,7 @@ function photoMeta(uid, jobId = "job1", tenantId = "heartwood") {
 }
 
 test("auth emulator accepts a sign-up without the live project", async () => {
-  const res = await fetch("http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:signUp?key=demo-key", {
+  const res = await fetch("http://" + (process.env.FIREBASE_AUTH_EMULATOR_HOST || "127.0.0.1:9099") + "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=demo-key", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: "cloud-test@example.com", password: "not-a-real-password", returnSecureToken: true }),

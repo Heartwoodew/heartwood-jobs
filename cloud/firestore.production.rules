@@ -341,9 +341,27 @@ service cloud.firestore {
     }
 
 
+    // Master page: a test company (isTest) that the verified platform owner may manage demo staff in.
+    function testCompanyId(id) {
+      return id != "heartwood" && exists(/databases/$(database)/documents/companies/$(id))
+        && get(/databases/$(database)/documents/companies/$(id)).data.get("isTest", false) == true;
+    }
     match /users/{uid} {
-      allow read: if isAdmin() || (signedIn() && request.auth.uid == uid);
-      allow write: if isAdmin();
+      // Everyone reads their own profile.
+      allow get: if signedIn() && request.auth.uid == uid;
+      // Box sync account (routines, staff sync) keeps full access.
+      allow read, write: if isSync();
+      // Heartwood admins (Alex, Patrick): Heartwood profiles only. A profile with no companyId/tenantId is Heartwood.
+      allow get: if isAdmin() && docCompany(resource.data) == "heartwood";
+      allow list: if isAdmin() && resource.data.companyId == "heartwood";
+      allow create: if isAdmin() && docCompany(request.resource.data) == "heartwood";
+      allow update: if isAdmin() && docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood";
+      allow delete: if isAdmin() && docCompany(resource.data) == "heartwood";
+      // Platform owner (Alex, verified email): TEST companies only (open-as-test session, demo staff reset).
+      allow get, delete: if platformOwner() && testCompanyId(docCompany(resource.data));
+      allow list: if platformOwner() && sessionCompany() != "" && resource.data.companyId == sessionCompany();
+      allow create: if platformOwner() && testCompanyId(docCompany(request.resource.data));
+      allow update: if platformOwner() && testCompanyId(docCompany(resource.data)) && docCompany(request.resource.data) == docCompany(resource.data);
       // CallUp self-signup: the new owner writes their own admin profile for the company they just created.
       allow create: if signedIn() && request.auth.uid == uid && ownerProfileCreate();
       // Company admins and supervisors (not Heartwood, which uses isAdmin above) read their own company's staff.
@@ -460,7 +478,9 @@ service cloud.firestore {
       allow read: if isSync() || mine();
       allow get: if isOwner() && docCompany(resource.data) == "heartwood";
       allow list: if isOwner() && resource.data.companyId == "heartwood";
-      allow create, update: if (isOwner() && docCompany(request.resource.data) == "heartwood" && (resource == null || docCompany(resource.data) == "heartwood")) || (mine() && isWorker() && notOtherCompany() && request.resource.data.uid == request.auth.uid && noSentChange());
+      // Workers write their own sheet through the TIMESHEET RULES block below (tsWorkerCreate / tsWorkerUpdate), which
+      // keeps clock stamps and entry authors fixed. The old blanket worker write here let a sheet be rewritten wholesale.
+      allow create, update: if isOwner() && docCompany(request.resource.data) == "heartwood" && (resource == null || docCompany(resource.data) == "heartwood");
       allow delete: if isOwner();
     }
 

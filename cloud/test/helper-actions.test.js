@@ -17,6 +17,12 @@ function harness() {
       return proposal ? structuredClone(proposal) : null;
     },
     async markProposal(id, patch) { Object.assign(proposals.get(id), patch); },
+    async claimProposal(id) {
+      const row = proposals.get(id);
+      if (!row || row.status !== "pending") return false;
+      row.status = "applying";
+      return true;
+    },
     async apply(action) { applied.push(structuredClone(action)); },
     async audit(entry) { audit.push(entry); },
   };
@@ -285,4 +291,15 @@ test("an expired preview and a missing store write nothing", async () => {
   });
   assert.match(bare.reply, /Nothing was changed/);
   assert.equal(bare.proposal, null);
+});
+
+test("double-tapping Confirm applies the action once", async () => {
+  const h = harness();
+  const preview = await ask(h, ALEX_UID, { question: "Add a note on Ironbark: double tap check" });
+  assert.ok(preview.proposal && preview.proposal.id);
+  const replies = await Promise.all(Array.from({ length: 5 }, () => ask(h, ALEX_UID, { step: "confirm", proposalId: preview.proposal.id })));
+  assert.equal(h.applied.length, 1);
+  assert.equal(h.audit.length, 1);
+  assert.equal(replies.filter(r => /already closed/.test(r.reply)).length, 4);
+  assert.equal(h.proposals.get(preview.proposal.id).status, "confirmed");
 });

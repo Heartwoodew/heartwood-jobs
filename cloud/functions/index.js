@@ -58,6 +58,7 @@ import {
   handleStripeWebhook,
   syncStaffQuantity,
   companiesTouchedByUser,
+  mergeBilling,
 } from "./billing/stripe-billing.js";
 
 const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
@@ -359,16 +360,18 @@ export const stripeWebhook = onRequest(
         const snap = await db.collection("companies").doc(companyId).get();
         return snap.exists ? snap.data() : null;
       },
-      saveBilling: async (companyId, patch) => {
+      saveBilling: async (companyId, patch, stamp) => {
         const ref = db.collection("companies").doc(companyId);
-        await db.runTransaction(async tx => {
+        return db.runTransaction(async tx => {
           const snap = await tx.get(ref);
-          if (!snap.exists) return;
-          const current = snap.data().billing || {};
+          if (!snap.exists) return { skipped: "missing-company" };
+          const merged = mergeBilling(snap.data().billing || {}, patch.billing, stamp);
+          if (merged.skipped) return merged;
           tx.update(ref, {
             ...(patch.plan ? { plan: patch.plan } : {}),
-            billing: { ...current, ...patch.billing },
+            billing: merged.billing,
           });
+          return {};
         });
       },
     });

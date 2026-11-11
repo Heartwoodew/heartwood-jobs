@@ -12,8 +12,11 @@ export function exportAllowed({ role, companyId } = {}) {
   return role === "admin" && typeof companyId === "string" && companyId.length > 0 && companyId !== "heartwood";
 }
 
+// Text typed by staff (notes, job, supplier) must not run as a spreadsheet formula when the CSV is opened in Excel or
+// Sheets. Plain numbers such as -12.50 are left alone.
 function cell(value) {
-  const text = String(value ?? "");
+  let text = String(value ?? "");
+  if (/^[=+\-@\t\r]/.test(text) && !/^-?\d+(\.\d+)?$/.test(text)) text = "'" + text;
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 

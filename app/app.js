@@ -22,6 +22,7 @@ import {
   acceptLoadingHtml, acceptScreenModel, acceptViewHtml, buildInviteDraft, inviteFailureText,
   newInviteToken, pendingInviteForEmail, staffViewHtml, appOriginFor,
 } from "./features/staff-invites.js";
+import { saveGuard, settleOrQueue } from "./features/pending-write.js";
 import { PRODUCT_NAME, POWERED_BY, orgSettings, saveOrgSettings, setActiveCompany } from "./org-settings.js";
 import {
   buildCompanyCreate, buildFriendCompany, buildTestCompany, companyDetailPatch, companyIdFromName, demoBundle,
@@ -133,8 +134,10 @@ onAuthStateChanged(auth, async user => {
   // users/{uid}.role: "operator" (staff, no $) | "supervisor" (staff shell + canSeeMoney). Patrick is rules-admin with an operator profile (bookable).
   const snap = await getDoc(doc(db, "users", user.uid)).catch(() => null);
   const prof = snap && snap.exists() ? snap.data() : null;
+  // Heartwood admins list only Heartwood profiles (rules deny every other company's staff).
+  // Other companies' admins/supervisors use their own profile role below, so this list is Heartwood-only.
   let users = null;
-  users = await getDocs(collection(db, "users")).catch(() => null);
+  if (docCompanyId(prof || {}) === "heartwood") users = await getDocs(query(collection(db, "users"), where("companyId", "==", "heartwood"))).catch(() => null);
   if (!prof && !users) { renderNoAccess(user); return; }
   const bootstrapAdmin = user.uid === ALEX_UID || user.uid === "R7t41e54Ykcdk9WPdVZnDd697iI2";
   const roleAdmin = !!(prof && prof.role === "admin");
@@ -142,8 +145,8 @@ onAuthStateChanged(auth, async user => {
     ? { uid: user.uid, name: (prof && prof.name) || (bootstrapAdmin ? "Alex" : "Admin"), role: "admin", staffRole: prof && prof.role }
     : { uid: user.uid, ...prof };
   me.cloudProfile = prof;
-  FOREIGN_UIDS = new Set(users ? users.docs.filter(d => docCompanyId(d.data()) !== docCompanyId(prof || {})).map(d => d.id) : []);
-  HOME_UIDS = users ? users.docs.filter(d => docCompanyId(d.data()) === docCompanyId(prof || {})).map(d => d.id) : [];
+  FOREIGN_UIDS = new Set();
+  HOME_UIDS = users ? users.docs.filter(d => docCompanyId(d.data()) === "heartwood").map(d => d.id) : [];
   const token = await user.getIdTokenResult().catch(() => null);
   me.platformOwner = isPlatformOwner({
     uid: user.uid,
@@ -167,7 +170,9 @@ onAuthStateChanged(auth, async user => {
     if (window.HW_PREVIEW_VIEW === "settings" || window.HW_PREVIEW_VIEW === "company") ui.view = "settings";
     if (window.HW_PREVIEW_VIEW === "master" && me.platformOwner) ui.view = "master";
     const companyId = myCompanyId();
-    const staffSnap = users || await getDocs(query(collection(db, "users"), where("companyId", "==", companyId))).catch(() => null);
+    const staffSnap = (companyId === "heartwood" && users) || await getDocs(query(collection(db, "users"), where("companyId", "==", companyId))).catch(() => null);
+    // When the unscoped users list is denied, still know this company's own staff so legacy (no companyId) Heartwood sheets load.
+    if (!users && staffSnap) HOME_UIDS = staffSnap.docs.filter(d => docCompanyId(d.data()) === companyId).map(d => d.id);
     const logins = (staffSnap ? staffSnap.docs : []).map(d => ({ uid: d.id, ...d.data() }))
       .filter(u => (u.companyId || u.tenantId || "heartwood") === companyId)
       .filter(u => u.role === "operator" || u.role === "supervisor");
@@ -901,9 +906,11 @@ async function mirrorJobPhotos(j, files) {
   });
   if (!plan.ok) { console.warn("cloud photo mirror skipped", (plan.skipped || []).map(s => s.reason).join(",") || "none"); return; }
   plan = stampExpiresAfter(plan, j, at);
-  await putPlanned(plan, target => uploadBytes(storageRef(storage, target.path), files[target.sourceIndex], {
-    contentType: target.contentType, customMetadata: target.metadata,
-  }));
+  await putPlanned(plan, target => {
+    const file = files[target.sourceIndex];
+    if (!file) throw Object.assign(new Error("photo-file-missing"), { code: "photo-file-missing" });
+    return uploadBytes(storageRef(storage, target.path), file, { contentType: target.contentType, customMetadata: target.metadata });
+  });
   // Not a retention anchor, including on a completed job. Listing still uses the
   // job's completion or existing activity date. This only asks other open phones to list again.
   updateDoc(doc(db, "jobs", j.id), { cloudPhotosAt: at.toISOString() }).catch(e => console.warn("cloud photo stamp not saved", e.code || e.message));
@@ -2768,6 +2775,8 @@ function editJob(j) {
   const n = !j || !j.id;
   j = j || { date: todayStr(), time: "07:00", durationHrs: 4, status: "Scheduled", type: "spoil", assigned: [], client: CLIENTS[0] };
   const d = $("#dlg");
+  // One id per New Job form, so a second tap (or a retry after no signal) cannot make a second job.
+  const newRef = n ? doc(collection(db, "jobs")) : null, guard = saveGuard();
   const qq = n ? "Work Order" : queueOf(j), hist = [];
   if (j.source === "sm8") hist.push(["ServiceM8", `Imported from ServiceM8 job #${j.sm8JobNo || "?"} (${j.sm8Status || "?"})`]);
   if (j.editedInApp) hist.push(["App", "Edited in the app – ServiceM8 import will no longer overwrite this job"]);
@@ -2854,6 +2863,9 @@ function editJob(j) {
       ...(String(j.poAmount ?? "") !== f.poAmount.value ? { poAmount: f.poAmount.value === "" ? null : Math.round(+f.poAmount.value * 100) / 100, poAmountBasis: f.poAmount.value === "" ? null : "entered in app (ex GST)", poAmountSource: "app" } : {}), updatedAt: serverTimestamp(), updatedBy: me.uid };
     if (data.status === "Done" && j.status !== "Done") Object.assign(data, { completedAt: serverTimestamp(), completedBy: me.uid });
     if (!confirmIfOnLeave(data.date, data.assignedNames)) return;
+    if (!guard.start()) return;
+    const saveBtn = f.querySelector("button[value=save]");
+    if (saveBtn) saveBtn.disabled = true;
     try {
       if (importing && !canImport()) { $("#ferr").textContent = "Supervisors and admins only."; return; }
       if (importing) {
@@ -2861,13 +2873,18 @@ function editJob(j) {
         if (!cur) { $("#ferr").textContent = "That email is no longer in the inbox."; return; }
         if (isImported(cur)) { $("#ferr").textContent = "That email is already imported."; return; }
       }
+      let write;
       if (n) {
         const extra = importing ? importFieldExtras(j, f) : {};
-        const ref = await addDoc(collection(db, "jobs"), scopeRecord({ ...data, ...extra, source: importing ? "inbox" : "app", log: [], createdAt: serverTimestamp() }, myCompanyId()));
-        if (importing) await markInboxImported(j._import.emailId, ref.id);
-      } else await updateDoc(doc(db, "jobs", j.id), data);
-      d.close(); toast("Saved"); refreshAfterImport(); if (!data.date) location.reload();
+        write = setDoc(newRef, scopeRecord({ ...data, ...extra, source: importing ? "inbox" : "app", log: [], createdAt: serverTimestamp() }, myCompanyId()));
+        if (importing) write = write.then(() => markInboxImported(j._import.emailId, newRef.id));
+      } else write = updateDoc(doc(db, "jobs", j.id), data);
+      const r = await settleOrQueue(write);
+      if (r.queued) write.catch(e => toast("Job not saved: " + (e.code || e.message)));
+      d.close(); toast(r.queued ? "Saved on this phone. It uploads when you have signal." : "Saved"); refreshAfterImport();
+      if (!data.date && !r.queued) location.reload();
     } catch (e) { $("#ferr").textContent = e.message; }
+    finally { guard.end(); if (saveBtn) saveBtn.disabled = false; }
   };
 }
 

@@ -121,9 +121,9 @@ test("pending blocks a second invite for that email until it is no longer pendin
   assert.equal(pendingInviteForEmail([{ ...pending, status: "accepted" }], email), null);
 });
 
-test("profile role is the invited role and heartwood omits tenantId", () => {
+test("profile role is the invited role and heartwood gets companyId but no tenantId", () => {
   const operator = profileFromInvite(draft().invite);
-  assert.deepEqual(operator, { name: "Casey Nguyen", role: "operator", email: "casey.nguyen@example.com" });
+  assert.deepEqual(operator, { name: "Casey Nguyen", role: "operator", email: "casey.nguyen@example.com", companyId: "heartwood" });
   const supervisor = profileFromInvite({ ...draft({ role: "supervisor", token: SUPER_TOKEN }).invite });
   assert.equal(supervisor.role, "supervisor");
   const other = profileFromInvite({ ...draft({ tenantId: "otherco" }).invite });
@@ -153,7 +153,7 @@ test("accept ignores a requested admin role and creates the invited profile", as
   assert.equal(store.calls.createUser[0].email, "casey.nguyen@example.com");
   assert.equal(store.calls.createUser[0].displayName, "Casey Nguyen");
   assert.deepEqual(store.calls.setProfile[0].profile, {
-    name: "Casey Nguyen", role: "operator", email: "casey.nguyen@example.com",
+    name: "Casey Nguyen", role: "operator", email: "casey.nguyen@example.com", companyId: "heartwood",
   });
   assert.equal(store.invites.get("i1").status, "accepted");
   assert.equal(store.profiles.get(result.uid).role, "operator");

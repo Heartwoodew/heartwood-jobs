@@ -76,7 +76,7 @@ async function authUpdate(localId, body) {
 mkdirSync(OUT, { recursive: true });
 const server = await start();
 const { port } = server.address();
-const browser = await chromium.launch({ executablePath: "/usr/local/bin/google-chrome", headless: true });
+const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || "/usr/local/bin/google-chrome", headless: true });
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
 try {
   await page.goto(`http://127.0.0.1:${port}/app/index.html`, { waitUntil: "domcontentloaded" });

@@ -136,6 +136,13 @@ function companyIdOf(object) {
     || "";
 }
 
+// API 2025-03-31.basil moved invoice.subscription to invoice.parent.subscription_details.subscription.
+function invoiceSubscription(object) {
+  return object.subscription
+    || (object.parent && object.parent.subscription_details && object.parent.subscription_details.subscription)
+    || undefined;
+}
+
 function mapStatus(stripeStatus) {
   if (stripeStatus === "active" || stripeStatus === "trialing") return "active";
   if (stripeStatus === "past_due" || stripeStatus === "unpaid") return "past_due";
@@ -169,11 +176,11 @@ export function applyStripeEvent(event, mode = "test") {
     return {
       ok: true,
       companyId,
-      patch: { plan: "paid", billing: billingPatch("active", { customer: object.customer, subscription: object.subscription }) },
+      patch: { plan: "paid", billing: billingPatch("active", { customer: object.customer, subscription: invoiceSubscription(object) }) },
     };
   }
   if (event.type === "invoice.payment_failed") {
-    return { ok: true, companyId, patch: { plan: "paid", billing: billingPatch("past_due", { customer: object.customer, subscription: object.subscription }) } };
+    return { ok: true, companyId, patch: { plan: "paid", billing: billingPatch("past_due", { customer: object.customer, subscription: invoiceSubscription(object) }) } };
   }
   if (event.type === "customer.subscription.updated") {
     const status = mapStatus(object.status);
@@ -271,14 +278,17 @@ export function constructStripeEvent(rawBody, header, secret, now = Date.now()) 
     if (cut > 0) parts[piece.slice(0, cut)] = piece.slice(cut + 1);
   }
   const timestamp = parts.t;
-  const v1 = parts.v1;
-  if (!timestamp || !v1 || !secret) throw new Error("invalid-signature");
+  // Stripe sends one v1 per active signing secret (two while a rolled secret is still valid). Accept any match.
+  const signatures = String(header || "").split(",").map(p => p.trim()).filter(p => p.startsWith("v1=")).map(p => p.slice(3)).filter(Boolean);
+  if (!timestamp || !signatures.length || !secret) throw new Error("invalid-signature");
   const age = Math.abs(now - Number(timestamp) * 1000);
   if (!Number.isFinite(age) || age > 5 * 60 * 1000) throw new Error("invalid-signature");
-  const expected = createHmac("sha256", secret).update(`${timestamp}.${text}`).digest("hex");
-  const left = Buffer.from(expected);
-  const right = Buffer.from(String(v1));
-  if (left.length !== right.length || !timingSafeEqual(left, right)) throw new Error("invalid-signature");
+  const expected = Buffer.from(createHmac("sha256", secret).update(`${timestamp}.${text}`).digest("hex"));
+  const match = signatures.some(sig => {
+    const right = Buffer.from(String(sig));
+    return expected.length === right.length && timingSafeEqual(expected, right);
+  });
+  if (!match) throw new Error("invalid-signature");
   const event = JSON.parse(text);
   if (!event || typeof event !== "object" || typeof event.type !== "string") throw new Error("invalid-signature");
   return event;
@@ -296,6 +306,25 @@ export async function handleStripeWebhook({ rawBody, signature, secret, loadComp
   const company = await loadCompany(decision.companyId);
   const skip = billingSkipped(company, decision.companyId);
   if (skip) return { status: 200, body: { received: true, skipped: skip } };
-  await saveBilling(decision.companyId, decision.patch);
+  const saved = await saveBilling(decision.companyId, decision.patch, eventStamp(event));
+  if (saved && saved.skipped) return { status: 200, body: { received: true, skipped: saved.skipped } };
   return { status: 200, body: { received: true, companyId: decision.companyId } };
+}
+
+function eventStamp(event) {
+  const created = Math.floor(Number(event && event.created));
+  return { id: String((event && event.id) || ""), created: Number.isFinite(created) && created > 0 ? created : 0 };
+}
+
+// Stripe does not deliver events in order and retries old ones for days. Apply a patch only when the event is not older
+// than the last one applied, so a retried invoice.paid can't turn a cancelled subscription back on. Same-second events
+// still apply. Events without a created time (never from Stripe) apply but don't move the marker.
+export function mergeBilling(current = {}, patch = {}, stamp = {}) {
+  const last = Math.floor(Number(current.lastEventCreated) || 0);
+  const created = Math.floor(Number(stamp.created) || 0);
+  if (created && last && created < last) return { skipped: "stale-event" };
+  if (stamp.id && current.lastEventId === stamp.id) return { skipped: "duplicate-event" };
+  const billing = { ...current, ...patch };
+  if (created) { billing.lastEventCreated = Math.max(created, last); billing.lastEventId = stamp.id || ""; }
+  return { billing };
 }

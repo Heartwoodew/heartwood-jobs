@@ -29,7 +29,7 @@ function start() {
 test("browser capture allows a Heartwood photo and rejects another tenant", async () => {
   const server = await start();
   const { port } = server.address();
-  const browser = await chromium.launch({ executablePath: "/usr/local/bin/google-chrome", headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || "/usr/local/bin/google-chrome", headless: true });
   try {
     const page = await browser.newPage();
     const storageCalls = [];

@@ -2,14 +2,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/storage-plan.test.js test/retention.test.js test/bundle.test.js test/storage-deploy-config.test.js test/capture-order.test.js test/gallery.test.js test/chat.test.js test/chat-push.test.js test/daily-jobs.test.js test/route-order.test.js test/swms.test.js test/compliance.test.js test/invites.test.js test/servicing.test.js test/prestart.test.js test/timesheet.test.js test/leave.test.js test/claims.test.js test/hours-export.test.js test/inbox-import.test.js test/helper.test.js test/helper-actions.test.js test/company.test.js test/company-branding.test.js test/company-exports.test.js test/stripe-billing.test.js test/production-rules.test.js test/callup-readiness.test.js",
+    "test": "node --test test/storage-plan.test.js test/retention.test.js test/bundle.test.js test/storage-deploy-config.test.js test/capture-order.test.js test/gallery.test.js test/chat.test.js test/chat-push.test.js test/daily-jobs.test.js test/route-order.test.js test/swms.test.js test/compliance.test.js test/invites.test.js test/servicing.test.js test/prestart.test.js test/timesheet.test.js test/leave.test.js test/claims.test.js test/hours-export.test.js test/inbox-import.test.js test/sw-shell.test.js test/pending-write.test.js test/indexes.test.js test/helper.test.js test/helper-actions.test.js test/company.test.js test/company-branding.test.js test/company-exports.test.js test/stripe-billing.test.js test/stripe-webhook-edges.test.js test/production-rules.test.js test/callup-readiness.test.js",
     "test:company-emulator": "firebase emulators:exec --only auth,firestore,storage --project demo-heartwood \"node --test --test-concurrency=1 test/company-migration.emulator.test.js\"",
     "test:helper:emulator": "firebase emulators:exec --only auth,firestore --project demo-heartwood \"node --test --test-concurrency=1 test/helper.emulator.test.js\"",
     "test:browser": "node --test test/browser.test.js",
     "test:inbox-browser": "node --test test/inbox-import.browser.test.js",
     "test:hours-browser": "firebase emulators:exec --only auth,firestore,storage --project demo-heartwood \"node --test --test-concurrency=1 test/hours-export.browser.test.js\"",
-    "test:emulator": "firebase emulators:exec --only auth,firestore,storage --project demo-heartwood \"node --test --test-concurrency=1 test/rules.emulator.test.js test/production-rules.emulator.test.js test/company-isolation.emulator.test.js\"",
-    "deploy": "node scripts/refuse-live-deploy.js"
+    "test:emulator": "firebase emulators:exec --only auth,firestore,storage --project demo-heartwood \"node --test --test-concurrency=1 test/rules.emulator.test.js test/production-rules.emulator.test.js test/company-isolation.emulator.test.js test/stress.emulator.test.js test/profile-scope.emulator.test.js test/push-rules.emulator.test.js\"",
+    "deploy": "node scripts/refuse-live-deploy.js",
+    "test:stress-emulator": "firebase emulators:exec --only firestore --project demo-heartwood \"node --test --test-concurrency=1 test/stress.emulator.test.js\""
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^4.0.1",

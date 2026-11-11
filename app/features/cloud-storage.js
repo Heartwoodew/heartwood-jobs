@@ -345,11 +345,10 @@ export async function putPlanned(plan, upload) {
   const targets = plan.uploads || [plan];
   const out = [];
   for (const target of targets) {
-    out.push(await upload({
-      path: target.path,
-      contentType: target.contentType,
-      metadata: target.metadata,
-    }));
+    const one = { path: target.path, contentType: target.contentType, metadata: target.metadata };
+    // Batch plans say which picked file each upload is for. Keep it, or the caller can't find the bytes.
+    if (Number.isInteger(target.sourceIndex)) one.sourceIndex = target.sourceIndex;
+    out.push(await upload(one));
   }
   return out;
 }
