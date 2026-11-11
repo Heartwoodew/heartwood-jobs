@@ -18,6 +18,16 @@ export function firestoreHelperStore(db) {
     async markProposal(id, patch) {
       await db.collection("helperProposals").doc(id).set(patch, { merge: true });
     },
+    // pending -> applying in a transaction. False when another request already claimed it.
+    async claimProposal(id) {
+      const ref = db.collection("helperProposals").doc(String(id || ""));
+      return db.runTransaction(async tx => {
+        const snap = await tx.get(ref);
+        if (!snap.exists || snap.data().status !== "pending") return false;
+        tx.update(ref, { status: "applying" });
+        return true;
+      });
+    },
     async audit(entry) {
       await db.collection("helperAudit").add(entry);
     },
