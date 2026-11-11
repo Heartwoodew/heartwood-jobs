@@ -460,7 +460,9 @@ service cloud.firestore {
       allow read: if isSync() || mine();
       allow get: if isOwner() && docCompany(resource.data) == "heartwood";
       allow list: if isOwner() && resource.data.companyId == "heartwood";
-      allow create, update: if (isOwner() && docCompany(request.resource.data) == "heartwood" && (resource == null || docCompany(resource.data) == "heartwood")) || (mine() && isWorker() && notOtherCompany() && request.resource.data.uid == request.auth.uid && noSentChange());
+      // Workers write their own sheet through the TIMESHEET RULES block below (tsWorkerCreate / tsWorkerUpdate), which
+      // keeps clock stamps and entry authors fixed. The old blanket worker write here let a sheet be rewritten wholesale.
+      allow create, update: if isOwner() && docCompany(request.resource.data) == "heartwood" && (resource == null || docCompany(resource.data) == "heartwood");
       allow delete: if isOwner();
     }
 
