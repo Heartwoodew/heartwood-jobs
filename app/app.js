@@ -869,9 +869,11 @@ async function mirrorJobPhotos(j, files) {
   });
   if (!plan.ok) { console.warn("cloud photo mirror skipped", (plan.skipped || []).map(s => s.reason).join(",") || "none"); return; }
   plan = stampExpiresAfter(plan, j, at);
-  await putPlanned(plan, target => uploadBytes(storageRef(storage, target.path), files[target.sourceIndex], {
-    contentType: target.contentType, customMetadata: target.metadata,
-  }));
+  await putPlanned(plan, target => {
+    const file = files[target.sourceIndex];
+    if (!file) throw Object.assign(new Error("photo-file-missing"), { code: "photo-file-missing" });
+    return uploadBytes(storageRef(storage, target.path), file, { contentType: target.contentType, customMetadata: target.metadata });
+  });
   // Not a retention anchor, including on a completed job. Listing still uses the
   // job's completion or existing activity date. This only asks other open phones to list again.
   updateDoc(doc(db, "jobs", j.id), { cloudPhotosAt: at.toISOString() }).catch(e => console.warn("cloud photo stamp not saved", e.code || e.message));

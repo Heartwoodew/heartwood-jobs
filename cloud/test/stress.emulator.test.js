@@ -67,6 +67,12 @@ test(`concurrent clock-on and clock-off for ${N * 3} staff across three companie
   await Promise.all(all.map(async ([uid, c]) => {
     const id = "e" + uid.toLowerCase().replace(/[^a-z0-9]/g, "").padEnd(8, "0");
     const ref = doc(db(uid), `timesheets/${uid}_2026-11-09`);
+    const first = (await getDoc(ref)).data().entries[id];
+    // Machine pick right after clock-on (the step CallUp company staff could not save).
+    try {
+      await updateDoc(ref, { [`entries.${id}`]: { ...first, machineChoice: "none", machineId: "", machineName: "" },
+        lastEntryId: id, updatedAt: serverTimestamp(), updatedAtIso: new Date().toISOString(), totalHrs: 0, companyId: c });
+    } catch (err) { offFailed.push(`${uid} (${c}) machine: ${String(err.message).includes("1000 expressions") ? "rules expression limit" : err.code}`); }
     const cur = (await getDoc(ref)).data();
     const e = cur.entries[id];
     try {
