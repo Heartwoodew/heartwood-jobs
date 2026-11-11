@@ -42,6 +42,7 @@ import {
   assertKeyForMode,
   handleCheckoutCall,
   stripeMode,
+  STRIPE_API_VERSION,
   stripePrices,
   handlePortalCall,
   handleStripeWebhook,
@@ -286,7 +287,8 @@ async function testStripe() {
   const key = STRIPE_LIVE ? STRIPE_LIVE_SECRET_KEY.value() : STRIPE_SECRET_KEY.value();
   assertKeyForMode(key, STRIPE_MODE);
   const { default: Stripe } = await import("stripe");
-  return new Stripe(key);
+  // The live CallUp account uses Stripe Managed Payments, which Checkout refuses on API versions before basil.
+  return new Stripe(key, { apiVersion: STRIPE_API_VERSION });
 }
 
 function billingFailure(result) {
