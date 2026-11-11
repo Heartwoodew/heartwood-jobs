@@ -2703,6 +2703,7 @@ function editJob(j) {
       ${j.address ? `<a class="sub" href="${mapsUrl(j.address)}" target="_blank" rel="noopener">📍 Open in Maps</a>` : ""}
       <h4>Job Description</h4>
       <textarea name="description" rows="4">${esc(j.description)}</textarea>
+      ${Array.isArray(j.workAmounts) && j.workAmounts.length ? `<div class="hint"><b>Amounts from the quote</b>${workAmountsHtml(j, "det-amt")}</div>` : ""}
       ${!n && isMixed(j) ? `<div class="splitbox"><b>⚠ Mixed work:</b> ${esc(mixedKinds(j).map(k => TYPES[k] || k).join(" + "))}. Tick the lines to move to a new job:
         ${taskLines(j.description).map((x, i) => `<label class="ck"><input type="checkbox" class="spl" data-i="${i}" ${x.k && x.k !== (j.type || taskLines(j.description)[0].k) ? "checked" : ""}> ${esc(x.t)} <span class="sub">${esc(TYPES[x.k] || "?")}</span></label>`).join("")}
         <button type="button" id="splitbtn" class="btn">✂ Split into new job</button></div>` : ""}
@@ -3607,6 +3608,11 @@ const opTabs = on => {
 };
 const adminBack = () => me.role === "admin" ? `<button class="mback adminback" id="toadmin" type="button">Admin view</button>` : "";
 const opSeg = on => `<div class="seg mob-seg" role="group" aria-label="When">${[["today", "Today"], ["week", "Upcoming"]].map(([k, n]) => `<button type="button" data-tab="${k}" class="${on === k ? "on" : ""}">${n}</button>`).join("")}</div>`;
+// Quote amounts for the crew (rubbish / concrete / material amounts). Price-free by construction (quotes.js workAmounts).
+function workAmountsHtml(j, cls) {
+  const list = Array.isArray(j && j.workAmounts) ? j.workAmounts.filter(a => typeof a === "string" && a && !/\$\s?\d/.test(a)).slice(0, 8) : [];
+  return list.length ? `<ul class="${cls}">${list.map(a => `<li>${esc(a)}</li>`).join("")}</ul>` : "";
+}
 function opCard(j) {
   const p = phonePlace(j.address);
   const crew = namesOf(j);
@@ -3619,6 +3625,7 @@ function opCard(j) {
     <div class="mbody">${ipTop(j, "sm")}<div class="mcl"><span class="qdot ${QCLS[queueOf(j)]}"></span>${esc(type)}${jobPhotosIcon(j)}</div>
       <div class="maddr">${esc(p.line || p.full || "-")}</div>
       <div class="mdesc">${esc(p.locality || j.client || "")}</div>
+      ${workAmountsHtml(j, "mamt")}
       <div class="mst ${st}">${esc(crew.length ? crew.join(", ") : "Unallocated")}<span class="sub"> · #${esc(jobNo(j))}</span></div></div>
     <div class="chev" aria-hidden="true"></div></div>`;
 }
@@ -3839,6 +3846,7 @@ function renderOpDetail(j) {
         <div><dt>Crew</dt><dd>${esc(crew.length ? crew.join(", ") : "—")}</dd></div>
         <div><dt>Purchase order</dt><dd><b>${esc(j.po || "—")}</b></dd></div>
         <div class="scope"><dt>Scope</dt><dd>${esc(j.description || "—")}</dd></div>
+        ${Array.isArray(j.workAmounts) && j.workAmounts.length ? `<div class="scope"><dt>Amounts</dt><dd>${workAmountsHtml(j, "det-amt")}</dd></div>` : ""}
       </dl>
       <div class="mcard"><div class="mlbl">Diary</div>${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("") || `<div class="muted sub">No notes yet</div>`}
         <button class="mnote" type="button" data-act="note">Add note</button></div>

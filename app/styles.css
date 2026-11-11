@@ -1063,3 +1063,41 @@ body.admin .mdisp .route-open{display:block;width:calc(100% - 24px);margin:10px 
 dialog.comp-alert { max-width: 420px; border: 0; border-radius: 12px; padding: 18px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
 dialog.comp-alert::backdrop { background: rgba(0,0,0,.35); }
 dialog.comp-alert h2 { margin: 0 0 8px; font-size: 1.1rem; }
+/* Quote extra items, price overrides, GST totals (Nov 2026) */
+.qx .qx-chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 10px}
+.qx-chip{min-height:40px;padding:6px 12px;border-radius:20px;border:1px solid #d9c7b3;background:#fffdf9;font-weight:700;color:#3b2a1a}
+.qx-chip.qx-saved{border-style:dashed}
+.qx-rows{display:flex;flex-direction:column;gap:10px}
+.qx-row{border:1px solid #eadfd3;border-radius:12px;background:#fff;padding:10px}
+.qx-head{display:flex;gap:10px;align-items:center}
+.qx-head .qx-desc{flex:1;min-width:0;font-weight:700}
+.qx-amt{white-space:nowrap;min-width:84px;text-align:right}
+.qx-grid{display:grid;grid-template-columns:1fr 1fr 1.3fr;gap:8px}
+.qx-grid label,.qx-row .qx-note,.qx-row .qx-type{margin:6px 0}
+.qx-acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.qx-acts .sm-btn{min-height:40px;min-width:44px}
+.qx-del{color:#a12d1f}
+.qx-tag{font-style:normal;font-size:11px;font-weight:800;background:#efe6da;color:#5c4e42;border-radius:6px;padding:1px 6px;margin-right:2px}
+.qx-lnote{display:block;color:#7a6a5a;font-size:12px}
+.qx-was{color:#9a8a7a;font-weight:500}
+.qx-adj{font-size:11px;font-weight:800;color:#8a5a2b;text-transform:uppercase}
+.qx-ovline{background:#fff3e0}
+.qx-adjrow{color:#8a5a2b}
+.qx-subtotal{border-top:1px solid #f0d9a8}
+.qx-ovrow{display:grid;grid-template-columns:1fr 120px auto;gap:8px;align-items:center;padding:6px 0;border-bottom:1px dashed #eadfd3}
+.qx-ovrow small{display:block}
+.qw-custrow{margin:10px 0}
+.plc-wrap{position:relative}
+.plc-list{list-style:none;margin:-6px 0 8px;padding:4px 0;border:1px solid #d9c7b3;border-radius:10px;background:#fff;box-shadow:0 6px 18px rgba(0,0,0,.08)}
+.plc-list li{padding:10px 12px;cursor:pointer;min-height:24px;color:#2b2118;font-size:15px;font-weight:500}
+.plc-list li:hover,.plc-list li:focus{background:#fbf6ef;outline:none}
+.plc-list .plc-foot{font-size:11px;color:#7a6a5a;cursor:default;text-align:right;padding:4px 12px}
+.plc-tag{color:#2f6b3a}
+.mamt,.det-amt{list-style:none;margin:4px 0 0;padding:0;font-size:13px;color:#3b2a1a}
+.mamt li::before{content:"▪ ";color:#8a5a2b}
+.det-amt li{padding:2px 0}
+@media (max-width:520px){.qx-grid{grid-template-columns:1fr 1fr}.qx-grid label:nth-child(3){grid-column:1/-1}.qx-ovrow{grid-template-columns:1fr 110px}.qx-ovrow .sm-btn{grid-column:1/-1}}
+.jc .qx-acts{display:grid;grid-template-columns:48px 48px 1fr 1fr;gap:6px}
+.jc .qx-acts .sm-btn{width:auto;min-height:44px;font-size:14px;padding:6px 8px}
+.jc .qx-ovrow .sm-btn{width:auto}
+.qx-chip{font-size:14px}

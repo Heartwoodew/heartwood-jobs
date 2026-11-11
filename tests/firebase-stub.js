@@ -94,6 +94,9 @@ function withGeo(row) {
   return geo ? { ...row, geo } : row;
 }
 function previewJob(row) {
+  // Quote amounts for the crew (window.HW_JOB_AMOUNTS = { jobId: [..] }), price-free.
+  const amts = (typeof window !== "undefined" && window.HW_JOB_AMOUNTS) || {};
+  if (amts[row.id]) row = { ...row, workAmounts: amts[row.id] };
   const crew = (typeof window !== "undefined" && window.HW_JOB_CREW) || {};
   const add = crew[row.id];
   let next = add ? {

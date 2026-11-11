@@ -40,6 +40,9 @@
       { id: "e1", name: "Riley Chen", email: "riley.chen@example.com", role: "operator", status: "pending", token: "expiredpreviewtoken00000000000000000000000", expiresAt: "2026-11-01T10:00:00+10:00" }
     ];
   }
+  if (q.get("amounts") === "1") {
+    window.HW_JOB_AMOUNTS = { j3: ["Rubbish removal — Green waste: 6 m³", "Concrete removal: 3 t (reinforced slab, break-up needed)", "Supply and deliver material — Road base: 10 t"] };
+  }
   if (q.get("open") === "accept") {
     window.HW_PREVIEW_SIGNED_OUT = true;
     window.HW_INVITE_PREVIEW = {
@@ -629,7 +632,7 @@ if (q.get("check") === "1") {
     if (hours) hours.value = "2";
     document.querySelector("#qwnext")?.click();
     await sleep(40);
-    const preset = document.querySelector('[name=preset][value=truck]');
+    const preset = document.querySelector('[name=preset][value=truck_skid]');
     if (preset) { preset.checked = true; preset.dispatchEvent(new Event("change")); }
     await sleep(30);
     document.querySelector("#qwnext")?.click();

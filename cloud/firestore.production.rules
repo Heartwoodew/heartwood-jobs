@@ -328,15 +328,24 @@ service cloud.firestore {
     }
 
 
+    // Quote extra items / guided price overrides / picked Google place (Nov 2026): optional, size-capped.
+    // Shape only; the app cleans each item. Quotes stay office-only (staff never read them).
+    function quoteFieldsOk(d) {
+      return d.get("extraItems", []) is list && d.get("extraItems", []).size() <= 40
+        && d.get("priceOverrides", {}) is map && d.get("priceOverrides", {}).size() <= 20
+        && (d.get("addressPlace", null) == null || (d.addressPlace is map
+          && d.addressPlace.keys().hasOnly(["formattedAddress", "lat", "lng", "placeId", "source"])
+          && d.addressPlace.lat is number && d.addressPlace.lng is number));
+    }
     match /quotes/{id} {
       allow get: if (isAdmin() && docCompany(resource.data) == "heartwood")
         || (companyOffice() && docCompany(resource.data) == callerCompany());
       allow list: if isAdmin() && resource.data.companyId == "heartwood";
       allow list: if companyOffice() && resource.data.companyId == callerCompany();
-      allow create: if (isAdmin() && request.resource.data.get("companyId", "heartwood") == "heartwood")
-        || (companyOffice() && request.resource.data.companyId == callerCompany());
-      allow update: if (isAdmin() && docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood")
-        || (companyOffice() && docCompany(resource.data) == callerCompany() && docCompany(request.resource.data) == callerCompany());
+      allow create: if quoteFieldsOk(request.resource.data) && ((isAdmin() && request.resource.data.get("companyId", "heartwood") == "heartwood")
+        || (companyOffice() && request.resource.data.companyId == callerCompany()));
+      allow update: if quoteFieldsOk(request.resource.data) && ((isAdmin() && docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood")
+        || (companyOffice() && docCompany(resource.data) == callerCompany() && docCompany(request.resource.data) == callerCompany()));
       allow delete: if false;
     }
 
