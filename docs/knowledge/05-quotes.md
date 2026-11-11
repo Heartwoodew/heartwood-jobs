@@ -20,7 +20,7 @@ The open PR that changes GST and a second operator is **not** this behaviour. Se
 
 `FLEET_MACHINES` (lines 16–20): Truck, Skid steer (Bobcat, code CA), Excavator (JCB, code EX).
 
-`EQUIPMENT_PRESETS` (lines 27–33): Truck only; Truck + skid; Truck + excavator; Truck + skid + excavator; Excavator only. Each preset lists a machine once. Comment (lines 23–25): the truck is never charged twice. The package rate includes the operator. An optional **labourer** is a separate rate (`labourerRate`), not a second operator record.
+`EQUIPMENT_PRESETS`: Truck + skid; Truck + excavator; Truck + skid + excavator; Excavator only. Truck on its own was removed on 11 Nov 2026 (the truck only comes with a skid steer or excavator); older truck-only quotes still open, calculate and can be accepted as legacy. Each preset lists a machine once. Comment (lines 23–25): the truck is never charged twice. The package rate includes the operator. An optional **labourer** is a separate rate (`labourerRate`), not a second operator record.
 
 Hourly machine lines multiply by hours on site. Day-rate lines multiply by `machineDays` (default 1), not by hours (`calcQuote`, lines 128–136). If any machine is selected, the legacy `hourlyOnSite` rate is not added (lines 69–70 and 134).
 

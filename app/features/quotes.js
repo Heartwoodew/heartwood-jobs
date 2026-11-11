@@ -33,9 +33,10 @@ export const FLEET_MACHINES = [
  * Equipment presets (Alex Nov 2026): Truck with skid and/or excavator.
  * Each preset lists machine ids once — truck is never charged twice.
  * Preset package rate includes operator; labourer is optional add-on.
+ * No truck-only option (Alex, 11 Nov 2026): the truck comes with a skid steer or excavator. Saved truck-only
+ * quotes still open and calculate as legacy (isTruckOnly) and are never forced to change.
  */
 export const EQUIPMENT_PRESETS = [
-  { id: "truck", label: "Truck only", machines: ["truck"] },
   { id: "truck_skid", label: "Truck + skid steer", machines: ["truck", "skid"] },
   { id: "truck_excavator", label: "Truck + excavator", machines: ["truck", "excavator"] },
   { id: "truck_skid_excavator", label: "Truck + skid steer + excavator", machines: ["truck", "skid", "excavator"] },
@@ -229,7 +230,7 @@ let api = null;
 export function installQuotes(a) {
   api = a;
   return {
-    calcQuote, DEFAULT_RATE_KEYS, DEFAULT_DEPOT, FLEET_MACHINES, EQUIPMENT_PRESETS,
+    calcQuote, isTruckOnly, machineSelectionError, DEFAULT_RATE_KEYS, DEFAULT_DEPOT, FLEET_MACHINES, EQUIPMENT_PRESETS,
     resolvePresetId, machineSelectionFromPreset, quoteLines, roadDistanceKm,
     bindAdmin: bindAdminExtras,
     openQuoteWizard, openRatesEditor, refreshQuotes, ensureRates,
@@ -302,7 +303,21 @@ export function resolvePresetId(machineIds) {
   return null;
 }
 
+/** A selection that is just the truck — no longer offered for new quotes. */
+export function isTruckOnly(machineIds) {
+  return normalizeMachineIds(machineIds).join(",") === "truck";
+}
+
+/** Step-2 machine check. Returns an error message or "". Legacy truck-only quotes (legacyTruck) stay allowed. */
+export function machineSelectionError(machineIds, { legacyTruck = false } = {}) {
+  const ids = normalizeMachineIds(machineIds);
+  if (!ids.length) return "Pick an equipment preset (skid steer and/or excavator).";
+  if (isTruckOnly(ids) && !legacyTruck) return "The truck comes with a skid steer or excavator. Pick a package with one of them.";
+  return "";
+}
+
 export function machineSelectionFromPreset(presetId) {
+  if (presetId === "truck") return ["truck"]; // legacy preset id on older saved quotes
   const p = EQUIPMENT_PRESETS.find(x => x.id === presetId);
   return p ? normalizeMachineIds(p.machines) : [];
 }
@@ -588,7 +603,7 @@ function openRatesEditor() {
     d.innerHTML = `<form method="dialog" id="qrf" class="jf"><h2>Quote rates &amp; depot</h2>
       <p class="sub">Saved for your company only. Dollar rates are ex GST — leave blank until you know them (nothing invented). Plant rates include the operator. Labourer is a separate optional add-on. Depot is travel start.</p>
       <h3>Plant (operator included)</h3>
-      <p class="sub">Presets: Truck only · Truck + skid · Truck + excavator · Truck + skid + excavator · Excavator only. Selecting a combo charges each machine once (no double truck).</p>
+      <p class="sub">Presets: Truck + skid · Truck + excavator · Truck + skid + excavator · Excavator only. Selecting a combo charges each machine once (no double truck). The truck rate is used inside the truck packages.</p>
       ${plantFields}
       <h3>Labourer (optional add-on)</h3>
       <label>Labourer $ (ex GST)<input name="labourerRate" type="number" step="0.01" min="0" value="${esc(rates.labourerRate ?? "")}"></label>
@@ -690,6 +705,8 @@ function openQuoteWizard(existing, opts = {}) {
     state.priceOverrides = sanitizeOverrides(state.priceOverrides);
     state.machines = normalizeMachineIds(state.machines || []);
     state.presetId = resolvePresetId(state.machines);
+    // Saved before truck-only was removed: keep it valid as a legacy quote (opens, calculates, can be accepted).
+    const legacyTruck = isTruckOnly(existing?.machines || []);
     // Shown as three steps (job / setup / review). Travel, materials, rubbish and the total stay on review.
     // calcQuote, rate checks and the accept payload are unchanged.
     let step = opts.jumpToPrice ? 2 : 0;
@@ -709,7 +726,7 @@ function openQuoteWizard(existing, opts = {}) {
         <button value="cancel" formnovalidate class="jc-x" aria-label="Close">✕</button></div>
         <div class="jc-body qw-body"><div class="qw-steps" aria-label="Quote steps">${phases.map((s, i) => `<span class="qw-phase ${i === step ? "on" : i < step ? "done" : ""}"><b>${i + 1}</b> ${s}</span>`).join("")}</div>
         <div class="qw-bar" aria-hidden="true"><span style="width:${Math.round(((step + 1) / phases.length) * 100)}%"></span></div>
-        ${stepHtml(step, draft, calc, rates, esc, TYPES, CLIENTS, canSeeMoney, $$, canEditRates())}
+        ${stepHtml(step, draft, calc, rates, esc, TYPES, CLIENTS, canSeeMoney, $$, canEditRates(), legacyTruck)}
         ${step === 2 ? `<p class="warnt pad" id="qwmissing" ${calc.complete ? "hidden" : ""}>${calc.complete ? "" : `Missing rates for: ${esc(calc.missingRates.map(k => missingLabel(k, calc)).join(", "))}. Save as draft, or set the price. Total is not shown as valid until every used line has a price.`}</p>` : ""}
         ${already ? `<p class="pad sub">Already accepted → job <b>${esc(existing.jobId)}</b>. Accept will not create another job.</p>` : ""}
         </div>
@@ -908,7 +925,10 @@ function openQuoteWizard(existing, opts = {}) {
     const validateStep = (s, data) => {
       const err = $("#qerr");
       if (s === 0 && (!data.client || !data.address)) { err.textContent = "Client and site address are required."; return false; }
-      if (s === 1 && !(data.machines && data.machines.length)) { err.textContent = "Pick an equipment preset (truck and/or skid / excavator)."; return false; }
+      if (s === 1) {
+        const m = machineSelectionError(data.machines, { legacyTruck: legacyTruck && isTruckOnly(data.machines) });
+        if (m) { err.textContent = m; return false; }
+      }
       err.textContent = ""; return true;
     };
     const calcTravel = async () => {
@@ -1000,7 +1020,7 @@ function openQuoteWizard(existing, opts = {}) {
   });
 }
 
-function stepHtml(step, d, calc, rates, esc, TYPES, CLIENTS, canSeeMoney, $$, isAdmin = false) {
+function stepHtml(step, d, calc, rates, esc, TYPES, CLIENTS, canSeeMoney, $$, isAdmin = false, legacyTruck = false) {
   const depot = rates.yardAddress || DEFAULT_DEPOT.yardAddress;
   const maps = rates.yardMapsUrl || DEFAULT_DEPOT.yardMapsUrl;
   const rateTxt = (v, suffix) => (v != null && canSeeMoney()) ? `${$$(v)}${suffix} ex GST` : "not set yet";
@@ -1023,7 +1043,7 @@ function stepHtml(step, d, calc, rates, esc, TYPES, CLIENTS, canSeeMoney, $$, is
     }).join("");
     // and/or builder mirrors preset: truck + optional skid + optional excavator. Same ids, truck once.
     const builder = `<details class="qw-builder"><summary>Adjust machines</summary>
-      <p class="sub">Same machines as the list above. Truck is counted once.</p>
+      <p class="sub">Same machines as the list above. Truck is counted once, and only with a skid steer or excavator.</p>
       <label class="ck"><input type="checkbox" data-mach="truck" ${sel.has("truck") ? "checked" : ""}> Truck</label>
       <label class="ck"><input type="checkbox" data-mach="skid" ${sel.has("skid") ? "checked" : ""}> Skid steer (Bobcat)</label>
       <label class="ck"><input type="checkbox" data-mach="excavator" ${sel.has("excavator") ? "checked" : ""}> Excavator (JCB)</label>
@@ -1032,8 +1052,12 @@ function stepHtml(step, d, calc, rates, esc, TYPES, CLIENTS, canSeeMoney, $$, is
       const { rate, unit } = machineRateOf(rates, id);
       return `<div class="sub">${esc(fleetName(id))} + operator: ${rateTxt(rate, unit === "day" ? "/day" : "/h")}</div>`;
     }).join("") : "";
+    const truckOnly = isTruckOnly([...sel]);
     return `<div class="qw-pane"><h4>Machine setup</h4>
-      <p class="sub">Each machine is included once, with its operator.</p>
+      <p class="sub">Each machine is included once, with its operator. The truck comes with a skid steer or excavator.</p>
+      ${truckOnly ? `<p class="${legacyTruck ? "sub" : "warnt"} qw-legacy">${legacyTruck
+        ? "Older truck-only quote — kept as it was. Truck on its own is no longer offered for new quotes."
+        : "Truck on its own isn't offered. Add a skid steer or excavator."}</p>` : ""}
       <div class="qw-presets">${presets}</div>
       ${builder}
       <h4 class="qw-labh">Need a labourer?</h4>

@@ -105,6 +105,58 @@ try {
     results.acceptToJob = { description: j.description, workAmounts: j.workAmounts, quoteAmount: j.quoteAmount };
     page.close();
   }
+  // Machine picker (no truck-only option) and an older truck-only quote opening as legacy.
+  {
+    const { page, errors } = await openPage(chrome.port, `http://127.0.0.1:${PORT}/tests/phone-preview.html?role=admin`);
+    await page.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+    await waitReady(page, 12000);
+    const r = await page.send("Runtime.evaluate", { expression: `(async () => {
+      const sleep = ms => new Promise(r => setTimeout(r, ms));
+      document.querySelector('[data-view="quotes"]').click(); await sleep(200);
+      document.querySelector("#newquote").click(); await sleep(200);
+      document.querySelector("[name=address]").value = "Lot 12 · 4 Cedar Court, Redbank Plains QLD 4301";
+      document.querySelector("#qwnext").click(); await sleep(80);
+      const presets = [...document.querySelectorAll("[name=preset]")].map(x => x.value);
+      const labels = [...document.querySelectorAll(".qw-preset b")].map(x => x.textContent);
+      // Builder: tick only the truck → blocked with a clear message.
+      document.querySelector(".qw-builder").open = true;
+      document.querySelectorAll("[data-mach]").forEach(cb => { cb.checked = cb.dataset.mach === "truck"; });
+      document.querySelector("[data-mach=truck]").dispatchEvent(new Event("change")); await sleep(60);
+      document.querySelector("#qwnext").click(); await sleep(60);
+      const blocked = document.querySelector("#qerr").textContent;
+      const stillStep2 = !!document.querySelector("[name=preset]");
+      return JSON.stringify({ presets, labels, blocked, stillStep2 });
+    })()`, awaitPromise: true, returnByValue: true });
+    const pick = JSON.parse(r.result.value);
+    if (pick.presets.includes("truck") || pick.labels.some(l => /Truck only/.test(l))) throw new Error("truck-only still offered " + r.result.value);
+    if (!/skid steer or excavator/.test(pick.blocked) || !pick.stillStep2) throw new Error("truck-only not blocked " + r.result.value);
+    writeFileSync(`${out}/machine-picker-truck-blocked-mobile.png`, await shot(page, { x: 0, y: 0, width: 390, height: 844, scale: 1 }));
+    await page.send("Runtime.evaluate", { expression: `(async () => {
+      const sleep = ms => new Promise(r => setTimeout(r, ms));
+      document.querySelector("#dlg").close(); await sleep(150);
+      document.querySelector('[data-view="quotes"]').click(); await sleep(200);
+      document.querySelector("#newquote").click(); await sleep(200);
+      document.querySelector("[name=address]").value = "Lot 12 · 4 Cedar Court, Redbank Plains QLD 4301";
+      document.querySelector("#qwnext").click(); await sleep(120);
+    })()`, awaitPromise: true });
+    writeFileSync(`${out}/machine-picker-mobile.png`, await shot(page, { x: 0, y: 0, width: 390, height: 844, scale: 1 }));
+    const lg = await page.send("Runtime.evaluate", { expression: `(async () => {
+      const sleep = ms => new Promise(r => setTimeout(r, ms));
+      document.querySelector("#dlg").close(); await sleep(150);
+      window.HW_QUOTES.openQuoteWizard({ id: "legacy1", quoteStatus: "Draft", client: "Orbit Homes (Qld) Pty Ltd", address: "Lot 5 · 2 Old Road, Chuwar QLD 4306", type: "spoil", hoursOnSite: 3, machines: ["truck"], presetId: "truck", travelKm: 0, materialQty: 0, tipLoads: 0 });
+      await sleep(250);
+      document.querySelector("#qwnext").click(); await sleep(80);
+      const legacyNote = document.querySelector(".qw-legacy")?.textContent || "";
+      document.querySelector("#qwnext").click(); await sleep(80);
+      return JSON.stringify({ legacyNote, onReview: !!document.querySelector("#qwsum"), sum: document.querySelector("#qwsum")?.innerText || "", err: document.querySelector("#qerr")?.textContent || "" });
+    })()`, awaitPromise: true, returnByValue: true });
+    const legacy = JSON.parse(lg.result.value);
+    if (!/Older truck-only quote/.test(legacy.legacyNote) || !legacy.onReview || !/Truck \+ operator \(3 h\)/.test(legacy.sum)) throw new Error("legacy truck-only quote broken " + lg.result.value);
+    writeFileSync(`${out}/legacy-truck-only-review-mobile.png`, await shot(page, { x: 0, y: 0, width: 390, height: 844, scale: 1 }));
+    if (errors.length) throw new Error(errors.join("\n"));
+    results.machinePicker = { ...pick, legacy };
+    page.close();
+  }
   // Places dropdown with a fake library (no Google call): suggestions show, a pick fills the address + place.
   {
     const { page, errors } = await openPage(chrome.port, `http://127.0.0.1:${PORT}/tests/phone-preview.html?role=supervisor`);

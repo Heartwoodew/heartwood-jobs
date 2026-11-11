@@ -632,7 +632,7 @@ if (q.get("check") === "1") {
     if (hours) hours.value = "2";
     document.querySelector("#qwnext")?.click();
     await sleep(40);
-    const preset = document.querySelector('[name=preset][value=truck]');
+    const preset = document.querySelector('[name=preset][value=truck_skid]');
     if (preset) { preset.checked = true; preset.dispatchEvent(new Event("change")); }
     await sleep(30);
     document.querySelector("#qwnext")?.click();

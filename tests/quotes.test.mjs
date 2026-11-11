@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { calcQuote, resolvePresetId, machineSelectionFromPreset, EQUIPMENT_PRESETS, FLEET_MACHINES } from "../app/features/quotes.js";
+import { calcQuote, resolvePresetId, machineSelectionFromPreset, EQUIPMENT_PRESETS, FLEET_MACHINES, isTruckOnly, machineSelectionError, quotesViewHtml } from "../app/features/quotes.js";
 
 const rates = {
   travelPerKm: 2, materialPerUnit: 3, tipPerLoad: 4,
@@ -110,4 +110,39 @@ test("quote module and service worker stay in place", () => {
   assert.match(app, /canSeeMoney = \(\) => !!me && \(me\.role === "admin" \|\| me\.role === "supervisor" \|\| me\.staffRole === "supervisor"\)/);
   assert.match(app, /canEditQuoteRates = \(\) => !!\(me && me\.role === "admin"\)/);
   assert.equal(FLEET_MACHINES.map(m => m.id).join(","), "truck,skid,excavator");
+});
+
+test("truck on its own is no longer offered; the truck only comes in a skid steer or excavator package", () => {
+  assert.equal(EQUIPMENT_PRESETS.some(p => p.id === "truck"), false);
+  assert.equal(EQUIPMENT_PRESETS.some(p => p.machines.length === 1 && p.machines[0] === "truck"), false);
+  assert.deepEqual(EQUIPMENT_PRESETS.map(p => p.id), ["truck_skid", "truck_excavator", "truck_skid_excavator", "excavator"]);
+  for (const p of EQUIPMENT_PRESETS.filter(p => p.machines.includes("truck"))) {
+    assert.ok(p.machines.includes("skid") || p.machines.includes("excavator"), p.id);
+  }
+  assert.equal(resolvePresetId(["truck"]), null);
+  assert.equal(isTruckOnly(["truck"]), true);
+  assert.equal(isTruckOnly(["truck", "truck"]), true);
+  assert.equal(isTruckOnly(["truck", "skid"]), false);
+  assert.match(machineSelectionError(["truck"]), /skid steer or excavator/);
+  assert.match(machineSelectionError([]), /Pick an equipment preset/);
+  assert.equal(machineSelectionError(["truck", "excavator"]), "");
+  assert.equal(machineSelectionError(["excavator"]), "");
+});
+
+test("a saved truck-only quote still opens and calculates as legacy, using the truck rate", () => {
+  assert.deepEqual(machineSelectionFromPreset("truck"), ["truck"], "legacy preset id still maps to the truck");
+  assert.equal(machineSelectionError(["truck"], { legacyTruck: true }), "");
+  const q = calcQuote({ hoursOnSite: 3, machines: ["truck"], presetId: "truck", travelKm: 0, materialQty: 0, tipLoads: 0 }, rates);
+  assert.equal(q.totalEx, 300);
+  assert.equal(q.presetId, null);
+  assert.equal(q.lines.filter(l => l.machineId === "truck").length, 1);
+  const esc = s => String(s ?? "");
+  const html = quotesViewHtml({ quoteRates: rates, quotes: [{ id: "old", quoteStatus: "Draft", client: "Orbit", machines: ["truck"], presetId: "truck", totalEx: 300 }] }, esc, v => "$" + v, { canEditQuoteRates: () => true });
+  assert.match(html, /Truck/);
+});
+
+test("truck rate stays in the rate editor because the truck packages use it", () => {
+  const src = readFileSync(new URL("../app/features/quotes.js", import.meta.url), "utf8");
+  assert.match(src, /\{ id: "truck", name: "Truck"/);
+  assert.match(src, /FLEET_MACHINES\.map\(m => \{\s*const cur = mr\[m\.id\]/);
 });
