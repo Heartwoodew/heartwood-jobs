@@ -8,13 +8,14 @@ import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { getStorage, ref as storageRef, uploadBytes, connectStorageEmulator, listAll, getMetadata, getBlob }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
-import { firebaseConfig, useEmulator } from "./firebase-config.js";
+import { firebaseConfig, useEmulator, vapidKey } from "./firebase-config.js";
 import { installQuotes, adminViewRouter, setDefaultDepot } from "./features/quotes.js";
 import { installRouteOrder, orderJobsForRun, runSheetId, geoPatch, setRouteDepot } from "./features/route-order.js";
 import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPlanned, jobPhotoPrefix, storageErrorCode, summarizePhotoListing } from "./features/cloud-storage.js";
 import { buildOperationalExport, retentionAdminText, retentionView } from "./features/cloud-retention.js";
 import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, lightboxHtml, photoFailureText } from "./features/photo-gallery.js";
 import { installChatApp } from "./features/chat-ui.js";
+import { alertsModel, bindChatAlerts, bindPingUnlock, chatAlertsHtml, installChatAlerts, readChatParam } from "./features/chat-notify.js";
 import { installCompliance } from "./features/compliance.js";
 import { SWMS, SWMS_VERSION, sigMs, sigExp, latestSig, statusOf, swmsSignatureData, buildPlaceholderPdf } from "./features/swms-sign.js";
 import {
@@ -62,6 +63,18 @@ if (useEmulator) {
   connectStorageEmulator(storage, "127.0.0.1", 9199);
 }
 if ("serviceWorker" in navigator && !useEmulator) navigator.serviceWorker.register("sw.js", { scope: "./" });
+installChatAlerts({
+  app: fb, db, vapidKey, emulator: useEmulator, toast,
+  getUid: () => me && me.uid,
+  getCompanyId: () => {
+    const profile = me && me.cloudProfile;
+    const company = profile && typeof profile.companyId === "string" ? profile.companyId.trim() : "";
+    if (company) return company;
+    const tenant = profile && typeof profile.tenantId === "string" ? profile.tenantId.trim() : "";
+    return tenant || "heartwood";
+  },
+});
+bindPingUnlock(document);
 
 // ------------------------------------------------------------------ constants / helpers
 // Client names for job/quote forms. Heartwood's builders by default; replaced in place per company (refreshClientLists).
@@ -463,9 +476,10 @@ function settingsView() {
   const rates = me && me.role === "admin" && myCompanyId() !== "heartwood"
     ? `<section class="pad setrates"><h3>Quote rates</h3><p class="sub">Your plant, labour, travel and tip rates for quotes. They start blank and are only used by your company.</p><button type="button" id="setrates" class="sm-btn">Edit quote rates</button></section>`
     : "";
-  return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin") }) + rates;
+  return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin") }) + rates + chatAlertsHtml(alertsModel(), { open: true });
 }
 function bindSettings(A) {
+  bindChatAlerts(A);
   const rb = A.querySelector("#setrates");
   if (rb) rb.onclick = () => QG && QG.openRatesEditor();
   const sub = A.querySelector("#billsub");
@@ -651,6 +665,19 @@ const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU"
 const NAV = [["home", "⌂", "Home"], ["compliance", "🚐", "Compliance"], ["prestart", "☑", "Prestart"], ["chat", "💬", "Chat"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["staff", "👥", "Staff"], ["inbox", "✉", "Inbox", 0, 1],
   ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["leave", "🌴", "Leave"], ["claims", "🧾", "Reimbursements"], ["reimb", "💵", "Receipt ledger", 0, 1], ["settings", "⚙", "Company"], ["master", "▣", "Master"]];
 ui.view = "home"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
+readChatLink();
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    const data = event.data || {};
+    if (data.type !== "open-chat") return;
+    const thread = data.threadId || "";
+    if (thread !== "staff" && !/^job_[A-Za-z0-9_-]{1,200}$/.test(thread)) return;
+    ui.pendingChat = thread;
+    if (!me) return;
+    if (me.role === "admin" && !ui.myJobs) renderAdmin();
+    else renderOperator();
+  });
+}
 const PHONE = matchMedia("(max-width:760px)");
 const TOUCH = matchMedia("(pointer:coarse)");
 PHONE.addEventListener?.("change", () => { if (me && me.role === "admin") renderAdmin(); });
@@ -2484,6 +2511,67 @@ function bindStaff(A) {
     catch (e) { toast("Couldn't cancel (" + (e.code || "error") + ")."); }
   });
 }
+function readChatLink() {
+  try {
+    const thread = readChatParam(location.search);
+    if (!thread) return;
+    ui.pendingChat = thread;
+    const params = new URLSearchParams(location.search);
+    params.delete("chat");
+    const next = params.toString();
+    history.replaceState(null, "", location.pathname + (next ? "?" + next : "") + location.hash);
+  } catch { /* keep the query */ }
+}
+function primeChatLink() {
+  const thread = ui.pendingChat;
+  if (!thread || !me) return;
+  if (thread === "staff") {
+    ui.pendingChat = "";
+    if (me.role === "admin" && !ui.myJobs) ui.view = "chat";
+    else { ui.opTab = "chat"; ui.opSel = null; }
+    return;
+  }
+  const jobId = thread.slice(4);
+  const pool = [...(jobs || []), ...(ui.undated || []), ...(ui.done || []), ...(ui.pendingChatJob ? [ui.pendingChatJob] : [])];
+  const job = pool.find(j => j && j.id === jobId);
+  if (!job) {
+    if (ui.pendingChatFetch !== jobId) {
+      ui.pendingChatFetch = jobId;
+      getDoc(doc(db, "jobs", jobId)).then(snap => {
+        if (ui.pendingChat !== "job_" + jobId) return;
+        ui.pendingChatFetch = "";
+        const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
+        if (!exists) { ui.pendingChat = ""; toast("That job chat isn't on this phone."); return; }
+        const loaded = { id: snap.id, ...snap.data() };
+        const company = (loaded.companyId || loaded.tenantId || "heartwood").trim();
+        if (company !== myCompanyId()) { ui.pendingChat = ""; toast("That job chat isn't on this phone."); return; }
+        if (me.role !== "admin" && !(loaded.assigned || []).includes(me.uid)) {
+          ui.pendingChat = ""; toast("That job chat isn't on this phone."); return;
+        }
+        ui.pendingChatJob = loaded;
+        if (me.role === "admin" && !ui.myJobs) renderAdmin();
+        else renderOperator();
+      }).catch(() => { if (ui.pendingChatFetch === jobId) ui.pendingChatFetch = ""; });
+    }
+    return;
+  }
+  ui.pendingChat = "";
+  ui.pendingChatJob = null;
+  if (me.role === "admin" && !ui.myJobs) ui.openChatJob = job;
+  else {
+    ui.pinnedChatJob = job;
+    if (!jobs.some(j => j.id === job.id)) jobs = jobs.concat(job);
+    ui.opSel = job.id;
+    ui.jobPane = "chat";
+  }
+}
+function finishChatLink() {
+  if (!ui.openChatJob) return;
+  const job = ui.openChatJob;
+  ui.openChatJob = null;
+  ui.pendingJobTab = "chat";
+  editJob(job);
+}
 function renderAdmin() {
   donePill(); reimbPill(); inboxSub();
   if (!me || me.role !== "admin") return;
@@ -2498,6 +2586,7 @@ function renderAdmin() {
   if (ui.view === "claims" && document.activeElement?.closest?.("#claimform, .rc-decide")) return;
   if (ui.view === "chat" && document.activeElement?.closest?.(".chat-compose")) return;
   if (ui.view === "staff" && document.activeElement?.closest?.("#invitef")) return;
+  primeChatLink();
   document.body.className = "admin";
   const fj = filtered(), und = (ui.undated || []).filter(j => (!ui.typeF || j.type === ui.typeF));
   const all = [...fj, ...und.filter(u => !fj.some(j => j.id === u.id))];
@@ -2580,6 +2669,7 @@ function renderAdmin() {
       const [id, from] = ev.dataTransfer.getData("text/plain").split("|"); const j = pool.find(x => x.id === id);
       if (j) dispatchMove(j, z.dataset.date, from, z.dataset.staff, z.dataset.hour); };
   });
+  finishChatLink();
 }
 // Dispatch drag: date (and optionally hour / staff row). Writes Firestore only (admin), marks editedInApp so the
 // 30-min ServiceM8 import keeps the change. Nothing is written to ServiceM8.
@@ -2797,7 +2887,9 @@ function jobTabs(d, j) {
     f.insertBefore(sc, f.querySelector(".jc-facts")); sc.append(f.querySelector(".jc-facts"), f.querySelector(".jc-tabs"), body); }
   f.querySelectorAll("[data-jt]").forEach(b => b.onclick = () => show(b.dataset.jt));
   if (canXero()) bindXc(f, [j]);
-  show("details");
+  const startTab = ui.pendingJobTab === "chat" ? "chat" : "details";
+  ui.pendingJobTab = "";
+  show(startTab);
 }
 // ------------------------------------------------------------------ invoicing (admin only)
 // Invoice fields live on the job doc: invoiceNo (text), invoiceAmount (ex GST), invoiceDescription, invoiceContact,
@@ -3589,6 +3681,7 @@ function opCard(j) {
     <div class="chev" aria-hidden="true"></div></div>`;
 }
 function bindOp(mine) {
+  bindChatAlerts($("#app"));
   if ($("#toadmin")) $("#toadmin").onclick = () => { ui.myJobs = false; ui.opSel = null; renderAdmin(); };
   $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; renderOperator(); window.scrollTo(0, 0); });
   $("#app").querySelectorAll("[data-go]").forEach(b => b.onclick = () => { if (b.dataset.go === "swms") return swmsOverlay(); ui.opTab = b.dataset.go; renderOperator(); window.scrollTo(0, 0); });
@@ -3641,11 +3734,15 @@ function renderOperator() {
   if (canImport()) inboxSub();
   if (!ui.forceRender && document.querySelector("#compform, #prestartform")) return;
   ui.forceRender = false;
+  primeChatLink();
   document.body.className = "operator";
   ui.runStops = {};
   CHAT.watch(jobs);
   const t0 = todayStr(), t1 = addDays(t0, 1), wkEnd = addDays(t0, 7);
-  const mine = jobs.filter(j => j.status !== "Cancelled" && (me.role !== "admin" || (j.assigned || []).includes(me.uid))).sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
+  const mineBase = jobs.filter(j => j.status !== "Cancelled" && (me.role !== "admin" || (j.assigned || []).includes(me.uid))).sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
+  const mine = ui.pinnedChatJob && ui.opSel === ui.pinnedChatJob.id && !mineBase.some(j => j.id === ui.pinnedChatJob.id)
+    ? mineBase.concat(ui.pinnedChatJob)
+    : mineBase;
   const sel = ui.opSel && mine.find(j => j.id === ui.opSel);
   if (sel) return renderOpDetail(sel);
   if (ui.opTab === "chat" && document.activeElement?.closest?.(".chat-compose")) return;
@@ -3727,6 +3824,7 @@ function renderOperator() {
         ${quoteBtn}
         ${staffBtn}
         ${inboxBtn}
+        ${chatAlertsHtml(alertsModel(), { open: true })}
         <p class="powered pad">${esc(orgSettings().name)} · ${esc(POWERED_BY)}</p>
       </div>
       ${myIncidentsHtml()}

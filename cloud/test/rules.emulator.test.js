@@ -249,6 +249,47 @@ test("job chat follows admin and assigned visibility", async () => {
   await assertSucceeds(getDoc(doc(db("op1"), "tenants", "heartwood", "chats", "staff")));
 });
 
+const TOKEN_ID = "a".repeat(32);
+function chatToken(companyId, origin = "https://jobs.heartwoodew.com") {
+  return {
+    token: "fcm-token-value-0123456789",
+    companyId,
+    origin,
+    platform: "web",
+    updatedAt: serverTimestamp(),
+  };
+}
+
+test("chat push tokens and alert prefs stay on the signed-in user and their company", async () => {
+  const opToken = doc(db("op1"), "users", "op1", "fcmTokens", TOKEN_ID);
+  await assertSucceeds(setDoc(opToken, chatToken("heartwood")));
+  await assertSucceeds(getDoc(opToken));
+  await assertSucceeds(getDocs(collection(db("op1"), "users", "op1", "fcmTokens")));
+  await assertFails(setDoc(opToken, chatToken("otherco")));
+  await assertFails(setDoc(doc(db("op1"), "users", "op1", "fcmTokens", "short"), chatToken("heartwood")));
+  await assertFails(setDoc(doc(db("op1"), "users", "op1", "fcmTokens", TOKEN_ID), chatToken("heartwood", "https://evil.example")));
+  await assertFails(getDoc(doc(db("idle"), "users", "op1", "fcmTokens", TOKEN_ID)));
+  await assertFails(getDocs(collection(db("op2"), "users", "op1", "fcmTokens")));
+  await assertFails(deleteDoc(doc(db("idle"), "users", "op1", "fcmTokens", TOKEN_ID)));
+  await assertFails(setDoc(doc(db("stranger"), "users", "stranger", "fcmTokens", TOKEN_ID), chatToken("heartwood")));
+  await assertFails(setDoc(doc(env.unauthenticatedContext().firestore(), "users", "op1", "fcmTokens", TOKEN_ID), chatToken("heartwood")));
+  await assertSucceeds(setDoc(doc(db(ALEX), "users", ALEX, "fcmTokens", TOKEN_ID), chatToken("heartwood")));
+  await assertSucceeds(deleteDoc(doc(db(ALEX), "users", ALEX, "fcmTokens", TOKEN_ID)));
+  const otherToken = doc(db("op2"), "users", "op2", "fcmTokens", TOKEN_ID);
+  await assertSucceeds(setDoc(otherToken, chatToken("otherco", "https://app.callupapp.com.au")));
+  await assertFails(setDoc(otherToken, chatToken("heartwood", "https://app.callupapp.com.au")));
+  await assertFails(setDoc(doc(db("op2"), "users", "op1", "fcmTokens", TOKEN_ID), chatToken("otherco", "https://app.callupapp.com.au")));
+  const prefs = doc(db("op1"), "users", "op1", "chatSettings", "prefs");
+  await assertSucceeds(setDoc(prefs, { sound: false, push: true }));
+  await assertSucceeds(getDoc(prefs));
+  await assertFails(setDoc(prefs, { sound: true, push: false, companyId: "otherco" }));
+  await assertFails(setDoc(doc(db("op1"), "users", "idle", "chatSettings", "prefs"), { sound: true, push: true }));
+  await assertFails(getDoc(doc(db("op2"), "users", "op1", "chatSettings", "prefs")));
+  await assertFails(deleteDoc(prefs));
+  await assertSucceeds(deleteDoc(opToken));
+  await assertSucceeds(deleteDoc(otherToken));
+});
+
 test("chat photos stay private to the thread and are not receipt or finance files", async () => {
   const staffPath = "tenants/heartwood/chat/staff/photos/c12345678";
   const staffMeta = {

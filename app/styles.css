@@ -924,6 +924,14 @@ body.operator .job-chat .chat-screen{height:calc(100dvh - 168px - env(safe-area-
 .chat-view{position:fixed;inset:0;z-index:90;background:#3b2a1a;display:flex;flex-direction:column;align-items:center;justify-content:center}
 .chat-view img{max-width:100%;max-height:calc(100dvh - 72px);object-fit:contain}
 .chat-view-x{position:absolute;top:8px;left:8px;color:#f6f1ea;background:transparent;border:none;min-height:44px;font-weight:700}
+.chat-alerts{flex:0 0 auto;margin:0 12px 8px;background:#fffdf9;border:1px solid #eadfd3;border-radius:12px;padding:4px 12px 8px}
+.chat-alerts summary,.chat-alerts h3{min-height:44px;display:flex;align-items:center;font-weight:700;cursor:pointer;margin:0}
+.chat-alerts h3{cursor:default;font-size:16px}
+.chat-alerts .ck{display:flex;align-items:center;gap:8px;min-height:44px}
+.chat-alerts .chat-enable{min-height:44px;margin:4px 0 8px}
+.chat-alerts .chat-enable[hidden]{display:none !important}
+.chat-alerts .chat-ios,.chat-alerts .sub{color:#7a6a5a;font-size:14px;margin:0 0 8px}
+.chat-alerts-err:empty{display:none}
 @media (max-width:760px){
   dialog.jobcard .jc-pane[data-pane="chat"] .chat-screen{height:calc(100dvh - 210px)}
   .chat-compose{padding-bottom:calc(8px + env(safe-area-inset-bottom))}

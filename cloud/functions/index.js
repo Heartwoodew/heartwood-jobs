@@ -17,6 +17,10 @@
  * helperAsk stays deployed and refuses every request. HELPER_ENABLED defaults
  * to "false", and HELPER_HARD_OFF returns before Auth, Firestore, or Vertex.
  * An environment change cannot turn it back on. See helper/DEPLOY.md.
+ *
+ * chatMessagePush sends a web push when a chat message is created.
+ * It notifies the other people who can see that chat, in that company only.
+ * Deploy is still blocked by cloud/scripts/refuse-live-deploy.js.
  */
 import { onDocumentCreated, onDocumentWritten } from "firebase-functions/v2/firestore";
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
@@ -24,6 +28,8 @@ import { defineSecret } from "firebase-functions/params";
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
+import { getMessaging } from "firebase-admin/messaging";
+import { dispatchChatPush } from "./chat-push.js";
 import { handlePhotoIntake } from "./lib/photo-intake.js";
 import {
   acceptStaffInvite as acceptInvite,
@@ -383,6 +389,66 @@ export const syncStripeStaff = onDocumentWritten(
       const staff = await db.collection("users").where("companyId", "==", companyId).get();
       await syncStaffQuantity({ companyId, company: snap.data(), staffCount: staff.size, stripe, prices: currentPrices() });
     }
+  },
+);
+
+async function loadChatPeople(db, tenantId) {
+  const snap = await db.collectionGroup("fcmTokens").where("companyId", "==", tenantId).get();
+  const grouped = new Map();
+  snap.forEach(docSnap => {
+    const parent = docSnap.ref.parent && docSnap.ref.parent.parent;
+    const uid = parent && parent.id;
+    if (!uid) return;
+    const data = docSnap.data() || {};
+    if (!grouped.has(uid)) grouped.set(uid, { uid, tokens: [] });
+    grouped.get(uid).tokens.push({
+      id: docSnap.id,
+      token: data.token,
+      companyId: data.companyId,
+      origin: data.origin,
+    });
+  });
+  const people = [];
+  for (const person of grouped.values()) {
+    const userRef = db.collection("users").doc(person.uid);
+    const [userSnap, prefsSnap] = await Promise.all([
+      userRef.get(),
+      userRef.collection("chatSettings").doc("prefs").get(),
+    ]);
+    person.profile = userSnap.exists ? userSnap.data() : null;
+    const prefs = prefsSnap.exists ? prefsSnap.data() : null;
+    person.push = !!(prefs && prefs.push === true);
+    people.push(person);
+  }
+  return people;
+}
+
+export const chatMessagePush = onDocumentCreated(
+  {
+    document: "tenants/{tenantId}/chats/{threadId}/messages/{messageId}",
+    region: "australia-southeast1",
+  },
+  async (event) => {
+    if (process.env.NODE_TEST_CONTEXT) return;
+    const snap = event.data;
+    if (!snap) return;
+    const message = snap.data() || {};
+    const { tenantId, threadId } = event.params;
+    ensureAdmin();
+    const db = getFirestore();
+    const result = await dispatchChatPush({
+      tenantId,
+      threadId,
+      message,
+      loadJob: async (jobId) => {
+        const jobSnap = await db.collection("jobs").doc(jobId).get();
+        return jobSnap.exists ? { id: jobSnap.id, ...jobSnap.data() } : null;
+      },
+      loadPeople: () => loadChatPeople(db, tenantId),
+      sendEach: (messages) => getMessaging().sendEach(messages),
+      deleteToken: (target) => db.collection("users").doc(target.uid).collection("fcmTokens").doc(target.tokenId).delete(),
+    });
+    console.log("chat push", tenantId, threadId, result.sent, result.dropped, result.skipped || "");
   },
 );
 
