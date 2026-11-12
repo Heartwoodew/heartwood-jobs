@@ -157,6 +157,41 @@ test("finance files and export objects stay off limits for ordinary roles", asyn
   await assertFails(uploadBytes(ref(storageOf(ALEX), "tenants/heartwood/_exports/public.zip"), new Uint8Array([1]), { contentType: "application/zip" }));
 });
 
+test("company logo is written by that company's admin and readable by its members", async () => {
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), "users/hwAdmin"), { role: "admin", name: "Ada", companyId: "heartwood" });
+  });
+  const pathHw = "companies/heartwood/logo/logo.jpg";
+  const pathOther = "companies/otherco/logo/logo.jpg";
+  const meta = (uid, companyId, contentType = "image/jpeg") => ({
+    contentType,
+    customMetadata: { purpose: "company-logo", uploaderUid: uid, companyId },
+  });
+  const hwAdmin = storageOf("hwAdmin");
+  await assertSucceeds(uploadBytes(ref(hwAdmin, pathHw), jpeg, meta("hwAdmin", "heartwood")));
+  await assertSucceeds(getBytes(ref(hwAdmin, pathHw)));
+  await assertSucceeds(getBytes(ref(storageOf("op1"), pathHw)));
+  await assertFails(uploadBytes(ref(storageOf("op1"), pathHw), jpeg, meta("op1", "heartwood")));
+  await assertFails(uploadBytes(ref(storageOf("sup1"), pathHw), jpeg, meta("sup1", "heartwood")));
+  await assertFails(uploadBytes(ref(storageOf("finOther"), pathHw), jpeg, meta("finOther", "heartwood")));
+  await assertSucceeds(uploadBytes(ref(storageOf("finOther"), pathOther), jpeg, meta("finOther", "otherco")));
+  await assertSucceeds(getBytes(ref(storageOf("op2"), pathOther)));
+  await assertFails(getBytes(ref(storageOf("op1"), pathOther)));
+  await assertFails(getBytes(ref(storageOf("op2"), pathHw)));
+  await assertFails(getBytes(ref(env.unauthenticatedContext().storage(), pathHw)));
+  await assertFails(uploadBytes(ref(hwAdmin, "companies/heartwood/logo/logo.webp"), jpeg, meta("hwAdmin", "heartwood")));
+  await assertFails(uploadBytes(ref(hwAdmin, "companies/heartwood/logo.jpg"), jpeg, meta("hwAdmin", "heartwood")));
+  await assertFails(uploadBytes(ref(hwAdmin, pathHw), jpeg, meta("hwAdmin", "heartwood", "image/gif")));
+  await assertFails(uploadBytes(ref(hwAdmin, pathHw), jpeg, { contentType: "image/jpeg" }));
+  await assertFails(uploadBytes(ref(hwAdmin, pathHw), new Uint8Array(2 * 1024 * 1024 + 1), meta("hwAdmin", "heartwood")));
+  await assertSucceeds(uploadBytes(ref(hwAdmin, "companies/heartwood/logo/logo.png"), jpeg, meta("hwAdmin", "heartwood", "image/png")));
+  await assertSucceeds(uploadBytes(ref(hwAdmin, pathHw), jpeg, meta("hwAdmin", "heartwood")));
+  await assertFails(deleteObject(ref(storageOf("op1"), pathHw)));
+  await assertSucceeds(deleteObject(ref(hwAdmin, pathHw)));
+  const alex = env.authenticatedContext(ALEX, { email: "alex@heartwoodew.com", email_verified: true, platformOwner: true }).storage();
+  await assertSucceeds(getBytes(ref(alex, pathOther)));
+});
+
 test("ordinary roles cannot read the Xero queue or rewrite their tenant", async () => {
   const op = env.authenticatedContext("op1").firestore();
   const sup = env.authenticatedContext("sup1").firestore();

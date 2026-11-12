@@ -33,6 +33,7 @@ import {
   supervisorsPath, docCompanyId,
 } from "./features/company.js";
 import { companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, signupFormHtml } from "./features/company-ui.js";
+import { acceptLogoValue, compressLogo, isLogoStoragePath, logoFailureText, logoFileOk, logoUploadPlan } from "./features/company-logo.js";
 import { exportAllowed, hoursCsv, invoiceCsv, jobsCsv, reimbursementsCsv } from "./features/company-exports.js";
 import {
   formatReceiptMeasure, parseReceiptMeasures, receiptDupKey, receiptHasMoney,
@@ -361,9 +362,30 @@ function bindInviteAccept(token, previewOnly, email) {
     }
   };
 }
+const logoObjectUrls = Object.create(null);
 function orgLogoHtml(org) {
-  if (!org.logoUrl) return "";
-  return `<img class="orglogo" src="${esc(org.logoUrl)}" alt="">`;
+  const url = org && org.logoUrl;
+  if (!url) return "";
+  if (isLogoStoragePath(url, org.companyId)) {
+    return `<img class="orglogo" data-logo-path="${esc(url)}" alt="">`;
+  }
+  return `<img class="orglogo" src="${esc(url)}" alt="">`;
+}
+function loadOrgLogos(root = document) {
+  const scope = root && root.querySelectorAll ? root : document;
+  const tasks = [];
+  scope.querySelectorAll("img[data-logo-path]").forEach(img => {
+    const path = img.dataset.logoPath;
+    if (!path) return;
+    if (logoObjectUrls[path]) { img.src = logoObjectUrls[path]; return; }
+    tasks.push(getBlob(storageRef(storage, path)).then(blob => {
+      if (!logoObjectUrls[path]) logoObjectUrls[path] = URL.createObjectURL(blob);
+      document.querySelectorAll(`img[data-logo-path="${CSS.escape(path)}"]`).forEach(el => { el.src = logoObjectUrls[path]; });
+    }).catch(() => {
+      document.querySelectorAll(`img[data-logo-path="${CSS.escape(path)}"]`).forEach(el => { el.remove(); });
+    }));
+  });
+  return Promise.all(tasks);
 }
 function paintBrand() {
   const org = orgSettings();
@@ -381,6 +403,7 @@ function paintBrand() {
   const back = document.querySelector("#testexit");
   if (back) back.onclick = () => leaveTestCompany();
   document.title = `${PRODUCT_NAME} · ${org.name}`;
+  loadOrgLogos(el || document);
 }
 function testCompanyActive() { return orgSettings().isTest === true; }
 function holdOutbound(kind, text) {
@@ -462,7 +485,7 @@ function renderSignup(friendCode = "") {
     const checked = validateCompanyInput({
       name: f.name.value, legalName: f.legalName.value, abn: f.abn.value, address: f.address.value,
       phone: f.phone.value, email: f.email.value, accountsEmail: f.accountsEmail.value,
-      hubdocAddress: f.hubdocAddress.value, logoUrl: f.logoUrl.value, signoff: f.name.value,
+      hubdocAddress: f.hubdocAddress.value, logoUrl: "", signoff: f.name.value,
     });
     if (!checked.ok) { err.textContent = companyFailure(checked.reason); return; }
     if (!f.ownerName.value.trim()) { err.textContent = "Enter your name."; return; }
@@ -489,6 +512,17 @@ function renderSignup(friendCode = "") {
         }));
       }
       await setDoc(doc(db, "users", cred.user.uid), { ...ownerProfile(checked.value, companyId, f.ownerName.value.trim()), email: f.ownerEmail.value.trim().toLowerCase() });
+      const logoFile = f.logoFile && f.logoFile.files && f.logoFile.files[0];
+      if (logoFile && logoFileOk(logoFile).ok) {
+        try {
+          const plan = logoUploadPlan(companyId, cred.user.uid);
+          if (plan.ok) {
+            const blob = await compressLogo(logoFile);
+            await uploadBytes(storageRef(storage, plan.path), blob, { contentType: plan.contentType, customMetadata: plan.metadata });
+            await updateDoc(doc(db, "companies", companyId), { logoUrl: plan.path });
+          }
+        } catch { /* company is already created; they can add the logo in settings */ }
+      }
       signingUp = false;
       location.reload();
     } catch (e) {
@@ -519,29 +553,101 @@ function bindSettings(A) {
   if (sub) sub.onclick = () => openBilling("createBillingCheckout");
   if (portal) portal.onclick = () => openBilling("createBillingPortal");
   const form = A.querySelector("#orgform");
-  if (!form || form.querySelector("[disabled]")) return;
+  if (!form || form.querySelector("[disabled]")) { loadOrgLogos(A); return; }
+  let pendingLogo = null;
+  const previewBox = form.querySelector(".logopreview");
+  const showLogoPreview = (src, path) => {
+    if (!previewBox) return;
+    if (!src && !path) { previewBox.hidden = true; previewBox.innerHTML = ""; return; }
+    previewBox.hidden = false;
+    const img = document.createElement("img");
+    img.className = "orglogo-preview";
+    img.alt = "Company logo";
+    if (path) img.dataset.logoPath = path;
+    else img.src = src;
+    previewBox.innerHTML = "";
+    previewBox.appendChild(img);
+    if (path) loadOrgLogos(previewBox);
+  };
+  const ensureLogoRemove = () => {
+    let btn = form.querySelector("#logoremove");
+    if (btn) return btn;
+    btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "sm-btn";
+    btn.id = "logoremove";
+    btn.textContent = "Remove logo";
+    if (form.logoFile) form.logoFile.insertAdjacentElement("afterend", btn);
+    else form.appendChild(btn);
+    return btn;
+  };
+  const bindLogoRemove = () => {
+    const btn = form.querySelector("#logoremove");
+    if (!btn || btn.dataset.bound) return;
+    btn.dataset.bound = "1";
+    btn.onclick = async () => {
+      pendingLogo = "remove";
+      if (form.logoFile) form.logoFile.value = "";
+      if (form.logoUrl) form.logoUrl.value = "";
+      showLogoPreview("");
+      btn.remove();
+    };
+  };
+  if (form.logoFile) {
+    form.logoFile.onchange = () => {
+      const file = form.logoFile.files && form.logoFile.files[0];
+      if (!file) return;
+      const check = logoFileOk(file);
+      if (!check.ok) { toast(logoFailureText(check.reason)); form.logoFile.value = ""; return; }
+      pendingLogo = file;
+      showLogoPreview(URL.createObjectURL(file));
+      bindLogoRemove(ensureLogoRemove());
+    };
+  }
+  bindLogoRemove();
+  loadOrgLogos(A);
   form.onsubmit = async ev => {
     ev.preventDefault();
     const org = orgSettings();
+    let logoUrl = form.logoUrl ? form.logoUrl.value : (org.logoUrl || "");
+    if (pendingLogo === "remove") {
+      const old = acceptLogoValue(org.logoUrl, org.companyId);
+      if (isLogoStoragePath(old, org.companyId) && logoObjectUrls[old]) {
+        URL.revokeObjectURL(logoObjectUrls[old]);
+        delete logoObjectUrls[old];
+      }
+      logoUrl = "";
+    } else if (pendingLogo) {
+      const plan = logoUploadPlan(org.companyId, me && me.uid);
+      if (!plan.ok) { toast(logoFailureText(plan.reason)); return; }
+      let blob;
+      try { blob = await compressLogo(pendingLogo); }
+      catch (e) { toast(logoFailureText((e && e.code) || "compress")); return; }
+      try {
+        await uploadBytes(storageRef(storage, plan.path), blob, { contentType: plan.contentType, customMetadata: plan.metadata });
+        logoUrl = plan.path;
+        if (logoObjectUrls[plan.path]) { URL.revokeObjectURL(logoObjectUrls[plan.path]); delete logoObjectUrls[plan.path]; }
+      } catch (e) { toast(logoFailureText("upload")); return; }
+    }
+    if (form.logoUrl) form.logoUrl.value = logoUrl;
     const checked = companyDetailPatch(org, {
       name: form.name.value, legalName: form.legalName.value, abn: form.abn.value, address: form.address.value,
       phone: form.phone.value, email: form.email.value, accountsEmail: form.accountsEmail.value,
-      hubdocAddress: form.hubdocAddress.value, signoff: form.signoff.value, logoUrl: form.logoUrl.value,
+      hubdocAddress: form.hubdocAddress.value, signoff: form.signoff.value, logoUrl,
       ...(form.jobPrefix ? { jobPrefix: form.jobPrefix.value } : {}), ...(form.accountsName ? { accountsName: form.accountsName.value } : {}),
     });
     if (!checked.ok) { toast(companyFailure(checked.reason)); return; }
-    const typed = form.logoUrl.value.trim();
     try {
       if (Object.keys(checked.patch).length) await updateDoc(doc(db, "companies", org.companyId), checked.patch);
       setActiveCompany({ ...org, ...checked.value, companyId: org.companyId });
       paintBrand();
-      toast(typed && !orgSettings().logoUrl ? "Logo needs an http(s) address or an icons/ file. Other fields saved." : "Company details saved");
+      toast("Company details saved");
     } catch (e) {
       if (org.companyId === "heartwood") {
-        const saved = saveOrgSettings(checked.value);
+        saveOrgSettings(checked.value);
         setActiveCompany(null);
         paintBrand();
-        toast(typed && !saved.logoUrl ? "Logo needs an http(s) address or an icons/ file. Other fields saved on this phone." : "Saved on this phone until the company record is published");
+        toast("Saved on this phone until the company record is published");
         return;
       }
       toast("Not saved: " + (e.code || e.message));

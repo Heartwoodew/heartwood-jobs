@@ -5,6 +5,7 @@
 
 import { DEFAULT_ORG } from "../org-settings.js";
 import { appOriginFor } from "./staff-invites.js";
+import { acceptLogoValue } from "./company-logo.js";
 
 export const HEARTWOOD_COMPANY_ID = "heartwood";
 export const PLATFORM_OWNER_EMAIL = "alex@heartwoodew.com";
@@ -66,15 +67,8 @@ function clip(value, max) {
   return String(value ?? "").trim().slice(0, max);
 }
 
-export function safeLogo(url) {
-  const value = clip(url, 300);
-  if (!value) return "";
-  if (/^icons\/[A-Za-z0-9._/-]+$/.test(value)) return value;
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol === "https:" || parsed.protocol === "http:") return value.slice(0, 300);
-  } catch { /* not a URL */ }
-  return "";
+export function safeLogo(url, companyId) {
+  return acceptLogoValue(url, companyId);
 }
 
 export function validateCompanyInput(input = {}) {
@@ -87,7 +81,7 @@ export function validateCompanyInput(input = {}) {
   const email = clip(input.email, 120).toLowerCase();
   const accountsEmail = clip(input.accountsEmail, 120).toLowerCase();
   const hubdocAddress = clip(input.hubdocAddress, 120).toLowerCase();
-  const logoUrl = safeLogo(input.logoUrl);
+  const logoUrl = safeLogo(input.logoUrl, input.companyId);
   if (!name) return { ok: false, reason: "name" };
   if (!legalName) return { ok: false, reason: "legalName" };
   if (!abn) return { ok: false, reason: "abn" };
