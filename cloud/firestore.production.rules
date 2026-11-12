@@ -449,13 +449,14 @@ service cloud.firestore {
         && (d.get("splitUndoPoAmount", null) == null || d.splitUndoPoAmount is number);
     }
     match /jobMoney/{jobId} {
+      // A missing doc (a job with no money yet) reads as "not found" for the office, so the Find PO listener stays alive. Crew still fail.
       allow read, write: if isSync();
-      allow get: if isAdmin() && docCompany(resource.data) == "heartwood";
+      allow get: if isAdmin() && (resource == null || docCompany(resource.data) == "heartwood");
       allow list: if isAdmin() && resource.data.companyId == "heartwood";
       allow create: if isAdmin() && docCompany(request.resource.data) == "heartwood" && jobMoneyOk(request.resource.data, jobId);
       allow update: if isAdmin() && docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood"
         && jobMoneyOk(request.resource.data, jobId);
-      allow get: if companyOffice() && docCompany(resource.data) == callerCompany();
+      allow get: if companyOffice() && (resource == null || docCompany(resource.data) == callerCompany());
       allow list: if companyOffice() && resource.data.companyId == callerCompany();
       allow create: if companyOffice() && request.resource.data.companyId == callerCompany() && jobMoneyOk(request.resource.data, jobId);
       allow update: if companyOffice() && resource.data.get("companyId", "") == callerCompany()

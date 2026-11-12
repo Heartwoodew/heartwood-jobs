@@ -326,7 +326,7 @@ service cloud.firestore {
         && (isAlex() || isPatrick() || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor")));
     }
     match /jobMoney/{id} {
-      allow get: if jobMoneyReader(resource.data);
+      allow get: if resource == null ? jobMoneyReader({"companyId": callerCompany()}) : jobMoneyReader(resource.data);
       allow list: if jobMoneyReader(resource.data) && resource.data.companyId == callerCompany();
       allow write: if false;
     }

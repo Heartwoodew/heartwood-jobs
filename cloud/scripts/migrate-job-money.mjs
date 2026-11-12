@@ -4,6 +4,10 @@
 // then removes them from the job. It also drops quote prices from the job's quote copy (totalEx, gst, totalInc, lines,
 // priceOverrides, ratesSnapshot, extraItems[].unitPrice; quote.totalEx is kept as quoteAmount when that is missing)
 // and moves splitUndo.poAmount to jobMoney.splitUndoPoAmount. Values already in jobMoney are never overwritten.
+// It also strips typed dollar amounts from crew-readable text the box or the app wrote on the job: poLookupMsg
+// (older Find PO runs wrote "PO ... $N ex GST"), workAmounts[] and quote.extraItems[].note/description (the same
+// "[price removed]" rule the app now applies to new quotes). Free text people typed (notes, description) is only
+// counted in the report (textWithPrice), never rewritten.
 // Invoice fields (invoiceNo, invoiceAmount, ...) are NOT touched: the box invoicing workers still use them on the job.
 // Dry run is the default and writes nothing.
 //
@@ -22,6 +26,11 @@ import { JOB_MONEY_KEYS } from "../../app/features/job-money.js";
 import { parseMigrateArgs, LIVE_PROJECT } from "./migrate-company-id.mjs";
 
 export const QUOTE_PRICE_KEYS = Object.freeze(["totalEx", "gst", "totalInc", "lines", "priceOverrides", "ratesSnapshot"]);
+
+// Same rule as app/features/quotes.js noDollars (kept here so the script has no browser imports).
+const PRICE_RE = /(?:A|AU)?\$\s?\d[\d,]*(?:\.\d+)?(?:\s?(?:ex|inc|incl)\.?\s?GST)?/gi;
+export const hasPrice = v => typeof v === "string" && /\$\s?\d/.test(v);
+export const scrubPrice = v => typeof v === "string" ? v.replace(PRICE_RE, "[price removed]").replace(/\$/g, "") : v;
 
 const companyOf = data => (typeof data.companyId === "string" && data.companyId) || (typeof data.tenantId === "string" && data.tenantId) || "heartwood";
 
@@ -47,6 +56,15 @@ export function planJobMoney(id, job, existingMoney = null) {
       if (quote.totalEx != null && !("quoteAmount" in job) && !("quoteAmount" in have) && !("quoteAmount" in money)) money.quoteAmount = quote.totalEx;
     }
   }
+  if (hasPrice(job.poLookupMsg)) set.poLookupMsg = scrubPrice(job.poLookupMsg);
+  if (Array.isArray(job.workAmounts) && job.workAmounts.some(hasPrice)) set.workAmounts = job.workAmounts.map(scrubPrice);
+  const q2 = set.quote || quote;
+  const items2 = q2 && Array.isArray(q2.extraItems) ? q2.extraItems : null;
+  if (items2 && items2.some(it => it && typeof it === "object" && (hasPrice(it.note) || hasPrice(it.description)))) {
+    set.quote = { ...q2, extraItems: items2.map(it => (it && typeof it === "object")
+      ? { ...it, ...("note" in it ? { note: scrubPrice(it.note) } : {}), ...("description" in it ? { description: scrubPrice(it.description) } : {}) } : it) };
+  }
+  const textWithPrice = ["notes", "description"].filter(k => hasPrice(job[k]));
   const undo = job.splitUndo && typeof job.splitUndo === "object" ? job.splitUndo : null;
   if (undo && "poAmount" in undo) {
     const { poAmount, ...rest } = undo;
@@ -56,7 +74,7 @@ export function planJobMoney(id, job, existingMoney = null) {
   const changes = remove.length > 0 || Object.keys(set).length > 0;
   const companyId = companyOf(job);
   return {
-    id, companyId, changes, remove, set,
+    id, companyId, changes, remove, set, textWithPrice,
     money: Object.keys(money).length ? { jobId: id, companyId, ...(companyId !== "heartwood" ? { tenantId: companyId } : {}), ...money } : null,
   };
 }
@@ -90,11 +108,13 @@ async function productionStore() {
 /** Run the plan over every job. Money is written before it is removed from the job. Report holds paths and keys, no amounts. */
 export async function migrateJobMoney(db, { commit = false, store = null } = {}) {
   const io = store || clientStore(db);
-  const report = { commit: !!commit, scanned: 0, jobsChanged: 0, moneyDocs: 0, removedKeys: {}, quoteCopiesCleaned: 0, rows: [] };
+  const report = { commit: !!commit, scanned: 0, jobsChanged: 0, moneyDocs: 0, removedKeys: {}, quoteCopiesCleaned: 0, textScrubbed: {}, textWithPrice: [], rows: [] };
   for (const { id, data } of await io.jobs()) {
     report.scanned += 1;
     const plan = planJobMoney(id, data, await io.money(id));
+    if (plan.textWithPrice.length) report.textWithPrice.push({ path: "jobs/" + id, fields: plan.textWithPrice });
     if (!plan.changes && !plan.money) continue;
+    for (const k of ["poLookupMsg", "workAmounts"]) if (k in plan.set) report.textScrubbed[k] = (report.textScrubbed[k] || 0) + 1;
     report.jobsChanged += 1;
     if (plan.money) report.moneyDocs += 1;
     if (plan.set.quote) report.quoteCopiesCleaned += 1;
