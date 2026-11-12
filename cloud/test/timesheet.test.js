@@ -136,5 +136,5 @@ test("operator tab taps force a redraw, and saves let go of focus so lists refre
   assert.match(app, /\$\("#burger"\)\.onclick = \(\) => \{ ui\.navOpen = !ui\.navOpen; ui\.forceRender = true; renderAdmin\(\); \}/);
   assert.match(app, /toast\("Leave request sent"\);\n\s*redrawAfterSave\(\);/);
   assert.match(app, /toast\(status === "approved" \? "Leave approved" : "Leave declined"\);\n\s*redrawAfterSave\(\);/);
-  assert.match(app, /toast\("Invite saved\. Copy the link\. Mail was not sent\."\);\n\s*redrawAfterSave\(\);/);
+  assert.match(app, /"Invite saved\. Copy the link\. Mail was not sent\."\);\n\s*redrawAfterSave\(\);/);
 });

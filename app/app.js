@@ -11,7 +11,7 @@ import { getStorage, ref as storageRef, uploadBytes, connectStorageEmulator, lis
 import { firebaseConfig, useEmulator } from "./firebase-config.js";
 import { installQuotes, adminViewRouter, setDefaultDepot, noDollars } from "./features/quotes.js";
 import { JOB_MONEY_COLLECTION, jobMoneyDoc, mergeJobMoney, splitJobMoney } from "./features/job-money.js";
-import { OPEN_STATUSES, staleOpenJobs, mergeJobLists } from "./features/job-window.js";
+import { OPEN_STATUSES, staleOpenJobs, mergeJobLists, parseHoursInput } from "./features/job-window.js";
 import { installRouteOrder, orderJobsForRun, runSheetId, geoPatch, setRouteDepot } from "./features/route-order.js";
 import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPlanned, jobPhotoPrefix, storageErrorCode, summarizePhotoListing } from "./features/cloud-storage.js";
 import { buildOperationalExport, retentionAdminText, retentionView } from "./features/cloud-retention.js";
@@ -189,6 +189,7 @@ onAuthStateChanged(auth, async user => {
     const u4 = onSnapshot(query(collection(db, "invites"), where("tenantId", "==", myTenant())), s => {
       ui.invites = s.docs.map(d => ({ id: d.id, ...d.data() })); ui.invitesErr = "";
       if (ui.view === "staff") renderAdmin();
+      watchInviteMail();
     }, e => { ui.invites = []; ui.invitesErr = e.code || "permission-denied"; if (ui.view === "staff") renderAdmin(); });
     moneyStart(renderAdmin);
     unsub = () => { u1(); u2(); u3(); u4(); u5(); moneyStop(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; }; swmsSub(); COMP.start(); leaveStart(); claimsStart(); if (me.platformOwner) watchMaster();
@@ -204,6 +205,7 @@ onAuthStateChanged(auth, async user => {
       ? onSnapshot(query(collection(db, "invites"), where("tenantId", "==", myTenant())), s => {
         ui.invites = s.docs.map(d => ({ id: d.id, ...d.data() })); ui.invitesErr = "";
         if ((ui.opTab || "today") === "staff") renderOperator();
+        watchInviteMail();
       }, e => { ui.invites = []; ui.invitesErr = e.code || "permission-denied"; if ((ui.opTab || "today") === "staff") renderOperator(); })
       : () => {};
     if (canInvite() && window.HW_PREVIEW_VIEW === "staff") ui.opTab = "staff";
@@ -990,7 +992,7 @@ function dispatchView(all) {
       <button type="button" class="sm-btn route-open" id="optorder">Optimise order</button>
       <button id="new" class="sm-btn primary">+ New Job</button></div>
     ${leaveBanner}
-    <div class="dwrap"><div class="dboard"><p class="touchhint">Tap a job to open it. Press and hold a job to move it to another day or staff member.</p><div class="dgrid-scroll">${grid}</div><p class="sub muted">Drag a job to another day or staff member to reschedule (saved in the app, sent to ServiceM8 by the next sync).</p></div>
+    <div class="dwrap"><div class="dboard"><p class="touchhint">Tap a job to open it. Press and hold a job to move it to another day or staff member.</p><div class="dgrid-scroll">${grid}</div><p class="sub muted">Drag a job to another day or staff member to reschedule (${esc(syncNote("saved in the app, sent to ServiceM8 by the next sync", "saved straight away"))}).</p></div>
       </div>`;
 }
 // Floating "Done today" card (dispatch board + job list). Today = Brisbane date of completedAt (fallback: job date when
@@ -1329,7 +1331,14 @@ const canXero = () => !!me && XERO_UIDS.includes(me.uid) && myCompanyId() === "h
 const canCompanyExport = () => exportAllowed({ role: me && me.role, companyId: myCompanyId() });
 // Money ($ PO/invoice/receipt/profit amounts): admins + users/{uid}.role "supervisor". Operators (staff) see none in the UI.
 // App roles on users/{uid}: "operator" (staff) | "supervisor" (sees money, still operator shell unless also Firebase-admin).
+// ServiceM8 sync runs only for Heartwood (box sm8_import / sm8_push). Other CallUp companies never see ServiceM8 wording.
+// Internal field names (sm8JobNo, sm8Status, sm8Uuid) are unchanged.
+const usesSm8Sync = () => myCompanyId() === "heartwood";
+const syncNote = (heartwoodText, otherText) => usesSm8Sync() ? heartwoodText : otherText;
 const canSeeMoney = () => !!me && (me.role === "admin" || me.role === "supervisor" || me.staffRole === "supervisor");
+// Job text shown to crew (operators). Descriptions imported from ServiceM8 or typed by the office can mention a price;
+// crew never see dollar figures, so they get the same price filter the quote-to-job copy uses.
+const crewText = t => canSeeMoney() ? String(t ?? "") : noDollars(t);
 const canInvite = () => !!(me && (me.role === "admin" || me.role === "supervisor" || me.staffRole === "supervisor"));
 // Inbox and import: admins and supervisors. Operators (staff) do not see the Inbox.
 // Builder-email Inbox and Find PO (Orbit portal, Alex's mailbox, box workers) are Heartwood-only.
@@ -2552,7 +2561,7 @@ function homeRow(j) {
   const q = queueOf(j), names = namesOf(j);
   return `<div class="hrow" data-id="${j.id}"><div class="htime"><b>${esc(j.time || "--")}</b><small>${j.durationHrs ? esc(j.durationHrs) + "h" : ""}</small></div>
     <div class="hbody"><div class="hcl"><span class="qdot ${QCLS[q]}"></span>${esc(j.client || "")} <span class="jn">#${esc(jobNo(j))}</span>${jobPhotosIcon(j)}</div>
-    <div class="sub">${esc(j.address || "-")}</div><div class="sub">${esc(firstLine(j.description))}</div>
+    <div class="sub">${esc(j.address || "-")}</div><div class="sub">${esc(firstLine(crewText(j.description)))}</div>
     <div class="sub">${names.length ? esc(names.map(label).join(", ")) : `<span class="unal">Unallocated</span>`}</div></div>
     <span class="pstack">${ipPill(j)}<span class="qpill ${QCLS[q]}">${j.status === "Done" ? "Work completed" : q}</span></span></div>`;
 }
@@ -2650,6 +2659,47 @@ function homeBody(all, admin, btns) {
 function homeView(all) {
   return homeBody(all, true, NAV.filter(x => x[0] !== "home" && !x[3] && (x[0] === "inbox" ? canImport() : (!x[4] || isOwner()))).map(([k, ic, n]) => [k, ic, n]));
 }
+// Invite email status (inviteStatus/{inviteId}, written by inviteEmailWorker; office of that company may get it).
+// Heartwood invites are never emailed from the app, so only other companies show the line.
+const inviteMailShown = () => myCompanyId() !== "heartwood";
+function staffRerender() {
+  if (me && me.role === "admin" && !ui.myJobs) { if (ui.view === "staff") renderAdmin(); }
+  else if ((ui.opTab || "today") === "staff") renderOperator();
+}
+async function readInviteMail() {
+  if (!inviteMailShown()) return;
+  ui.inviteMail = ui.inviteMail || {};
+  const pending = (ui.invites || []).filter(r => r && r.status === "pending" && r.id);
+  let changed = false;
+  await Promise.all(pending.map(async r => {
+    try {
+      const snap = await getDoc(doc(db, "inviteStatus", r.id));
+      if (!snap.exists()) return;
+      const d = snap.data() || {};
+      const next = { delivery: String(d.delivery || ""), reason: String(d.reason || ""), token: String(r.token || "").slice(0, 6) };
+      const prev = ui.inviteMail[r.id];
+      if (!prev || prev.delivery !== next.delivery || prev.reason !== next.reason || prev.token !== next.token) { ui.inviteMail[r.id] = next; changed = true; }
+    } catch { /* not written yet (the rule can't read a missing doc), or offline: keep "checking" */ }
+  }));
+  if (changed) staffRerender();
+}
+// The worker writes the status a second or two after the invite is saved or resent, so look again shortly after.
+function watchInviteMail() {
+  if (!inviteMailShown()) return;
+  ui.inviteMail = ui.inviteMail || {};
+  // A resend changes the token: forget the old result so the line goes back to "checking".
+  for (const r of ui.invites || []) {
+    const prev = ui.inviteMail[r.id];
+    if (prev && prev.token !== String(r.token || "").slice(0, 6)) { delete ui.inviteMail[r.id]; }
+  }
+  readInviteMail();
+  clearTimeout(ui.inviteMailT1); clearTimeout(ui.inviteMailT2);
+  ui.inviteMailT1 = setTimeout(readInviteMail, 3000);
+  ui.inviteMailT2 = setTimeout(readInviteMail, 10000);
+}
+function inviteMailMap() {
+  return inviteMailShown() ? (ui.inviteMail || {}) : null;
+}
 async function saveInvite(fields) {
   const draft = buildInviteDraft({ ...fields, createdBy: me.uid, now: new Date(), token: newInviteToken(), tenantId: myTenant() });
   if (!draft.ok) return draft.reason;
@@ -2710,15 +2760,15 @@ function bindStaff(A) {
     const reason = await saveInvite({ name: form.name.value, email: form.email.value, role: form.role.value });
     if (reason) { if (err) err.textContent = inviteFailureText(reason); return; }
     form.reset();
-    toast("Invite saved. Copy the link. Mail was not sent.");
+    toast(inviteMailShown() ? "Invite saved. The list shows whether it was emailed." : "Invite saved. Copy the link. Mail was not sent.");
     redrawAfterSave();
   };
   A.querySelectorAll("[data-invite-copy]").forEach(b => b.onclick = async () => {
-    try { await navigator.clipboard.writeText(b.dataset.inviteCopy); toast("Link copied. Mail was not sent."); }
-    catch { toast("Select the link to copy it. Mail was not sent."); }
+    try { await navigator.clipboard.writeText(b.dataset.inviteCopy); toast(inviteMailShown() ? "Link copied." : "Link copied. Mail was not sent."); }
+    catch { toast(inviteMailShown() ? "Select the link to copy it." : "Select the link to copy it. Mail was not sent."); }
   });
   A.querySelectorAll("[data-invite-resend]").forEach(b => b.onclick = async () => {
-    try { await resendInvite(b.dataset.inviteResend); toast("Invite resent. Copy the new link. Mail was not sent."); }
+    try { await resendInvite(b.dataset.inviteResend); toast(inviteMailShown() ? "Invite resent with a new link. The list shows whether it was emailed." : "Invite resent. Copy the new link. Mail was not sent."); }
     catch (e) { toast("Couldn't resend (" + (e.code || "error") + ")."); }
   });
   A.querySelectorAll("[data-invite-cancel]").forEach(b => b.onclick = async () => {
@@ -2745,7 +2795,7 @@ function renderAdmin() {
   const fj = filtered(), und = (ui.undated || []).filter(j => (!ui.typeF || j.type === ui.typeF));
   const all = [...fj, ...und.filter(u => !fj.some(j => j.id === u.id))];
   const quotesHtml = ui.view === "quotes" ? adminViewRouter(ui.view, ui, { esc, $$, staff, jobs: all, todayStr, rerender: () => renderAdmin(), canEditQuoteRates }) : null;
-  const staffHtml = ui.view === "staff" ? staffViewHtml(ui.invites || [], { now: inviteDisplayNow(), error: ui.invitesErr || "", origin: appOriginFor(myCompanyId(), location.origin) }) : null;
+  const staffHtml = ui.view === "staff" ? staffViewHtml(ui.invites || [], { now: inviteDisplayNow(), error: ui.invitesErr || "", origin: appOriginFor(myCompanyId(), location.origin), emailStatus: inviteMailMap() }) : null;
   paintBrand();
   $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "master" ? masterView() : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : quotesHtml != null ? quotesHtml : jobsView(all));
   const A = $("#app"); inboxBadge();
@@ -2888,12 +2938,12 @@ async function splitJob(j, pick) {
     ...(canFindPo() && canSeeMoney() ? { poLookupCandidates: [] } : {}), updatedAt: serverTimestamp(), updatedBy: me.uid });
   if (canSeeMoney()) await jobMoneyWrite(j.id, {}, { splitUndoPoAmount: j.poAmount ?? null }).catch(() => {});
   $("#dlg").close();
-  undoToast(`Split #${jobNo(j)}: new ${TYPES[newType] || newType} job created (syncs to ServiceM8 in ~10 min)`, () => undoSplit({ ...j, splitTo: ref.id, splitUndo: undo }));
+  undoToast(`Split #${jobNo(j)}: new ${TYPES[newType] || newType} job created${usesSm8Sync() ? " (syncs to ServiceM8 in ~10 min)" : ""}`, () => undoSplit({ ...j, splitTo: ref.id, splitUndo: undo }));
 }
 async function undoSplit(j) {
   const nd = await getDoc(doc(db, "jobs", j.splitTo));
-  if (!nd.exists()) throw new Error("the new job has already synced to ServiceM8 - undo there");
-  if (nd.data().sm8Uuid) throw new Error("the new job is already in ServiceM8 - undo there");
+  if (!nd.exists()) throw new Error(usesSm8Sync() ? "the new job has already synced to ServiceM8 - undo there" : "the new job no longer exists");
+  if (nd.data().sm8Uuid) throw new Error(usesSm8Sync() ? "the new job is already in ServiceM8 - undo there" : "the new job has already been changed");
   const o = (await getDoc(doc(db, "jobs", j.id))).data() || {}, u = o.splitUndo || j.splitUndo;
   if (!u) throw new Error("no undo data");
   if (nd.exists()) await deleteDoc(doc(db, "jobs", j.splitTo));
@@ -2913,14 +2963,14 @@ function editJob(j) {
   // One id per New Job form, so a second tap (or a retry after no signal) cannot make a second job.
   const newRef = n ? doc(collection(db, "jobs")) : null, guard = saveGuard();
   const qq = n ? "Work Order" : queueOf(j), hist = [];
-  if (j.source === "sm8") hist.push(["ServiceM8", `Imported from ServiceM8 job #${j.sm8JobNo || "?"} (${j.sm8Status || "?"})`]);
-  if (j.editedInApp) hist.push(["App", "Edited in the app – ServiceM8 import will no longer overwrite this job"]);
+  if (j.source === "sm8" && usesSm8Sync()) hist.push(["ServiceM8", `Imported from ServiceM8 job #${j.sm8JobNo || "?"} (${j.sm8Status || "?"})`]);
+  if (j.editedInApp && usesSm8Sync()) hist.push(["App", "Edited in the app – ServiceM8 import will no longer overwrite this job"]);
   if (j.inboxId) hist.push(["Inbox", "Linked to a builder email"]);
   if (j.completedByName) hist.push([j.completedByName, `Completed${j.loads ? ` · ${j.loads} loads` : ""}`]);
   const SL = { "Scheduled": "Work Order – scheduled", "In progress": "Work Order – in progress", "Done": "Completed", "Cancelled": "Unsuccessful" };
   d.className = "jobcard"; d.onclose = () => refreshAfterImport();
   d.innerHTML = `<form method="dialog" id="jf" class="jc">
-    <div class="jc-top ${QCLS[qq]}"><div><div class="jc-no">${n ? "New Job" : "Job #" + esc(jobNo(j))}</div>${n ? "" : ipTop(j, "onbar")}<div class="jc-q">${qq}${j.sm8Status === "Quote" ? " (quote in ServiceM8)" : ""}</div></div>
+    <div class="jc-top ${QCLS[qq]}"><div><div class="jc-no">${n ? "New Job" : "Job #" + esc(jobNo(j))}</div>${n ? "" : ipTop(j, "onbar")}<div class="jc-q">${qq}${j.sm8Status === "Quote" && usesSm8Sync() ? " (quote in ServiceM8)" : ""}</div></div>
       <label class="jc-st">Job Status<select name="status">${STATUSES.map(s => `<option value="${s}" ${j.status === s ? "selected" : ""}>${SL[s]}</option>`).join("")}</select></label>
       <button value="cancel" formnovalidate class="jc-x" title="Close">✕</button></div>
     <div class="jc-body"><div class="jc-col">
@@ -2950,8 +3000,8 @@ function editJob(j) {
       <h4>Staff Allocation &amp; Schedule</h4>
       <div class="row"><label>Date<input type="date" name="date" value="${esc(j.date)}"></label>
         <label>Start<input type="time" name="time" value="${esc(j.time)}"></label>
-        <label>Hours<input type="number" step="0.5" min="0" name="durationHrs" value="${esc(j.durationHrs)}"></label></div>
-      ${!n && j.date && !["Done", "Cancelled"].includes(j.status) ? `<div class="row"><button type="button" id="unschbtn" class="btn">✕ Remove from dispatch board</button><span class="sub">Back to Unscheduled; the ServiceM8 booking is removed at the next sync (the job stays).</span></div>` : ""}
+        <label>Hours<input type="number" step="any" min="0" max="999" inputmode="decimal" name="durationHrs" value="${esc(j.durationHrs)}"></label></div>
+      ${!n && j.date && !["Done", "Cancelled"].includes(j.status) ? `<div class="row"><button type="button" id="unschbtn" class="btn">✕ Remove from dispatch board</button><span class="sub">Back to Unscheduled${usesSm8Sync() ? "; the ServiceM8 booking is removed at the next sync" : ""} (the job stays).</span></div>` : ""}
       <fieldset class="staffs">${staff.map(s => `<label class="ck"><input type="checkbox" name="assigned" value="${esc(skey(s))}" ${namesOf(j).map(x => x.toLowerCase()).includes(s.name.toLowerCase()) ? "checked" : ""}> <span class="av">${esc(s.name[0])}</span>${esc(label(s.name))}</label>`).join("")}</fieldset>
       <p id="leavewarn" class="leave-warn" hidden></p>
       <h4>Notes</h4>
@@ -2993,7 +3043,7 @@ function editJob(j) {
     const picked = [...f.querySelectorAll("[name=assigned]:checked")].map(x => staff.find(s => skey(s) === x.value)).filter(Boolean);
     const assigned = picked.filter(s => s.uid).map(s => s.uid);
     const data = { client: f.client.value.trim(), address: f.address.value.trim(), type: typ, po: f.po.value.trim().toUpperCase().replace(/\s+/g, ""),
-      description: f.description.value.trim(), date: f.date.value, time: f.time.value, durationHrs: f.durationHrs.value ? +f.durationHrs.value : null,
+      description: f.description.value.trim(), date: f.date.value, time: f.time.value, durationHrs: parseHoursInput(f.durationHrs.value),
       assigned, assignedNames: picked.map(s => s.name), status: f.status.value, notes: f.notes.value.trim(),
       loads: f.loads.value === "" ? null : +f.loads.value, editedInApp: true,
       ...(String(j.poAmount ?? "") !== f.poAmount.value ? { poAmount: f.poAmount.value === "" ? null : Math.round(+f.poAmount.value * 100) / 100, poAmountBasis: f.poAmount.value === "" ? null : "entered in app (ex GST)", poAmountSource: "app" } : {}), updatedAt: serverTimestamp(), updatedBy: me.uid };
@@ -3980,7 +4030,7 @@ function renderOperator() {
   if (ui.opTab === "staff" && document.activeElement?.closest?.("#invitef")) return;
   if (ui.opTab === "staff" && canInvite()) {
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Staff</div><div class="mob-sub">Invite operators and supervisors</div></div>
-      <div class="pad">${staffViewHtml(ui.invites || [], { now: inviteDisplayNow(), error: ui.invitesErr || "", origin: appOriginFor(myCompanyId(), location.origin) })}</div>${opTabs("more")}</div>`;
+      <div class="pad">${staffViewHtml(ui.invites || [], { now: inviteDisplayNow(), error: ui.invitesErr || "", origin: appOriginFor(myCompanyId(), location.origin), emailStatus: inviteMailMap() })}</div>${opTabs("more")}</div>`;
     bindOp(mine); bindStaff($("#app")); return;
   }
   if (ui.opTab === "staff") ui.opTab = "more";
@@ -4086,7 +4136,7 @@ function renderOpDetail(j) {
         <div><dt>Scheduled</dt><dd>${esc(j.date ? longDate(j.date) : "Unscheduled")}${j.time ? " · " + esc(phoneTime(j.time)) : ""}${j.durationHrs ? " · " + esc(j.durationHrs) + "h" : ""}</dd></div>
         <div><dt>Crew</dt><dd>${esc(crew.length ? crew.join(", ") : "—")}</dd></div>
         <div><dt>Purchase order</dt><dd><b>${esc(j.po || "—")}</b></dd></div>
-        <div class="scope"><dt>Scope</dt><dd>${esc(j.description || "—")}</dd></div>
+        <div class="scope"><dt>Scope</dt><dd>${esc(crewText(j.description) || "—")}</dd></div>
         ${Array.isArray(j.workAmounts) && j.workAmounts.length ? `<div class="scope"><dt>Amounts</dt><dd>${workAmountsHtml(j, "det-amt")}</dd></div>` : ""}
       </dl>
       <div class="mcard"><div class="mlbl">Diary</div>${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("") || `<div class="muted sub">No notes yet</div>`}
@@ -4292,7 +4342,7 @@ function mobileDispatch(all) {
       <div class="mdc-top"><b class="mdc-time">${esc(j.time || "--:--")}</b><span class="mdc-no">#${esc(jobNo(j))}</span><span class="pstack">${ipPill(j, "sm")}<span class="qpill ${QCLS[queueOf(j)]}">${esc(queueOf(j))}</span></span></div>
       <div class="mdc-cl">${esc(j.client || "")}</div>
       <a class="mdc-addr" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener">📍 ${esc(j.address || "-")}</a>
-      <div class="mdc-desc">${esc(firstLine(j.description))}</div>
+      <div class="mdc-desc">${esc(firstLine(crewText(j.description)))}</div>
       ${away ? `<p class="leave-chip">${esc(away)}</p>` : ""}
       <div class="mdc-foot"><span class="sub">${j.po ? "PO " + esc(j.po) : "No PO"}${j.durationHrs ? " · " + esc(j.durationHrs) + "h" : ""}</span>
         <span><button type="button" class="sm-btn mdc-unsch" data-unsch="${j.id}" title="Remove from dispatch board (back to Unscheduled)">✕ Off board</button> <button type="button" class="sm-btn mdc-move" data-move="${j.id}">⇄ Move</button></span></div></div>`;
@@ -4330,7 +4380,7 @@ function moveSheet(j) {
   v.innerHTML = `<form class="embox msheet"><h3>Move #${esc(jobNo(j))}</h3><p class="sub muted">${esc(j.address || "")}</p>
     <div class="row"><label>Date<input type="date" name="date" value="${esc(j.date || todayStr())}" required></label><label>Time<input type="time" name="time" value="${esc(j.time || "07:00")}"></label></div>
     <fieldset class="staffs">${staff.map(s => `<label class="ck"><input type="checkbox" name="st" value="${esc(skey(s))}" ${cur.includes(s.name.toLowerCase()) ? "checked" : ""}> ${esc(s.name)}</label>`).join("")}</fieldset>
-    <p class="sub muted">No one ticked = Unallocated. Saved to the app, then sent to ServiceM8 by the next sync.</p>
+    <p class="sub muted">No one ticked = Unallocated. ${esc(syncNote("Saved to the app, then sent to ServiceM8 by the next sync.", "Saved straight away."))}</p>
     <button class="mbtn complete">Save</button><button type="button" class="mbtn" data-x>Cancel</button></form>`;
   document.body.appendChild(v);
   v.querySelector("[data-x]").onclick = () => v.remove();

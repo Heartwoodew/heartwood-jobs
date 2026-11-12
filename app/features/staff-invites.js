@@ -199,7 +199,18 @@ function statusLabel(status) {
   return "Invite";
 }
 
-export function staffViewHtml(invites, { now = new Date(), error = "", origin = HEARTWOOD_APP_ORIGIN } = {}) {
+// One line per pending invite saying whether CallUp emailed it, from inviteStatus/{inviteId} (written by inviteEmailWorker).
+// status is { delivery, reason } or null while it is still being checked. Heartwood invites are never emailed from here.
+export function inviteEmailLine(status) {
+  if (!status) return "Checking whether the invite email went out…";
+  const delivery = String(status.delivery || "");
+  if (delivery === "sent") return "Invite email sent. If it isn't in their inbox, ask them to check junk mail.";
+  if (delivery === "received" || delivery === "resend") return "Sending the invite email…";
+  if (delivery === "held") return "Not emailed. Copy the link and send it to them yourself (text or email).";
+  return "The invite email didn't go through. Copy the link and send it to them yourself (text or email).";
+}
+
+export function staffViewHtml(invites, { now = new Date(), error = "", origin = HEARTWOOD_APP_ORIGIN, emailStatus = null } = {}) {
   const rows = (invites || []).map(row => ({ ...row, viewStatus: displayStatus(row, now) }));
   const rank = { pending: 0, expired: 1, accepted: 2, cancelled: 3, invalid: 4 };
   rows.sort((a, b) => (rank[a.viewStatus] ?? 9) - (rank[b.viewStatus] ?? 9) || String(a.email).localeCompare(String(b.email)));
@@ -211,6 +222,7 @@ export function staffViewHtml(invites, { now = new Date(), error = "", origin = 
         <b>${esc(row.name)}</b>
         <div class="sub">${esc(row.email)} · ${esc(roleLabel(row.role) || row.role)}</div>
         <div class="sub">${esc(statusLabel(row.viewStatus))}${row.viewStatus === "pending" || row.viewStatus === "expired" ? " · " + esc(formatWhen(row.expiresAt)) : ""}</div>
+        ${emailStatus && row.viewStatus === "pending" ? `<div class="sub invite-mail" data-invite-mail="${esc((emailStatus[row.id] && emailStatus[row.id].delivery) || "checking")}">${esc(inviteEmailLine(emailStatus[row.id] || null))}</div>` : ""}
         ${link ? `<p class="invite-link">${esc(link)}</p>` : ""}
       </div>
       ${actions ? `<div class="inviteacts">
@@ -221,7 +233,7 @@ export function staffViewHtml(invites, { now = new Date(), error = "", origin = 
     </article>`;
   }).join("");
   return `<div class="sm-head"><h1>Staff</h1></div>
-    <p class="sub invite-note">Invite an operator or a supervisor. They set their own password from the link. Admin is not a role you can give here. ${origin !== HEARTWOOD_APP_ORIGIN ? "CallUp emails them the link when invite email is on for your company; you can always copy the link below and send it yourself." : "Mail is not sent from this screen."}</p>
+    <p class="sub invite-note">Invite an operator or a supervisor. They set their own password from the link. Admin is not a role you can give here. ${origin !== HEARTWOOD_APP_ORIGIN ? "CallUp emails them the link. Each invite below says whether the email went out; you can always copy the link and send it yourself." : "Mail is not sent from this screen."}</p>
     <form id="invitef" class="card invitef" autocomplete="off">
       <h2>Invite staff</h2>
       <label>Name<input name="name" required maxlength="80" autocomplete="name"></label>
