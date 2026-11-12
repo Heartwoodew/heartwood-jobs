@@ -14,9 +14,11 @@ test("CallUp stays the product and Heartwood Earthworx stays the default organis
   assert.equal(org.logoUrl, "");
 });
 
-test("organisation logo accepts an https URL or an icons path", () => {
+test("organisation logo accepts an uploaded Storage path, an https URL, or an icons path", () => {
   assert.equal(safeLogo("https://cdn.example/logo.png"), "https://cdn.example/logo.png");
   assert.equal(safeLogo("icons/callup-wordmark.svg"), "icons/callup-wordmark.svg");
+  assert.equal(safeLogo("companies/acme-1/logo/logo.jpg", "acme-1"), "companies/acme-1/logo/logo.jpg");
+  assert.equal(safeLogo("companies/other/logo/logo.jpg", "acme-1"), "");
   assert.equal(safeLogo("javascript:alert(1)"), "");
   assert.equal(safeLogo("tenants/heartwood/logo.png"), "");
 });

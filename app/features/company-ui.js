@@ -3,6 +3,7 @@
 
 import { POWERED_BY, PRODUCT_NAME } from "../org-settings.js";
 import { derivedJobPrefix, filterMaster, friendInviteLink, masterTotals } from "./company.js";
+import { LOGO_ACCEPT, acceptLogoValue, isLogoStoragePath } from "./company-logo.js";
 
 const jobPrefixHint = org => derivedJobPrefix(org && org.name);
 
@@ -15,6 +16,24 @@ function when(ms) {
   return new Intl.DateTimeFormat("en-AU", {
     day: "numeric", month: "short", year: "numeric", timeZone: "Australia/Brisbane",
   }).format(new Date(ms));
+}
+
+
+export function logoFieldHtml(org = {}, { canEdit = false, signup = false } = {}) {
+  const lock = canEdit || signup ? "" : " disabled";
+  const current = acceptLogoValue((org && org.logoUrl) || "", org && org.companyId);
+  const preview = !current ? "" : isLogoStoragePath(current, org && org.companyId)
+    ? `<img class="orglogo-preview" data-logo-path="${esc(current)}" alt="Company logo">`
+    : `<img class="orglogo-preview" src="${esc(current)}" alt="Company logo">`;
+  const remove = (canEdit || signup) && current ? `<button type="button" class="sm-btn" id="logoremove">Remove logo</button>` : "";
+  return `<div class="logofield">
+    <span>Logo</span>
+    <span class="sub">Optional. JPEG or PNG from your photos or files. We'll resize it. Leave empty to keep the name as text.</span>
+    <div class="logopreview"${preview ? "" : " hidden"}>${preview}</div>
+    <input type="file" name="logoFile" accept="${LOGO_ACCEPT}"${lock}>
+    ${remove}
+    <input type="hidden" name="logoUrl" value="${esc(current)}">
+  </div>`;
 }
 
 export function signupFormHtml({ friend = false } = {}) {
@@ -38,7 +57,7 @@ export function signupFormHtml({ friend = false } = {}) {
     <label>Email<input name="email" type="email" required maxlength="120"></label>
     <label>Accounts email<span class="sub">Hours spreadsheets are sent here.</span><input name="accountsEmail" type="email" required maxlength="120"></label>
     <label>Hubdoc address<span class="sub">Optional. Must end in @app.hubdoc.com.</span><input name="hubdocAddress" maxlength="120" placeholder="name@app.hubdoc.com"></label>
-    <label>Logo URL<span class="sub">Optional. https address, or leave blank.</span><input name="logoUrl" maxlength="300" placeholder="https://…"></label>
+    ${logoFieldHtml({}, { signup: true })}
     <button class="big primary" type="submit">Create company</button>
     <button class="big ghost" type="button" id="signupback">Back to sign in</button>
     <p id="signuperr" class="err"></p>
@@ -62,7 +81,7 @@ export function companySettingsHtml(org, { canEdit = false } = {}) {
       ${org.companyId === "heartwood" ? "" : `<label>Accounts contact name<span class="sub">Optional. Timesheet emails start "Hi" and this name.</span><input name="accountsName" maxlength="80" value="${esc(org.accountsName || "")}"${lock}></label>`}
       <label>Email sign-off<input name="signoff" required maxlength="80" value="${esc(org.signoff)}"${lock}></label>
       ${org.companyId === "heartwood" ? "" : `<label>Job number prefix<span class="sub">Optional, up to 5 letters or numbers. Blank uses ${esc(jobPrefixHint(org))}.</span><input name="jobPrefix" maxlength="5" value="${esc(org.jobPrefix || "")}" placeholder="${esc(jobPrefixHint(org))}" autocapitalize="characters"${lock}></label>`}
-      <label>Logo URL<span class="sub">Optional https address. Blank keeps the name as text.</span><input name="logoUrl" maxlength="300" value="${esc(org.logoUrl || "")}"${lock}></label>
+      ${logoFieldHtml(org, { canEdit })}
       ${canEdit ? `<div class="btns"><button type="submit" class="primary">Save company details</button></div>` : `<p class="sub">Only a company admin can change these.</p>`}
       <p class="powered">${esc(POWERED_BY)}</p>
     </form>
@@ -197,7 +216,7 @@ export function failureText(code) {
     email: "Enter a valid company email.",
     accountsEmail: "Enter the accounts email that should receive hours spreadsheets.",
     hubdoc: "Hubdoc addresses end in @app.hubdoc.com, or leave the field blank.",
-    logo: "Logo needs an http(s) address or an icons/ file.",
+    logo: "Use a JPEG or PNG photo or file.",
     jobPrefix: "Job number prefix: up to 5 letters or numbers.",
     accountsName: "Check the accounts contact name.",
     "email-in-use": "That login email is already in use.",

@@ -23,6 +23,8 @@ export const DEFAULT_ORG = Object.freeze({
   hubdocAddress: "",
 });
 
+import { acceptLogoValue } from "./features/company-logo.js";
+
 const STORE_KEY = "callup.org.v1";
 const FIELDS = ["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "jobPrefix", "accountsName"];
 let activeCompany = null;
@@ -38,16 +40,9 @@ function clean(source) {
   return out;
 }
 
-// A customer logo is an https URL or a file under icons/. Blank means text only.
-export function safeLogo(url) {
-  const value = String(url || "").trim();
-  if (!value) return "";
-  if (/^icons\/[A-Za-z0-9._/-]+$/.test(value)) return value;
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol === "https:" || parsed.protocol === "http:") return value;
-  } catch { /* not a URL */ }
-  return "";
+// A customer logo is a private Storage path, an https URL, or a file under icons/. Blank means text only.
+export function safeLogo(url, companyId) {
+  return acceptLogoValue(url, companyId);
 }
 
 function readSaved() {
@@ -91,14 +86,14 @@ export function orgSettings() {
   if (!merged.accountsEmail && merged.companyId === "heartwood") merged.accountsEmail = DEFAULT_ORG.accountsEmail;
   if (!merged.email && merged.companyId === "heartwood") merged.email = DEFAULT_ORG.email;
   if (!merged.address && merged.companyId === "heartwood") merged.address = DEFAULT_ORG.address;
-  merged.logoUrl = safeLogo(merged.logoUrl);
+  merged.logoUrl = safeLogo(merged.logoUrl, merged.companyId);
   return merged;
 }
 
 // Returns the saved organisation. A rejected logo URL is stored blank.
 export function saveOrgSettings(partial) {
   const next = { ...orgSettings(), ...clean(partial) };
-  next.logoUrl = safeLogo(next.logoUrl);
+  next.logoUrl = safeLogo(next.logoUrl, next.companyId);
   if (!next.name) next.name = DEFAULT_ORG.name;
   if (!next.legalName) next.legalName = DEFAULT_ORG.legalName;
   if (!next.signoff) next.signoff = next.name;

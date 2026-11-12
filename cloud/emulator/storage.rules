@@ -383,15 +383,22 @@ service firebase.storage {
     }
 // END HOURS EXPORT FILE RULES
 
-    // Company logo only. Not job photos. Platform owner may read the logo.
+    // Company logo only. Not job photos. Members of that company can read.
+    // Owners and admins (profile role admin, including the company creator) can write.
+    // Platform owner may read any company logo. JPEG or PNG, 2 MB. That company's
+    // admin may delete so they can remove a logo. No public download tokens.
     match /companies/{companyId}/logo/{file} {
       allow read: if signedIn() && (callerTenant() == companyId || storagePlatformOwner());
       allow create, update: if signedIn() && callerTenant() == companyId
         && hasProfile() && profile().get("role", "") == "admin"
-        && file.matches('^logo[.](png|jpg|webp)$')
+        && file.matches('^logo[.](jpg|png)$')
         && request.resource.size > 0 && request.resource.size <= 2 * 1024 * 1024
-        && request.resource.contentType.matches('image/.*');
-      allow delete: if false;
+        && (request.resource.contentType == "image/jpeg" || request.resource.contentType == "image/png")
+        && request.resource.metadata.purpose == "company-logo"
+        && request.resource.metadata.uploaderUid == request.auth.uid
+        && request.resource.metadata.companyId == companyId;
+      allow delete: if signedIn() && callerTenant() == companyId
+        && hasProfile() && profile().get("role", "") == "admin";
     }
   }
 }
