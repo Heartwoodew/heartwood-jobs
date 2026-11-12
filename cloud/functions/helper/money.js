@@ -111,6 +111,7 @@ export function projectReceipt(receipt, { canSeeMoney } = {}) {
     status: receipt.status || null,
     createdAtIso: typeof receipt.createdAtIso === "string" ? receipt.createdAtIso.slice(0, 10) : null,
     amountInc: receipt.amountInc ?? null,
+    tonnes: receipt.tonnes ?? null,
   };
 }
 

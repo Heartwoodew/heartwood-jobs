@@ -46,7 +46,7 @@ export function sampleStore() {
     ],
     receipts: [
       { id: "r1", uid: "op1", jobId: "job-iron", amountInc: 44.5, supplier: "Bunnings", tenantId: "heartwood" },
-      { id: "r-sue", uid: "sup1", jobId: "job-iron", amountInc: 55, supplier: "Bunnings", tenantId: "heartwood" },
+      { id: "r-sue", uid: "sup1", jobId: "job-iron", amountInc: 55, tonnes: 1.25, supplier: "Bunnings", tenantId: "heartwood" },
       { id: "r-other", uid: "op2", jobId: "job-other", amountInc: 8, supplier: "SECRET-RECEIPT", tenantId: "otherco" },
     ],
     meta: {

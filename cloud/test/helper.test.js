@@ -143,6 +143,7 @@ test("a supervisor can ask, sees leave to decide, and still hides other business
   assert.equal(context.jobs.find(job => job.id === "job-iron").poAmount, 9999);
   assert.equal(context.jobs.find(job => job.id === "job-iron").xeroCheck, undefined);
   assert.equal(context.receipts.some(receipt => receipt.amountInc === 55), true);
+  assert.equal(context.receipts.some(receipt => receipt.tonnes === 1.25), true);
   assert.equal(JSON.stringify(context).includes("44.5"), false);
   assert.equal(JSON.stringify(context).includes("WOMBAT-LEDGER-77"), false);
   assert.equal(JSON.stringify(context).includes("SECRET-OTHERCO-8841"), false);
@@ -299,7 +300,7 @@ test("helper callable is hard-off and the phone has no helper UI", () => {
   assert.equal(existsSync(new URL("../../app/features/helper-ui.js", import.meta.url)), false);
   assert.doesNotMatch(app, /installHelperApp|helper-ui|helperAsk|helper-launch|SpeechRecognition|speechSynthesis/);
   assert.doesNotMatch(sw, /features\/helper/);
-  assert.match(sw, /callup-shell-v92-older-open-jobs/);
+  assert.match(sw, /callup-shell-v93-receipt-tonnes/);
   assert.doesNotMatch(css, /helper-launch|helper-panel|helper-mic|helper-speech|Ask Helper/);
   assert.match(index, /region: "australia-southeast1"/);
   assert.match(index, /helperAsk/);

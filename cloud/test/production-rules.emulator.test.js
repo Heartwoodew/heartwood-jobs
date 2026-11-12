@@ -316,3 +316,25 @@ test("invite delivery status is readable by the inviting company's office only",
   await assertFails(getDoc(doc(db(BRAVO), "inviteStatus/ih1")));
   await assertFails(setDoc(doc(db(BRAVO), "inviteStatus/ib2"), { companyId: "bravo", delivery: "sent" }));
 });
+
+test("receipts are accepted with a dollar amount or tonnes, not neither", async () => {
+  const op = db(OP);
+  const alex = db(ALEX);
+  const base = { uid: OP, status: "queued", supplier: "Remondis", workerName: "Sam" };
+  await assertFails(setDoc(doc(op, "receipts/rnone"), { ...base }));
+  await assertFails(setDoc(doc(op, "receipts/rzero"), { ...base, amountInc: 0, tonnes: 0 }));
+  await assertFails(setDoc(doc(op, "receipts/rneg"), { ...base, tonnes: -2 }));
+  await assertSucceeds(setDoc(doc(op, "receipts/rtonnes"), { ...base, amountInc: null, tonnes: 3.25, paidPersonally: false }));
+  await assertSucceeds(setDoc(doc(op, "receipts/rdollars"), { ...base, amountInc: 12.5 }));
+  await assertSucceeds(setDoc(doc(op, "receipts/rboth"), { ...base, amountInc: 12.5, tonnes: 1, paidPersonally: true }));
+  await assertFails(updateDoc(doc(op, "receipts/rtonnes"), { amountInc: 40 }));
+  await assertSucceeds(updateDoc(doc(alex, "receipts/rboth"), { amountInc: 40 }));
+  await env.withSecurityRulesDisabled(async ctx => {
+    const d = ctx.firestore();
+    await setDoc(doc(d, "companies/bravo"), { name: "Bravo", ownerUid: BRAVO, status: "active", plan: "trial", isTest: false });
+    await setDoc(doc(d, "users/bravoOp2"), { role: "operator", name: "Bo", companyId: "bravo", tenantId: "bravo" });
+  });
+  const bo = db("bravoOp2");
+  await assertFails(setDoc(doc(bo, "receipts/bt1"), { uid: "bravoOp2", status: "queued", supplier: "Tip", tonnes: 2 }));
+  await assertSucceeds(setDoc(doc(bo, "receipts/bt2"), { uid: "bravoOp2", status: "queued", supplier: "Tip", tonnes: 2, companyId: "bravo", tenantId: "bravo" }));
+});

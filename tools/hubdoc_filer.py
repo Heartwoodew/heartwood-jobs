@@ -35,6 +35,25 @@ def parse(t):
 def slug(s): return re.sub(r"[^A-Za-z0-9]+", "-", str(s or "")).strip("-")[:40] or "receipt"
 def money(c): return f"${int(c or 0) / 100:,.2f}"
 
+def _positive(v):
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+def measure_text(d, extra=None):
+    """Hubdoc body line: dollars and/or tonnes. Never 'Amount $0.00' for a weight-only docket."""
+    src = {}
+    if extra: src.update(extra)
+    if d: src.update({k: v for k, v in d.items() if v not in (None, "")})
+    amt = _positive(src.get("amountInc"))
+    tonnes = _positive(src.get("tonnes"))
+    parts = []
+    if amt is not None: parts.append(f"Amount ${amt:,.2f} inc GST")
+    if tonnes is not None: parts.append(f"Tonnes: {tonnes:g} t")
+    return ". ".join(parts) if parts else "Amount not on docket"
+
 
 def hub_address(c):
     hub = ((c.get("ownerSettings/hubdoc") or {}).get("email") or "").strip().lower()
@@ -152,10 +171,9 @@ def pending(out):
         if len(chunks) != r.get("chunks", 0): continue
         data = base64.b64decode("".join(x for _, x in chunks))
         who, sup, job = r.get("byName") or led.get("byName") or "", r.get("supplier") or led.get("supplier") or "", r.get("jobNo") or led.get("jobNo") or ""
-        amt = led.get("amountInc") or r.get("amountInc") or ""
         items.append(item(out, "legacy:" + rid, dest, f"receipt_{slug(sup)}_{slug(who)}_{rid}.jpg", "image/jpeg", data, verify,
                           f"Receipt {sup} job #{job} - {who} [HW {rid}]",
-                          f"Uploaded by {who} via {via}. Amount ${amt} inc GST.\nRef: {rid}"))
+                          f"Uploaded by {who} via {via}. {measure_text(r, led)}.\nRef: {rid}"))
         lock(c, f"receipts/{rid}", r, verify)
     print(json.dumps(items, indent=1))
 

@@ -510,12 +510,22 @@ service cloud.firestore {
 
     // Receipts (Upload receipt button). Any signed-in admin/operator creates their OWN receipt + image chunks and reads only
     // their own; the box sync user (tools/receipts_worker.py) and Alex read/update/delete all.
+    // Accepted with a dollar amount > 0 and/or a tonnes weight > 0 (tip dockets often have only a weight).
     function isWorker() { return isAdmin() || isOperator(); }
+    function receiptMeasureOk(d) {
+      let amtOk = !d.keys().hasAny(["amountInc"]) || d.amountInc == null || (d.amountInc is number && d.amountInc >= 0);
+      let tOk = !d.keys().hasAny(["tonnes"]) || d.tonnes == null || (d.tonnes is number && d.tonnes >= 0);
+      let hasAmt = d.keys().hasAny(["amountInc"]) && d.amountInc is number && d.amountInc > 0;
+      let hasT = d.keys().hasAny(["tonnes"]) && d.tonnes is number && d.tonnes > 0;
+      return amtOk && tOk && (hasAmt || hasT);
+    }
     match /receipts/{rid} {
       allow create: if isWorker() && notOtherCompany() && docCompany(request.resource.data) == "heartwood"
-        && request.resource.data.uid == request.auth.uid && request.resource.data.status == "queued";
+        && request.resource.data.uid == request.auth.uid && request.resource.data.status == "queued"
+        && receiptMeasureOk(request.resource.data);
       allow create: if companyStaff() && request.resource.data.uid == request.auth.uid
-        && request.resource.data.status == "queued" && request.resource.data.companyId == callerCompany();
+        && request.resource.data.status == "queued" && request.resource.data.companyId == callerCompany()
+        && receiptMeasureOk(request.resource.data);
       allow read: if isOwner() || isSync() || (signedIn() && resource.data.uid == request.auth.uid);
       allow read: if companyStaff() && resource.data.uid == request.auth.uid && docCompany(resource.data) == callerCompany();
       allow update, delete: if isOwner() || isSync();
