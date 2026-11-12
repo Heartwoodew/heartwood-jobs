@@ -364,9 +364,9 @@ test("rules-admins create operator invites and staff cannot read or self-assign 
   const email = "casey.rules@example.com";
   const created = await assertSucceeds(writeInvite(ALEX, email, { token: "c".repeat(43) }));
   await assertSucceeds(getDoc(created));
-  // 12 Nov 2026: only a CallUp company admin reads admin invites, so other invite admins list by role.
+  // 12 Nov 2026: admins (Alex: fixed list) read every invite; supervisors list by the roles they may give.
   await assertSucceeds(getDocs(query(collection(db(ALEX), "invites"), where("tenantId", "==", "heartwood"), where("role", "in", ["labourer", "operator", "supervisor"]))));
-  await assertFails(getDocs(query(collection(db(ALEX), "invites"), where("tenantId", "==", "heartwood"))));
+  await assertSucceeds(getDocs(query(collection(db(ALEX), "invites"), where("tenantId", "==", "heartwood"))));
   await assertFails(getDocs(collection(db(ALEX), "invites")));
   await assertSucceeds(getDoc(doc(db(ALEX), "inviteEmails", email)));
   await assertFails(getDocs(collection(db(ALEX), "inviteEmails")));
@@ -389,8 +389,10 @@ test("rules-admins create operator invites and staff cannot read or self-assign 
   await assertFails(deleteDoc(created));
 });
 
-test("invite shape rejects admin, a second pending email, and a client accept", async () => {
-  await assertFails(writeInvite(ALEX, "bad.role@example.com", { role: "admin", token: "i".repeat(43) }));
+test("invite shape: only admins give admin, a second pending email, and a client accept", async () => {
+  await assertSucceeds(writeInvite(ALEX, "admin.role@example.com", { role: "admin", token: "i".repeat(43) }));
+  await assertFails(writeInvite("sup1", "bad.role@example.com", { role: "admin", token: "i".repeat(43) }));
+  await assertFails(writeInvite(ALEX, "owner.role@example.com", { role: "owner", token: "i".repeat(43) }));
   await assertFails(writeInvite(ALEX, "Casey.Upper@example.com", { token: "j".repeat(43) }));
   await assertFails(writeInvite(ALEX, "soon@example.com", { token: "k".repeat(43), expiresAt: inviteExpires(1) }));
   await assertFails(writeInvite(ALEX, "newline@example.com", { token: "l".repeat(43), name: "Casey\nNguyen" }));

@@ -12,7 +12,15 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
-    function isAdmin() { return signedIn() && request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "38SU5waAy4f9UI9N6JTqDMaYpQg2", "R7t41e54Ykcdk9WPdVZnDd697iI2"]; }
+    // Heartwood admins: the fixed list (Alex, the box sync user, Patrick) OR an accepted Heartwood admin invite.
+    // heartwoodAdmins/{uid} is written by acceptStaffInvite (Admin SDK) or a Heartwood admin, never by the person.
+    function isAdmin() { return signedIn() && (request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "38SU5waAy4f9UI9N6JTqDMaYpQg2", "R7t41e54Ykcdk9WPdVZnDd697iI2"] || heartwoodAdminGrant()); }
+    function heartwoodAdminGrant() {
+      let grant = /databases/$(database)/documents/heartwoodAdmins/$(request.auth.uid);
+      let user = /databases/$(database)/documents/users/$(request.auth.uid);
+      return exists(grant) && get(grant).data.get("role", "") == "admin"
+        && exists(user) && docCompany(get(user).data) == "heartwood" && get(user).data.get("role", "") == "admin";
+    }
     function isOwner() { return signedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
     function isSync() { return signedIn() && request.auth.uid == "38SU5waAy4f9UI9N6JTqDMaYpQg2"; }
     // Xero (profit figures, Send to Xero queue): explicit allowlist, NOT isAdmin(), so future admins get no Xero access.
@@ -359,6 +367,21 @@ service cloud.firestore {
     function testCompanyId(id) {
       return id != "heartwood" && exists(/databases/$(database)/documents/companies/$(id))
         && get(/databases/$(database)/documents/companies/$(id)).data.get("isTest", false) == true;
+    }
+    // Heartwood admin grants (12 Nov 2026). Created by acceptStaffInvite for an accepted Heartwood admin invite, or by a
+    // Heartwood admin. Nobody grants themselves; supervisors and crew can't write here.
+    match /heartwoodAdmins/{uid} {
+      allow get: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isAdmin() && request.auth.uid != uid
+        && request.resource.data.keys().hasOnly(["uid", "role", "companyId", "inviteId", "grantedBy", "grantedAt"])
+        && request.resource.data.uid == uid
+        && request.resource.data.role == "admin"
+        && request.resource.data.companyId == "heartwood"
+        && request.resource.data.grantedBy == request.auth.uid
+        && request.resource.data.grantedAt == request.time;
+      allow update: if false;
+      allow delete: if isAdmin() && request.auth.uid != uid;
     }
     match /users/{uid} {
       // Everyone reads their own profile.
@@ -873,23 +896,36 @@ service cloud.firestore {
     }
     function routeSheetWorker(id) { return id[0:id.size()-11]; }
     function routeSheetDate(id) { return id[id.size()-10:id.size()]; }
+    // Run sheets belong to one company (12 Nov 2026): companyId on the sheet (missing = Heartwood). An admin reads and
+    // writes only their own company's sheets, for a worker of their own company. The depot is the company's own address
+    // (Heartwood: Chuwar from its settings / default), so it is checked for shape only.
+    function routeWorkerCompany(sheetId) {
+      let p = /databases/$(database)/documents/users/$(routeSheetWorker(sheetId));
+      return exists(p) ? docCompany(get(p).data) : "heartwood";
+    }
     function routeCanRead(sheetId) {
       return routeSignedIn() && routeSheetIdOk(sheetId)
-        && (routeIsAdmin() || request.auth.uid == routeSheetWorker(sheetId));
+        && (request.auth.uid == routeSheetWorker(sheetId)
+          || (routeIsAdmin() && (resource == null || docCompany(resource.data) == callerCompany())));
     }
     function routeCanWrite(sheetId) {
       return routeIsAdmin() && routeSheetIdOk(sheetId)
         && request.resource.data.keys().hasOnly([
           "workerUid", "workerName", "date", "jobIds", "returnToDepot", "status", "depot",
           "method", "provider", "tweaked", "totalMinutes", "totalKm", "currentMinutes", "currentKm",
-          "approvedBy", "approvedByName", "approvedAt"
+          "approvedBy", "approvedByName", "approvedAt", "companyId"
         ])
-        && request.resource.data.workerUid == routeSheetWorker(sheetId)
+        && request.resource.data.companyId is string
+        && request.resource.data.companyId == callerCompany()
+        && (resource == null || docCompany(resource.data) == callerCompany())
+        && routeWorkerCompany(sheetId) == callerCompany()
         && request.resource.data.approvedBy == request.auth.uid
         && request.resource.data.date == routeSheetDate(sheetId)
         && request.resource.data.date is string
         && request.resource.data.status == "approved"
-        && request.resource.data.depot == "208-220 Holdsworth Rd, Chuwar QLD 4306"
+        && request.resource.data.depot is string
+        && request.resource.data.depot.size() > 0
+        && request.resource.data.depot.size() <= 200
         && request.resource.data.returnToDepot is bool
         && request.resource.data.tweaked is bool
         && request.resource.data.jobIds is list
@@ -1119,10 +1155,14 @@ service cloud.firestore {
         && email.size() <= 120
         && email.matches('^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$');
     }
-    // Labourer, operator or supervisor: any invite admin (admin or supervisor). Admin: only a profile-role admin of a
-    // CallUp company. Heartwood's admins stay the fixed UID list, so nobody invites a Heartwood admin.
+    // Labourer, operator or supervisor: any invite admin (admin or supervisor). Admin: a profile-role admin of a CallUp
+    // company, or a Heartwood admin (Alex, Patrick, or an accepted Heartwood admin grant in heartwoodAdmins/{uid}).
     function inviteFullAdmin() {
-      return inviteHasProfile() && "role" in inviteProfile() && inviteProfile().role == "admin" && inviteCallerTenant() != "heartwood";
+      return inviteCallerTenant() == "heartwood"
+        ? (inviteIsAlex() || inviteIsPatrick()
+          || (exists(/databases/$(database)/documents/heartwoodAdmins/$(request.auth.uid))
+            && inviteHasProfile() && inviteProfile().get("role", "") == "admin"))
+        : (inviteHasProfile() && "role" in inviteProfile() && inviteProfile().role == "admin");
     }
     function inviteRoleOk() {
       return request.resource.data.role in ["labourer", "operator", "supervisor"]

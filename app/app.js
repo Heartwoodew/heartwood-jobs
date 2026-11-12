@@ -257,8 +257,8 @@ async function loadCompanyBrand() {
   const snap = await getDoc(doc(db, "companies", id)).catch(() => null);
   if (snap && snap.exists()) setActiveCompany({ ...snap.data(), companyId: id });
   else setActiveCompany(id === "heartwood" ? null : { companyId: id, name: "Your company" });
-  // Depot for quotes and run sheets: Heartwood's yard, or the company's own address.
-  const depot = id === "heartwood" ? "" : orgSettings().address;
+  // Depot for quotes and run sheets: the company's address from settings (Heartwood: Chuwar unless changed there).
+  const depot = orgSettings().address;
   setRouteDepot(depot, { heartwood: id === "heartwood" }); setDefaultDepot(depot, { heartwood: id === "heartwood" });
   paintBrand();
 }
@@ -2733,7 +2733,8 @@ async function saveInvite(fields) {
 function myInviteRoles() {
   // me.role "admin" = rules-admin in the app (profile admin, or a Heartwood admin from the fixed list); Heartwood never gets "admin".
   const role = me && (me.role === "admin" ? "admin" : ((me.cloudProfile && me.cloudProfile.role) || me.role));
-  return invitableRoles({ uid: me && me.uid, profile: { role }, tenantId: myTenant() });
+  // Heartwood: the app only treats someone as admin when the rules let them list staff (fixed list or a grant).
+  return invitableRoles({ uid: me && me.uid, profile: { role }, tenantId: myTenant(), heartwoodAdmin: role === "admin" });
 }
 async function resendInvite(id) {
   const row = (ui.invites || []).find(item => item.id === id);
@@ -4902,6 +4903,7 @@ ROUTE = installRouteOrder({
   db, doc, setDoc, updateDoc, serverTimestamp,
   todayStr, toast,
   getMe: () => me,
+  getCompanyId: () => myCompanyId(),
   getStaff: () => staff,
   getJobs: () => [...jobs, ...(ui.undated || [])],
   peekSheet: (uid, date) => {

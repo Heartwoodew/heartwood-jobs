@@ -64,6 +64,7 @@ export async function handleHelperAsk({
     profile,
     requestedTenantId: data && data.tenantId,
     requestedBusinessId: data && data.businessId,
+    heartwoodAdmin: reader && typeof reader.heartwoodAdmin === "function" ? await reader.heartwoodAdmin(auth.uid) : false,
   });
   if (!membership.ok) return { ok: false, code: "permission-denied", reply: DENIED_REPLY };
   const person = named(auth.uid, profile);

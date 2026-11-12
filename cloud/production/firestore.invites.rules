@@ -40,10 +40,14 @@
         && email.size() <= 120
         && email.matches('^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$');
     }
-    // Labourer, operator or supervisor: any invite admin (admin or supervisor). Admin: only a profile-role admin of a
-    // CallUp company. Heartwood's admins stay the fixed UID list, so nobody invites a Heartwood admin.
+    // Labourer, operator or supervisor: any invite admin (admin or supervisor). Admin: a profile-role admin of a CallUp
+    // company, or a Heartwood admin (Alex, Patrick, or an accepted Heartwood admin grant in heartwoodAdmins/{uid}).
     function inviteFullAdmin() {
-      return inviteHasProfile() && "role" in inviteProfile() && inviteProfile().role == "admin" && inviteCallerTenant() != "heartwood";
+      return inviteCallerTenant() == "heartwood"
+        ? (inviteIsAlex() || inviteIsPatrick()
+          || (exists(/databases/$(database)/documents/heartwoodAdmins/$(request.auth.uid))
+            && inviteHasProfile() && inviteProfile().get("role", "") == "admin"))
+        : (inviteHasProfile() && "role" in inviteProfile() && inviteProfile().role == "admin");
     }
     function inviteRoleOk() {
       return request.resource.data.role in ["labourer", "operator", "supervisor"]

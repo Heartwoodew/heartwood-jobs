@@ -1,6 +1,6 @@
 // 12 Nov 2026 (Alex): four invite profiles - labourer, operator, supervisor, admin. A labourer has exactly the
 // operator's access (assigned jobs, own receipts/timesheet, prestarts, fleet meter) and no dollar amounts. Admin
-// invites only by a company admin. Loads cloud/firestore.production.rules. Fake data only.
+// invites only by an admin. Loads cloud/firestore.production.rules. Fake data only.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -103,8 +103,8 @@ test("invites: admin gives all four roles; a supervisor gives three, never admin
     await assertSucceeds(invite(sup, "bSup", role, `${role}.s@bravo.test`));
   await assertFails(invite(sup, "bSup", "admin", "admin.s@bravo.test"));
   for (const uid of ["bOp", "bLab"]) await assertFails(invite(db(uid), uid, "labourer", `x.${uid.toLowerCase()}@bravo.test`));
-  // Heartwood's admins are the fixed list in the rules: nobody invites a Heartwood admin, Alex included.
-  await assertFails(invite(db(ALEX), ALEX, "admin", "admin.hw@example.com", "heartwood"));
+  // Heartwood: Alex (fixed list) may invite an admin (accepting it writes the heartwoodAdmins grant).
+  await assertSucceeds(invite(db(ALEX), ALEX, "admin", "admin.hw@example.com", "heartwood"));
   await assertSucceeds(invite(db(ALEX), ALEX, "labourer", "lab.hw@example.com", "heartwood"));
   // A supervisor never reads (or resends) an admin invite: it carries the sign-up token.
   await assertFails(getDoc(doc(sup, "invites", ids.admin.id)));

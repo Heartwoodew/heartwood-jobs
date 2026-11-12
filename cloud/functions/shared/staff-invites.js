@@ -99,16 +99,18 @@ export function canManageInvites(membership) {
   return !!(membership && membership.ok && (membership.rulesAdmin || membership.role === "supervisor"));
 }
 
-// Rules-admins (Alex, Patrick, or profile role admin) and supervisors may invite. Crew cannot.
-// Admin invites: only an admin, and only for a CallUp company. Heartwood's admins are the fixed list in the rules.
-export function invitableRoles({ uid, profile, tenantId } = {}) {
+// Admins invite all four roles; supervisors labourer/operator/supervisor (never admin); crew nobody.
+// Heartwood admin = Alex, Patrick, or an accepted Heartwood admin (heartwoodAdmin: grant in heartwoodAdmins/{uid}).
+// CallUp company admin = profile role admin.
+export function invitableRoles({ uid, profile, tenantId, heartwoodAdmin = false } = {}) {
   const role = profile && profile.role;
-  const admin = uid === ALEX_UID || uid === PATRICK_UID || role === "admin";
-  if (admin) return tenantId === HEARTWOOD_TENANT ? SUPERVISOR_INVITE_ROLES : INVITE_ROLES;
+  const admin = uid === ALEX_UID || uid === PATRICK_UID
+    || (tenantId === HEARTWOOD_TENANT ? heartwoodAdmin === true && role === "admin" : role === "admin");
+  if (admin) return INVITE_ROLES;
   return role === "supervisor" ? SUPERVISOR_INVITE_ROLES : [];
 }
-export function inviterMayInvite({ uid, profile } = {}, role = "", tenantId = HEARTWOOD_TENANT) {
-  const roles = invitableRoles({ uid, profile, tenantId });
+export function inviterMayInvite({ uid, profile, heartwoodAdmin = false } = {}, role = "", tenantId = HEARTWOOD_TENANT) {
+  const roles = invitableRoles({ uid, profile, tenantId, heartwoodAdmin });
   return role ? roles.includes(role) : roles.length > 0;
 }
 
@@ -500,18 +502,25 @@ export async function acceptStaffInvite(input, deps) {
   if (!inviterMayInvite(inviter || { uid: invite.createdBy, profile: null }, invite.role, profile.companyId || HEARTWOOD_TENANT)) return { ok: false, reason: "invalid" };
   const existing = await deps.getUserByEmail(profile.email);
   if (existing) return { ok: false, reason: "email-in-use" };
+  // A Heartwood admin also needs the grant the rules read (heartwoodAdmins/{uid}); without a way to write it, refuse.
+  const hwAdmin = profile.role === "admin" && (profile.companyId || HEARTWOOD_TENANT) === HEARTWOOD_TENANT;
+  if (hwAdmin && typeof deps.grantHeartwoodAdmin !== "function") return { ok: false, reason: "invalid" };
   const user = await deps.createUser({ email: profile.email, password: input.password, displayName: profile.name });
+  const undo = async () => {
+    if (hwAdmin && typeof deps.revokeHeartwoodAdmin === "function") await deps.revokeHeartwoodAdmin(user.uid);
+    await deps.deleteProfile(user.uid);
+    await deps.deleteUser(user.uid);
+  };
   try {
     await deps.setProfile(user.uid, profile);
+    if (hwAdmin) await deps.grantHeartwoodAdmin(user.uid, { inviteId: invite.id, grantedBy: invite.createdBy });
     const claimed = await deps.claimInvite(invite.id, user.uid, now);
     if (!claimed || !claimed.ok) {
-      await deps.deleteProfile(user.uid);
-      await deps.deleteUser(user.uid);
+      await undo();
       return { ok: false, reason: (claimed && claimed.reason) || "invalid" };
     }
   } catch (err) {
-    await deps.deleteProfile(user.uid);
-    await deps.deleteUser(user.uid);
+    await undo();
     throw err;
   }
   return { ok: true, uid: user.uid, email: profile.email, role: profile.role, name: profile.name };

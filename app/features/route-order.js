@@ -17,7 +17,7 @@ export const EXACT_JOB_LIMIT = 8;
 export const RUN_SHEET_KEYS = [
   "workerUid", "workerName", "date", "jobIds", "returnToDepot", "status", "depot",
   "method", "provider", "tweaked", "totalMinutes", "totalKm", "currentMinutes", "currentKm",
-  "approvedBy", "approvedByName", "approvedAt",
+  "approvedBy", "approvedByName", "approvedAt", "companyId",
 ];
 
 const memGeo = new Map();
@@ -552,6 +552,8 @@ export function buildApproval(input) {
   if (!id) return { ok: false, reason: "Choose a worker and a day." };
   if (!jobIds.length) return { ok: false, reason: "Nothing to approve." };
   if (input.minutes == null || input.km == null) return { ok: false, reason: "Drive time is missing, so this order cannot be approved." };
+  const depot = depotAddress();
+  if (!depot) return { ok: false, reason: "Add your company address in Company settings first. Run sheets start there." };
   const data = {
     workerUid: worker.uid,
     workerName: String(worker.name || "").slice(0, 80),
@@ -559,7 +561,7 @@ export function buildApproval(input) {
     jobIds: jobIds.slice(),
     returnToDepot: !!input.returnToDepot,
     status: "approved",
-    depot: depotAddress(),
+    depot,
     method: input.method === "nearest-neighbour-2opt" ? "nearest-neighbour-2opt" : "exact",
     provider: ["ors", "osrm-fallback"].includes(input.provider) ? input.provider : "osrm",
     tweaked: !!input.tweaked,
@@ -569,6 +571,8 @@ export function buildApproval(input) {
     currentKm: input.currentKm,
     approvedBy: input.me.uid,
     approvedByName: String(input.me.name || "").slice(0, 80),
+    // The sheet belongs to the approver's company; the rules check it matches theirs and the worker's.
+    companyId: String(input.companyId || "heartwood"),
   };
   return { ok: true, id, data };
 }
@@ -749,6 +753,7 @@ export function installRouteOrder(api) {
     const worker = selectedWorker();
     const built = buildApproval({
       me: me(),
+      companyId: api.getCompanyId ? api.getCompanyId() : "heartwood",
       worker,
       date: state.date,
       jobIds: state.model.orderIds,

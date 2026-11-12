@@ -43,6 +43,7 @@ test("no ServiceM8 / SM8 in any shipped string, page, manifest or stylesheet (fo
 // Reviewed: each of these is an id, a Heartwood-only branch, a config default only used for Heartwood, or a Firebase
 // project id. A new string mentioning Heartwood fails here until it is checked against client companies.
 const HEARTWOOD_OK = new Set([
+  "heartwoodAdmins", // Firestore collection id (Heartwood admin grants), never shown
   "heartwood", "demo-heartwood", "heartwood-held", "heartwood-not-approved",
   "heartwood-9f37f", "heartwood-9f37f.firebaseapp.com", "heartwood-9f37f.firebasestorage.app",
   "https://australia-southeast1-heartwood-9f37f.cloudfunctions.net/stripeWebhook",

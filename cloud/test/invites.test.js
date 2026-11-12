@@ -295,7 +295,7 @@ test("invite rules fragment matches the emulator block and does not open mail", 
 });
 
 // 12 Nov 2026 (Alex): four invite profiles. Labourer = operator access, a different label. Admin only from an admin.
-test("four invite roles; supervisors never offer or accept an admin invite; Heartwood keeps its fixed admins", () => {
+test("four invite roles; supervisors never offer or accept an admin invite; Heartwood admins need the fixed list or a grant", () => {
   assert.deepEqual([...INVITE_ROLES], ["labourer", "operator", "supervisor", "admin"]);
   assert.deepEqual([...CREW_ROLES], ["labourer", "operator"]);
   assert.equal(roleLabel("labourer"), "Labourer");
@@ -308,7 +308,12 @@ test("four invite roles; supervisors never offer or accept an admin invite; Hear
   assert.deepEqual([...invitableRoles({ ...coSup, tenantId: "otherco" })], ["labourer", "operator", "supervisor"]);
   assert.deepEqual([...invitableRoles({ ...coOp, tenantId: "otherco" })], []);
   assert.deepEqual([...invitableRoles({ ...coLab, tenantId: "otherco" })], []);
-  assert.deepEqual([...invitableRoles({ uid: "1JKLsoxkQNfkphBBO0vDz2ziEyj2", profile: null, tenantId: "heartwood" })], ["labourer", "operator", "supervisor"]);
+  assert.deepEqual([...invitableRoles({ uid: "1JKLsoxkQNfkphBBO0vDz2ziEyj2", profile: null, tenantId: "heartwood" })], ["labourer", "operator", "supervisor", "admin"]);
+  // A Heartwood profile with role admin counts only with the heartwoodAdmins grant.
+  const hwProfile = { role: "admin", companyId: "heartwood" };
+  assert.deepEqual([...invitableRoles({ uid: "hw1", profile: hwProfile, tenantId: "heartwood" })], []);
+  assert.deepEqual([...invitableRoles({ uid: "hw1", profile: hwProfile, tenantId: "heartwood", heartwoodAdmin: true })], ["labourer", "operator", "supervisor", "admin"]);
+  assert.deepEqual([...invitableRoles({ uid: "hwS", profile: { role: "supervisor" }, tenantId: "heartwood", heartwoodAdmin: true })], ["labourer", "operator", "supervisor"]);
   assert.equal(inviterMayInvite(coAdmin, "admin", "otherco"), true);
   assert.equal(inviterMayInvite(coSup, "admin", "otherco"), false);
   assert.equal(inviterMayInvite(coSup, "labourer", "otherco"), true);
@@ -339,10 +344,36 @@ test("accept: a labourer gets a labourer profile; an admin invite needs an admin
   assert.equal(ok.ok, true);
   assert.equal(byAdmin.profiles.get(ok.uid).role, "admin");
 
+  // Heartwood admin invite from Alex: the accept writes the heartwoodAdmins grant (rolled back if the claim fails).
   const hwAdmin = memory([{ id: "h1", ...draft({ role: "admin" }).invite }]);
   hwAdmin.deps.getInviter = async () => ({ uid: "1JKLsoxkQNfkphBBO0vDz2ziEyj2", profile: null });
-  assert.equal((await acceptStaffInvite({ token: TOKEN, password: "choose-a-password" }, hwAdmin.deps)).reason, "invalid");
+  assert.equal((await acceptStaffInvite({ token: TOKEN, password: "choose-a-password" }, hwAdmin.deps)).reason, "invalid", "no grant writer, no admin");
   assert.equal(hwAdmin.calls.createUser.length, 0);
+  const grants = new Map();
+  hwAdmin.deps.grantHeartwoodAdmin = async (uid, meta) => { grants.set(uid, { role: "admin", ...meta }); };
+  hwAdmin.deps.revokeHeartwoodAdmin = async uid => { grants.delete(uid); };
+  const hwOk = await acceptStaffInvite({ token: TOKEN, password: "choose-a-password" }, hwAdmin.deps);
+  assert.equal(hwOk.ok, true);
+  assert.equal(hwAdmin.profiles.get(hwOk.uid).role, "admin");
+  assert.equal(hwAdmin.profiles.get(hwOk.uid).companyId, "heartwood");
+  assert.deepEqual(grants.get(hwOk.uid), { role: "admin", inviteId: "h1", grantedBy: "admin-1" });
+  // A Heartwood supervisor's admin invite, or one from a Heartwood profile-admin without a grant, is refused.
+  for (const inviter of [{ uid: "hs", profile: { role: "supervisor" } }, { uid: "hp", profile: { role: "admin" }, heartwoodAdmin: false }]) {
+    const m = memory([{ id: "h2", ...draft({ role: "admin" }).invite }]);
+    m.deps.getInviter = async () => inviter;
+    m.deps.grantHeartwoodAdmin = async () => { throw new Error("must not grant"); };
+    assert.equal((await acceptStaffInvite({ token: TOKEN, password: "choose-a-password" }, m.deps)).reason, "invalid");
+    assert.equal(m.calls.createUser.length, 0);
+  }
+  // A failed claim removes the grant again.
+  const rb = memory([{ id: "h3", ...draft({ role: "admin" }).invite }]);
+  const rbGrants = new Map();
+  rb.deps.getInviter = async () => ({ uid: "R7t41e54Ykcdk9WPdVZnDd697iI2", profile: { role: "operator" } });
+  rb.deps.grantHeartwoodAdmin = async uid => { rbGrants.set(uid, true); };
+  rb.deps.revokeHeartwoodAdmin = async uid => { rbGrants.delete(uid); };
+  rb.deps.claimInvite = async () => ({ ok: false, reason: "expired" });
+  assert.equal((await acceptStaffInvite({ token: TOKEN, password: "choose-a-password" }, rb.deps)).reason, "expired");
+  assert.equal(rbGrants.size, 0);
 });
 
 test("invite email names the role with the right article", () => {

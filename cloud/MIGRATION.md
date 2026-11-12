@@ -309,7 +309,8 @@ fleet meter reading. Labourers are below supervisor, so no dollar amounts anywhe
   labourer/operator/supervisor and never admin; crew invite nobody. Heartwood: no admin invites (Heartwood's admins
   are the fixed UID list in the rules; a Heartwood profile-role admin would get a half-working office). The accept
   function re-checks the inviter's power for the invited role and refuses otherwise. The Staff screen offers only the
-  roles the signed-in person may give; the role picker defaults to Operator.
+  roles the signed-in person may give; the role picker defaults to Operator. (Heartwood admin invites: see the next
+  section; they now work through heartwoodAdmins/{uid}.)
 - Rules: `isOperator()` takes role operator or labourer. Invites: `inviteRoleOk()` allows labourer/operator/supervisor
   for any invite admin and admin only for a profile-role admin of a CallUp company (`inviteFullAdmin()`), on create,
   resend and cancel. Supervisors cannot read an admin invite (it carries the sign-up token); the app's invite list
@@ -323,3 +324,32 @@ fleet meter reading. Labourers are below supervisor, so no dollar amounts anywhe
   supervisor can't read or resend an admin invite), `tests/phone-ui.test.mjs`.
 - Deploy: Firestore rules, hosting, and functions `previewStaffInvite`, `acceptStaffInvite`, `inviteEmailWorker`
   (shared/staff-invites.js) and `helperAsk` (helper/actions.js).
+
+## Heartwood admin invites; run sheets per company (12 Nov 2026, Alex's answers)
+
+Kept as is (Alex): crew still see the dollar amount on their OWN receipts and claims; the 4 job notes / 3 descriptions
+with a typed $ stay as written (the app hides dollars from crew).
+
+### Heartwood admin invites work
+- `isAdmin()` = the fixed UID list (unchanged, Alex / box sync / Patrick) OR `heartwoodAdminGrant()`: a
+  `heartwoodAdmins/{uid}` doc with role admin AND that person's users/{uid} is a Heartwood profile with role admin.
+- `heartwoodAdmins/{uid}`: written by `acceptStaffInvite` (Admin SDK) for an accepted Heartwood admin invite, or by a
+  Heartwood admin for someone else (shape-checked: uid, role admin, companyId heartwood, grantedBy = caller,
+  grantedAt = now). Nobody creates or deletes their own grant. No updates. Read: the person and Heartwood admins.
+- Invites: a Heartwood admin (fixed list or grant) may invite an admin; supervisors still can't. The accept function
+  checks the inviter (fixed list or grant) and writes profile + grant, rolling both back if the claim fails.
+- Helper: a Heartwood profile with role admin counts as admin only with the grant (`resolveMembership(heartwoodAdmin)`).
+- Still Alex-only or Alex + Patrick by design: reimbursements ledger, owner settings, timesheet office list (isOwner)
+  and Xero (xeroUser). An invited admin gets what Patrick gets through isAdmin(); say if they should get more.
+- Production check (read only, 12 Nov 2026): no Heartwood profile has role admin today and heartwoodAdmins is empty,
+  so nobody gains access when the rules go live.
+- Cost: crew requests that hit isAdmin() do one extra document lookup (the grant) after the UID list misses.
+
+### Run sheets belong to one company
+- Sheets carry `companyId`. Read: the worker, or an admin of the sheet's company (missing companyId = Heartwood; a
+  missing sheet reads as not-there). Write: an admin of their own company, for a worker of their own company, never
+  over another company's sheet. The hard-coded Chuwar depot check is gone: depot must be a non-empty string <= 200.
+- The app takes the depot from Company settings (`orgSettings().address`); Heartwood's default is still
+  208-220 Holdsworth Rd, Chuwar. A client company with no address can't approve and is told to add one.
+- Existing sheets have no companyId and read as Heartwood (only Heartwood used run sheets).
+- Tests: `test/heartwood-admin-runsheets.emulator.test.js`.

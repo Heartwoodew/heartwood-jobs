@@ -1,6 +1,6 @@
 # Optimise order
 
-An admin picks a day and one worker, then asks for the quickest driving order of that worker’s jobs. The drive starts at the depot, **208-220 Holdsworth Rd, Chuwar QLD 4306**. A checkbox adds the leg back to the depot. The screen shows each leg’s drive time and distance, and the total next to the current order (the approved run-sheet order if there is one, otherwise start-time order).
+An admin picks a day and one worker, then asks for the quickest driving order of that worker’s jobs. The drive starts at the depot: the company address from Company settings (Heartwood: **208-220 Holdsworth Rd, Chuwar QLD 4306** by default). Each run sheet carries its companyId and only that company's admins read or write it. A checkbox adds the leg back to the depot. The screen shows each leg’s drive time and distance, and the total next to the current order (the approved run-sheet order if there is one, otherwise start-time order).
 
 The admin can drag the stops, or use the arrows, before approving. Approve writes `runSheets/{workerUid}_{YYYY-MM-DD}`. Reject writes nothing. Staff cannot approve. On their run sheet they see the approved sequence for their own jobs. Each worker has a separate document, so a shared job can sit in a different place on two people’s days.
 

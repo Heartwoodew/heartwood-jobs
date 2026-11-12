@@ -424,8 +424,8 @@ async function prepareLeaveDecision(membership, intent, reader, name) {
 async function prepareInvite(membership, intent, reader) {
   if (!(membership.rulesAdmin || membership.role === "supervisor")) return deny("supervisor-only");
   const role = String(intent.role || "");
-  // Supervisors: labourer, operator or supervisor. Admin invites: rules-admins of a CallUp company only.
-  const roles = membership.rulesAdmin && membership.tenantId !== "heartwood"
+  // Supervisors: labourer, operator or supervisor. Admin invites: rules-admins (Heartwood: fixed list or granted admin).
+  const roles = membership.rulesAdmin
     ? ["labourer", "operator", "supervisor", "admin"] : ["labourer", "operator", "supervisor"];
   if (!roles.includes(role)) return deny("not-allowed");
   const email = String(intent.email || "").trim().toLowerCase();

@@ -24,6 +24,10 @@ export function adminReader(db) {
       const snap = await db.collection("users").doc(uid).get();
       return snap.exists ? snap.data() : null;
     },
+    async heartwoodAdmin(uid) {
+      const snap = await db.collection("heartwoodAdmins").doc(uid).get();
+      return snap.exists && (snap.data() || {}).role === "admin";
+    },
     async jobs({ assignedUid, limit }) {
       let query = db.collection("jobs");
       if (assignedUid) query = query.where("assigned", "array-contains", assignedUid);
