@@ -21,3 +21,13 @@ export function mergeJobLists(windowJobs, extra) {
   const ids = new Set((windowJobs || []).map(j => j.id));
   return [...(windowJobs || []), ...(extra || []).filter(j => j && !ids.has(j.id))];
 }
+
+// Job "Hours" field. Accepts decimals such as 7.6 (a 7 h 36 min day) or "7,6". Blank, negative or non-numbers save as null.
+// Kept to 2 decimal places so 7.6 stays 7.6 and never becomes 7.6000000001.
+export function parseHoursInput(value) {
+  const text = String(value ?? "").trim().replace(",", ".");
+  if (text === "") return null;
+  const n = Number(text);
+  if (!Number.isFinite(n) || n < 0 || n > 999) return null;
+  return Math.round(n * 100) / 100;
+}
