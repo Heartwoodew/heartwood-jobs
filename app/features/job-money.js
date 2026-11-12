@@ -5,7 +5,9 @@
 // until cloud/scripts/migrate-job-money.mjs moves it.
 
 // poLookupCandidates (Nov 2026): Find PO suggestions carry PO amounts, so the list lives on jobMoney too.
-export const JOB_MONEY_KEYS = Object.freeze(["poAmount", "poAmountBasis", "poAmountSource", "quoteAmount", "poLookupCandidates"]);
+// invoiceAmount (12 Nov 2026): the invoice price (ex GST) typed at invoicing is office only as well; the other invoice
+// fields (invoiceNo, invoiceDescription, invoiced, ...) stay on the job. cloud/scripts/migrate-invoice-amount.mjs moves old values.
+export const JOB_MONEY_KEYS = Object.freeze(["poAmount", "poAmountBasis", "poAmountSource", "quoteAmount", "poLookupCandidates", "invoiceAmount"]);
 export const JOB_MONEY_COLLECTION = "jobMoney";
 
 /** Split a job write into the crew-readable job part and the office-only money part. */

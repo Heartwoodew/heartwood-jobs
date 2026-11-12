@@ -388,7 +388,14 @@ service cloud.firestore {
     // (poLookupCandidates, they carry PO amounts) or quote prices on a job.
     // Removing a legacy copy is allowed. The box (isSync) still writes poAmount for Find PO / ServiceM8 until its
     // workers move to jobMoney; cloud/scripts/migrate-job-money.mjs moves existing amounts.
-    function jobMoneyKeys() { return ["poAmount", "poAmountBasis", "poAmountSource", "quoteAmount", "poLookupCandidates"]; }
+    // invoiceAmount (12 Nov 2026): the invoice price is office only too. Even the box (isSync) may not add or change it on a
+    // job (tools/export_completed.py writes it to jobMoney); cloud/scripts/migrate-invoice-amount.mjs moves old values.
+    function jobMoneyKeys() { return ["poAmount", "poAmountBasis", "poAmountSource", "quoteAmount", "poLookupCandidates", "invoiceAmount"]; }
+    function syncJobCreateOk() { return !request.resource.data.keys().hasAny(["invoiceAmount"]); }
+    function syncJobUpdateOk() {
+      let df = request.resource.data.diff(resource.data);
+      return !df.addedKeys().hasAny(["invoiceAmount"]) && !df.changedKeys().hasAny(["invoiceAmount"]);
+    }
     function quotePriceKeys() { return ["totalEx", "gst", "totalInc", "lines", "priceOverrides", "ratesSnapshot"]; }
     function jobQuoteNoPrices(d) { return !(d.get("quote", null) is map) || !d.quote.keys().hasAny(quotePriceKeys()); }
     function jobMoneyFreeCreate() {
@@ -412,14 +419,14 @@ service cloud.firestore {
         && resource.data.get("companyId", "") == callerCompany()
         && request.resource.data.get("companyId", "") == callerCompany()
         && jobMoneyFreeUpdate();
-      allow create: if isSync() || (isAdmin() && docCompany(request.resource.data) == "heartwood" && jobMoneyFreeCreate());
+      allow create: if (isSync() && syncJobCreateOk()) || (isAdmin() && docCompany(request.resource.data) == "heartwood" && jobMoneyFreeCreate());
       allow delete: if isSync() || (isAdmin() && docCompany(resource.data) == "heartwood");
       // Master page: Alex adds demo jobs to a test company only.
       allow create: if platformOwner() && request.resource.data.get("demo", false) == true
         && jobMoneyFreeCreate()
         && docCompany(request.resource.data) != "heartwood"
         && get(/databases/$(database)/documents/companies/$(docCompany(request.resource.data))).data.get("isTest", false) == true;
-      allow update: if (isAdmin() && (isSync() || (docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood"
+      allow update: if (isAdmin() && ((isSync() && syncJobUpdateOk()) || (docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood"
           && jobMoneyFreeUpdate()))
         && (xeroUser() || isSync() || !request.resource.data.diff(resource.data).affectedKeys().hasAny(
           ["xeroStatus", "xeroInvoiceId", "xeroInvoiceNo", "xeroError", "xeroQueuedAt"]))) || (
@@ -441,11 +448,12 @@ service cloud.firestore {
     // supervisors (who already read quotes) for their own company. Crew (operators, staff) never read it.
     function jobMoneyOk(d, jobId) {
       return d.keys().hasOnly(["jobId", "companyId", "tenantId", "poAmount", "poAmountBasis", "poAmountSource", "quoteAmount",
-          "splitUndoPoAmount", "poLookupCandidates", "migratedAt", "updatedAt", "updatedBy"])
+          "splitUndoPoAmount", "poLookupCandidates", "invoiceAmount", "migratedAt", "updatedAt", "updatedBy"])
         && (d.get("poLookupCandidates", null) == null || (d.poLookupCandidates is list && d.poLookupCandidates.size() <= 50))
         && d.jobId == jobId
         && (d.get("poAmount", null) == null || d.poAmount is number)
         && (d.get("quoteAmount", null) == null || d.quoteAmount is number)
+        && (d.get("invoiceAmount", null) == null || d.invoiceAmount is number)
         && (d.get("splitUndoPoAmount", null) == null || d.splitUndoPoAmount is number);
     }
     match /jobMoney/{jobId} {

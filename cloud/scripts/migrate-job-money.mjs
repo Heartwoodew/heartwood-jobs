@@ -8,7 +8,8 @@
 // (older Find PO runs wrote "PO ... $N ex GST"), workAmounts[] and quote.extraItems[].note/description (the same
 // "[price removed]" rule the app now applies to new quotes). Free text people typed (notes, description) is only
 // counted in the report (textWithPrice), never rewritten.
-// Invoice fields (invoiceNo, invoiceAmount, ...) are NOT touched: the box invoicing workers still use them on the job.
+// Invoice fields (invoiceNo, invoiceAmount, ...) are NOT touched here. invoiceAmount is now job money too (12 Nov 2026), but it
+// has its own script with a backup: scripts/migrate-invoice-amount.mjs.
 // Dry run is the default and writes nothing.
 //
 // Emulator (fake data):
@@ -25,6 +26,8 @@ import { readFileSync } from "node:fs";
 import { JOB_MONEY_KEYS } from "../../app/features/job-money.js";
 import { parseMigrateArgs, LIVE_PROJECT } from "./migrate-company-id.mjs";
 
+// invoiceAmount is moved by scripts/migrate-invoice-amount.mjs (backup first), not by this script.
+const MOVE_KEYS = Object.freeze(JOB_MONEY_KEYS.filter(k => k !== "invoiceAmount"));
 export const QUOTE_PRICE_KEYS = Object.freeze(["totalEx", "gst", "totalInc", "lines", "priceOverrides", "ratesSnapshot"]);
 
 // Same rule as app/features/quotes.js noDollars (kept here so the script has no browser imports).
@@ -38,7 +41,7 @@ const companyOf = data => (typeof data.companyId === "string" && data.companyId)
 export function planJobMoney(id, job, existingMoney = null) {
   const have = existingMoney || {};
   const money = {}, remove = [], set = {};
-  for (const key of JOB_MONEY_KEYS) {
+  for (const key of MOVE_KEYS) {
     if (!(key in job)) continue;
     remove.push(key);
     if (!(key in have)) money[key] = job[key] ?? null;

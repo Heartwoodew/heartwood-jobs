@@ -240,3 +240,39 @@ After merge: deploy the rules and the app (service worker `callup-shell-v91-po-s
 over, then run `scripts/migrate-job-money.mjs` (dry run, then `--commit`): it moves existing suggestion lists off jobs
 into jobMoney without overwriting a list already there. It is the same idempotent script as above.
 
+
+## Invoice price off the job document (12 Nov 2026)
+
+`invoiceAmount` (the invoice price, ex GST) is now job money too. Assigned crew can read the whole job document, so
+the price lives in the office-only `jobMoney/{jobId}` with the PO value and quote total. The other invoice fields
+(`invoiceNo`, `invoiceDescription`, `invoiceDate`, `invoiceContact`, `invoiced`, ...) stay on the job.
+
+- App: the Invoices screen price box and "Assign numbers" write the price to jobMoney (numbering does both writes in one
+  transaction) and remove any legacy copy from the job. Office lists already merge jobMoney over the job (`withMoney`),
+  so the Invoices screen, Xero queue (`amountEx`), CSV exports and totals read the merged value. Service worker
+  `callup-shell-v97-invoice-office`.
+- Rules (`firestore.production.rules`): `invoiceAmount` is in `jobMoneyKeys()`, so app writers may not add or change it on a
+  job (removal is allowed). The box sync user may not add or change it on a job either (`syncJobCreateOk`,
+  `syncJobUpdateOk`). `jobMoneyOk` allows `invoiceAmount` (number or null). Crew still can't read jobMoney at all.
+- Helper (`helperAsk`): the admin reader merges `invoiceAmount` from jobMoney; crew answers never include it.
+- Box workers (not in this repo, /workspace/heartwood-app/tools): `hwfire.JOB_MONEY_KEYS` gets `invoiceAmount`;
+  `export_completed.py --invoice-sync` reads the price from jobMoney (legacy job copy as fallback) and writes store->app
+  prices to jobMoney; `sm8_push.py` never copies a price onto a moved job.
+
+### Existing jobs: `cloud/scripts/migrate-invoice-amount.mjs`
+
+Dry run is the default and reads only. `--apply` writes a JSON backup first (mode 600, needs `--backup <new file>` on
+production), copies each price to jobMoney (never overwriting a value already there; a different value there is a
+conflict and that job is left alone), then deletes the field from the job, then re-reads every job to verify.
+Dry run on 12 Nov 2026: 129 jobs scanned, 52 with `invoiceAmount` (all Heartwood; 51 Done + invoiced, 1 Cancelled;
+50 with crew assigned), 52 to copy, 0 conflicts.
+
+Order: merge, put the box worker update in place (it may write jobMoney before the rules change: the sync user already
+has full jobMoney access), deploy the Firestore rules, deploy hosting (v97) and `helperAsk`, then run the migration
+(`--apply --backup ...`), then a second dry run (expect 0).
+
+```
+cd cloud
+node scripts/migrate-invoice-amount.mjs --project heartwood-9f37f
+node scripts/migrate-invoice-amount.mjs --project heartwood-9f37f --apply --backup /workspace/callup/invoice-amount-backup.json
+```

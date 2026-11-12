@@ -3114,8 +3114,10 @@ function jobTabs(d, j) {
   show("details");
 }
 // ------------------------------------------------------------------ invoicing (admin only)
-// Invoice fields live on the job doc: invoiceNo (text), invoiceAmount (ex GST), invoiceDescription, invoiceContact,
+// Invoice fields live on the job doc: invoiceNo (text), invoiceDescription, invoiceContact,
 // invoiceDate (YYYY-MM-DD = job date, like hwdata.py), numberedAt/By, invoiced (bool), invoicedAt/By.
+// The price (invoiceAmount, ex GST) is office only: it lives on jobMoney/{jobId} (crew can read the job doc) and office
+// lists see it merged in by withMoney; a legacy copy still on the job is the fallback until the migration moves it.
 // Numbers: max(meta/invoicing.lastNo, meta/boxInvoiceMax.max (written by tools/export_completed.py from
 // completed.json), every job invoiceNo, 5402) + 1, assigned inside a Firestore transaction.
 const INV_FLOOR = 5402;                  // last number used on the planner's Completed sheet / completed.json (10/10/2026)
@@ -3776,8 +3778,9 @@ function bindInvoices(A) {
   A.querySelectorAll("[data-inv]").forEach(b => b.onclick = () => { ui.inv = b.dataset.inv; ui.invSel.clear(); renderAdmin(); });
   A.querySelectorAll(".isel").forEach(c => c.onchange = () => { const id = c.closest("[data-id]").dataset.id; c.checked ? ui.invSel.add(id) : ui.invSel.delete(id); renderAdmin(); });
   const ia = $("#iall"); if (ia) ia.onchange = () => { A.querySelectorAll(".isel").forEach(c => { const id = c.closest("[data-id]").dataset.id; ia.checked ? ui.invSel.add(id) : ui.invSel.delete(id); }); renderAdmin(); };
+  // writeJob: the price (invoiceAmount) goes to the office-only jobMoney doc and any legacy copy on the job is removed.
   const save = (el, field, conv) => el.onchange = async () => { const id = el.closest("[data-id]").dataset.id;
-    try { await updateDoc(doc(db, "jobs", id), { [field]: conv(el.value), updatedAt: serverTimestamp(), updatedBy: me.uid }); toast("Saved"); }
+    try { await writeJob(id, { [field]: conv(el.value), updatedAt: serverTimestamp(), updatedBy: me.uid }); toast("Saved"); }
     catch (e) { toast("Not saved: " + (e.code || e.message)); } };
   A.querySelectorAll(".iamt").forEach(el => save(el, "invoiceAmount", v => v === "" ? null : Math.round(+v * 100) / 100));
   A.querySelectorAll(".iamt").forEach(el => el.oninput = () => { const j = byId(el.closest("[data-id]").dataset.id); const o = el.parentNode.querySelector(".opo");
@@ -3834,9 +3837,12 @@ async function assignNumbers(list) {
       let n = Math.max(invFloor(), m.data()?.lastNo || 0, b?.data()?.max || 0, ...(ui.done || []).map(j => parseInt(j.invoiceNo) || 0));
       const res = [];
       for (const j of list) { n++;
-        const f = { invoiceNo: String(n), invoiceAmount: j.invoiceAmount, invoiceDescription: j.invoiceDescription, invoiceContact: invContact(j),
+        const f = { invoiceNo: String(n), invoiceDescription: j.invoiceDescription, invoiceContact: invContact(j),
           invoiceDate: j.date, invoiced: false, numberedAt: serverTimestamp(), numberedBy: me.uid, updatedAt: serverTimestamp(), updatedBy: me.uid };
-        tx.update(doc(db, "jobs", j.id), f); res.push({ ...j, ...f }); }
+        // The price is office only: it goes to jobMoney/{jobId} in the same transaction; any legacy copy on the job is removed.
+        tx.update(doc(db, "jobs", j.id), { ...f, invoiceAmount: deleteField() });
+        tx.set(doc(db, JOB_MONEY_COLLECTION, j.id), jobMoneyDoc(j.id, myCompanyId(), { invoiceAmount: j.invoiceAmount }, { updatedAt: serverTimestamp(), updatedBy: me.uid }), { merge: true });
+        res.push({ ...j, ...f, invoiceAmount: j.invoiceAmount }); }
       tx.set(mRef, { lastNo: n, updatedAt: serverTimestamp(), updatedBy: me.uid, ...(myCompanyId() === "heartwood" ? {} : { companyId: myCompanyId() }) }, { merge: true });
       return res;
     });

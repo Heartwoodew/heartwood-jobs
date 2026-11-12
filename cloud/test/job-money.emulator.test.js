@@ -70,7 +70,8 @@ test("office reads and writes money for its own company only", async () => {
   // shape
   await assertFails(setDoc(doc(db("bAdm"), "jobMoney/b2"), money("WRONG", "bravo")));
   await assertFails(setDoc(doc(db("bAdm"), "jobMoney/b3"), money("b3", "bravo", { poAmount: "lots" })));
-  await assertFails(setDoc(doc(db("bAdm"), "jobMoney/b4"), money("b4", "bravo", { invoiceAmount: 5 })));
+  await assertFails(setDoc(doc(db("bAdm"), "jobMoney/b4"), money("b4", "bravo", { profitAmount: 5 })));
+  await assertFails(setDoc(doc(db("bAdm"), "jobMoney/b5"), money("b5", "bravo", { invoiceAmount: "lots" })));
   await assertFails(deleteDoc(doc(db("bAdm"), "jobMoney/b1")));
 });
 
