@@ -2,7 +2,7 @@
 // Master rows are account-level only. This file does not read jobs, photos, or money.
 
 import { POWERED_BY, PRODUCT_NAME } from "../org-settings.js";
-import { derivedJobPrefix, filterMaster, masterTotals } from "./company.js";
+import { derivedJobPrefix, filterMaster, friendInviteLink, masterTotals } from "./company.js";
 
 const jobPrefixHint = org => derivedJobPrefix(org && org.name);
 
@@ -90,7 +90,7 @@ function badge(row) {
   return "";
 }
 
-export function masterPageHtml(companies, filters = {}, invites = []) {
+export function masterPageHtml(companies, filters = {}, invites = [], currentOrigin = "", justCreated = "") {
   const rows = filterMaster(companies, filters);
   const totals = masterTotals(companies);
   const q = filters.q || "";
@@ -107,7 +107,18 @@ export function masterPageHtml(companies, filters = {}, invites = []) {
       <td>${esc(when(row.lastActivityAt))}</td>
       <td><span class="qpill ${row.status === "active" ? "q-comp" : "q-uns"}">${esc(row.status)}</span></td>
     </tr>`).join("");
-  const inviteRows = (invites || []).map(inv => `<li><code>${esc(inv.id)}</code> · ${esc(inv.status || "")}${inv.companyId ? " · " + esc(inv.companyId) : ""}</li>`).join("");
+  const rank = status => status === "pending" ? 0 : status === "used" ? 1 : 2;
+  const inviteRows = (invites || []).slice().sort((a, b) => rank(a.status) - rank(b.status) || String(a.id).localeCompare(String(b.id))).map(inv => {
+    const pending = inv.status === "pending";
+    const link = pending ? friendInviteLink(inv.id, currentOrigin) : "";
+    return `<li class="friend-invite" data-friend-status="${esc(inv.status || "")}">
+      <div>
+        <code>${esc(inv.id)}</code> · ${esc(inv.status || "")}${inv.companyId ? " · " + esc(inv.companyId) : ""}
+        ${link ? `<p class="invite-link">${esc(link)}</p>` : ""}
+      </div>
+      ${pending ? `<div class="inviteacts"><button type="button" data-friend-copy="${esc(link)}">Copy link</button></div>` : ""}
+    </li>`;
+  }).join("");
   return `<div class="sm-head"><h1>Master</h1><span class="sub">Platform owner · account details only</span></div>
     <div class="master-totals">
       <div class="tile"><span class="big">${totals.companies}</span><span class="nm">Companies</span></div>
@@ -127,9 +138,9 @@ export function masterPageHtml(companies, filters = {}, invites = []) {
       </form>
       <form id="friendinv" class="jf">
         <h2>Friend trial invite</h2>
-        <p class="sub">A real company. Their email works. One use, and you can revoke it before it is used.</p>
+        <p class="sub">A real company. Their email works. One use, and you can revoke it before it is used. Copy the link below and send it yourself. No email is sent.</p>
         <button class="primary" type="submit">Create friend invite</button>
-        <p id="friendout" class="sub"></p>
+        <p id="friendout" class="sub">${esc(justCreated || "")}</p>
         <ul class="friend-codes">${inviteRows || `<li class="muted">No invites yet.</li>`}</ul>
       </form>
     </div>

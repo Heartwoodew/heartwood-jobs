@@ -42,5 +42,5 @@ test("office app subscribes to older open jobs and merges them into the job list
   assert.match(src, /companyJobs\(\[where\("assigned", "array-contains", user\.uid\)\]\)/);
   const sw = readFileSync(new URL("../app/sw.js", import.meta.url), "utf8");
   assert.match(sw, /"features\/job-window\.js"/);
-  assert.match(sw, /callup-shell-v93-receipt-tonnes/);
+  assert.match(sw, /callup-shell-v94-friend-invite-link/);
 });
