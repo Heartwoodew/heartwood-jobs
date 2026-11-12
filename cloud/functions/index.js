@@ -10,7 +10,8 @@
  *
  * Staff invites: previewStaffInvite and acceptStaffInvite are callable.
  * acceptStaffInvite creates the Auth user and users/{uid} with the invited
- * role (operator or supervisor only). inviteEmailWorker queues mail.
+ * role (labourer, operator, supervisor, or admin for a CallUp company when an admin invited).
+ * inviteEmailWorker queues mail.
  * INVITE_EMAIL_ENABLED must be the string "true" or the message is held in
  * inviteMail and nothing is sent. This file does not open an SMTP connection.
  *

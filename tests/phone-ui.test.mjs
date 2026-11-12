@@ -64,8 +64,10 @@ test("phone shell, quote gate and handlers", async () => {
         assert.match(text.result.value, /Invite staff/, name);
         assert.match(text.result.value, /Operator/, name);
         assert.match(text.result.value, /Supervisor/, name);
+        assert.match(text.result.value, /Labourer/, name);
         const options = await page.send("Runtime.evaluate", { expression: "[...document.querySelectorAll('#invitef select option')].map(o => o.value).join(',')", returnByValue: true });
-        assert.equal(options.result.value, "operator,supervisor", name);
+        // Heartwood admin (fixed rules list): labourer, operator, supervisor. Admin invites are for CallUp company admins.
+        assert.equal(options.result.value, "labourer,operator,supervisor", name);
         const list = await page.send("Runtime.evaluate", { expression: "document.querySelector('.invitelist')?.innerText || ''", returnByValue: true });
         assert.match(list.result.value, /Casey Nguyen/, name);
         assert.match(list.result.value, /Pending/, name);

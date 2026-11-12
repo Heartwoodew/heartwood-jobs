@@ -21,7 +21,7 @@ import { installCompliance } from "./features/compliance.js";
 import { SWMS, SWMS_VERSION, sigMs, sigExp, latestSig, statusOf, swmsSignatureData, buildPlaceholderPdf } from "./features/swms-sign.js";
 import {
   acceptLoadingHtml, acceptScreenModel, acceptViewHtml, buildInviteDraft, inviteFailureText,
-  newInviteToken, pendingInviteForEmail, staffViewHtml, appOriginFor,
+  newInviteToken, pendingInviteForEmail, staffViewHtml, appOriginFor, invitableRoles, CREW_ROLES,
 } from "./features/staff-invites.js";
 import { saveGuard, settleOrQueue } from "./features/pending-write.js";
 import { PRODUCT_NAME, POWERED_BY, orgSettings, saveOrgSettings, setActiveCompany } from "./org-settings.js";
@@ -126,7 +126,7 @@ onAuthStateChanged(auth, async user => {
   if (inviteToken) return renderInviteSignedIn();
   // Admin = UID listed in firestore.rules (Alex, sync, Patrick): detected by being ALLOWED to list users - so if the
   // rules don't (yet) make someone admin they simply fall back to the operator view.
-  // users/{uid}.role: "operator" (staff, no $) | "supervisor" (staff shell + canSeeMoney). Patrick is rules-admin with an operator profile (bookable).
+  // users/{uid}.role: "labourer" / "operator" (crew, no $, same access) | "supervisor" (staff shell + canSeeMoney) | "admin". Patrick is rules-admin with an operator profile (bookable).
   const snap = await getDoc(doc(db, "users", user.uid)).catch(() => null);
   const prof = snap && snap.exists() ? snap.data() : null;
   // Heartwood admins list only Heartwood profiles (rules deny every other company's staff).
@@ -170,7 +170,7 @@ onAuthStateChanged(auth, async user => {
     if (!users && staffSnap) HOME_UIDS = staffSnap.docs.filter(d => docCompanyId(d.data()) === companyId).map(d => d.id);
     const logins = (staffSnap ? staffSnap.docs : []).map(d => ({ uid: d.id, ...d.data() }))
       .filter(u => (u.companyId || u.tenantId || "heartwood") === companyId)
-      .filter(u => u.role === "operator" || u.role === "supervisor");
+      .filter(u => CREW_ROLES.includes(u.role) || u.role === "supervisor");
     staff = companyId === "heartwood"
       ? [{ uid: ALEX_UID, name: "Alex" }, ...logins.filter(u => u.uid !== ALEX_UID)]
       : logins;
@@ -186,7 +186,7 @@ onAuthStateChanged(auth, async user => {
     // Invoicing: every Done job (any date), admin only.
     const u2 = onSnapshot(companyJobs([where("status", "==", "Done")]), s => { ui.done = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); donePill(); if (ui.view === "invoices" || ui.view === "completed" || ui.view === "home") renderAdmin(); }, e => console.warn("done jobs", e.code || e.message));
     const u3 = onSnapshot(query(collection(db, "incidents"), where("companyId", "==", myCompanyId())), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); if (ui.view === "safety" || ui.view === "home") renderAdmin(); incRefresh(); }, e => console.warn("incidents", e.code));
-    const u4 = onSnapshot(query(collection(db, "invites"), where("tenantId", "==", myTenant())), s => {
+    const u4 = onSnapshot(query(collection(db, "invites"), where("tenantId", "==", myTenant()), where("role", "in", [...myInviteRoles()])), s => {
       ui.invites = s.docs.map(d => ({ id: d.id, ...d.data() })); ui.invitesErr = "";
       if (ui.view === "staff") renderAdmin();
       watchInviteMail();
@@ -202,7 +202,7 @@ onAuthStateChanged(auth, async user => {
     moneyStart(renderOperator);
     const u3 = onSnapshot(query(collection(db, "incidents"), where("companyId", "==", myCompanyId()), where("reportedBy", "==", user.uid)), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); if (!ui.opSel && (ui.opTab || "today") === "today") renderOperator(); incRefresh(); }, e => console.warn("incidents", e.code));
     const u4 = canInvite()
-      ? onSnapshot(query(collection(db, "invites"), where("tenantId", "==", myTenant())), s => {
+      ? onSnapshot(query(collection(db, "invites"), where("tenantId", "==", myTenant()), where("role", "in", [...myInviteRoles()])), s => {
         ui.invites = s.docs.map(d => ({ id: d.id, ...d.data() })); ui.invitesErr = "";
         if ((ui.opTab || "today") === "staff") renderOperator();
         watchInviteMail();
@@ -2703,6 +2703,7 @@ function inviteMailMap() {
 async function saveInvite(fields) {
   const draft = buildInviteDraft({ ...fields, createdBy: me.uid, now: new Date(), token: newInviteToken(), tenantId: myTenant() });
   if (!draft.ok) return draft.reason;
+  if (!myInviteRoles().includes(draft.invite.role)) return "role";
   if (pendingInviteForEmail(ui.invites || [], draft.invite.email)) return "already-pending";
   const inviteRef = doc(collection(db, "invites"));
   const expiresAt = Timestamp.fromDate(draft.invite.expiresAt);
@@ -2728,9 +2729,16 @@ async function saveInvite(fields) {
   }
   return "";
 }
+// Roles this login may invite: admins all four (CallUp companies), supervisors labourer/operator/supervisor.
+function myInviteRoles() {
+  // me.role "admin" = rules-admin in the app (profile admin, or a Heartwood admin from the fixed list); Heartwood never gets "admin".
+  const role = me && (me.role === "admin" ? "admin" : ((me.cloudProfile && me.cloudProfile.role) || me.role));
+  return invitableRoles({ uid: me && me.uid, profile: { role }, tenantId: myTenant() });
+}
 async function resendInvite(id) {
   const row = (ui.invites || []).find(item => item.id === id);
   if (!row || row.status !== "pending") return;
+  if (!myInviteRoles().includes(row.role)) throw Object.assign(new Error("role"), { code: "admin-only" });
   const expiresAt = Timestamp.fromDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
   const token = newInviteToken();
   await runTransaction(db, async tx => {
@@ -2795,7 +2803,7 @@ function renderAdmin() {
   const fj = filtered(), und = (ui.undated || []).filter(j => (!ui.typeF || j.type === ui.typeF));
   const all = [...fj, ...und.filter(u => !fj.some(j => j.id === u.id))];
   const quotesHtml = ui.view === "quotes" ? adminViewRouter(ui.view, ui, { esc, $$, staff, jobs: all, todayStr, rerender: () => renderAdmin(), canEditQuoteRates }) : null;
-  const staffHtml = ui.view === "staff" ? staffViewHtml(ui.invites || [], { now: inviteDisplayNow(), error: ui.invitesErr || "", origin: appOriginFor(myCompanyId(), location.origin), emailStatus: inviteMailMap() }) : null;
+  const staffHtml = ui.view === "staff" ? staffViewHtml(ui.invites || [], { now: inviteDisplayNow(), error: ui.invitesErr || "", origin: appOriginFor(myCompanyId(), location.origin), emailStatus: inviteMailMap(), roles: myInviteRoles() }) : null;
   paintBrand();
   $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "master" ? masterView() : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : quotesHtml != null ? quotesHtml : jobsView(all));
   const A = $("#app"); inboxBadge();
@@ -4035,8 +4043,8 @@ function renderOperator() {
   if (ui.opTab === "fleet") ui.opTab = "more";
   if (ui.opTab === "staff" && document.activeElement?.closest?.("#invitef")) return;
   if (ui.opTab === "staff" && canInvite()) {
-    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Staff</div><div class="mob-sub">Invite operators and supervisors</div></div>
-      <div class="pad">${staffViewHtml(ui.invites || [], { now: inviteDisplayNow(), error: ui.invitesErr || "", origin: appOriginFor(myCompanyId(), location.origin), emailStatus: inviteMailMap() })}</div>${opTabs("more")}</div>`;
+    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Staff</div><div class="mob-sub">Invite labourers, operators, supervisors and admins</div></div>
+      <div class="pad">${staffViewHtml(ui.invites || [], { now: inviteDisplayNow(), error: ui.invitesErr || "", origin: appOriginFor(myCompanyId(), location.origin), emailStatus: inviteMailMap(), roles: myInviteRoles() })}</div>${opTabs("more")}</div>`;
     bindOp(mine); bindStaff($("#app")); return;
   }
   if (ui.opTab === "staff") ui.opTab = "more";
@@ -4050,7 +4058,7 @@ function renderOperator() {
   if (ui.opTab === "more") {
     const quoteBtn = canQuote() && me.role !== "admin" ? `<button type="button" class="mob-more" data-go="quotes"><b>Quotes</b><small>Guided pricing for supervisors</small></button>` : "";
     const fleetBtn = COMP.canSee() ? `<button type="button" class="mob-more" data-go="fleet"><b>Compliance</b><small>Registration and COI status</small></button>` : "";
-    const staffBtn = canInvite() ? `<button type="button" class="mob-more" data-go="staff"><b>Staff</b><small>Invite operators and supervisors</small></button>` : "";
+    const staffBtn = canInvite() ? `<button type="button" class="mob-more" data-go="staff"><b>Staff</b><small>Invite labourers, operators, supervisors and admins</small></button>` : "";
     const inboxBtn = canImport() ? `<button type="button" class="mob-more" data-go="inbox"><b>Inbox</b><small>Import builder emails as jobs</small></button>` : "";
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">More</div><div class="mob-sub">${esc(me.name || "")} · ${esc(orgSettings().name)}</div></div>
       <div class="mob-menu">

@@ -364,7 +364,9 @@ test("rules-admins create operator invites and staff cannot read or self-assign 
   const email = "casey.rules@example.com";
   const created = await assertSucceeds(writeInvite(ALEX, email, { token: "c".repeat(43) }));
   await assertSucceeds(getDoc(created));
-  await assertSucceeds(getDocs(query(collection(db(ALEX), "invites"), where("tenantId", "==", "heartwood"))));
+  // 12 Nov 2026: only a CallUp company admin reads admin invites, so other invite admins list by role.
+  await assertSucceeds(getDocs(query(collection(db(ALEX), "invites"), where("tenantId", "==", "heartwood"), where("role", "in", ["labourer", "operator", "supervisor"]))));
+  await assertFails(getDocs(query(collection(db(ALEX), "invites"), where("tenantId", "==", "heartwood"))));
   await assertFails(getDocs(collection(db(ALEX), "invites")));
   await assertSucceeds(getDoc(doc(db(ALEX), "inviteEmails", email)));
   await assertFails(getDocs(collection(db(ALEX), "inviteEmails")));
@@ -531,7 +533,9 @@ test("SWMS signatures are self-only for staff and readable by admins", async () 
 test("a supervisor can invite, resend and cancel; an operator cannot", async () => {
   const email = "crew.lead@example.com";
   const created = await assertSucceeds(writeInvite("sup1", email, { token: "u".repeat(43), role: "operator" }));
-  await assertSucceeds(getDocs(query(collection(db("sup1"), "invites"), where("tenantId", "==", "heartwood"))));
+  // 12 Nov 2026: only a CallUp company admin reads admin invites, so other invite admins list by role.
+  await assertSucceeds(getDocs(query(collection(db("sup1"), "invites"), where("tenantId", "==", "heartwood"), where("role", "in", ["labourer", "operator", "supervisor"]))));
+  await assertFails(getDocs(query(collection(db("sup1"), "invites"), where("tenantId", "==", "heartwood"))));
   await assertSucceeds(getDoc(doc(db("sup1"), "inviteEmails", email)));
   await assertFails(writeInvite("op1", "crew.mate@example.com", { token: "v".repeat(43) }));
   await assertFails(getDocs(query(collection(db("op1"), "invites"), where("tenantId", "==", "heartwood"))));

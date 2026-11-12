@@ -298,3 +298,28 @@ node scripts/migrate-office-money.mjs --project heartwood-9f37f --apply --backup
   reviewed list of Heartwood strings (Heartwood-only branches, ids), and renders client-company settings, invite emails,
   timesheet consent, depots and helper prompts to check they are Heartwood-free.
 
+## Four invite roles: labourer, operator, supervisor, admin (12 Nov 2026)
+
+Alex: "there should be 4 different profiles available for new invites". Labourer has exactly the operator's access
+(a different label): assigned jobs, own timesheet/leave/receipts, photos and notes on assigned jobs, prestarts and the
+fleet meter reading. Labourers are below supervisor, so no dollar amounts anywhere (UI, rules, helper).
+
+- `staff-invites.js` (app and functions copies, identical): `INVITE_ROLES` labourer/operator/supervisor/admin,
+  `CREW_ROLES`, `invitableRoles()`. An admin of a CallUp company may invite all four; a supervisor keeps
+  labourer/operator/supervisor and never admin; crew invite nobody. Heartwood: no admin invites (Heartwood's admins
+  are the fixed UID list in the rules; a Heartwood profile-role admin would get a half-working office). The accept
+  function re-checks the inviter's power for the invited role and refuses otherwise. The Staff screen offers only the
+  roles the signed-in person may give; the role picker defaults to Operator.
+- Rules: `isOperator()` takes role operator or labourer. Invites: `inviteRoleOk()` allows labourer/operator/supervisor
+  for any invite admin and admin only for a profile-role admin of a CallUp company (`inviteFullAdmin()`), on create,
+  resend and cancel. Supervisors cannot read an admin invite (it carries the sign-up token); the app's invite list
+  filters by the roles the person may give. Storage rules have no operator role check, so nothing changes there.
+- Crew lists (office crew picker, run sheets) include labourers. Helper: "invite labourer|operator|supervisor|admin ...";
+  admin only for a CallUp company's rules-admin; labourers get the staff action set and no money.
+- There is no role-edit screen in the app (company admins can't write users/{uid} under the rules); roles come only
+  from the invite. Changing a role later is still a console / box job.
+- Tests: `test/invites.test.js`, `test/helper-actions.test.js`, `test/labourer-role.emulator.test.js` (labourer parity
+  with operator on jobs, receipts, prestarts, fleet meter, timesheet; no money; admin/supervisor/crew invite powers;
+  supervisor can't read or resend an admin invite), `tests/phone-ui.test.mjs`.
+- Deploy: Firestore rules, hosting, and functions `previewStaffInvite`, `acceptStaffInvite`, `inviteEmailWorker`
+  (shared/staff-invites.js) and `helperAsk` (helper/actions.js).
