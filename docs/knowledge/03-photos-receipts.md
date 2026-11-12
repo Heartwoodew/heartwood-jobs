@@ -59,7 +59,7 @@ A client-typed path is not authority (file header, lines 1–5).
 
 `receiptDialog` (`app/app.js` lines 662–698). Any signed-in person with the job card or the receipt button can upload.
 
-Required: photo, amount greater than 0, supplier. Optional job number (locked when opened from a job). Checkbox **I paid for this myself**, default on.
+Required: photo, supplier, and either a dollar amount greater than 0 or a tonnes amount greater than 0 (or both). Tip dockets can be uploaded with only a weight. Optional job number (locked when opened from a job). Checkbox **I paid for this myself**, default on. Uncheck for a company-account docket (for example Remondis). A personally paid receipt with no dollar amount is flagged as needing an amount before it can be paid back; a tonnes-only account docket is normal, files to Hubdoc, and is not treated as money owed.
 
 The JPEG is shrunk to a long edge of 1600 px (`shrinkImage`, lines 655–660). Error: `Can't read that image - try a JPEG/PNG photo`. The base64 is split into `receiptChunks/{receiptId}_{i}` of 700000 characters, then `receipts/{id}` is written with `status: "queued"`. Toast: `Receipt uploaded - queued for Hubdoc`.
 
@@ -81,7 +81,7 @@ Hubdoc address is `ownerSettings/hubdoc` field `email`. Save checks `/^[a-z0-9._
 
 The amber pill (`reimbPill`, lines 906–924) lists unpaid ledger rows plus personally paid receipts still `queued` and not yet on the ledger (`owedList`, lines 873–877). **Done** writes the ledger (`markReimbursed`, lines 881–888) with a 5-second undo. **CSV** downloads owed rows, including a GST column computed as amount inc / 11 (`reimbCsv`, lines 890–905). It does not mark them paid. iOS uses the share sheet when it can share a file.
 
-Possible duplicates on Home are the same worker, amount, and date (`attentionHtml`, lines 1006–1007).
+Possible duplicates on Home are the same worker, dollar amount (or tonnes when there is no dollar amount), and date (`attentionHtml`). Receipts with no dollar amount are not treated as $0.00 owed.
 
 ## Retention (shown, not running)
 

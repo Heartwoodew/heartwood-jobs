@@ -35,6 +35,11 @@ import {
 import { companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, signupFormHtml } from "./features/company-ui.js";
 import { exportAllowed, hoursCsv, invoiceCsv, jobsCsv, reimbursementsCsv } from "./features/company-exports.js";
 import {
+  formatReceiptMeasure, parseReceiptMeasures, receiptDupKey, receiptHasMoney,
+  receiptMeasureFields, receiptNeedsAmount, receiptOwedTotal,
+  validateReceiptUpload,
+} from "./features/receipts.js";
+import {
   accuracyText, brisbaneHM, captureFix, coordText, daysForSheet, editList, entryList, locationConsent,
   locationMap, machineChoicePatch, machinePromptNeeded, machineShiftToResume, mapsHref, needsLocationConsent, newTsId, openClock,
   paidShift, prestartStatus, sheetHours, shiftHours, sortedEntries, stampText,
@@ -1226,15 +1231,37 @@ async function shrinkImage(file, max = 1600, q = 0.72) {
   c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k); c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
   return c.toDataURL("image/jpeg", q).split(",")[1];
 }
+
+function receiptTonnesLabel(r) {
+  const m = formatReceiptMeasure({ tonnes: r && r.tonnes }, () => "");
+  return m ? ` <span class="sub">${esc(m)}</span>` : "";
+}
+function receiptAmountInput(r) {
+  const id = (r && (r.receiptId || r.id)) || "";
+  return `<form class="raddamt" data-rid="${esc(id)}"><input name="amt" type="number" step="0.01" min="0" inputmode="decimal" placeholder="$ amount" required><button class="sm-btn">Save amount</button></form>`;
+}
+async function saveReceiptAmount(r, value) {
+  const measures = parseReceiptMeasures({ amount: value });
+  if (!measures.ok || !measures.amountInc) { toast("Enter a dollar amount greater than 0."); return; }
+  const id = (r && (r.receiptId || r.id)) || "";
+  if (!id) return;
+  await updateDoc(doc(db, "receipts", id), { amountInc: measures.amountInc });
+  const hasLed = (ui.reimb || []).some(x => (x.receiptId || x.id) === id);
+  if (hasLed) await updateDoc(doc(db, "reimbursements", id), { amountInc: measures.amountInc, needsAmount: false });
+  toast("Amount saved");
+}
 function receiptDialog(j) {
   const jn = j ? String(jobNo(j) || "") : "";
   let d = $("#rdlg"); if (!d) { d = document.createElement("dialog"); d.id = "rdlg"; d.className = "rdlg"; document.body.appendChild(d); }
   d.innerHTML = `<form id="rf" method="dialog"><h3>🧾 Upload receipt${jn ? ` · Job #${esc(jn)}` : ""}</h3>${j ? `<div class="sub">${esc(j.address || "")}</div>` : ""}
     <label class="rphoto">Photo of the receipt<input name="photo" type="file" accept="image/*" capture="environment" required></label>
-    <div class="row"><label>Amount $ (inc GST)<input name="amt" type="number" step="0.01" min="0" inputmode="decimal" required></label>
-      <label>Job # (optional)<input name="job" inputmode="numeric" placeholder="e.g. 697" value="${esc(jn)}" ${j ? "readonly" : ""}></label></div>
+    <div class="row"><label>Amount $ (inc GST)<input name="amt" type="number" step="0.01" min="0" inputmode="decimal"></label>
+      <label>Tonnes<input name="tonnes" type="number" step="0.001" min="0" inputmode="decimal"></label></div>
+    <p class="sub">Enter a dollar amount or the tonnes (or both). Tip dockets can be uploaded with just the weight.</p>
+    <label>Job # (optional)<input name="job" inputmode="numeric" placeholder="e.g. 697" value="${esc(jn)}" ${j ? "readonly" : ""}></label>
     <label>Supplier / what it was for<input name="sup" required placeholder="e.g. Bunnings - silt fence"></label>
     <label class="ck"><input type="checkbox" name="mine" checked> I paid for this myself (reimburse me)</label>
+    <p class="sub">Uncheck if this went on the company account (for example a Remondis tip docket).</p>
     <p id="rerr" class="err"></p>
     <div class="btns"><button value="cancel" formnovalidate class="sm-btn">Close</button><button value="send" class="sm-btn primary" id="rsend">Upload</button></div>
     <h4>My recent receipts</h4><div id="rmine" class="sub">Loading…</div></form>`;
@@ -1242,13 +1269,14 @@ function receiptDialog(j) {
   const f = $("#rf"), mine = $("#rmine");
   getDocs(query(collection(db, "receipts"), where("uid", "==", me.uid))).then(sn => {
     const L = sn.docs.map(x => ({ id: x.id, ...x.data() })).sort((a, b) => String(b.createdAtIso || "").localeCompare(String(a.createdAtIso || ""))).slice(0, 8);
-    mine.innerHTML = L.map(r => `<div class="rrow"><span>${esc(String(r.createdAtIso || "").slice(0, 10))} · ${esc(r.supplier || "")} · ${$$(r.amountInc || 0)}</span>
+    mine.innerHTML = L.map(r => `<div class="rrow"><span>${esc(String(r.createdAtIso || "").slice(0, 10))} · ${esc(r.supplier || "")}${(() => { const m = formatReceiptMeasure(r, $$); const need = isOwner() && receiptNeedsAmount(r) ? " · needs $" : ""; return (m ? " · " + esc(m) : "") + need; })()}</span>
       <span class="qpill ${r.status === "filed" ? "q-comp" : ""}">${r.status === "filed" ? "Filed" : "Queued"}</span></div>`).join("") || "None yet.";
   }).catch(e => { mine.textContent = "Receipts not available yet (" + (e.code || e.message) + ")"; });
   f.onsubmit = async ev => {
     if (ev.submitter?.value !== "send") return; ev.preventDefault();
-    const file = f.photo.files[0], amt = Math.round(+f.amt.value * 100) / 100;
-    if (!file || !(amt > 0) || !f.sup.value.trim()) { $("#rerr").textContent = "Photo, amount and supplier are needed."; return; }
+    const file = f.photo.files[0];
+    const checked = validateReceiptUpload({ hasPhoto: !!file, supplier: f.sup.value, amount: f.amt.value, tonnes: f.tonnes.value });
+    if (!checked.ok) { $("#rerr").textContent = checked.reason; return; }
     $("#rsend").disabled = true; $("#rsend").textContent = "Uploading…";
     try {
       const b64 = await shrinkImage(file), CH = 700000, n = Math.ceil(b64.length / CH);
@@ -1257,7 +1285,7 @@ function receiptDialog(j) {
       const rco = myCompanyId() === "heartwood" ? {} : { companyId: myCompanyId(), tenantId: myCompanyId() };
       for (let i = 0; i < n; i++) await setDoc(doc(db, "receiptChunks", `${ref.id}_${i}`), { rid: ref.id, i, uid: me.uid, data: b64.slice(i * CH, (i + 1) * CH), ...rco });
       const written = { id: ref.id, uid: me.uid, jobId: j ? j.id : null, status: "queued" };
-      await setDoc(ref, { uid: me.uid, workerName: me.name, amountInc: amt, supplier: f.sup.value.trim(), paidPersonally: f.mine.checked,
+      await setDoc(ref, { uid: me.uid, workerName: me.name, ...receiptMeasureFields(checked.measures), supplier: f.sup.value.trim(), paidPersonally: f.mine.checked,
         jobNo: f.job.value.trim().replace(/^#/, "") || null, jobId: written.jobId, address: j ? (j.address || null) : null, chunks: n, mime: "image/jpeg", bytes: Math.round(b64.length * 0.75),
         status: "queued", createdAt: serverTimestamp(), createdAtIso: new Date().toISOString(), ...rco });
       d.close(); toast(myCompanyId() === "heartwood" ? "Receipt uploaded - queued for Hubdoc" : "Receipt uploaded"); if (j) loadJobReceipts(j);
@@ -1273,28 +1301,30 @@ async function loadJobReceipts(j) {
     const qs = isOwner() ? query(collection(db, "receipts"), where("jobId", "==", j.id)) : query(collection(db, "receipts"), where("jobId", "==", j.id), where("uid", "==", me.uid));
     const L = (await getDocs(qs)).docs.map(x => ({ id: x.id, ...x.data() })).filter(r => docCompanyId(r) === myCompanyId()).sort((a, b) => String(b.createdAtIso || "").localeCompare(String(a.createdAtIso || "")));
     if ($("#jrc") !== box) return;
-    box.innerHTML = L.map(r => `<div class="rrow"><span>🧾 ${esc(String(r.createdAtIso || "").slice(0, 10))} · <b>${$$(r.amountInc || 0)}</b> · ${esc(r.supplier || "")}${isOwner() ? ` · ${esc(r.workerName || "")}${r.paidPersonally ? " (to reimburse)" : ""}` : ""}</span>
+    box.innerHTML = L.map(r => `<div class="rrow"><span>🧾 ${esc(String(r.createdAtIso || "").slice(0, 10))}${(() => { const m = formatReceiptMeasure(r, $$); const need = isOwner() && receiptNeedsAmount(r) ? "needs $" : ""; const shown = [m, need].filter(Boolean).join(" · "); return shown ? ` · <b>${esc(shown)}</b>` : ""; })()} · ${esc(r.supplier || "")}${isOwner() ? ` · ${esc(r.workerName || "")}${r.paidPersonally ? (receiptNeedsAmount(r) ? " (to reimburse · needs $)" : " (to reimburse)") : ""}` : ""}</span>
       <span class="qpill ${r.status === "filed" ? "q-comp" : ""}">${r.status === "filed" ? "Filed" : "Queued"}</span></div>`).join("") || "No receipts on this job yet.";
   } catch (e) { box.textContent = "Receipts not available yet (" + (e.code || e.message) + ")"; }
 }
 function wireJobReceipts(j) { const b = $("#jrcbtn"); if (!b) return; b.onclick = () => receiptDialog(j); loadJobReceipts(j); }
 function reimbView() {
   if (!isOwner()) return `<div class="sm-head"><h1>Reimbursements</h1></div><p class="muted pad">Owner only.</p>`;
-  const L = ui.reimb || [], open = L.filter(r => !r.paid), by = {};
+  reimbSubs();
+  const L = ui.reimb || [], open = owedList(), by = {};
   for (const r of open) (by[r.workerName || "?"] ||= []).push(r);
   const hd = ui.hubdocCfg?.email || "";
   return `<div class="sm-head"><h1>Reimbursements</h1><span class="sub">Owed to workers for receipts they paid personally (owner only)</span></div>
     <div class="filters"><label>Hubdoc email-in address <input id="hdmail" value="${esc(hd)}" placeholder="yourname.xxxx@app.hubdoc.com" size="34"></label>
       <button id="hdsave" class="sm-btn">Save</button><span class="sub">${hd ? "Receipts are emailed here from the company mailbox." : "<b>Not set</b> - receipts stay queued until it is."}</span></div>
-    ${Object.keys(by).length ? Object.entries(by).map(([w, rs]) => `<h3>${esc(w)} · owed <b>${$$(rs.reduce((t, r) => t + (+r.amountInc || 0), 0))}</b> inc GST (${rs.length})</h3>
+    ${Object.keys(by).length ? Object.entries(by).map(([w, rs]) => `<h3>${esc(w)} · owed <b>${$$(receiptOwedTotal(rs))}</b> inc GST (${rs.filter(receiptHasMoney).length}${rs.some(receiptNeedsAmount) ? ` · ${rs.filter(receiptNeedsAmount).length} need $` : ""})</h3>
       <table class="jt"><thead><tr><th>Date</th><th>Supplier / for</th><th>Job</th><th>Amount</th><th>Hubdoc</th><th></th></tr></thead><tbody>${rs.map(r => `<tr data-rb="${esc(r.id)}">
-        <td>${esc(String(r.date || "").slice(0, 10))}</td><td>${esc(r.supplier || "")}</td><td>${r.jobNo ? "#" + esc(r.jobNo) : ""}</td><td>${$$(r.amountInc || 0)}</td>
+        <td>${esc(String(r.date || "").slice(0, 10))}</td><td>${esc(r.supplier || "")}${receiptTonnesLabel(r)}</td><td>${r.jobNo ? "#" + esc(r.jobNo) : ""}</td><td>${receiptNeedsAmount(r) ? receiptAmountInput(r) : $$(r.amountInc)}</td>
         <td><span class="qpill ${r.hubdocStatus === "filed" ? "q-comp" : ""}">${r.hubdocStatus === "filed" ? "Filed" : "Queued"}</span></td>
-        <td><button class="sm-btn rbpaid">Mark paid</button></td></tr>`).join("")}</tbody></table>`).join("") : `<p class="muted pad">Nothing owed.</p>`}
-    <p class="sub">Paid: ${L.filter(r => r.paid).length} entr${L.filter(r => r.paid).length === 1 ? "y" : "ies"} (${$$(L.filter(r => r.paid).reduce((t, r) => t + (+r.amountInc || 0), 0))}).</p>`;
+        <td>${receiptNeedsAmount(r) ? `<span class="sub">Needs $ before payback</span>` : `<button class="sm-btn rbpaid">Mark paid</button>`}</td></tr>`).join("")}</tbody></table>`).join("") : `<p class="muted pad">Nothing owed.</p>`}
+    <p class="sub">Paid: ${L.filter(r => r.paid).length} entr${L.filter(r => r.paid).length === 1 ? "y" : "ies"} (${$$(receiptOwedTotal(L.filter(r => r.paid)))}).</p>`;
 }
 function bindReimb(A) {
   if (!isOwner()) return;
+  reimbSubs();
   if (!ui.reimbSub) {
     ui.reimbSub = onSnapshot(collection(db, "reimbursements"), s => { ui.reimb = s.docs.map(x => ({ id: x.id, ...x.data() })); if (ui.view === "reimb") renderAdmin(); },
       e => toast("Reimbursements not available: " + (e.code || e.message)));
@@ -1304,9 +1334,14 @@ function bindReimb(A) {
     if (v && !/^[a-z0-9._+-]+@app\.hubdoc\.com$/.test(v)) return toast("Hubdoc addresses end in @app.hubdoc.com");
     try { await setDoc(doc(db, "ownerSettings", "hubdoc"), { email: v || null, updatedAt: serverTimestamp() }); ui.hubdocCfg = { email: v }; toast("Saved"); renderAdmin(); }
     catch (e) { toast("Not saved: " + (e.code || e.message)); } };
+  A.querySelectorAll(".raddamt").forEach(f => f.onsubmit = ev => { ev.preventDefault();
+    const r = (ui.reimb || []).concat(ui.rqueued || []).find(x => (x.receiptId || x.id) === f.dataset.rid);
+    saveReceiptAmount(r || { id: f.dataset.rid, paidPersonally: true }, f.amt.value).catch(e => toast("Not saved: " + (e.code || e.message))); });
   A.querySelectorAll(".rbpaid").forEach(b => b.onclick = async () => { const id = b.closest("[data-rb]").dataset.rb;
+    const r = (owedList() || []).find(x => x.id === id) || (ui.reimb || []).find(x => x.id === id);
+    if (receiptNeedsAmount(r)) return toast("Add the dollar amount before marking this paid back.");
     if (!armBtn(b, "Mark paid", "Tap again: paid")) return;
-    try { const at = new Date().toISOString(); await updateDoc(doc(db, "reimbursements", id), { paid: true, reimbursed: true, paidAt: at, reimbursedAt: at, reimbursedBy: me.uid, reimbursedByName: me.name }); toast("Marked paid"); }
+    try { await markReimbursed(r); toast("Marked paid"); }
     catch (e) { toast("Not saved: " + (e.code || e.message)); } });
 }
 function donePill() {
@@ -2338,9 +2373,10 @@ function owedList() {
 // (created from the receipt if the box hasn't written it yet; the box keeps an existing entry and skips its "you owe" text).
 // Nothing is deleted; Undo (5 s) puts paid back to false.
 async function markReimbursed(r) {
+  if (receiptNeedsAmount(r)) { toast("Add the dollar amount before marking this paid back."); return; }
   const id = r.receiptId || r.id, ref = doc(db, "reimbursements", id), at = new Date().toISOString();
   const base = r.pending ? { receiptId: id, uid: r.uid || null, workerName: r.workerName || null, date: r.createdAtIso || r.date || null, supplier: r.supplier || null,
-    amountInc: +r.amountInc || 0, jobNo: r.jobNo || null, jobId: r.jobId || null, hubdocStatus: "queued", createdFrom: "pill" } : {};
+    amountInc: receiptHasMoney(r) ? +r.amountInc : null, tonnes: r.tonnes || null, jobNo: r.jobNo || null, jobId: r.jobId || null, hubdocStatus: "queued", createdFrom: "pill" } : {};
   await setDoc(ref, { ...base, paid: true, reimbursed: true, paidAt: at, reimbursedAt: at, reimbursedBy: me.uid, reimbursedByName: me.name }, { merge: true });
   undoToast(`Reimbursed ${r.workerName || ""} ${$$(+r.amountInc || 0)} (${r.supplier || "receipt"})`, () =>
     setDoc(ref, { paid: false, reimbursed: false, paidAt: null, reimbursedAt: null, reimbursedBy: null, reimbursedByName: null, undoneAt: new Date().toISOString() }, { merge: true }), 5000);
@@ -2350,10 +2386,13 @@ async function reimbCsv(L) {
   const all = [...jobs, ...(ui.undated || []), ...(ui.done || [])], q = v => `"${String(v ?? "").replace(/"/g, '""')}"`, r2 = v => (Math.round(v * 100) / 100).toFixed(2);
   const addr = r => r.address || ((r.jobId && all.find(x => x.id === r.jobId)) || (r.jobNo && all.find(x => String(jobNo(x)) === String(r.jobNo))) || {}).address || "";
   let ti = 0, tg = 0;
-  const rows = [["Worker", "Date", "Supplier/Description", "Job #", "Job address", "Amount inc GST", "GST", "Amount ex GST", "Status", "Receipt ID"]];
-  for (const r of L) { const inc = +r.amountInc || 0, g = inc / 11; ti += inc; tg += g;
-    rows.push([r.workerName || "", String(r.date || "").slice(0, 10), r.supplier || "", r.jobNo || "", addr(r), r2(inc), r2(g), r2(inc - g), r.pending ? "queued" : "owed", r.receiptId || r.id]); }
-  rows.push(["TOTAL", "", `${L.length} receipt${L.length === 1 ? "" : "s"}`, "", "", r2(ti), r2(tg), r2(ti - tg), "", ""]);
+  const rows = [["Worker", "Date", "Supplier/Description", "Job #", "Job address", "Amount inc GST", "GST", "Amount ex GST", "Tonnes", "Status", "Receipt ID"]];
+  for (const r of L) {
+    const inc = receiptHasMoney(r) ? +r.amountInc : 0, g = inc / 11; ti += inc; tg += g;
+    const st = receiptNeedsAmount(r) ? "needs amount" : (r.pending ? "queued" : "owed");
+    rows.push([r.workerName || "", String(r.date || "").slice(0, 10), r.supplier || "", r.jobNo || "", addr(r), receiptHasMoney(r) ? r2(inc) : "", receiptHasMoney(r) ? r2(g) : "", receiptHasMoney(r) ? r2(inc - g) : "", r.tonnes || "", st, r.receiptId || r.id]);
+  }
+  rows.push(["TOTAL", "", `${L.length} receipt${L.length === 1 ? "" : "s"}`, "", "", r2(ti), r2(tg), r2(ti - tg), "", "", ""]);
   const csv = "\ufeff" + rows.map(x => x.map(q).join(",")).join("\r\n") + "\r\n";
   const name = `reimbursements_${new Date().toLocaleDateString("en-CA", { timeZone: "Australia/Brisbane" })}.csv`;
   const iOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -2369,10 +2408,11 @@ function reimbPill() {
   const L = owedList(); if (!L.length) { if (el) el.remove(); return; }
   if (!el) { el = document.createElement("div"); el.id = "rbpill"; fw.insertBefore(el, fw.firstChild); }
   el.className = "donepill rbpill rblines";
-  el.innerHTML = L.map(r => `<div role="button" tabindex="0" class="dp-head rb-line" data-rp="${esc(r.id)}" title="${esc(String(r.date || "").slice(0, 10))}${r.pending ? " · queued" : ""}">
-    <span class="dp-tick">🧾</span><span class="rb-t">${esc(r.workerName || "?")} · ${esc(r.supplier || "receipt")}${r.jobNo ? " · #" + esc(r.jobNo) : ""}</span><b class="rb-a">${$$(r.amountInc || 0)}</b>
-    <button type="button" class="rb-done" data-rbdone="${esc(r.id)}" title="Done - paid back to ${esc(r.workerName || "worker")}" aria-label="Mark reimbursed">✓</button></div>`).join("");
-  el.insertAdjacentHTML("beforeend", `<button type="button" class="dp-head rb-csv" id="rbcsv"><span class="dp-tick">⬇</span><span class="rb-t">CSV · ${L.length} owed</span></button>`);
+  el.innerHTML = L.map(r => `<div role="button" tabindex="0" class="dp-head rb-line" data-rp="${esc(r.id)}" title="${esc(String(r.date || "").slice(0, 10))}${r.pending ? " · queued" : ""}${receiptNeedsAmount(r) ? " · needs amount" : ""}">
+    <span class="dp-tick">🧾</span><span class="rb-t">${esc(r.workerName || "?")} · ${esc(r.supplier || "receipt")}${r.jobNo ? " · #" + esc(r.jobNo) : ""}</span><b class="rb-a">${esc(receiptNeedsAmount(r) ? ((formatReceiptMeasure(r, $$) ? formatReceiptMeasure(r, $$) + " · " : "") + "needs $") : (formatReceiptMeasure(r, $$) || $$(r.amountInc || 0)))}</b>
+    ${receiptNeedsAmount(r) ? "" : `<button type="button" class="rb-done" data-rbdone="${esc(r.id)}" title="Done - paid back to ${esc(r.workerName || "worker")}" aria-label="Mark reimbursed">✓</button>`}</div>`).join("");
+  const needN = L.filter(receiptNeedsAmount).length, owedN = L.filter(receiptHasMoney).length;
+  el.insertAdjacentHTML("beforeend", `<button type="button" class="dp-head rb-csv" id="rbcsv"><span class="dp-tick">⬇</span><span class="rb-t">CSV · ${owedN} owed${needN ? ` · ${needN} need $` : ""}</span></button>`);
   $("#rbcsv").onclick = () => reimbCsv(L).catch(e => e?.name !== "AbortError" && toast("CSV failed: " + (e.message || e)));
   el.querySelectorAll("[data-rbdone]").forEach(b => b.onclick = ev => { ev.stopPropagation(); ev.preventDefault();
     const r = L.find(x => x.id === b.dataset.rbdone); if (r) markReimbursed(r).catch(e => toast("Not saved: " + (e.code || e.message))); });
@@ -2462,7 +2502,7 @@ function attentionHtml(all) {
   const unal = live.filter(j => j.date && j.date >= t0 && j.status !== "Done" && !namesOf(j).length).sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
   const nopo = live.filter(j => !String(j.po || "").trim() && ((j.status === "Done" && !j.invoiceNo && !j.doNotInvoice && j.invoiceExcluded !== true) || (j.date && j.date >= t0 && j.date <= addDays(t0, 7)) || j.status === "In progress"));
   const incs = (ui.incidents || []).filter(r => r.status !== "Closed");
-  const owed = isOwner() ? owedList() : [], dk = r => [r.workerName, (+r.amountInc || 0).toFixed(2), String(r.date || "").slice(0, 10)].join("|");
+  const owed = isOwner() ? owedList() : [], dk = receiptDupKey;
   const dups = owed.filter(r => owed.filter(x => dk(x) === dk(r)).length > 1);
   const unread = canImport() && ui.inbox ? inboxUnread() : 0;
   const jl = j => `<div class="at-j" data-id="${j.id}"><b>${esc(j.date ? shortDate(j.date) : "—")}</b> ${esc(j.time || "")} · ${esc(j.address || j.client || "")} <span class="jn">#${esc(jobNo(j))}</span></div>`;
