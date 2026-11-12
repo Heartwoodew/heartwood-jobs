@@ -131,7 +131,7 @@ export async function handleHelperAsk({
     return { ok: true, enabled: true, reply: MODEL_FAILED, knowledge: pack.source };
   }
   const reply = sanitiseReply(String(raw || "").replace(/HELPER_ACTION[\s\S]*$/g, ""), {
-    canary: prompt.canary, canSeeMoney: membership.canSeeMoney,
+    canary: prompt.canary, canSeeMoney: membership.canSeeMoney, tenantId: membership.tenantId,
   });
   return {
     ok: true,

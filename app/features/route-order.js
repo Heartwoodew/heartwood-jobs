@@ -9,7 +9,8 @@ import { routeConfig } from "../route-config.js";
 export const DEPOT_ADDRESS = "208-220 Holdsworth Rd, Chuwar QLD 4306";
 // Heartwood starts at Chuwar. Other companies start at their own company address (setRouteDepot).
 let routeDepot = DEPOT_ADDRESS;
-export function setRouteDepot(address) { routeDepot = String(address || "").trim() || DEPOT_ADDRESS; }
+// A CallUp company with no address has no depot (never Heartwood's yard); routes ask for the company address first.
+export function setRouteDepot(address, { heartwood = true } = {}) { routeDepot = String(address || "").trim() || (heartwood ? DEPOT_ADDRESS : ""); }
 export function depotAddress() { return routeDepot; }
 export const DEPOT_LABEL = "Depot";
 export const EXACT_JOB_LIMIT = 8;
@@ -511,6 +512,7 @@ export async function planRoute(jobs, options = {}) {
   if (!located.length) {
     return { ok: false, error: "No site addresses could be placed for this worker.", skipped, degraded: cfg.degraded };
   }
+  if (!depotAddress()) return { ok: false, error: "Add your company address in Company settings first. It is the start and end of the run.", skipped, degraded: cfg.degraded };
   const depot = await locateDepot(cfg, fetchImpl, sleep);
   if (!depot) return { ok: false, error: `Could not geocode the depot (${depotAddress()}).`, skipped, degraded: cfg.degraded };
   let routed;
@@ -590,7 +592,7 @@ export function suggestionHtml(model, opts = {}) {
   let html = "";
   if (model.degraded) html += `<p class="route-warn">${esc(model.degraded)}</p>`;
   html += `<p class="route-kicker">${esc(model.tweaked ? "Your order" : "Suggested order")} · ${esc(methodLabel(model.method, model.tweaked))}</p>`;
-  html += `<p class="route-depot"><b>${esc(DEPOT_LABEL)}</b><span>${esc(depotAddress())}</span></p>`;
+  html += `<p class="route-depot"><b>${esc(DEPOT_LABEL)}</b><span>${esc(depotAddress() || "Company address not set")}</span></p>`;
   html += `<div id="routelist">`;
   const legs = model.suggested.legs || [];
   let legAt = 0;

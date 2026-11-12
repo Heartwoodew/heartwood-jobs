@@ -16,6 +16,6 @@ export function handleXeroQueue(items, env = {}, transport = null) {
     transportCalls: 0,
     writes: [],
     liveXero: false,
-    note: "CallUp does not connect customer companies to Xero. Heartwood's queue is left for the existing worker.",
+    note: "CallUp does not connect this company to Xero.",
   };
 }

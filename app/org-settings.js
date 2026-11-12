@@ -23,6 +23,9 @@ export const DEFAULT_ORG = Object.freeze({
   hubdocAddress: "",
 });
 
+// CallUp companies (not Heartwood) never inherit Heartwood's name, ABN, address, email or sign-off.
+const BLANK_ORG = Object.freeze({ name: "", legalName: "", abn: "", signoff: "", logoUrl: "", address: "", phone: "", email: "", accountsEmail: "", hubdocAddress: "" });
+
 import { acceptLogoValue } from "./features/company-logo.js";
 
 const STORE_KEY = "callup.org.v1";
@@ -77,11 +80,13 @@ export function setActiveCompany(company) {
 
 export function orgSettings() {
   const overlay = typeof window !== "undefined" ? window.CALLUP_ORG : null;
-  const base = activeCompany ? { ...DEFAULT_ORG, ...activeCompany } : { ...DEFAULT_ORG, ...readSaved() };
+  const other = !!(activeCompany && activeCompany.companyId && activeCompany.companyId !== DEFAULT_ORG.companyId);
+  const base = activeCompany ? { ...(other ? { ...BLANK_ORG, companyId: activeCompany.companyId } : DEFAULT_ORG), ...activeCompany } : { ...DEFAULT_ORG, ...readSaved() };
   const merged = { ...base, ...clean(overlay) };
   if (!merged.companyId) merged.companyId = DEFAULT_ORG.companyId;
-  if (!merged.name) merged.name = DEFAULT_ORG.name;
-  if (!merged.legalName) merged.legalName = DEFAULT_ORG.legalName;
+  const hw = merged.companyId === DEFAULT_ORG.companyId;
+  if (!merged.name) merged.name = hw ? DEFAULT_ORG.name : PRODUCT_NAME;
+  if (!merged.legalName) merged.legalName = hw ? DEFAULT_ORG.legalName : merged.name;
   if (!merged.signoff) merged.signoff = merged.name;
   if (!merged.accountsEmail && merged.companyId === "heartwood") merged.accountsEmail = DEFAULT_ORG.accountsEmail;
   if (!merged.email && merged.companyId === "heartwood") merged.email = DEFAULT_ORG.email;
@@ -94,8 +99,9 @@ export function orgSettings() {
 export function saveOrgSettings(partial) {
   const next = { ...orgSettings(), ...clean(partial) };
   next.logoUrl = safeLogo(next.logoUrl, next.companyId);
-  if (!next.name) next.name = DEFAULT_ORG.name;
-  if (!next.legalName) next.legalName = DEFAULT_ORG.legalName;
+  const hw = !next.companyId || next.companyId === DEFAULT_ORG.companyId;
+  if (!next.name) next.name = hw ? DEFAULT_ORG.name : PRODUCT_NAME;
+  if (!next.legalName) next.legalName = hw ? DEFAULT_ORG.legalName : next.name;
   if (!next.signoff) next.signoff = next.name;
   const stored = {};
   for (const key of FIELDS) stored[key] = next[key];

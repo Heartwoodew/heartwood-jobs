@@ -350,8 +350,10 @@ export function buildInviteEmail(invite, config = {}) {
   const link = inviteLink(invite.token, config.appOrigin || appOriginFor(companyId, "", config.domainLive));
   const role = roleLabel(profile.role).toLowerCase();
   const companyName = typeof config.companyName === "string" ? config.companyName.trim() : "";
-  const heartwood = !companyName || companyName === "Heartwood" || companyName === "Heartwood Earthworx" || companyName === "Heartwood Jobs";
-  const place = heartwood ? "Heartwood Jobs" : companyName;
+  // A CallUp company (any id but heartwood) never gets Heartwood wording, even with no company name loaded.
+  const heartwood = companyId === HEARTWOOD_TENANT
+    && (!companyName || companyName === "Heartwood" || companyName === "Heartwood Earthworx" || companyName === "Heartwood Jobs");
+  const place = heartwood ? "Heartwood Jobs" : (companyName || "CallUp");
   const text = [
     `Hello ${profile.name},`,
     "",
@@ -367,7 +369,7 @@ export function buildInviteEmail(invite, config = {}) {
       ? (config.enabled === true && config.provider === "resend" ? HEARTWOOD_RESEND_FROM : (config.from || inviteEmailConfig().from))
       : (config.neutralFrom || CALLUP_INVITE_FROM),
     replyTo: heartwood ? (config.replyTo || "alex@heartwoodew.com") : (config.companyEmail || ""),
-    subject: heartwood ? "You're invited to Heartwood Jobs" : `You're invited to ${companyName}`,
+    subject: heartwood ? "You're invited to Heartwood Jobs" : `You're invited to ${place}`,
     text,
     link,
   };

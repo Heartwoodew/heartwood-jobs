@@ -59,6 +59,25 @@ export function packUserPayload(base) {
   return payload;
 }
 
+// 12 Nov 2026 (Alex): no ServiceM8 / SM8 wording for anyone, and no Heartwood wording for CallUp companies.
+// Applied to the knowledge text, the job data and the reply. Internal field names elsewhere are unchanged.
+export function neutralText(text, tenantId) {
+  let t = String(text ?? "").replace(/servicem8/gi, "the job system").replace(/\bSM8\b/gi, "job");
+  if (tenantId && tenantId !== "heartwood") {
+    t = t.replace(/heartwood\s+earthworx(\s+pty\.?\s+ltd\.?)?/gi, "CallUp").replace(/[a-z0-9.+_-]*@?heartwoodew\.com(\/\S*)?/gi, "callupapp.com.au")
+      .replace(/heartwood/gi, "CallUp");
+  }
+  return t;
+}
+const KEY_NAMES = { sm8JobNo: "jobNo", sm8Status: "syncStatus" };
+const neutralKey = k => KEY_NAMES[k] || k.replace(/sm8/gi, "job");
+function neutralDeep(value, tenantId) {
+  if (typeof value === "string") return neutralText(value, tenantId);
+  if (Array.isArray(value)) return value.map(v => neutralDeep(v, tenantId));
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [neutralKey(k), neutralDeep(v, tenantId)]));
+  return value;
+}
+
 export function buildHelperPrompt({
   name, role, tenantId, canSeeMoney, finance, today, knowledge, context, question, canary,
 }) {
@@ -74,6 +93,8 @@ export function buildHelperPrompt({
     `Today in Australia/Brisbane is ${today}.`,
     "Repeat quantities exactly. If a date or quantity is not in the data, say you don't have it.",
     `The person is ${name}. Role: ${role}. Business: ${tenantId}.`,
+    "Never name an outside job system; call it the job system.",
+    ...(tenantId && tenantId !== "heartwood" ? ["The product is CallUp. Never mention any other business by name except this person's own business."] : []),
     `Money on this login: ${money}.`,
     `Xero and company profit on this login: ${xero}.`,
     "If money is hidden, do not state any dollar amount, invoice, quote price, receipt total, profit figure, or Xero result. Say this login does not include prices.",
@@ -90,8 +111,8 @@ export function buildHelperPrompt({
       : "Use the knowledge text for how-to questions.",
     "HELPER_RULES_END",
   ].join("\n");
-  const knowledgeText = canSeeMoney ? knowledge.text : redactMoneyText(knowledge.text).replaceAll("$", "");
-  const user = JSON.stringify(packUserPayload({
+  const knowledgeText = neutralText(canSeeMoney ? knowledge.text : redactMoneyText(knowledge.text).replaceAll("$", ""), tenantId);
+  const user = JSON.stringify(neutralDeep(packUserPayload({
     knowledgeSource: knowledge.source,
     knowledge: knowledgeText,
     jobs: context.jobs,
@@ -106,16 +127,17 @@ export function buildHelperPrompt({
     leave: context.leave,
     prestarts: context.prestarts,
     question,
-  }));
+  }), tenantId));
   return { system, user, canary: token };
 }
 
-export function sanitiseReply(text, { canary, canSeeMoney }) {
+export function sanitiseReply(text, { canary, canSeeMoney, tenantId = "" }) {
   const raw = String(text || "").trim();
   if (!raw) return "I don't have an answer for that from the notes I can see.";
   if ((canary && raw.includes(canary)) || raw.includes(RULES_MARK) || raw.includes("HELPER_RULES_END")) {
     return REFUSAL;
   }
   const reply = canSeeMoney ? raw : raw.replace(/(?:\$\s?\d[\d,]*(?:\.\d+)?)|(?:\b(?:aud|usd)\s*\$?\s*\d[\d,]*(?:\.\d+)?)|(?:\b\d[\d,]*(?:\.\d+)?\s*(?:dollars|ex\s*gst|inc(?:l(?:uding)?)?\.?\s*gst|plus\s*gst)\b)/gi, "[amount hidden]");
-  return reply.length > 4000 ? reply.slice(0, 4000) : reply;
+  const clean = neutralText(reply, tenantId);
+  return clean.length > 4000 ? clean.slice(0, 4000) : clean;
 }

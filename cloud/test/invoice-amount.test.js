@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { JOB_MONEY_KEYS, splitJobMoney, mergeJobMoney, stripJobMoney, jobMoneyDoc } from "../../app/features/job-money.js";
-import { planInvoiceAmount, parseInvoiceArgs, migrateInvoiceAmount } from "../scripts/migrate-invoice-amount.mjs";
+import { planInvoiceAmount, planOfficeMoney, parseInvoiceArgs, migrateInvoiceAmount } from "../scripts/migrate-office-money.mjs";
 import { planJobMoney } from "../scripts/migrate-job-money.mjs";
 import { adminReader } from "../functions/helper/reader.js";
 
@@ -79,7 +79,8 @@ test("migrateInvoiceAmount: dry run writes nothing and reports no amounts; apply
   let backup = null;
   const rep = await migrateInvoiceAmount(null, { apply: true, store: f.store, writeBackup: async b => { assert.equal(f.log.length, 0, "backup before any write"); backup = b; } });
   assert.equal(backup.rows.length, 2);
-  assert.deepEqual(backup.rows.find(r => r.path === "jobs/a"), { path: "jobs/a", companyId: "heartwood", jobValue: 1234.5, jobMoneyBefore: "(missing)", action: "copy-and-remove" });
+  assert.deepEqual(backup.rows.find(r => r.path === "jobs/a"), { path: "jobs/a", companyId: "heartwood", job: { invoiceAmount: 1234.5 },
+    jobMoneyBefore: { invoiceAmount: "(missing)" }, actions: { invoiceAmount: "copy-and-remove" } });
   assert.deepEqual(f.log, ["money:a", "job:a", "job:b"], "jobMoney is written before the job loses the field; conflict c untouched");
   assert.equal(rep.verified, 2); assert.deepEqual(rep.verifyFailed, []);
   assert.equal("invoiceAmount" in f.J.get("a"), false); assert.equal(f.M.get("a").invoiceAmount, 1234.5);
@@ -101,8 +102,8 @@ test("app: invoice price saves go to jobMoney; numbering moves it in the same tr
 
 test("rules: invoiceAmount is a job money key, allowed (number) on jobMoney, and even the box can't put it on a job", () => {
   const rules = read("../firestore.production.rules");
-  assert.match(rules, /function jobMoneyKeys\(\) \{ return \[[^\]]*"invoiceAmount"\]; \}/);
-  assert.match(rules, /"splitUndoPoAmount", "poLookupCandidates", "invoiceAmount", "migratedAt"/);
+  assert.match(rules, /function jobMoneyKeys\(\) \{ return \[[^\]]*"invoiceAmount", "xeroCheck"\]; \}/);
+  assert.match(rules, /"splitUndoPoAmount", "poLookupCandidates", "invoiceAmount", "xeroCheck", "migratedAt"/);
   assert.match(rules, /d\.get\("invoiceAmount", null\) == null \|\| d\.invoiceAmount is number/);
   assert.match(rules, /allow create: if \(isSync\(\) && syncJobCreateOk\(\)\)/);
   assert.match(rules, /\(isSync\(\) && syncJobUpdateOk\(\)\)/);
@@ -114,4 +115,20 @@ test("helper reader merges invoiceAmount from jobMoney for office answers", asyn
   const db = { collection: c => ({ doc: id => ref(c + "/" + id) }), async getAll(...refs) { return Promise.all(refs.map(r => r.get())); } };
   const job = await adminReader(db).job("j1");
   assert.equal(job.invoiceAmount, 640);
+});
+
+test("xeroCheck (Xero match: totalEx, amountDue) is job money too, moved per field", () => {
+  assert.ok(JOB_MONEY_KEYS.includes("xeroCheck"));
+  const xc = { checkedAt: "2026-11-01T08:00:00+10:00", status: "invoiced", matches: [{ invoiceNumber: "5401", totalEx: 900, amountDue: 0 }] };
+  const p = planOfficeMoney("j", { invoiceAmount: 900, xeroCheck: xc }, null);
+  assert.deepEqual(p.remove.sort(), ["invoiceAmount", "xeroCheck"]);
+  assert.deepEqual(p.money.xeroCheck, xc);
+  const q = planOfficeMoney("j", { invoiceAmount: 900, xeroCheck: xc }, { invoiceAmount: 901, xeroCheck: JSON.parse(JSON.stringify(xc)) });
+  assert.deepEqual(q.remove, ["xeroCheck"], "same xeroCheck -> remove only");
+  assert.deepEqual(q.conflicts, ["invoiceAmount"], "different price -> left on the job");
+  assert.equal(q.money, null);
+  assert.equal(stripJobMoney({ xeroCheck: xc }).xeroCheck, undefined);
+  const rules = read("../firestore.production.rules");
+  assert.match(rules, /d\.get\("xeroCheck", null\) == null \|\| d\.xeroCheck is map/);
+  assert.match(rules, /function syncDeniedJobKeys\(\) \{ return \["invoiceAmount", "xeroCheck"\]; \}/);
 });

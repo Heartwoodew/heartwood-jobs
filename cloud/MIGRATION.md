@@ -241,31 +241,38 @@ over, then run `scripts/migrate-job-money.mjs` (dry run, then `--commit`): it mo
 into jobMoney without overwriting a list already there. It is the same idempotent script as above.
 
 
-## Invoice price off the job document (12 Nov 2026)
+## Invoice price and Xero match off the job document; crew money audit (12 Nov 2026)
 
-`invoiceAmount` (the invoice price, ex GST) is now job money too. Assigned crew can read the whole job document, so
-the price lives in the office-only `jobMoney/{jobId}` with the PO value and quote total. The other invoice fields
-(`invoiceNo`, `invoiceDescription`, `invoiceDate`, `invoiceContact`, `invoiced`, ...) stay on the job.
+Alex: "move it" (invoice price) and "everyone below supervisor can't see dollar amounts". Assigned crew can read the
+whole job document, so `invoiceAmount` (the invoice price, ex GST) and `xeroCheck` (the Xero match: `totalEx`,
+`amountDue`) now live in the office-only `jobMoney/{jobId}` with the PO value and quote total. The other invoice fields
+(`invoiceNo`, `invoiceDescription`, `invoiceDate`, `invoiceContact`, `invoiced`, `xeroCheckPending`, ...) stay on the job.
 
-- App: the Invoices screen price box and "Assign numbers" write the price to jobMoney (numbering does both writes in one
+- App: the Invoices price box and "Assign numbers" write the price to jobMoney (numbering does both writes in one
   transaction) and remove any legacy copy from the job. Office lists already merge jobMoney over the job (`withMoney`),
-  so the Invoices screen, Xero queue (`amountEx`), CSV exports and totals read the merged value. Service worker
-  `callup-shell-v97-invoice-office`.
-- Rules (`firestore.production.rules`): `invoiceAmount` is in `jobMoneyKeys()`, so app writers may not add or change it on a
-  job (removal is allowed). The box sync user may not add or change it on a job either (`syncJobCreateOk`,
-  `syncJobUpdateOk`). `jobMoneyOk` allows `invoiceAmount` (number or null). Crew still can't read jobMoney at all.
-- Helper (`helperAsk`): the admin reader merges `invoiceAmount` from jobMoney; crew answers never include it.
-- Box workers (not in this repo, /workspace/heartwood-app/tools): `hwfire.JOB_MONEY_KEYS` gets `invoiceAmount`;
-  `export_completed.py --invoice-sync` reads the price from jobMoney (legacy job copy as fallback) and writes store->app
-  prices to jobMoney; `sm8_push.py` never copies a price onto a moved job.
+  so the Invoices screen, Xero queue (`amountEx`), CSV exports, totals and the Check Xero pill read the merged value.
+  Service worker `callup-shell-v97-invoice-office`.
+- Rules (`firestore.production.rules`): `invoiceAmount` and `xeroCheck` are in `jobMoneyKeys()`, so app writers may not
+  add or change them on a job (removal is allowed). The box sync user may not add or change them on a job either
+  (`syncDeniedJobKeys`, `syncJobCreateOk`, `syncJobUpdateOk`). `jobMoneyOk` allows `invoiceAmount` (number or null) and
+  `xeroCheck` (map). Crew still can't read jobMoney at all.
+- Helper (`helperAsk`): the admin reader merges both from jobMoney; crew answers never include money (unchanged).
+- Box workers (not in this repo, /workspace/heartwood-app/tools): `hwfire.JOB_MONEY_KEYS` gets both keys;
+  `export_completed.py --invoice-sync` reads/writes the price on jobMoney; `xero_queue.py` writes `xeroCheck` to jobMoney;
+  `sm8_push.py` never copies a price onto a moved job.
+- Tests: `test/invoice-amount.test.js`, `test/invoice-amount.emulator.test.js`, `test/crew-money.emulator.test.js`
+  (every money record an operator could try to read: jobMoney, quotes, rates, invoicing counters, profit, Xero queue,
+  reimbursements ledger, other people's receipts/claims, service costs, hours exports, PO lookups).
+- Exception kept for Alex to decide: an operator can read the dollar amount on their OWN receipt and their OWN
+  reimbursement claim (needed to be paid back).
 
-### Existing jobs: `cloud/scripts/migrate-invoice-amount.mjs`
+### Existing jobs: `cloud/scripts/migrate-office-money.mjs`
 
 Dry run is the default and reads only. `--apply` writes a JSON backup first (mode 600, needs `--backup <new file>` on
-production), copies each price to jobMoney (never overwriting a value already there; a different value there is a
-conflict and that job is left alone), then deletes the field from the job, then re-reads every job to verify.
-Dry run on 12 Nov 2026: 129 jobs scanned, 52 with `invoiceAmount` (all Heartwood; 51 Done + invoiced, 1 Cancelled;
-50 with crew assigned), 52 to copy, 0 conflicts.
+production), copies each value to jobMoney (never overwriting a value already there; a different value there is a
+conflict and that field is left on the job), then deletes the field from the job, then re-reads every job to verify.
+Dry run on 12 Nov 2026: 129 jobs scanned; 52 with `invoiceAmount` (all Heartwood; 51 Done + invoiced, 1 Cancelled;
+50 with crew assigned) and 1 with `xeroCheck`; 52 jobs to change; 0 conflicts.
 
 Order: merge, put the box worker update in place (it may write jobMoney before the rules change: the sync user already
 has full jobMoney access), deploy the Firestore rules, deploy hosting (v97) and `helperAsk`, then run the migration
@@ -273,6 +280,21 @@ has full jobMoney access), deploy the Firestore rules, deploy hosting (v97) and 
 
 ```
 cd cloud
-node scripts/migrate-invoice-amount.mjs --project heartwood-9f37f
-node scripts/migrate-invoice-amount.mjs --project heartwood-9f37f --apply --backup /workspace/callup/invoice-amount-backup.json
+node scripts/migrate-office-money.mjs --project heartwood-9f37f
+node scripts/migrate-office-money.mjs --project heartwood-9f37f --apply --backup /workspace/callup/office-money-backup.json
 ```
+
+## No ServiceM8 wording; no Heartwood wording for CallUp companies (12 Nov 2026)
+
+- Every user-visible ServiceM8 / SM8 string is gone for every company, Heartwood included (toasts, history lines,
+  dispatch notes, quote tag, split/undo errors). Field names (`sm8JobNo`, `sm8Status`, ...) are unchanged.
+- Helper: knowledge text, job data (keys `sm8JobNo`/`sm8Status` are sent as `jobNo`/`syncStatus`) and replies have
+  ServiceM8 removed for everyone and Heartwood removed for CallUp companies (`neutralText` in helper/prompt.js).
+- CallUp companies no longer inherit Heartwood's name, legal name, ABN, address, email or sign-off (`org-settings.js`),
+  nor Heartwood's yard as the quote/run-sheet depot, nor Alex's address as the photo email fallback. Invite emails for a
+  CallUp company never use Heartwood wording even when the company name is not loaded. The test-company exit button says
+  "Exit test company". The Xero queue stub note no longer names Heartwood.
+- `test/brand-text.test.js` scans every string literal in app/ and cloud/functions/ (acorn) for ServiceM8/SM8, keeps a
+  reviewed list of Heartwood strings (Heartwood-only branches, ids), and renders client-company settings, invite emails,
+  timesheet consent, depots and helper prompts to check they are Heartwood-free.
+

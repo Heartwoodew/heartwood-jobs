@@ -3,8 +3,8 @@
 
 // Job money (PO value, accepted-quote total) lives in jobMoney/{jobId} (round 3, Q6); merge it over the job
 // so office answers keep working. projectJob still drops it for logins that may not see money.
-// invoiceAmount (12 Nov 2026) moved to jobMoney as well.
-const JOB_MONEY_KEYS = ["poAmount", "poAmountBasis", "poAmountSource", "quoteAmount", "invoiceAmount"];
+// invoiceAmount and xeroCheck (12 Nov 2026) moved to jobMoney as well.
+const JOB_MONEY_KEYS = ["poAmount", "poAmountBasis", "poAmountSource", "quoteAmount", "invoiceAmount", "xeroCheck"];
 async function withMoney(db, jobs) {
   if (!jobs.length || typeof db.getAll !== "function") return jobs;
   const snaps = await db.getAll(...jobs.map(job => db.collection("jobMoney").doc(job.id)));

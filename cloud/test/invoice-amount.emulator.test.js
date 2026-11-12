@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { initializeTestEnvironment, assertFails, assertSucceeds } from "@firebase/rules-unit-testing";
 import { doc, getDoc, getDocs, setDoc, updateDoc, deleteField, collection, query, where, runTransaction, writeBatch } from "firebase/firestore";
-import { migrateInvoiceAmount } from "../scripts/migrate-invoice-amount.mjs";
+import { migrateInvoiceAmount } from "../scripts/migrate-office-money.mjs";
 
 const ALEX = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";
 const PATRICK = "R7t41e54Ykcdk9WPdVZnDd697iI2";
@@ -115,7 +115,7 @@ test("migration on the emulator: backup first, copy + remove, conflict untouched
     assert.equal(again.copyAndRemove + again.removeOnly, 0);
     assert.deepEqual(again.conflicts, ["jobs/m3"]);
   });
-  assert.ok(backup.rows.some(r => r.path === "jobs/m1" && r.jobValue === 900));
+  assert.ok(backup.rows.some(r => r.path === "jobs/m1" && r.job.invoiceAmount === 900));
   assert.deepEqual(report.verifyFailed, []);
   const m1 = (await assertSucceeds(getDoc(doc(db("op1"), "jobs/m1")))).data();
   assert.equal("invoiceAmount" in m1, false); assert.equal(m1.invoiceNo, "1");
@@ -126,4 +126,22 @@ test("migration on the emulator: backup first, copy + remove, conflict untouched
   assert.equal((await getDoc(doc(db("bAdm"), "jobMoney/m4"))).data().invoiceAmount, 70);
   assert.equal((await getDoc(doc(db("bAdm"), "jobMoney/m4"))).data().tenantId, "bravo");
   await assertFails(getDoc(doc(db("bOp"), "jobMoney/m4")));
+});
+
+test("xeroCheck (Xero totals) is office only: crew can't read it, nobody puts it on a job, the migration moves it", async () => {
+  const xc = { checkedAt: "2026-11-01T08:00:00+10:00", status: "invoiced", matches: [{ invoiceNumber: "5401", status: "PAID", totalEx: 900, amountDue: 0 }] };
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), "jobs/x1"), { companyId: "heartwood", assigned: ["op1"], status: "Done", xeroCheckPending: true, xeroCheck: xc });
+  });
+  await assertFails(updateDoc(doc(db(SYNC), "jobs/hwNext"), { xeroCheck: xc }));
+  await assertFails(updateDoc(doc(db(ALEX), "jobs/hwNext"), { xeroCheck: xc }));
+  await assertSucceeds(updateDoc(doc(db(SYNC), "jobs/hwNext"), { xeroCheckPending: false }));
+  await assertSucceeds(setDoc(doc(db(SYNC), "jobMoney/hwNext"), { jobId: "hwNext", companyId: "heartwood", xeroCheck: xc }, { merge: true }));
+  await assertFails(setDoc(doc(db(ALEX), "jobMoney/hwNext"), { jobId: "hwNext", companyId: "heartwood", xeroCheck: "paid" }, { merge: true }));
+  await assertFails(getDoc(doc(db("op1"), "jobMoney/hwNext")));
+  await env.withSecurityRulesDisabled(async ctx => { await migrateInvoiceAmount(ctx.firestore(), { apply: true, writeBackup: async () => {} }); });
+  const j = (await assertSucceeds(getDoc(doc(db("op1"), "jobs/x1")))).data();
+  assert.equal("xeroCheck" in j, false); assert.equal(j.xeroCheckPending, true);
+  await assertFails(getDoc(doc(db("op1"), "jobMoney/x1")));
+  assert.deepEqual((await getDoc(doc(db(ALEX), "jobMoney/x1"))).data().xeroCheck, xc);
 });

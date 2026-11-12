@@ -259,7 +259,7 @@ async function loadCompanyBrand() {
   else setActiveCompany(id === "heartwood" ? null : { companyId: id, name: "Your company" });
   // Depot for quotes and run sheets: Heartwood's yard, or the company's own address.
   const depot = id === "heartwood" ? "" : orgSettings().address;
-  setRouteDepot(depot); setDefaultDepot(depot);
+  setRouteDepot(depot, { heartwood: id === "heartwood" }); setDefaultDepot(depot, { heartwood: id === "heartwood" });
   paintBrand();
 }
 function inviteDisplayNow() {
@@ -399,7 +399,7 @@ function paintBrand() {
     return;
   }
   const mark = org.isTest ? `<span class="co-badge co-test">TEST</span>` : org.plan === "friend" ? `<span class="co-badge co-friend">FRIEND</span>` : "";
-  const exit = me && me.testCompanyId ? `<button type="button" class="ghost" id="testexit">Back to Heartwood</button>` : "";
+  const exit = me && me.testCompanyId ? `<button type="button" class="ghost" id="testexit">Exit test company</button>` : "";
   const el = document.querySelector(".brand");
   if (el) el.innerHTML = `<span class="wordmark" aria-label="${esc(PRODUCT_NAME)}">Call<span>Up</span></span><span class="orgline">${orgLogoHtml(org)}${esc(org.name)} ${mark}</span>${exit}`;
   const back = document.querySelector("#testexit");
@@ -992,7 +992,7 @@ function dispatchView(all) {
       <button type="button" class="sm-btn route-open" id="optorder">Optimise order</button>
       <button id="new" class="sm-btn primary">+ New Job</button></div>
     ${leaveBanner}
-    <div class="dwrap"><div class="dboard"><p class="touchhint">Tap a job to open it. Press and hold a job to move it to another day or staff member.</p><div class="dgrid-scroll">${grid}</div><p class="sub muted">Drag a job to another day or staff member to reschedule (${esc(syncNote("saved in the app, sent to ServiceM8 by the next sync", "saved straight away"))}).</p></div>
+    <div class="dwrap"><div class="dboard"><p class="touchhint">Tap a job to open it. Press and hold a job to move it to another day or staff member.</p><div class="dgrid-scroll">${grid}</div><p class="sub muted">Drag a job to another day or staff member to reschedule (${esc(syncNote("saved in the app, synced at the next sync", "saved straight away"))}).</p></div>
       </div>`;
 }
 // Floating "Done today" card (dispatch board + job list). Today = Brisbane date of completedAt (fallback: job date when
@@ -2938,12 +2938,12 @@ async function splitJob(j, pick) {
     ...(canFindPo() && canSeeMoney() ? { poLookupCandidates: [] } : {}), updatedAt: serverTimestamp(), updatedBy: me.uid });
   if (canSeeMoney()) await jobMoneyWrite(j.id, {}, { splitUndoPoAmount: j.poAmount ?? null }).catch(() => {});
   $("#dlg").close();
-  undoToast(`Split #${jobNo(j)}: new ${TYPES[newType] || newType} job created${usesSm8Sync() ? " (syncs to ServiceM8 in ~10 min)" : ""}`, () => undoSplit({ ...j, splitTo: ref.id, splitUndo: undo }));
+  undoToast(`Split #${jobNo(j)}: new ${TYPES[newType] || newType} job created${usesSm8Sync() ? " (syncs in ~10 min)" : ""}`, () => undoSplit({ ...j, splitTo: ref.id, splitUndo: undo }));
 }
 async function undoSplit(j) {
   const nd = await getDoc(doc(db, "jobs", j.splitTo));
-  if (!nd.exists()) throw new Error(usesSm8Sync() ? "the new job has already synced to ServiceM8 - undo there" : "the new job no longer exists");
-  if (nd.data().sm8Uuid) throw new Error(usesSm8Sync() ? "the new job is already in ServiceM8 - undo there" : "the new job has already been changed");
+  if (!nd.exists()) throw new Error(usesSm8Sync() ? "the new job has already synced, so it can't be undone here" : "the new job no longer exists");
+  if (nd.data().sm8Uuid) throw new Error(usesSm8Sync() ? "the new job has already synced, so it can't be undone here" : "the new job has already been changed");
   const o = (await getDoc(doc(db, "jobs", j.id))).data() || {}, u = o.splitUndo || j.splitUndo;
   if (!u) throw new Error("no undo data");
   if (nd.exists()) await deleteDoc(doc(db, "jobs", j.splitTo));
@@ -2963,14 +2963,14 @@ function editJob(j) {
   // One id per New Job form, so a second tap (or a retry after no signal) cannot make a second job.
   const newRef = n ? doc(collection(db, "jobs")) : null, guard = saveGuard();
   const qq = n ? "Work Order" : queueOf(j), hist = [];
-  if (j.source === "sm8" && usesSm8Sync()) hist.push(["ServiceM8", `Imported from ServiceM8 job #${j.sm8JobNo || "?"} (${j.sm8Status || "?"})`]);
-  if (j.editedInApp && usesSm8Sync()) hist.push(["App", "Edited in the app – ServiceM8 import will no longer overwrite this job"]);
+  if (j.source === "sm8" && usesSm8Sync()) hist.push(["Import", `Imported job #${j.sm8JobNo || "?"} (${j.sm8Status || "?"})`]);
+  if (j.editedInApp && usesSm8Sync()) hist.push(["App", "Edited in the app – the sync will no longer overwrite this job"]);
   if (j.inboxId) hist.push(["Inbox", "Linked to a builder email"]);
   if (j.completedByName) hist.push([j.completedByName, `Completed${j.loads ? ` · ${j.loads} loads` : ""}`]);
   const SL = { "Scheduled": "Work Order – scheduled", "In progress": "Work Order – in progress", "Done": "Completed", "Cancelled": "Unsuccessful" };
   d.className = "jobcard"; d.onclose = () => refreshAfterImport();
   d.innerHTML = `<form method="dialog" id="jf" class="jc">
-    <div class="jc-top ${QCLS[qq]}"><div><div class="jc-no">${n ? "New Job" : "Job #" + esc(jobNo(j))}</div>${n ? "" : ipTop(j, "onbar")}<div class="jc-q">${qq}${j.sm8Status === "Quote" && usesSm8Sync() ? " (quote in ServiceM8)" : ""}</div></div>
+    <div class="jc-top ${QCLS[qq]}"><div><div class="jc-no">${n ? "New Job" : "Job #" + esc(jobNo(j))}</div>${n ? "" : ipTop(j, "onbar")}<div class="jc-q">${qq}${j.sm8Status === "Quote" && usesSm8Sync() ? " (quote)" : ""}</div></div>
       <label class="jc-st">Job Status<select name="status">${STATUSES.map(s => `<option value="${s}" ${j.status === s ? "selected" : ""}>${SL[s]}</option>`).join("")}</select></label>
       <button value="cancel" formnovalidate class="jc-x" title="Close">✕</button></div>
     <div class="jc-body"><div class="jc-col">
@@ -3001,7 +3001,7 @@ function editJob(j) {
       <div class="row"><label>Date<input type="date" name="date" value="${esc(j.date)}"></label>
         <label>Start<input type="time" name="time" value="${esc(j.time)}"></label>
         <label>Hours<input type="number" step="any" min="0" max="999" inputmode="decimal" name="durationHrs" value="${esc(j.durationHrs)}"></label></div>
-      ${!n && j.date && !["Done", "Cancelled"].includes(j.status) ? `<div class="row"><button type="button" id="unschbtn" class="btn">✕ Remove from dispatch board</button><span class="sub">Back to Unscheduled${usesSm8Sync() ? "; the ServiceM8 booking is removed at the next sync" : ""} (the job stays).</span></div>` : ""}
+      ${!n && j.date && !["Done", "Cancelled"].includes(j.status) ? `<div class="row"><button type="button" id="unschbtn" class="btn">✕ Remove from dispatch board</button><span class="sub">Back to Unscheduled${usesSm8Sync() ? "; the booking is removed at the next sync" : ""} (the job stays).</span></div>` : ""}
       <fieldset class="staffs">${staff.map(s => `<label class="ck"><input type="checkbox" name="assigned" value="${esc(skey(s))}" ${namesOf(j).map(x => x.toLowerCase()).includes(s.name.toLowerCase()) ? "checked" : ""}> <span class="av">${esc(s.name[0])}</span>${esc(label(s.name))}</label>`).join("")}</fieldset>
       <p id="leavewarn" class="leave-warn" hidden></p>
       <h4>Notes</h4>
@@ -4203,7 +4203,7 @@ async function opAction(j, act) {
 // The share must be started by a fresh tap (browsers require a user gesture), so the picked photos are shown in a
 // small dialog with a "Send" button.
 // Photos go to this company's office email (Heartwood: alex@heartwoodew.com via org defaults).
-const officeEmail = () => orgSettings().email || "alex@heartwoodew.com";
+const officeEmail = () => orgSettings().email || (myCompanyId() === "heartwood" ? "alex@heartwoodew.com" : "");
 const emailSubject = j => `[Job Photos] Job #${jobNo(j)} – ${j.address || "(no address)"}`;
 const emailBody = (j, infos, attached) => [`Job #${jobNo(j)}`, `Address: ${j.address || "-"}`, `Client: ${j.client || "-"}`, `PO: ${j.po || "-"}`,
   `Job date: ${j.date ? dayLabel(j.date) : "-"}`, "",
@@ -4309,8 +4309,8 @@ function emailDialog(j, files, infos, o = {}) {
     <div class="emthumbs">${files.map(f => `<img src="${URL.createObjectURL(f)}" alt="">`).join("")}</div>
     <p class="sub muted">${o.coll ? esc(j.reportNo) : "Job #" + esc(jobNo(j))} · ${esc(j.address || "")} · ${mb.toFixed(1)} MB${mb > 24 ? " — may be too big for one email, send fewer at a time" : ""}</p>
     ${canShare ? `<button type="button" class="mbtn complete" data-a="share">Send via email app</button>
-      <p class="sub muted">Choose Mail or Gmail, then put <b>${officeEmail()}</b> in the To box (the subject and job details are filled in).</p>`
-    : `<p class="sub">This browser can't attach photos automatically. Tap below to open an email to ${officeEmail()}, then attach the photos yourself.</p>
+      <p class="sub muted">Choose Mail or Gmail, then put <b>${officeEmail() || "your office's email"}</b> in the To box (the subject and job details are filled in).</p>`
+    : `<p class="sub">This browser can't attach photos automatically. Tap below to open an email to ${officeEmail() || "your office"}, then attach the photos yourself.</p>
       <a class="mbtn complete" data-a="mail" href="${mailto}">Open email to the office</a>
       <button type="button" class="mbtn" data-a="sent">I've sent it</button>`}
     <button type="button" class="mbtn ghost" data-a="x">Cancel</button></div>`;
@@ -4386,7 +4386,7 @@ function moveSheet(j) {
   v.innerHTML = `<form class="embox msheet"><h3>Move #${esc(jobNo(j))}</h3><p class="sub muted">${esc(j.address || "")}</p>
     <div class="row"><label>Date<input type="date" name="date" value="${esc(j.date || todayStr())}" required></label><label>Time<input type="time" name="time" value="${esc(j.time || "07:00")}"></label></div>
     <fieldset class="staffs">${staff.map(s => `<label class="ck"><input type="checkbox" name="st" value="${esc(skey(s))}" ${cur.includes(s.name.toLowerCase()) ? "checked" : ""}> ${esc(s.name)}</label>`).join("")}</fieldset>
-    <p class="sub muted">No one ticked = Unallocated. ${esc(syncNote("Saved to the app, then sent to ServiceM8 by the next sync.", "Saved straight away."))}</p>
+    <p class="sub muted">No one ticked = Unallocated. ${esc(syncNote("Saved to the app, then synced at the next sync.", "Saved straight away."))}</p>
     <button class="mbtn complete">Save</button><button type="button" class="mbtn" data-x>Cancel</button></form>`;
   document.body.appendChild(v);
   v.querySelector("[data-x]").onclick = () => v.remove();

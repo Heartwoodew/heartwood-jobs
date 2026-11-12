@@ -31,7 +31,7 @@ test("planJobMoney moves amounts, cleans the quote copy and the split undo copy"
       extraItems: [{ id: "x", qty: 6, unit: "m3", unitPrice: 55 }] },
     splitUndo: { description: "d", poAmount: 400 } };
   const p = planJobMoney("j1", job);
-  assert.deepEqual(p.remove.sort(), JOB_MONEY_KEYS.filter(k => k !== "poLookupCandidates" && k !== "invoiceAmount").sort());
+  assert.deepEqual(p.remove.sort(), JOB_MONEY_KEYS.filter(k => k !== "poLookupCandidates" && k !== "invoiceAmount" && k !== "xeroCheck").sort());
   assert.deepEqual(p.set.quote, { travelKm: 5, extraItems: [{ id: "x", qty: 6, unit: "m3" }] });
   assert.deepEqual(p.set.splitUndo, { description: "d" });
   assert.deepEqual(p.money, { jobId: "j1", companyId: "bravo", tenantId: "bravo", quoteAmount: 2085, poAmount: 2085,

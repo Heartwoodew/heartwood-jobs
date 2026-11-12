@@ -388,13 +388,15 @@ service cloud.firestore {
     // (poLookupCandidates, they carry PO amounts) or quote prices on a job.
     // Removing a legacy copy is allowed. The box (isSync) still writes poAmount for Find PO / ServiceM8 until its
     // workers move to jobMoney; cloud/scripts/migrate-job-money.mjs moves existing amounts.
-    // invoiceAmount (12 Nov 2026): the invoice price is office only too. Even the box (isSync) may not add or change it on a
-    // job (tools/export_completed.py writes it to jobMoney); cloud/scripts/migrate-invoice-amount.mjs moves old values.
-    function jobMoneyKeys() { return ["poAmount", "poAmountBasis", "poAmountSource", "quoteAmount", "poLookupCandidates", "invoiceAmount"]; }
-    function syncJobCreateOk() { return !request.resource.data.keys().hasAny(["invoiceAmount"]); }
+    // invoiceAmount and xeroCheck (12 Nov 2026): the invoice price and the Xero match (totalEx, amountDue) are office only too.
+    // Even the box (isSync) may not add or change them on a job (tools/export_completed.py and tools/xero_queue.py write them
+    // to jobMoney); cloud/scripts/migrate-office-money.mjs moves old values.
+    function syncDeniedJobKeys() { return ["invoiceAmount", "xeroCheck"]; }
+    function jobMoneyKeys() { return ["poAmount", "poAmountBasis", "poAmountSource", "quoteAmount", "poLookupCandidates", "invoiceAmount", "xeroCheck"]; }
+    function syncJobCreateOk() { return !request.resource.data.keys().hasAny(syncDeniedJobKeys()); }
     function syncJobUpdateOk() {
       let df = request.resource.data.diff(resource.data);
-      return !df.addedKeys().hasAny(["invoiceAmount"]) && !df.changedKeys().hasAny(["invoiceAmount"]);
+      return !df.addedKeys().hasAny(syncDeniedJobKeys()) && !df.changedKeys().hasAny(syncDeniedJobKeys());
     }
     function quotePriceKeys() { return ["totalEx", "gst", "totalInc", "lines", "priceOverrides", "ratesSnapshot"]; }
     function jobQuoteNoPrices(d) { return !(d.get("quote", null) is map) || !d.quote.keys().hasAny(quotePriceKeys()); }
@@ -448,12 +450,13 @@ service cloud.firestore {
     // supervisors (who already read quotes) for their own company. Crew (operators, staff) never read it.
     function jobMoneyOk(d, jobId) {
       return d.keys().hasOnly(["jobId", "companyId", "tenantId", "poAmount", "poAmountBasis", "poAmountSource", "quoteAmount",
-          "splitUndoPoAmount", "poLookupCandidates", "invoiceAmount", "migratedAt", "updatedAt", "updatedBy"])
+          "splitUndoPoAmount", "poLookupCandidates", "invoiceAmount", "xeroCheck", "migratedAt", "updatedAt", "updatedBy"])
         && (d.get("poLookupCandidates", null) == null || (d.poLookupCandidates is list && d.poLookupCandidates.size() <= 50))
         && d.jobId == jobId
         && (d.get("poAmount", null) == null || d.poAmount is number)
         && (d.get("quoteAmount", null) == null || d.quoteAmount is number)
         && (d.get("invoiceAmount", null) == null || d.invoiceAmount is number)
+        && (d.get("xeroCheck", null) == null || d.xeroCheck is map)
         && (d.get("splitUndoPoAmount", null) == null || d.splitUndoPoAmount is number);
     }
     match /jobMoney/{jobId} {

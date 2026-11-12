@@ -6,7 +6,8 @@ export const TS_CONSENT = "Location is captured only when you tap Clock on or Cl
 // Heartwood keeps the sentence above. Another company name replaces only that word.
 export function locationConsent(orgName) {
   const who = String(orgName || "").trim();
-  if (!who || who === "Heartwood" || who === "Heartwood Earthworx" || who === "Heartwood Earthworx Pty Ltd") return TS_CONSENT;
+  if (!who) return TS_CONSENT.replaceAll("Heartwood", "Your employer");
+  if (who === "Heartwood" || who === "Heartwood Earthworx" || who === "Heartwood Earthworx Pty Ltd") return TS_CONSENT;
   return TS_CONSENT.replaceAll("Heartwood", who);
 }
 
