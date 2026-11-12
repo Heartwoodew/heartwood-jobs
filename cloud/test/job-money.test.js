@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { JOB_MONEY_KEYS, splitJobMoney, mergeJobMoney, jobMoneyDoc, stripJobMoney } from "../../app/features/job-money.js";
-import { planJobMoney } from "../scripts/migrate-job-money.mjs";
+import { planJobMoney, scrubPrice } from "../scripts/migrate-job-money.mjs";
 
 test("splitJobMoney sends money keys to jobMoney and clears them on the job", () => {
   const del = () => "DELETE";
@@ -89,3 +89,27 @@ test("the app clears Find PO suggestions on jobMoney and never writes a list ont
   assert.match(app, /onSnapshot\(doc\(db, JOB_MONEY_COLLECTION, j\.id\)/);
 });
 
+
+test("planJobMoney strips typed dollar amounts from crew-readable text the box or app wrote; typed notes are only reported", () => {
+  const job = { po: "3008309", poLookupStatus: "found", poLookupMsg: "PO 3008309 $1,234.50 ex GST (orbit_po PDF a.pdf)",
+    workAmounts: ["Rubbish removal: 6 skip (Customer agreed $500 cash)", "Truck: 2 h"],
+    quote: { travelKm: 4, extraItems: [{ id: "x", kind: "rubbish", qty: 6, unit: "skip", note: "Customer agreed $500 cash" }, { id: "y", qty: 1, note: "no price" }] },
+    notes: "Paid $200 deposit", description: "Backslab" };
+  const p = planJobMoney("jt", job);
+  assert.equal(p.changes, true);
+  assert.equal(p.set.poLookupMsg, "PO 3008309 [price removed] (orbit_po PDF a.pdf)");
+  assert.deepEqual(p.set.workAmounts, ["Rubbish removal: 6 skip (Customer agreed [price removed] cash)", "Truck: 2 h"]);
+  assert.equal(p.set.quote.extraItems[0].note, "Customer agreed [price removed] cash");
+  assert.equal(p.set.quote.extraItems[1].note, "no price");
+  assert.equal(p.set.quote.travelKm, 4);
+  assert.equal("notes" in p.set || "description" in p.set, false, "typed free text is never rewritten");
+  assert.deepEqual(p.textWithPrice, ["notes"]);
+  assert.equal(JSON.stringify(p.set).match(/\$/), null);
+  // nothing to do on clean text, and the scrub is stable
+  assert.equal(planJobMoney("jc", { poLookupMsg: "picked 3008309 by Alex", workAmounts: ["Truck: 2 h"] }).changes, false);
+  assert.equal(scrubPrice(scrubPrice("A$ 99.95 inc GST")), "[price removed]");
+  // a quote copy with both prices and a priced note gets one clean rewrite
+  const both = planJobMoney("jb", { quote: { totalEx: 50, extraItems: [{ id: "z", qty: 1, unitPrice: 50, note: "$50 each" }] } });
+  assert.deepEqual(both.set.quote, { extraItems: [{ id: "z", qty: 1, note: "[price removed] each" }] });
+  assert.equal(both.money.quoteAmount, 50);
+});

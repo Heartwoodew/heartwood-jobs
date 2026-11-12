@@ -74,6 +74,19 @@ test("office reads and writes money for its own company only", async () => {
   await assertFails(deleteDoc(doc(db("bAdm"), "jobMoney/b1")));
 });
 
+test("a job with no money doc yet: office reads 'not found' (Find PO listener stays alive); crew still can't", async () => {
+  assert.equal((await assertSucceeds(getDoc(doc(db(ALEX), "jobMoney/hwNoMoney")))).exists(), false);
+  assert.equal((await assertSucceeds(getDoc(doc(db(PATRICK), "jobMoney/hwNoMoney")))).exists(), false);
+  assert.equal((await assertSucceeds(getDoc(doc(db("bAdm"), "jobMoney/bNoMoney")))).exists(), false);
+  assert.equal((await assertSucceeds(getDoc(doc(db("bSup"), "jobMoney/bNoMoney")))).exists(), false);
+  await assertFails(getDoc(doc(db("op1"), "jobMoney/hwNoMoney")));
+  await assertFails(getDoc(doc(db("hwSupOp"), "jobMoney/hwNoMoney")));
+  await assertFails(getDoc(doc(db("bOp"), "jobMoney/bNoMoney")));
+  // existing docs of another company stay closed
+  await assertFails(getDoc(doc(db("cAdm"), "jobMoney/b1")));
+  await assertFails(getDoc(doc(db("bAdm"), "jobMoney/hw1")));
+});
+
 test("app writers can't put money or quote prices on a job; removing a legacy copy is allowed", async () => {
   const base = { companyId: "bravo", tenantId: "bravo", client: "Acme", assigned: [], status: "Scheduled" };
   await assertFails(setDoc(doc(db("bAdm"), "jobs/bn1"), { ...base, poAmount: 100 }));
@@ -139,9 +152,19 @@ test("migration moves legacy money off the job; crew then see no money and the o
     await migrateJobMoney(ctx.firestore(), { commit: true });
     assert.equal("poLookupCandidates" in (await getDoc(doc(ctx.firestore(), "jobs/hwSug"))).data(), false);
     assert.equal((await getDoc(doc(ctx.firestore(), "jobMoney/hwSug"))).data().poLookupCandidates[0].amount, 777);
+    // older Find PO messages carried the PO amount on the crew-readable job
+    await setDoc(doc(ctx.firestore(), "jobs/hwMsg"), { companyId: "heartwood", client: "Orbit", assigned: ["op1"], status: "Scheduled", po: "3008111",
+      poLookupStatus: "found", poLookupMsg: "PO 3008111 $4321 ex GST (orbit_po PDF x.pdf)", notes: "cash $50" });
+    const scrub = await migrateJobMoney(ctx.firestore(), { commit: true });
+    assert.equal(scrub.textScrubbed.poLookupMsg >= 1, true);
+    assert.ok(scrub.textWithPrice.some(r => r.path === "jobs/hwMsg" && r.fields.includes("notes")));
+    assert.equal(JSON.stringify(scrub).match(/4321|\$50/), null, "report holds no amounts");
     const again = await migrateJobMoney(ctx.firestore(), { commit: true });
     assert.equal(again.jobsChanged, 0, "second run has nothing to do");
   });
+  const hwMsg = (await assertSucceeds(getDoc(doc(db("op1"), "jobs/hwMsg")))).data();
+  assert.equal(hwMsg.poLookupMsg, "PO 3008111 [price removed] (orbit_po PDF x.pdf)");
+  assert.equal(hwMsg.notes, "cash $50", "typed notes are left for the office");
   const crew = (await assertSucceeds(getDoc(doc(db("bOp"), "jobs/bOld")))).data();
   assert.equal(JSON.stringify(crew).match(/1500|1650|unitPrice|totalEx|poAmount|quoteAmount/), null);
   assert.equal(crew.quote.extraItems[0].qty, 3);

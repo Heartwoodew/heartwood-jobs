@@ -201,6 +201,14 @@ carries the PO value or the accepted-quote total.
 
 ### Existing jobs: `cloud/scripts/migrate-job-money.mjs` (admin-run, after merge)
 
+Re-run (Nov 2026, full-app test): the script also strips typed dollar amounts from crew-readable text written by the
+box or the app: `poLookupMsg` (older Find PO runs wrote "PO ... $N ex GST"; 37 Heartwood jobs on 12 Nov 2026, 33 of
+them with crew assigned), `workAmounts[]` and `quote.extraItems[].note/description` (same "[price removed]" rule as
+new quotes). `notes` and `description` that people typed are only listed in the report (`textWithPrice`), never
+rewritten. Safe to run again: jobs already clean are skipped, and jobMoney values are never overwritten.
+The `jobMoney` get rule also allows the office to read a missing doc (a job with no money yet) as "not found", so the
+Find PO dialog's live listener no longer fails with permission-denied. Crew still can't read jobMoney at all.
+
 Order: merge the PR, deploy the Firestore rules (firestore.production.rules) and the app (service worker
 `callup-shell-v90-job-money`), then run the migration. Dry run is the default and writes nothing.
 
