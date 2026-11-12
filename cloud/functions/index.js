@@ -10,7 +10,8 @@
  *
  * Staff invites: previewStaffInvite and acceptStaffInvite are callable.
  * acceptStaffInvite creates the Auth user and users/{uid} with the invited
- * role (operator or supervisor only). inviteEmailWorker queues mail.
+ * role (labourer, operator, supervisor, or admin for a CallUp company when an admin invited).
+ * inviteEmailWorker queues mail.
  * INVITE_EMAIL_ENABLED must be the string "true" or the message is held in
  * inviteMail and nothing is sent. This file does not open an SMTP connection.
  *
@@ -162,8 +163,19 @@ function inviteBackend() {
       await db.collection("users").doc(uid).delete();
     },
     async getInviter(uid) {
-      const snap = await db.collection("users").doc(String(uid || "")).get();
-      return { uid, profile: snap.exists ? (snap.data() || null) : null };
+      const id = String(uid || "");
+      const [snap, grant] = await Promise.all([db.collection("users").doc(id).get(), db.collection("heartwoodAdmins").doc(id).get()]);
+      return { uid, profile: snap.exists ? (snap.data() || null) : null, heartwoodAdmin: grant.exists && (grant.data() || {}).role === "admin" };
+    },
+    // Accepted Heartwood admin invite: the grant the rules read (isAdmin) alongside the fixed admin list.
+    async grantHeartwoodAdmin(uid, { inviteId, grantedBy }) {
+      await db.collection("heartwoodAdmins").doc(uid).set({
+        uid, role: "admin", companyId: "heartwood", inviteId: String(inviteId || ""), grantedBy: String(grantedBy || ""),
+        grantedAt: FieldValue.serverTimestamp(),
+      });
+    },
+    async revokeHeartwoodAdmin(uid) {
+      await db.collection("heartwoodAdmins").doc(uid).delete();
     },
     async claimInvite(id, uid, now) {
       return db.runTransaction(async tx => {

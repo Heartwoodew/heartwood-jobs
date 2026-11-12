@@ -60,11 +60,11 @@ test("invite toasts no longer say mail was not sent for CallUp companies", () =>
   assert.match(app, /emailStatus: inviteMailMap\(\)/);
 });
 
-test("ServiceM8 wording only for Heartwood; field names unchanged", () => {
+test("no ServiceM8 wording for anyone, Heartwood included (12 Nov 2026); field names unchanged", () => {
   assert.match(app, /const usesSm8Sync = \(\) => myCompanyId\(\) === "heartwood";/);
-  // Every user-visible ServiceM8 string is behind usesSm8Sync() / syncNote(): look at non-comment lines.
+  // Full string scan of shipped code: cloud/test/brand-text.test.js. Here: no non-comment line names ServiceM8.
   const lines = app.split("\n").filter(l => /ServiceM8/.test(l) && !/^\s*\/\//.test(l) && !/\/\/ Firestore only; nothing goes to ServiceM8/.test(l));
-  for (const l of lines) assert.match(l, /usesSm8Sync\(\)|syncNote\(/, l.trim().slice(0, 120));
+  assert.deepEqual(lines.map(l => l.trim().slice(0, 120)), []);
   assert.match(app, /j\.sm8JobNo/);
 });
 

@@ -31,7 +31,7 @@ test("planJobMoney moves amounts, cleans the quote copy and the split undo copy"
       extraItems: [{ id: "x", qty: 6, unit: "m3", unitPrice: 55 }] },
     splitUndo: { description: "d", poAmount: 400 } };
   const p = planJobMoney("j1", job);
-  assert.deepEqual(p.remove.sort(), JOB_MONEY_KEYS.filter(k => k !== "poLookupCandidates").sort());
+  assert.deepEqual(p.remove.sort(), JOB_MONEY_KEYS.filter(k => k !== "poLookupCandidates" && k !== "invoiceAmount" && k !== "xeroCheck").sort());
   assert.deepEqual(p.set.quote, { travelKm: 5, extraItems: [{ id: "x", qty: 6, unit: "m3" }] });
   assert.deepEqual(p.set.splitUndo, { description: "d" });
   assert.deepEqual(p.money, { jobId: "j1", companyId: "bravo", tenantId: "bravo", quoteAmount: 2085, poAmount: 2085,
@@ -39,7 +39,7 @@ test("planJobMoney moves amounts, cleans the quote copy and the split undo copy"
   assert.equal(JSON.stringify({ ...job, ...p.set, ...Object.fromEntries(p.remove.map(k => [k, undefined])) }).match(/2085|55|900|400/), null);
 });
 
-test("planJobMoney never overwrites jobMoney and leaves invoice fields alone", () => {
+test("planJobMoney never overwrites jobMoney and leaves invoice fields alone (invoiceAmount has its own script)", () => {
   const p = planJobMoney("j2", { poAmount: 10, invoiceAmount: 99, quote: { totalEx: 50 } }, { poAmount: 12 });
   assert.deepEqual(p.remove, ["poAmount"]);
   assert.deepEqual(p.money, { jobId: "j2", companyId: "heartwood", quoteAmount: 50 });
@@ -58,8 +58,10 @@ test("the app never writes money keys straight onto a job", () => {
   const app = readFileSync(new URL("../../app/app.js", import.meta.url), "utf8");
   const quotes = readFileSync(new URL("../../app/features/quotes.js", import.meta.url), "utf8");
   for (const src of [app, quotes]) {
-    for (const m of src.matchAll(/updateDoc\(doc\(db, "jobs"[^;]*;/g)) assert.doesNotMatch(m[0], /poAmount|quoteAmount/, m[0].slice(0, 120));
-    for (const m of src.matchAll(/addDoc\(collection\(db, "jobs"\)[^;]*;/g)) assert.doesNotMatch(m[0], /poAmount|quoteAmount/);
+    for (const m of src.matchAll(/updateDoc\(doc\(db, "jobs"[^;]*;/g)) assert.doesNotMatch(m[0], /poAmount|quoteAmount|invoiceAmount/, m[0].slice(0, 120));
+    for (const m of src.matchAll(/addDoc\(collection\(db, "jobs"\)[^;]*;/g)) assert.doesNotMatch(m[0], /poAmount|quoteAmount|invoiceAmount/);
+    // Transactions/batches may only remove a legacy invoiceAmount from a job (deleteField), never set it.
+    for (const m of src.matchAll(/(?:tx|batch|b)\.(?:update|set)\(doc\(db, "jobs"[^;]*;/g)) assert.doesNotMatch(m[0].replace(/invoiceAmount: deleteField\(\)/g, ""), /poAmount|quoteAmount|invoiceAmount/, m[0].slice(0, 120));
   }
   assert.doesNotMatch(quotes.slice(quotes.indexOf("async function createJobFromQuote"), quotes.indexOf("export function adminViewRouter")).split("const jobDoc")[1].split("await setDoc(ref, jobDoc)")[0], /quoteAmount|poAmount/);
 });

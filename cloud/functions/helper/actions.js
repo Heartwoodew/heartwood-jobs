@@ -56,7 +56,7 @@ export function intentFromQuestion(question) {
   }
   match = /^(approve|decline) leave (.+?): (.+)$/i.exec(q);
   if (match) return { type: "leave-decision", status: match[1].toLowerCase() === "approve" ? "approved" : "declined", hint: match[2].trim(), note: match[3].trim() };
-  match = /^invite (operator|supervisor) (.+?) at (\S+)$/i.exec(q);
+  match = /^invite (labourer|operator|supervisor|admin) (.+?) at (\S+)$/i.exec(q);
   if (match) return { type: "invite", role: match[1].toLowerCase(), name: match[2].trim(), email: match[3].trim() };
   return null;
 }
@@ -424,7 +424,10 @@ async function prepareLeaveDecision(membership, intent, reader, name) {
 async function prepareInvite(membership, intent, reader) {
   if (!(membership.rulesAdmin || membership.role === "supervisor")) return deny("supervisor-only");
   const role = String(intent.role || "");
-  if (role !== "operator" && role !== "supervisor") return deny("not-allowed");
+  // Supervisors: labourer, operator or supervisor. Admin invites: rules-admins (Heartwood: fixed list or granted admin).
+  const roles = membership.rulesAdmin
+    ? ["labourer", "operator", "supervisor", "admin"] : ["labourer", "operator", "supervisor"];
+  if (!roles.includes(role)) return deny("not-allowed");
   const email = String(intent.email || "").trim().toLowerCase();
   if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(email) || email.length > 120) return deny("invalid");
   const name = String(intent.name || "").trim().replace(/ +/g, " ");

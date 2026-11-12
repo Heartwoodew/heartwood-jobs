@@ -586,7 +586,7 @@ Tabs:
 | Recent | Invoiced, invoice or job date within 30 days |
 | Removed | `invoiceExcluded` and no invoice number. The job is kept. **Restore** puts it back. |
 
-Ready rows: description (default from `invDescDefault`, lines 1347–1351) and amount ex GST (prefill `invoiceAmount` else `poAmount`). They save as you type (`bindInvoices` continues at line 1671). Over PO shows a note and **Email supervisor**. It does not block.
+Ready rows: description (default from `invDescDefault`, lines 1347–1351) and amount ex GST (prefill `invoiceAmount` else `poAmount`; both live on the office-only `jobMoney/{jobId}`, never on the crew-readable job). They save as you type (`bindInvoices` continues at line 1671). Over PO shows a note and **Email supervisor**. It does not block.
 
 **Assign numbers** (`assignNumbers`, lines 1712–1746) reads the price and description from the row. A missing price alerts `Set a price first for:` plus the jobs. Standard clients with no real PO ask you to continue with a blank reference. Over-PO jobs ask you to continue; the typed price is kept. For a Xero UID the confirm says the click assigns numbers and creates draft invoices, then `sendToXero` runs with `skipConfirm` and no CSV. For everyone else it downloads the CSV. A transaction error alerts `Numbers NOT assigned: {code}`. The number is `max(5402, meta last number, box max, existing invoice numbers) + 1`, in date order. If a selected job was numbered in the meantime: `already numbered: …`.
 

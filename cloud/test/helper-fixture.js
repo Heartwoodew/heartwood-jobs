@@ -8,6 +8,7 @@ export function sampleStore() {
       op1: { name: "Sam", role: "operator" },
       op2: { name: "Riley", role: "operator" },
       sup1: { name: "Sue", role: "supervisor" },
+      lab1: { name: "Lee", role: "labourer" },
       otherAdmin: { name: "Olivia", role: "admin", tenantId: "otherco" },
       scoped: { name: "Sid", role: "operator", customerIds: ["Orbit Homes (Qld) Pty Ltd"] },
     },

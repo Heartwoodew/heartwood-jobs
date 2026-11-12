@@ -17,10 +17,11 @@ export const DEFAULT_DEPOT = {
 };
 const HEARTWOOD_DEPOT = { ...DEFAULT_DEPOT };
 // Other companies: the depot default is their own company address (no Heartwood maps link).
-export function setDefaultDepot(address) {
+// A CallUp company with no address gets no depot (never Heartwood's yard): the admin sets it under Quote rates & depot.
+export function setDefaultDepot(address, { heartwood = false } = {}) {
   const a = String(address || "").trim();
-  DEFAULT_DEPOT.yardAddress = a || HEARTWOOD_DEPOT.yardAddress;
-  DEFAULT_DEPOT.yardMapsUrl = a ? "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(a) : HEARTWOOD_DEPOT.yardMapsUrl;
+  DEFAULT_DEPOT.yardAddress = a || (heartwood ? HEARTWOOD_DEPOT.yardAddress : "");
+  DEFAULT_DEPOT.yardMapsUrl = a ? "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(a) : (heartwood ? HEARTWOOD_DEPOT.yardMapsUrl : "");
 }
 
 /** Fleet plant from Heartwood Machine register (names/codes). Rates blank until admin sets them. */
@@ -567,7 +568,7 @@ export function quotesViewHtml(ui, esc, $$, helpers = {}) {
     <div class="row gap"><button type="button" class="sm-btn primary" id="newquote">＋ New quote</button>
     ${editRates ? `<button type="button" class="sm-btn" id="editrates">Quote rates &amp; depot</button>` : `<span class="sub pad">Rates are set by an admin · depot ${esc(rates.yardAddress || DEFAULT_DEPOT.yardAddress)}</span>`}</div></div>
     <p class="pad sub">Three steps: job details, setup (machine and optional labourer), then review. Travel, materials and rubbish sit on the review. Accepting creates an unscheduled job. Admins and supervisors only. Prices stay ex GST and are never invented. Quotes are for ${esc(orgSettings().legalName)}. ${esc(POWERED_BY)}.</p>
-    <p class="pad sub">Depot (travel start): <b>${esc(rates.yardAddress || DEFAULT_DEPOT.yardAddress)}</b>
+    <p class="pad sub">Depot (travel start): <b>${esc(rates.yardAddress || DEFAULT_DEPOT.yardAddress || "not set")}</b>
       · <a href="${esc(rates.yardMapsUrl || DEFAULT_DEPOT.yardMapsUrl)}" target="_blank" rel="noopener">Maps</a></p>
     ${rateWarn ? `<p class="pad warnt">Set plant (incl. operator), labourer, travel, materials and tip rates before accepting — nothing is invented for you.</p>` : ""}
     <div class="sm-head"><h2>Drafts <span class="cnt">${drafts.length}</span></h2></div>
@@ -945,6 +946,7 @@ function openQuoteWizard(existing, opts = {}) {
       const depot = rates.yardAddress || DEFAULT_DEPOT.yardAddress;
       const site = state.address;
       const status = $("#qwtravelst");
+      if (!depot) { if (status) status.textContent = "Set the depot address under Quote rates & depot first."; return; }
       if (!site) { if (status) status.textContent = "Enter the site address on step 1 first."; return; }
       if (status) status.textContent = "Looking up road distance (Nominatim + OSRM)…";
       const r = await roadDistanceKm(depot, site, state.addressPlace);

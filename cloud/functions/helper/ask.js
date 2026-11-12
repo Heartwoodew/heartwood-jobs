@@ -64,6 +64,7 @@ export async function handleHelperAsk({
     profile,
     requestedTenantId: data && data.tenantId,
     requestedBusinessId: data && data.businessId,
+    heartwoodAdmin: reader && typeof reader.heartwoodAdmin === "function" ? await reader.heartwoodAdmin(auth.uid) : false,
   });
   if (!membership.ok) return { ok: false, code: "permission-denied", reply: DENIED_REPLY };
   const person = named(auth.uid, profile);
@@ -131,7 +132,7 @@ export async function handleHelperAsk({
     return { ok: true, enabled: true, reply: MODEL_FAILED, knowledge: pack.source };
   }
   const reply = sanitiseReply(String(raw || "").replace(/HELPER_ACTION[\s\S]*$/g, ""), {
-    canary: prompt.canary, canSeeMoney: membership.canSeeMoney,
+    canary: prompt.canary, canSeeMoney: membership.canSeeMoney, tenantId: membership.tenantId,
   });
   return {
     ok: true,

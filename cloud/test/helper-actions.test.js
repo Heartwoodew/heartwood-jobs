@@ -303,3 +303,36 @@ test("double-tapping Confirm applies the action once", async () => {
   assert.equal(replies.filter(r => /already closed/.test(r.reply)).length, 4);
   assert.equal(h.proposals.get(preview.proposal.id).status, "confirmed");
 });
+
+// 12 Nov 2026: four invite roles. A labourer is crew (no invites, no money); supervisors never invite an admin.
+test("helper invites: labourer cannot invite; supervisor invites a labourer but not an admin; admins may invite an admin", async () => {
+  for (const question of ["Invite labourer Pat at pat@example.com", "Invite admin Pat at pat@example.com"]) {
+    const h = harness();
+    const r = await ask(h, "lab1", { question });
+    assert.equal(r.proposal ?? null, null, question);
+  }
+  const lab = harness();
+  const okLab = await ask(lab, "sup1", { question: "Invite labourer Pat at pat@example.com" });
+  assert.equal(okLab.proposal.title, "Invite staff");
+  const supAdmin = harness();
+  assert.equal((await ask(supAdmin, "sup1", { question: "Invite admin Pat at pat@example.com" })).proposal ?? null, null);
+  // Heartwood: Alex (fixed list) may invite an admin; accepting it writes the heartwoodAdmins grant.
+  const hwAdmin = harness();
+  assert.equal((await ask(hwAdmin, ALEX_UID, { question: "Invite admin Pat at pat@example.com" })).proposal.title, "Invite staff");
+  const coAdmin = harness();
+  const okAdmin = await ask(coAdmin, "otherAdmin", { question: "Invite admin Pat at pat@example.com" });
+  assert.equal(okAdmin.proposal.title, "Invite staff");
+  await ask(coAdmin, "otherAdmin", { step: "confirm", proposalId: okAdmin.proposal.id });
+  assert.equal(coAdmin.applied[0].role, "admin");
+  assert.equal(coAdmin.applied[0].tenantId, "otherco");
+});
+
+test("helper: a Heartwood profile with role admin is an admin only with a heartwoodAdmins grant", async () => {
+  const { resolveMembership } = await import("../functions/shared/cloud-storage.js");
+  const profile = { name: "Hana", role: "admin", companyId: "heartwood" };
+  assert.equal(resolveMembership({ uid: "hw-new", profile, heartwoodAdmin: false }).rulesAdmin, false);
+  assert.equal(resolveMembership({ uid: "hw-new", profile, heartwoodAdmin: false }).canSeeMoney, false);
+  assert.equal(resolveMembership({ uid: "hw-new", profile, heartwoodAdmin: true }).rulesAdmin, true);
+  assert.equal(resolveMembership({ uid: "co-admin", profile: { role: "admin", tenantId: "otherco" }, heartwoodAdmin: false }).rulesAdmin, true);
+  assert.equal(resolveMembership({ uid: ALEX_UID, profile: { role: "operator" }, heartwoodAdmin: false }).rulesAdmin, true);
+});

@@ -191,7 +191,7 @@ function sheetXml(rows, widths, headerRow) {
 const DETAIL = ["Staff", "Date", "Weekday", "Clock on", "Clock off", "Break start", "Break end", "Break minutes", "Shift hours", "Day total", "Job", "Site", "Machine", "Leave", "Notes", "Type"];
 const text = v => { const s = clean(v); return s ? { v: s } : null; };
 
-export function reportSheets(rep, { company = "Heartwood", generated = new Date() } = {}) {
+export function reportSheets(rep, { company = "CallUp", generated = new Date() } = {}) {
   const gen = generated.toLocaleString("en-AU", { timeZone: "Australia/Brisbane", weekday: "short", day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit" });
   const title = [{ v: `${company} · Timesheet hours`, s: S.title }];
   const sub = [{ v: `Pay period ${dmy(rep.weekStart)} to ${dmy(rep.weekEnd)} · Every day is listed · A 30-minute lunch is already off a finished shift unless a break was entered · Generated ${gen} (Brisbane)`, s: S.sub }];
@@ -268,7 +268,7 @@ export function xlsxBytes(sheets) {
     ["xl/_rels/workbook.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join("")}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`],
     ["xl/styles.xml", STYLES], ...ws]);
 }
-export const exportFileName = (company, weekStart) => `${String(company || "Heartwood").replace(/[^A-Za-z0-9]+/g, "_")}_hours_${weekStart}_to_${addD(weekStart, 6)}.xlsx`;
+export const exportFileName = (company, weekStart) => `${String(company || "CallUp").replace(/[^A-Za-z0-9]+/g, "_")}_hours_${weekStart}_to_${addD(weekStart, 6)}.xlsx`;
 export function newExportId() { let s = "hx"; while (s.length < 18) s += Math.random().toString(36).slice(2); return s.replace(/[^a-z0-9]/g, "a").slice(0, 18); }
 
 // iPhone (and iPad desktop-mode) gets the share sheet. Everywhere else, including Windows desktop, saves with an anchor.

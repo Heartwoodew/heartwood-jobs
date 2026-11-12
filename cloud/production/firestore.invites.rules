@@ -5,7 +5,7 @@
 // and would replace jobs, quotes, receipts and the rest of the live rules.
 //
 // Invites are CallUp Base. A supervisor or admin creates invites/{id} together with
-// inviteEmails/{email} in one transaction. Role is operator or supervisor.
+// inviteEmails/{email} in one transaction. Role is labourer, operator, supervisor, or admin (CallUp company admins only).
 // The accept function (Admin SDK) is the only writer of users/{uid}.role.
 // This block does not add a users match: a second users match would be OR'd
 // with the live one. Keep the live users rules denying client writes of role.
@@ -40,8 +40,18 @@
         && email.size() <= 120
         && email.matches('^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$');
     }
+    // Labourer, operator or supervisor: any invite admin (admin or supervisor). Admin: a profile-role admin of a CallUp
+    // company, or a Heartwood admin (Alex, Patrick, or an accepted Heartwood admin grant in heartwoodAdmins/{uid}).
+    function inviteFullAdmin() {
+      return inviteCallerTenant() == "heartwood"
+        ? (inviteIsAlex() || inviteIsPatrick()
+          || (exists(/databases/$(database)/documents/heartwoodAdmins/$(request.auth.uid))
+            && inviteHasProfile() && inviteProfile().get("role", "") == "admin"))
+        : (inviteHasProfile() && "role" in inviteProfile() && inviteProfile().role == "admin");
+    }
     function inviteRoleOk() {
-      return request.resource.data.role == "operator" || request.resource.data.role == "supervisor";
+      return request.resource.data.role in ["labourer", "operator", "supervisor"]
+        || (request.resource.data.role == "admin" && inviteFullAdmin());
     }
     function inviteSame(key) {
       return (!(key in request.resource.data) && !(key in resource.data))
@@ -127,7 +137,9 @@
     }
 
     match /invites/{inviteId} {
-      allow get, list: if inviteAdmin() && resource.data.tenantId == inviteCallerTenant();
+      // Supervisors never read an admin invite (it carries the sign-up token): their list asks for the three crew/supervisor roles.
+      allow get, list: if inviteAdmin() && resource.data.tenantId == inviteCallerTenant()
+        && (resource.data.role in ["labourer", "operator", "supervisor"] || inviteFullAdmin());
       allow create: if inviteCreateOk(inviteId);
       allow update: if inviteUpdateOk(inviteId);
       allow delete: if false;

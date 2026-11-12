@@ -6,13 +6,21 @@
 rules_version = '2';
 // Heartwood Jobs.
 // ADMINS are a fixed list of Firebase Auth UIDs (Alex + the box sync user + Patrick, full admin since 11/10/2026). No role doc is needed to be admin,
-// so there is no bootstrap step. OPERATORS are people with a users/{uid} doc whose role == "operator"
+// so there is no bootstrap step. OPERATORS (crew) are people with a users/{uid} doc whose role is "operator" or "labourer" (same access)
 // (written by an admin). Operators see only jobs whose `assigned` array contains their uid, and may only change
 // status (In progress / Done), site notes (log), loads, completion stamps and photos metadata.
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
-    function isAdmin() { return signedIn() && request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "38SU5waAy4f9UI9N6JTqDMaYpQg2", "R7t41e54Ykcdk9WPdVZnDd697iI2"]; }
+    // Heartwood admins: the fixed list (Alex, the box sync user, Patrick) OR an accepted Heartwood admin invite.
+    // heartwoodAdmins/{uid} is written by acceptStaffInvite (Admin SDK) or a Heartwood admin, never by the person.
+    function isAdmin() { return signedIn() && (request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "38SU5waAy4f9UI9N6JTqDMaYpQg2", "R7t41e54Ykcdk9WPdVZnDd697iI2"] || heartwoodAdminGrant()); }
+    function heartwoodAdminGrant() {
+      let grant = /databases/$(database)/documents/heartwoodAdmins/$(request.auth.uid);
+      let user = /databases/$(database)/documents/users/$(request.auth.uid);
+      return exists(grant) && get(grant).data.get("role", "") == "admin"
+        && exists(user) && docCompany(get(user).data) == "heartwood" && get(user).data.get("role", "") == "admin";
+    }
     function isOwner() { return signedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
     function isSync() { return signedIn() && request.auth.uid == "38SU5waAy4f9UI9N6JTqDMaYpQg2"; }
     // Xero (profit figures, Send to Xero queue): explicit allowlist, NOT isAdmin(), so future admins get no Xero access.
@@ -20,7 +28,7 @@ service cloud.firestore {
     function xeroUser() { return signedIn() && request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "R7t41e54Ykcdk9WPdVZnDd697iI2"]; }
     function isOperator() {
       return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "operator";
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ["operator", "labourer"];
     }
     function isAssigned(d) { return request.auth.uid in d.assigned; }
 
@@ -360,6 +368,21 @@ service cloud.firestore {
       return id != "heartwood" && exists(/databases/$(database)/documents/companies/$(id))
         && get(/databases/$(database)/documents/companies/$(id)).data.get("isTest", false) == true;
     }
+    // Heartwood admin grants (12 Nov 2026). Created by acceptStaffInvite for an accepted Heartwood admin invite, or by a
+    // Heartwood admin. Nobody grants themselves; supervisors and crew can't write here.
+    match /heartwoodAdmins/{uid} {
+      allow get: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isAdmin() && request.auth.uid != uid
+        && request.resource.data.keys().hasOnly(["uid", "role", "companyId", "inviteId", "grantedBy", "grantedAt"])
+        && request.resource.data.uid == uid
+        && request.resource.data.role == "admin"
+        && request.resource.data.companyId == "heartwood"
+        && request.resource.data.grantedBy == request.auth.uid
+        && request.resource.data.grantedAt == request.time;
+      allow update: if false;
+      allow delete: if isAdmin() && request.auth.uid != uid;
+    }
     match /users/{uid} {
       // Everyone reads their own profile.
       allow get: if signedIn() && request.auth.uid == uid;
@@ -388,7 +411,16 @@ service cloud.firestore {
     // (poLookupCandidates, they carry PO amounts) or quote prices on a job.
     // Removing a legacy copy is allowed. The box (isSync) still writes poAmount for Find PO / ServiceM8 until its
     // workers move to jobMoney; cloud/scripts/migrate-job-money.mjs moves existing amounts.
-    function jobMoneyKeys() { return ["poAmount", "poAmountBasis", "poAmountSource", "quoteAmount", "poLookupCandidates"]; }
+    // invoiceAmount and xeroCheck (12 Nov 2026): the invoice price and the Xero match (totalEx, amountDue) are office only too.
+    // Even the box (isSync) may not add or change them on a job (tools/export_completed.py and tools/xero_queue.py write them
+    // to jobMoney); cloud/scripts/migrate-office-money.mjs moves old values.
+    function syncDeniedJobKeys() { return ["invoiceAmount", "xeroCheck"]; }
+    function jobMoneyKeys() { return ["poAmount", "poAmountBasis", "poAmountSource", "quoteAmount", "poLookupCandidates", "invoiceAmount", "xeroCheck"]; }
+    function syncJobCreateOk() { return !request.resource.data.keys().hasAny(syncDeniedJobKeys()); }
+    function syncJobUpdateOk() {
+      let df = request.resource.data.diff(resource.data);
+      return !df.addedKeys().hasAny(syncDeniedJobKeys()) && !df.changedKeys().hasAny(syncDeniedJobKeys());
+    }
     function quotePriceKeys() { return ["totalEx", "gst", "totalInc", "lines", "priceOverrides", "ratesSnapshot"]; }
     function jobQuoteNoPrices(d) { return !(d.get("quote", null) is map) || !d.quote.keys().hasAny(quotePriceKeys()); }
     function jobMoneyFreeCreate() {
@@ -412,14 +444,14 @@ service cloud.firestore {
         && resource.data.get("companyId", "") == callerCompany()
         && request.resource.data.get("companyId", "") == callerCompany()
         && jobMoneyFreeUpdate();
-      allow create: if isSync() || (isAdmin() && docCompany(request.resource.data) == "heartwood" && jobMoneyFreeCreate());
+      allow create: if (isSync() && syncJobCreateOk()) || (isAdmin() && docCompany(request.resource.data) == "heartwood" && jobMoneyFreeCreate());
       allow delete: if isSync() || (isAdmin() && docCompany(resource.data) == "heartwood");
       // Master page: Alex adds demo jobs to a test company only.
       allow create: if platformOwner() && request.resource.data.get("demo", false) == true
         && jobMoneyFreeCreate()
         && docCompany(request.resource.data) != "heartwood"
         && get(/databases/$(database)/documents/companies/$(docCompany(request.resource.data))).data.get("isTest", false) == true;
-      allow update: if (isAdmin() && (isSync() || (docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood"
+      allow update: if (isAdmin() && ((isSync() && syncJobUpdateOk()) || (docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood"
           && jobMoneyFreeUpdate()))
         && (xeroUser() || isSync() || !request.resource.data.diff(resource.data).affectedKeys().hasAny(
           ["xeroStatus", "xeroInvoiceId", "xeroInvoiceNo", "xeroError", "xeroQueuedAt"]))) || (
@@ -441,11 +473,13 @@ service cloud.firestore {
     // supervisors (who already read quotes) for their own company. Crew (operators, staff) never read it.
     function jobMoneyOk(d, jobId) {
       return d.keys().hasOnly(["jobId", "companyId", "tenantId", "poAmount", "poAmountBasis", "poAmountSource", "quoteAmount",
-          "splitUndoPoAmount", "poLookupCandidates", "migratedAt", "updatedAt", "updatedBy"])
+          "splitUndoPoAmount", "poLookupCandidates", "invoiceAmount", "xeroCheck", "migratedAt", "updatedAt", "updatedBy"])
         && (d.get("poLookupCandidates", null) == null || (d.poLookupCandidates is list && d.poLookupCandidates.size() <= 50))
         && d.jobId == jobId
         && (d.get("poAmount", null) == null || d.poAmount is number)
         && (d.get("quoteAmount", null) == null || d.quoteAmount is number)
+        && (d.get("invoiceAmount", null) == null || d.invoiceAmount is number)
+        && (d.get("xeroCheck", null) == null || d.xeroCheck is map)
         && (d.get("splitUndoPoAmount", null) == null || d.splitUndoPoAmount is number);
     }
     match /jobMoney/{jobId} {
@@ -862,23 +896,36 @@ service cloud.firestore {
     }
     function routeSheetWorker(id) { return id[0:id.size()-11]; }
     function routeSheetDate(id) { return id[id.size()-10:id.size()]; }
+    // Run sheets belong to one company (12 Nov 2026): companyId on the sheet (missing = Heartwood). An admin reads and
+    // writes only their own company's sheets, for a worker of their own company. The depot is the company's own address
+    // (Heartwood: Chuwar from its settings / default), so it is checked for shape only.
+    function routeWorkerCompany(sheetId) {
+      let p = /databases/$(database)/documents/users/$(routeSheetWorker(sheetId));
+      return exists(p) ? docCompany(get(p).data) : "heartwood";
+    }
     function routeCanRead(sheetId) {
       return routeSignedIn() && routeSheetIdOk(sheetId)
-        && (routeIsAdmin() || request.auth.uid == routeSheetWorker(sheetId));
+        && (request.auth.uid == routeSheetWorker(sheetId)
+          || (routeIsAdmin() && (resource == null || docCompany(resource.data) == callerCompany())));
     }
     function routeCanWrite(sheetId) {
       return routeIsAdmin() && routeSheetIdOk(sheetId)
         && request.resource.data.keys().hasOnly([
           "workerUid", "workerName", "date", "jobIds", "returnToDepot", "status", "depot",
           "method", "provider", "tweaked", "totalMinutes", "totalKm", "currentMinutes", "currentKm",
-          "approvedBy", "approvedByName", "approvedAt"
+          "approvedBy", "approvedByName", "approvedAt", "companyId"
         ])
-        && request.resource.data.workerUid == routeSheetWorker(sheetId)
+        && request.resource.data.companyId is string
+        && request.resource.data.companyId == callerCompany()
+        && (resource == null || docCompany(resource.data) == callerCompany())
+        && routeWorkerCompany(sheetId) == callerCompany()
         && request.resource.data.approvedBy == request.auth.uid
         && request.resource.data.date == routeSheetDate(sheetId)
         && request.resource.data.date is string
         && request.resource.data.status == "approved"
-        && request.resource.data.depot == "208-220 Holdsworth Rd, Chuwar QLD 4306"
+        && request.resource.data.depot is string
+        && request.resource.data.depot.size() > 0
+        && request.resource.data.depot.size() <= 200
         && request.resource.data.returnToDepot is bool
         && request.resource.data.tweaked is bool
         && request.resource.data.jobIds is list
@@ -1108,8 +1155,18 @@ service cloud.firestore {
         && email.size() <= 120
         && email.matches('^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$');
     }
+    // Labourer, operator or supervisor: any invite admin (admin or supervisor). Admin: a profile-role admin of a CallUp
+    // company, or a Heartwood admin (Alex, Patrick, or an accepted Heartwood admin grant in heartwoodAdmins/{uid}).
+    function inviteFullAdmin() {
+      return inviteCallerTenant() == "heartwood"
+        ? (inviteIsAlex() || inviteIsPatrick()
+          || (exists(/databases/$(database)/documents/heartwoodAdmins/$(request.auth.uid))
+            && inviteHasProfile() && inviteProfile().get("role", "") == "admin"))
+        : (inviteHasProfile() && "role" in inviteProfile() && inviteProfile().role == "admin");
+    }
     function inviteRoleOk() {
-      return request.resource.data.role == "operator" || request.resource.data.role == "supervisor";
+      return request.resource.data.role in ["labourer", "operator", "supervisor"]
+        || (request.resource.data.role == "admin" && inviteFullAdmin());
     }
     function inviteSame(key) {
       return (!(key in request.resource.data) && !(key in resource.data))
@@ -1196,7 +1253,9 @@ service cloud.firestore {
     }
 
     match /invites/{inviteId} {
-      allow get, list: if inviteAdmin() && resource.data.tenantId == inviteCallerTenant();
+      // Supervisors never read an admin invite (it carries the sign-up token): their list asks for the three crew/supervisor roles.
+      allow get, list: if inviteAdmin() && resource.data.tenantId == inviteCallerTenant()
+        && (resource.data.role in ["labourer", "operator", "supervisor"] || inviteFullAdmin());
       allow create: if inviteCreateOk(inviteId);
       allow update: if inviteUpdateOk(inviteId);
       allow delete: if false;

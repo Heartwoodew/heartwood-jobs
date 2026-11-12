@@ -9,7 +9,7 @@ import {
   acceptScreenModel, acceptStaffInvite, acceptViewHtml, buildInviteDraft, buildInviteEmail,
   canManageInvites, displayStatus, inviteEmailConfig, inviteLink, newInviteToken, pendingInviteForEmail,
   planInviteDelivery, previewStaffInvite, profileFromInvite, queueInviteEmail, shouldQueueInviteEmail,
-  staffViewHtml, tokenOk,
+  staffViewHtml, tokenOk, invitableRoles, inviterMayInvite, INVITE_ROLES, CREW_ROLES, roleLabel,
 } from "../../app/features/staff-invites.js";
 
 const NOW = new Date("2026-11-08T02:00:00.000Z");
@@ -97,15 +97,17 @@ test("supervisors and admins can manage invites; operators cannot", () => {
   assert.equal(canManageInvites(operator), false);
 });
 
-test("draft lowercases email, expires in 7 days, and rejects admin", () => {
+test("draft lowercases email, expires in 7 days, and takes only the four roles", () => {
   const ok = draft();
   assert.equal(ok.ok, true);
   assert.equal(ok.invite.email, "casey.nguyen@example.com");
   assert.equal(ok.invite.status, "pending");
   assert.equal(ok.invite.role, "operator");
   assert.equal(ok.invite.expiresAt.getTime() - NOW.getTime(), 7 * 24 * 60 * 60 * 1000);
-  assert.equal(draft({ role: "admin" }).reason, "role");
+  assert.equal(draft({ role: "labourer" }).invite.role, "labourer");
+  assert.equal(draft({ role: "admin", tenantId: "otherco" }).invite.role, "admin");
   assert.equal(draft({ role: "owner" }).reason, "role");
+  assert.equal(draft({ role: "Admin" }).reason, "role");
   assert.equal(draft({ email: "not-an-email" }).reason, "email");
   assert.equal(draft({ name: "Casey\nNguyen" }).reason, "name");
   assert.equal(draft({ token: "short" }).reason, "token");
@@ -128,7 +130,9 @@ test("profile role is the invited role and heartwood gets companyId but no tenan
   assert.equal(supervisor.role, "supervisor");
   const other = profileFromInvite({ ...draft({ tenantId: "otherco" }).invite });
   assert.equal(other.tenantId, "otherco");
-  assert.equal(profileFromInvite({ ...draft().invite, role: "admin" }), null);
+  assert.equal(profileFromInvite({ ...draft({ tenantId: "otherco" }).invite, role: "admin" }).role, "admin");
+  assert.equal(profileFromInvite({ ...draft().invite, role: "labourer" }).role, "labourer");
+  assert.equal(profileFromInvite({ ...draft().invite, role: "owner" }), null);
 });
 
 test("an operator cannot be the inviter, and a requested admin role is ignored", async () => {
@@ -191,14 +195,14 @@ test("accept rejects weak passwords, expired invites, and a failed claim", async
   assert.deepEqual(store.calls.deleted, ["uid-0"]);
 });
 
-test("preview does not return the token and will not offer an admin role", async () => {
+test("preview does not return the token and the accept screen has no role picker", async () => {
   const store = memory([{ id: "i1", ...draft().invite }]);
   const preview = await previewStaffInvite({ token: TOKEN }, store.deps);
   assert.equal(preview.ok, true);
   assert.equal(preview.role, "operator");
   assert.equal(preview.token, undefined);
   assert.equal("password" in preview, false);
-  const bad = memory([{ id: "i9", ...draft().invite, role: "admin" }]);
+  const bad = memory([{ id: "i9", ...draft().invite, role: "owner" }]);
   assert.equal((await previewStaffInvite({ token: TOKEN }, bad.deps)).reason, "invalid");
   const html = acceptViewHtml(acceptScreenModel(preview, NOW));
   assert.match(html, /Set your password/);
@@ -207,7 +211,7 @@ test("preview does not return the token and will not offer an admin role", async
   assert.doesNotMatch(html, /<select|value="admin"|name="role"/);
 });
 
-test("staff screen lists pending, accepted and expired with resend and cancel, and no admin role", () => {
+test("staff screen lists pending, accepted and expired with resend and cancel; a supervisor gets no admin option", () => {
   const html = staffViewHtml([
     { id: "p", name: "Casey Nguyen", email: "casey.nguyen@example.com", role: "operator", status: "pending", token: TOKEN, expiresAt: "2026-11-14T00:00:00.000Z" },
     { id: "a", name: "Sam Lee", email: "sam.lee@example.com", role: "supervisor", status: "accepted", token: SUPER_TOKEN, expiresAt: "2026-11-01T00:00:00.000Z" },
@@ -216,6 +220,7 @@ test("staff screen lists pending, accepted and expired with resend and cancel, a
   assert.match(html, /Invite staff/);
   assert.match(html, /value="operator"/);
   assert.match(html, /value="supervisor"/);
+  assert.match(html, /value="labourer"/);
   assert.doesNotMatch(html, /value="admin"/);
   assert.match(html, /data-invite-status="pending"/);
   assert.match(html, /data-invite-status="accepted"/);
@@ -276,7 +281,7 @@ test("invite rules fragment matches the emulator block and does not open mail", 
     return text.slice(start, end + "// END INVITE RULES".length);
   };
   assert.equal(slice(emu), slice(frag));
-  assert.match(slice(frag), /role == "operator" \|\| request\.resource\.data\.role == "supervisor"/);
+  assert.match(slice(frag), /role in \["labourer", "operator", "supervisor"\]\s*\|\| \(request\.resource\.data\.role == "admin" && inviteFullAdmin\(\)\)/);
   assert.match(slice(frag), /allow delete: if false/);
   assert.match(slice(frag), /match \/mail\/\{id\}/);
   assert.doesNotMatch(slice(frag), /match \/users\/|match \/jobs\/|match \/xeroQueue\//);
@@ -287,4 +292,93 @@ test("invite rules fragment matches the emulator block and does not open mail", 
   assert.match(index, /NODE_TEST_CONTEXT/);
   assert.doesNotMatch(index, /onSchedule|nodemailer|smtp|createTransport/);
   assert.match(readFileSync(new URL("../MIGRATION.md", import.meta.url), "utf8"), /Staff invites/);
+});
+
+// 12 Nov 2026 (Alex): four invite profiles. Labourer = operator access, a different label. Admin only from an admin.
+test("four invite roles; supervisors never offer or accept an admin invite; Heartwood admins need the fixed list or a grant", () => {
+  assert.deepEqual([...INVITE_ROLES], ["labourer", "operator", "supervisor", "admin"]);
+  assert.deepEqual([...CREW_ROLES], ["labourer", "operator"]);
+  assert.equal(roleLabel("labourer"), "Labourer");
+  assert.equal(roleLabel("admin"), "Admin");
+  const coAdmin = { uid: "a1", profile: { role: "admin", companyId: "otherco" } };
+  const coSup = { uid: "s1", profile: { role: "supervisor", companyId: "otherco" } };
+  const coOp = { uid: "o1", profile: { role: "operator" } };
+  const coLab = { uid: "l1", profile: { role: "labourer" } };
+  assert.deepEqual([...invitableRoles({ ...coAdmin, tenantId: "otherco" })], ["labourer", "operator", "supervisor", "admin"]);
+  assert.deepEqual([...invitableRoles({ ...coSup, tenantId: "otherco" })], ["labourer", "operator", "supervisor"]);
+  assert.deepEqual([...invitableRoles({ ...coOp, tenantId: "otherco" })], []);
+  assert.deepEqual([...invitableRoles({ ...coLab, tenantId: "otherco" })], []);
+  assert.deepEqual([...invitableRoles({ uid: "1JKLsoxkQNfkphBBO0vDz2ziEyj2", profile: null, tenantId: "heartwood" })], ["labourer", "operator", "supervisor", "admin"]);
+  // A Heartwood profile with role admin counts only with the heartwoodAdmins grant.
+  const hwProfile = { role: "admin", companyId: "heartwood" };
+  assert.deepEqual([...invitableRoles({ uid: "hw1", profile: hwProfile, tenantId: "heartwood" })], []);
+  assert.deepEqual([...invitableRoles({ uid: "hw1", profile: hwProfile, tenantId: "heartwood", heartwoodAdmin: true })], ["labourer", "operator", "supervisor", "admin"]);
+  assert.deepEqual([...invitableRoles({ uid: "hwS", profile: { role: "supervisor" }, tenantId: "heartwood", heartwoodAdmin: true })], ["labourer", "operator", "supervisor"]);
+  assert.equal(inviterMayInvite(coAdmin, "admin", "otherco"), true);
+  assert.equal(inviterMayInvite(coSup, "admin", "otherco"), false);
+  assert.equal(inviterMayInvite(coSup, "labourer", "otherco"), true);
+  assert.equal(inviterMayInvite(coLab, "labourer", "otherco"), false);
+  const adminHtml = staffViewHtml([], { now: NOW, origin: "https://app.callupapp.com.au", roles: invitableRoles({ ...coAdmin, tenantId: "otherco" }) });
+  for (const r of INVITE_ROLES) assert.match(adminHtml, new RegExp(`<option value="${r}"`));
+  assert.match(adminHtml, /<option value="operator" selected>/);
+  const supHtml = staffViewHtml([], { now: NOW, roles: invitableRoles({ ...coSup, tenantId: "otherco" }) });
+  assert.doesNotMatch(supHtml, /value="admin"/);
+});
+
+test("accept: a labourer gets a labourer profile; an admin invite needs an admin inviter of that CallUp company", async () => {
+  const lab = memory([{ id: "l1", ...draft({ role: "labourer", tenantId: "otherco" }).invite }]);
+  lab.deps.getInviter = async () => ({ uid: "s1", profile: { role: "supervisor", companyId: "otherco", tenantId: "otherco" } });
+  const labDone = await acceptStaffInvite({ token: TOKEN, password: "choose-a-password" }, lab.deps);
+  assert.equal(labDone.ok, true);
+  assert.equal(lab.profiles.get(labDone.uid).role, "labourer");
+  assert.equal(lab.profiles.get(labDone.uid).companyId, "otherco");
+
+  const adminInvite = { id: "a1", ...draft({ role: "admin", tenantId: "otherco" }).invite };
+  const bySup = memory([adminInvite]);
+  bySup.deps.getInviter = async () => ({ uid: "s1", profile: { role: "supervisor", companyId: "otherco" } });
+  assert.equal((await acceptStaffInvite({ token: TOKEN, password: "choose-a-password" }, bySup.deps)).reason, "invalid");
+  assert.equal(bySup.calls.createUser.length, 0);
+  const byAdmin = memory([adminInvite]);
+  byAdmin.deps.getInviter = async () => ({ uid: "a9", profile: { role: "admin", companyId: "otherco" } });
+  const ok = await acceptStaffInvite({ token: TOKEN, password: "choose-a-password" }, byAdmin.deps);
+  assert.equal(ok.ok, true);
+  assert.equal(byAdmin.profiles.get(ok.uid).role, "admin");
+
+  // Heartwood admin invite from Alex: the accept writes the heartwoodAdmins grant (rolled back if the claim fails).
+  const hwAdmin = memory([{ id: "h1", ...draft({ role: "admin" }).invite }]);
+  hwAdmin.deps.getInviter = async () => ({ uid: "1JKLsoxkQNfkphBBO0vDz2ziEyj2", profile: null });
+  assert.equal((await acceptStaffInvite({ token: TOKEN, password: "choose-a-password" }, hwAdmin.deps)).reason, "invalid", "no grant writer, no admin");
+  assert.equal(hwAdmin.calls.createUser.length, 0);
+  const grants = new Map();
+  hwAdmin.deps.grantHeartwoodAdmin = async (uid, meta) => { grants.set(uid, { role: "admin", ...meta }); };
+  hwAdmin.deps.revokeHeartwoodAdmin = async uid => { grants.delete(uid); };
+  const hwOk = await acceptStaffInvite({ token: TOKEN, password: "choose-a-password" }, hwAdmin.deps);
+  assert.equal(hwOk.ok, true);
+  assert.equal(hwAdmin.profiles.get(hwOk.uid).role, "admin");
+  assert.equal(hwAdmin.profiles.get(hwOk.uid).companyId, "heartwood");
+  assert.deepEqual(grants.get(hwOk.uid), { role: "admin", inviteId: "h1", grantedBy: "admin-1" });
+  // A Heartwood supervisor's admin invite, or one from a Heartwood profile-admin without a grant, is refused.
+  for (const inviter of [{ uid: "hs", profile: { role: "supervisor" } }, { uid: "hp", profile: { role: "admin" }, heartwoodAdmin: false }]) {
+    const m = memory([{ id: "h2", ...draft({ role: "admin" }).invite }]);
+    m.deps.getInviter = async () => inviter;
+    m.deps.grantHeartwoodAdmin = async () => { throw new Error("must not grant"); };
+    assert.equal((await acceptStaffInvite({ token: TOKEN, password: "choose-a-password" }, m.deps)).reason, "invalid");
+    assert.equal(m.calls.createUser.length, 0);
+  }
+  // A failed claim removes the grant again.
+  const rb = memory([{ id: "h3", ...draft({ role: "admin" }).invite }]);
+  const rbGrants = new Map();
+  rb.deps.getInviter = async () => ({ uid: "R7t41e54Ykcdk9WPdVZnDd697iI2", profile: { role: "operator" } });
+  rb.deps.grantHeartwoodAdmin = async uid => { rbGrants.set(uid, true); };
+  rb.deps.revokeHeartwoodAdmin = async uid => { rbGrants.delete(uid); };
+  rb.deps.claimInvite = async () => ({ ok: false, reason: "expired" });
+  assert.equal((await acceptStaffInvite({ token: TOKEN, password: "choose-a-password" }, rb.deps)).reason, "expired");
+  assert.equal(rbGrants.size, 0);
+});
+
+test("invite email names the role with the right article", () => {
+  const lab = buildInviteEmail({ ...draft({ role: "labourer", tenantId: "otherco" }).invite }, { companyName: "Acme Civil" });
+  assert.match(lab.text, /invited to Acme Civil as a labourer\./);
+  const adm = buildInviteEmail({ ...draft({ role: "admin", tenantId: "otherco" }).invite }, { companyName: "Acme Civil" });
+  assert.match(adm.text, /as an admin\./);
 });

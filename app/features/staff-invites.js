@@ -1,10 +1,14 @@
 // CallUp Base staff invites.
-// An admin invites an operator or a supervisor. The invitee sets a password.
+// An admin invites a labourer, operator, supervisor or (CallUp companies) admin. The invitee sets a password.
 // The role on users/{uid} is copied from the invite by the accept function.
 // This module does not grant admin, does not write Firestore, and does not send email.
 
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-export const INVITE_ROLES = Object.freeze(["operator", "supervisor"]);
+export const INVITE_ROLES = Object.freeze(["labourer", "operator", "supervisor", "admin"]);
+// Crew roles: same app access (assigned jobs, own timesheet/leave/receipts, prestarts and fleet meter); no dollar amounts.
+export const CREW_ROLES = Object.freeze(["labourer", "operator"]);
+// Supervisors keep their invite powers (labourer, operator, supervisor) but never create an admin.
+export const SUPERVISOR_INVITE_ROLES = Object.freeze(["labourer", "operator", "supervisor"]);
 export const INVITE_LINK_ORIGIN = "https://jobs.heartwoodew.com/app";
 // Where the app lives. Heartwood stays on jobs.heartwoodew.com (GitHub Pages). Every other company uses the CallUp
 // address on Firebase Hosting (site "callupapp"). Until app.callupapp.com.au is connected, CallUp links use callupapp.web.app.
@@ -88,19 +92,26 @@ export function displayStatus(invite, now) {
 }
 
 export function roleLabel(role) {
-  return role === "supervisor" ? "Supervisor" : role === "operator" ? "Operator" : "";
+  return { labourer: "Labourer", operator: "Operator", supervisor: "Supervisor", admin: "Admin" }[role] || "";
 }
 
 export function canManageInvites(membership) {
   return !!(membership && membership.ok && (membership.rulesAdmin || membership.role === "supervisor"));
 }
 
-// Rules-admins (Alex, Patrick, or profile role admin) and supervisors may invite.
-// Operators cannot. The invited role is still only operator or supervisor.
-export function inviterMayInvite({ uid, profile } = {}) {
-  if (uid === ALEX_UID || uid === PATRICK_UID) return true;
+// Admins invite all four roles; supervisors labourer/operator/supervisor (never admin); crew nobody.
+// Heartwood admin = Alex, Patrick, or an accepted Heartwood admin (heartwoodAdmin: grant in heartwoodAdmins/{uid}).
+// CallUp company admin = profile role admin.
+export function invitableRoles({ uid, profile, tenantId, heartwoodAdmin = false } = {}) {
   const role = profile && profile.role;
-  return role === "admin" || role === "supervisor";
+  const admin = uid === ALEX_UID || uid === PATRICK_UID
+    || (tenantId === HEARTWOOD_TENANT ? heartwoodAdmin === true && role === "admin" : role === "admin");
+  if (admin) return INVITE_ROLES;
+  return role === "supervisor" ? SUPERVISOR_INVITE_ROLES : [];
+}
+export function inviterMayInvite({ uid, profile, heartwoodAdmin = false } = {}, role = "", tenantId = HEARTWOOD_TENANT) {
+  const roles = invitableRoles({ uid, profile, tenantId, heartwoodAdmin });
+  return role ? roles.includes(role) : roles.length > 0;
 }
 
 export function pendingInviteForEmail(invites, email) {
@@ -165,7 +176,7 @@ export function inviteFailureText(code) {
   const map = {
     name: "Enter the person's name.",
     email: "Enter a valid email address.",
-    role: "Choose operator or supervisor.",
+    role: "Choose labourer, operator, supervisor or admin. Only an admin can invite an admin.",
     "already-pending": "This email already has a pending invite. Resend or cancel it.",
     "weak-password": "Use a password of at least 8 characters.",
     "email-in-use": "That email already has a login. Ask an admin to cancel this invite.",
@@ -210,7 +221,8 @@ export function inviteEmailLine(status) {
   return "The invite email didn't go through. Copy the link and send it to them yourself (text or email).";
 }
 
-export function staffViewHtml(invites, { now = new Date(), error = "", origin = HEARTWOOD_APP_ORIGIN, emailStatus = null } = {}) {
+export function staffViewHtml(invites, { now = new Date(), error = "", origin = HEARTWOOD_APP_ORIGIN, emailStatus = null, roles = SUPERVISOR_INVITE_ROLES } = {}) {
+  const offer = INVITE_ROLES.filter(r => (roles || []).includes(r));
   const rows = (invites || []).map(row => ({ ...row, viewStatus: displayStatus(row, now) }));
   const rank = { pending: 0, expired: 1, accepted: 2, cancelled: 3, invalid: 4 };
   rows.sort((a, b) => (rank[a.viewStatus] ?? 9) - (rank[b.viewStatus] ?? 9) || String(a.email).localeCompare(String(b.email)));
@@ -233,14 +245,13 @@ export function staffViewHtml(invites, { now = new Date(), error = "", origin = 
     </article>`;
   }).join("");
   return `<div class="sm-head"><h1>Staff</h1></div>
-    <p class="sub invite-note">Invite an operator or a supervisor. They set their own password from the link. Admin is not a role you can give here. ${origin !== HEARTWOOD_APP_ORIGIN ? "CallUp emails them the link. Each invite below says whether the email went out; you can always copy the link and send it yourself." : "Mail is not sent from this screen."}</p>
+    <p class="sub invite-note">Invite a ${offer.map(r => roleLabel(r).toLowerCase()).join(", ").replace(/, ([^,]*)$/, " or $1")}. Labourers and operators see their own jobs and no dollar amounts. They set their own password from the link. ${origin !== HEARTWOOD_APP_ORIGIN ? "CallUp emails them the link. Each invite below says whether the email went out; you can always copy the link and send it yourself." : "Mail is not sent from this screen."}</p>
     <form id="invitef" class="card invitef" autocomplete="off">
       <h2>Invite staff</h2>
       <label>Name<input name="name" required maxlength="80" autocomplete="name"></label>
       <label>Email<input name="email" type="email" required maxlength="120" autocomplete="off" inputmode="email"></label>
       <label>Role<select name="role">
-        <option value="operator">Operator</option>
-        <option value="supervisor">Supervisor</option>
+        ${offer.map(r => `<option value="${r}"${r === "operator" ? " selected" : ""}>${roleLabel(r)}</option>`).join("\n        ")}
       </select></label>
       <button class="primary" type="submit">Send invite</button>
       <p id="inviteerr" class="err">${esc(error ? inviteFailureText(error) : "")}</p>
@@ -278,7 +289,7 @@ export function acceptViewHtml(model) {
   return `<form class="card login" id="acceptf" autocomplete="off">
     <h2>Set your password</h2>
     <p class="invite-who"><b>${esc(model.name)}</b><br>${esc(model.email)}</p>
-    <p class="sub">You will join as ${esc(roleLabel(model.role))}. This login cannot be an admin.</p>
+    <p class="sub">You will join as ${esc(roleLabel(model.role))}.</p>
     <label>Password<input name="p" type="password" required minlength="8" maxlength="128" autocomplete="new-password"></label>
     <label>Confirm password<input name="p2" type="password" required minlength="8" maxlength="128" autocomplete="new-password"></label>
     <button class="big primary" type="submit">Create login</button>
@@ -350,12 +361,14 @@ export function buildInviteEmail(invite, config = {}) {
   const link = inviteLink(invite.token, config.appOrigin || appOriginFor(companyId, "", config.domainLive));
   const role = roleLabel(profile.role).toLowerCase();
   const companyName = typeof config.companyName === "string" ? config.companyName.trim() : "";
-  const heartwood = !companyName || companyName === "Heartwood" || companyName === "Heartwood Earthworx" || companyName === "Heartwood Jobs";
-  const place = heartwood ? "Heartwood Jobs" : companyName;
+  // A CallUp company (any id but heartwood) never gets Heartwood wording, even with no company name loaded.
+  const heartwood = companyId === HEARTWOOD_TENANT
+    && (!companyName || companyName === "Heartwood" || companyName === "Heartwood Earthworx" || companyName === "Heartwood Jobs");
+  const place = heartwood ? "Heartwood Jobs" : (companyName || "CallUp");
   const text = [
     `Hello ${profile.name},`,
     "",
-    `You have been invited to ${place} as ${role === "supervisor" ? "a supervisor" : "an operator"}.`,
+    `You have been invited to ${place} as ${/^[aeiou]/.test(role) ? "an" : "a"} ${role}.`,
     "Open this link and set your own password:",
     link,
     "",
@@ -367,7 +380,7 @@ export function buildInviteEmail(invite, config = {}) {
       ? (config.enabled === true && config.provider === "resend" ? HEARTWOOD_RESEND_FROM : (config.from || inviteEmailConfig().from))
       : (config.neutralFrom || CALLUP_INVITE_FROM),
     replyTo: heartwood ? (config.replyTo || "alex@heartwoodew.com") : (config.companyEmail || ""),
-    subject: heartwood ? "You're invited to Heartwood Jobs" : `You're invited to ${companyName}`,
+    subject: heartwood ? "You're invited to Heartwood Jobs" : `You're invited to ${place}`,
     text,
     link,
   };
@@ -486,21 +499,28 @@ export async function acceptStaffInvite(input, deps) {
   const profile = profileFromInvite(invite);
   if (!profile) return { ok: false, reason: "invalid" };
   const inviter = typeof deps.getInviter === "function" ? await deps.getInviter(invite.createdBy) : { uid: invite.createdBy, profile: null };
-  if (!inviterMayInvite(inviter || { uid: invite.createdBy, profile: null })) return { ok: false, reason: "invalid" };
+  if (!inviterMayInvite(inviter || { uid: invite.createdBy, profile: null }, invite.role, profile.companyId || HEARTWOOD_TENANT)) return { ok: false, reason: "invalid" };
   const existing = await deps.getUserByEmail(profile.email);
   if (existing) return { ok: false, reason: "email-in-use" };
+  // A Heartwood admin also needs the grant the rules read (heartwoodAdmins/{uid}); without a way to write it, refuse.
+  const hwAdmin = profile.role === "admin" && (profile.companyId || HEARTWOOD_TENANT) === HEARTWOOD_TENANT;
+  if (hwAdmin && typeof deps.grantHeartwoodAdmin !== "function") return { ok: false, reason: "invalid" };
   const user = await deps.createUser({ email: profile.email, password: input.password, displayName: profile.name });
+  const undo = async () => {
+    if (hwAdmin && typeof deps.revokeHeartwoodAdmin === "function") await deps.revokeHeartwoodAdmin(user.uid);
+    await deps.deleteProfile(user.uid);
+    await deps.deleteUser(user.uid);
+  };
   try {
     await deps.setProfile(user.uid, profile);
+    if (hwAdmin) await deps.grantHeartwoodAdmin(user.uid, { inviteId: invite.id, grantedBy: invite.createdBy });
     const claimed = await deps.claimInvite(invite.id, user.uid, now);
     if (!claimed || !claimed.ok) {
-      await deps.deleteProfile(user.uid);
-      await deps.deleteUser(user.uid);
+      await undo();
       return { ok: false, reason: (claimed && claimed.reason) || "invalid" };
     }
   } catch (err) {
-    await deps.deleteProfile(user.uid);
-    await deps.deleteUser(user.uid);
+    await undo();
     throw err;
   }
   return { ok: true, uid: user.uid, email: profile.email, role: profile.role, name: profile.name };

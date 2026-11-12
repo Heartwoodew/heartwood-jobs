@@ -240,3 +240,116 @@ After merge: deploy the rules and the app (service worker `callup-shell-v91-po-s
 over, then run `scripts/migrate-job-money.mjs` (dry run, then `--commit`): it moves existing suggestion lists off jobs
 into jobMoney without overwriting a list already there. It is the same idempotent script as above.
 
+
+## Invoice price and Xero match off the job document; crew money audit (12 Nov 2026)
+
+Alex: "move it" (invoice price) and "everyone below supervisor can't see dollar amounts". Assigned crew can read the
+whole job document, so `invoiceAmount` (the invoice price, ex GST) and `xeroCheck` (the Xero match: `totalEx`,
+`amountDue`) now live in the office-only `jobMoney/{jobId}` with the PO value and quote total. The other invoice fields
+(`invoiceNo`, `invoiceDescription`, `invoiceDate`, `invoiceContact`, `invoiced`, `xeroCheckPending`, ...) stay on the job.
+
+- App: the Invoices price box and "Assign numbers" write the price to jobMoney (numbering does both writes in one
+  transaction) and remove any legacy copy from the job. Office lists already merge jobMoney over the job (`withMoney`),
+  so the Invoices screen, Xero queue (`amountEx`), CSV exports, totals and the Check Xero pill read the merged value.
+  Service worker `callup-shell-v97-invoice-office`.
+- Rules (`firestore.production.rules`): `invoiceAmount` and `xeroCheck` are in `jobMoneyKeys()`, so app writers may not
+  add or change them on a job (removal is allowed). The box sync user may not add or change them on a job either
+  (`syncDeniedJobKeys`, `syncJobCreateOk`, `syncJobUpdateOk`). `jobMoneyOk` allows `invoiceAmount` (number or null) and
+  `xeroCheck` (map). Crew still can't read jobMoney at all.
+- Helper (`helperAsk`): the admin reader merges both from jobMoney; crew answers never include money (unchanged).
+- Box workers (not in this repo, /workspace/heartwood-app/tools): `hwfire.JOB_MONEY_KEYS` gets both keys;
+  `export_completed.py --invoice-sync` reads/writes the price on jobMoney; `xero_queue.py` writes `xeroCheck` to jobMoney;
+  `sm8_push.py` never copies a price onto a moved job.
+- Tests: `test/invoice-amount.test.js`, `test/invoice-amount.emulator.test.js`, `test/crew-money.emulator.test.js`
+  (every money record an operator could try to read: jobMoney, quotes, rates, invoicing counters, profit, Xero queue,
+  reimbursements ledger, other people's receipts/claims, service costs, hours exports, PO lookups).
+- Exception kept for Alex to decide: an operator can read the dollar amount on their OWN receipt and their OWN
+  reimbursement claim (needed to be paid back).
+
+### Existing jobs: `cloud/scripts/migrate-office-money.mjs`
+
+Dry run is the default and reads only. `--apply` writes a JSON backup first (mode 600, needs `--backup <new file>` on
+production), copies each value to jobMoney (never overwriting a value already there; a different value there is a
+conflict and that field is left on the job), then deletes the field from the job, then re-reads every job to verify.
+Dry run on 12 Nov 2026: 129 jobs scanned; 52 with `invoiceAmount` (all Heartwood; 51 Done + invoiced, 1 Cancelled;
+50 with crew assigned) and 1 with `xeroCheck`; 52 jobs to change; 0 conflicts.
+
+Order: merge, put the box worker update in place (it may write jobMoney before the rules change: the sync user already
+has full jobMoney access), deploy the Firestore rules, deploy hosting (v97) and `helperAsk`, then run the migration
+(`--apply --backup ...`), then a second dry run (expect 0).
+
+```
+cd cloud
+node scripts/migrate-office-money.mjs --project heartwood-9f37f
+node scripts/migrate-office-money.mjs --project heartwood-9f37f --apply --backup /workspace/callup/office-money-backup.json
+```
+
+## No ServiceM8 wording; no Heartwood wording for CallUp companies (12 Nov 2026)
+
+- Every user-visible ServiceM8 / SM8 string is gone for every company, Heartwood included (toasts, history lines,
+  dispatch notes, quote tag, split/undo errors). Field names (`sm8JobNo`, `sm8Status`, ...) are unchanged.
+- Helper: knowledge text, job data (keys `sm8JobNo`/`sm8Status` are sent as `jobNo`/`syncStatus`) and replies have
+  ServiceM8 removed for everyone and Heartwood removed for CallUp companies (`neutralText` in helper/prompt.js).
+- CallUp companies no longer inherit Heartwood's name, legal name, ABN, address, email or sign-off (`org-settings.js`),
+  nor Heartwood's yard as the quote/run-sheet depot, nor Alex's address as the photo email fallback. Invite emails for a
+  CallUp company never use Heartwood wording even when the company name is not loaded. The test-company exit button says
+  "Exit test company". The Xero queue stub note no longer names Heartwood.
+- `test/brand-text.test.js` scans every string literal in app/ and cloud/functions/ (acorn) for ServiceM8/SM8, keeps a
+  reviewed list of Heartwood strings (Heartwood-only branches, ids), and renders client-company settings, invite emails,
+  timesheet consent, depots and helper prompts to check they are Heartwood-free.
+
+## Four invite roles: labourer, operator, supervisor, admin (12 Nov 2026)
+
+Alex: "there should be 4 different profiles available for new invites". Labourer has exactly the operator's access
+(a different label): assigned jobs, own timesheet/leave/receipts, photos and notes on assigned jobs, prestarts and the
+fleet meter reading. Labourers are below supervisor, so no dollar amounts anywhere (UI, rules, helper).
+
+- `staff-invites.js` (app and functions copies, identical): `INVITE_ROLES` labourer/operator/supervisor/admin,
+  `CREW_ROLES`, `invitableRoles()`. An admin of a CallUp company may invite all four; a supervisor keeps
+  labourer/operator/supervisor and never admin; crew invite nobody. Heartwood: no admin invites (Heartwood's admins
+  are the fixed UID list in the rules; a Heartwood profile-role admin would get a half-working office). The accept
+  function re-checks the inviter's power for the invited role and refuses otherwise. The Staff screen offers only the
+  roles the signed-in person may give; the role picker defaults to Operator. (Heartwood admin invites: see the next
+  section; they now work through heartwoodAdmins/{uid}.)
+- Rules: `isOperator()` takes role operator or labourer. Invites: `inviteRoleOk()` allows labourer/operator/supervisor
+  for any invite admin and admin only for a profile-role admin of a CallUp company (`inviteFullAdmin()`), on create,
+  resend and cancel. Supervisors cannot read an admin invite (it carries the sign-up token); the app's invite list
+  filters by the roles the person may give. Storage rules have no operator role check, so nothing changes there.
+- Crew lists (office crew picker, run sheets) include labourers. Helper: "invite labourer|operator|supervisor|admin ...";
+  admin only for a CallUp company's rules-admin; labourers get the staff action set and no money.
+- There is no role-edit screen in the app (company admins can't write users/{uid} under the rules); roles come only
+  from the invite. Changing a role later is still a console / box job.
+- Tests: `test/invites.test.js`, `test/helper-actions.test.js`, `test/labourer-role.emulator.test.js` (labourer parity
+  with operator on jobs, receipts, prestarts, fleet meter, timesheet; no money; admin/supervisor/crew invite powers;
+  supervisor can't read or resend an admin invite), `tests/phone-ui.test.mjs`.
+- Deploy: Firestore rules, hosting, and functions `previewStaffInvite`, `acceptStaffInvite`, `inviteEmailWorker`
+  (shared/staff-invites.js) and `helperAsk` (helper/actions.js).
+
+## Heartwood admin invites; run sheets per company (12 Nov 2026, Alex's answers)
+
+Kept as is (Alex): crew still see the dollar amount on their OWN receipts and claims; the 4 job notes / 3 descriptions
+with a typed $ stay as written (the app hides dollars from crew).
+
+### Heartwood admin invites work
+- `isAdmin()` = the fixed UID list (unchanged, Alex / box sync / Patrick) OR `heartwoodAdminGrant()`: a
+  `heartwoodAdmins/{uid}` doc with role admin AND that person's users/{uid} is a Heartwood profile with role admin.
+- `heartwoodAdmins/{uid}`: written by `acceptStaffInvite` (Admin SDK) for an accepted Heartwood admin invite, or by a
+  Heartwood admin for someone else (shape-checked: uid, role admin, companyId heartwood, grantedBy = caller,
+  grantedAt = now). Nobody creates or deletes their own grant. No updates. Read: the person and Heartwood admins.
+- Invites: a Heartwood admin (fixed list or grant) may invite an admin; supervisors still can't. The accept function
+  checks the inviter (fixed list or grant) and writes profile + grant, rolling both back if the claim fails.
+- Helper: a Heartwood profile with role admin counts as admin only with the grant (`resolveMembership(heartwoodAdmin)`).
+- Still Alex-only or Alex + Patrick by design: reimbursements ledger, owner settings, timesheet office list (isOwner)
+  and Xero (xeroUser). An invited admin gets what Patrick gets through isAdmin(); say if they should get more.
+- Production check (read only, 12 Nov 2026): no Heartwood profile has role admin today and heartwoodAdmins is empty,
+  so nobody gains access when the rules go live.
+- Cost: crew requests that hit isAdmin() do one extra document lookup (the grant) after the UID list misses.
+
+### Run sheets belong to one company
+- Sheets carry `companyId`. Read: the worker, or an admin of the sheet's company (missing companyId = Heartwood; a
+  missing sheet reads as not-there). Write: an admin of their own company, for a worker of their own company, never
+  over another company's sheet. The hard-coded Chuwar depot check is gone: depot must be a non-empty string <= 200.
+- The app takes the depot from Company settings (`orgSettings().address`); Heartwood's default is still
+  208-220 Holdsworth Rd, Chuwar. A client company with no address can't approve and is told to add one.
+- Existing sheets have no companyId and read as Heartwood (only Heartwood used run sheets).
+- Tests: `test/heartwood-admin-runsheets.emulator.test.js`.

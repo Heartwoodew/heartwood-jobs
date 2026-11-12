@@ -117,6 +117,8 @@ test("emulator confirm writes a note and an audit row, and cancel writes neither
   const store = rewrite(sampleStore(), decoded.uid);
   store.users[decoded.uid].role = "admin";
   await seed(store);
+  // A Heartwood admin who is not on the fixed list is an admin only with the grant acceptStaffInvite writes.
+  await db.collection("heartwoodAdmins").doc(decoded.uid).set({ uid: decoded.uid, role: "admin", companyId: "heartwood" });
   const jobsBefore = (await db.collection("jobs").get()).size;
   const helper = firestoreHelperStore(db);
   const reader = adminReader(db);

@@ -53,7 +53,9 @@ export function jobTenantOf(record) {
  * Membership is read from the server-stored profile (or Heartwood bootstrap).
  * requestedTenantId and requestedBusinessId are recorded and then ignored.
  */
-export function resolveMembership({ uid, profile, requestedTenantId, requestedBusinessId } = {}) {
+// heartwoodAdmin: whether heartwoodAdmins/{uid} grants Heartwood admin. The server (helper) passes true/false; a
+// Heartwood profile with role admin and no grant is not an admin there. Undefined (app screens) keeps the profile role.
+export function resolveMembership({ uid, profile, requestedTenantId, requestedBusinessId, heartwoodAdmin } = {}) {
   const bootstrap = BOOTSTRAP[uid] || null;
   const ignoredClientTenantId = requestedTenantId ?? null;
   const ignoredClientBusinessId = requestedBusinessId ?? null;
@@ -63,7 +65,8 @@ export function resolveMembership({ uid, profile, requestedTenantId, requestedBu
   const explicit = profile && typeof profile.tenantId === "string" && profile.tenantId.trim();
   const tenantId = explicit ? profile.tenantId.trim() : HEARTWOOD_TENANT;
   const role = (profile && profile.role) || (bootstrap ? "admin" : "operator");
-  const rulesAdmin = role === "admin" || !!(bootstrap && bootstrap.rulesAdmin);
+  const ungranted = tenantId === HEARTWOOD_TENANT && role === "admin" && !bootstrap && heartwoodAdmin === false;
+  const rulesAdmin = (role === "admin" && !ungranted) || !!(bootstrap && bootstrap.rulesAdmin);
   const finance = tenantId === HEARTWOOD_TENANT && !!(bootstrap && bootstrap.finance);
   const customerIds = profile && Array.isArray(profile.customerIds)
     ? profile.customerIds.filter(x => typeof x === "string" && x.trim()).map(x => x.trim())

@@ -21,7 +21,7 @@ import { installCompliance } from "./features/compliance.js";
 import { SWMS, SWMS_VERSION, sigMs, sigExp, latestSig, statusOf, swmsSignatureData, buildPlaceholderPdf } from "./features/swms-sign.js";
 import {
   acceptLoadingHtml, acceptScreenModel, acceptViewHtml, buildInviteDraft, inviteFailureText,
-  newInviteToken, pendingInviteForEmail, staffViewHtml, appOriginFor,
+  newInviteToken, pendingInviteForEmail, staffViewHtml, appOriginFor, invitableRoles, CREW_ROLES,
 } from "./features/staff-invites.js";
 import { saveGuard, settleOrQueue } from "./features/pending-write.js";
 import { PRODUCT_NAME, POWERED_BY, orgSettings, saveOrgSettings, setActiveCompany } from "./org-settings.js";
@@ -126,7 +126,7 @@ onAuthStateChanged(auth, async user => {
   if (inviteToken) return renderInviteSignedIn();
   // Admin = UID listed in firestore.rules (Alex, sync, Patrick): detected by being ALLOWED to list users - so if the
   // rules don't (yet) make someone admin they simply fall back to the operator view.
-  // users/{uid}.role: "operator" (staff, no $) | "supervisor" (staff shell + canSeeMoney). Patrick is rules-admin with an operator profile (bookable).
+  // users/{uid}.role: "labourer" / "operator" (crew, no $, same access) | "supervisor" (staff shell + canSeeMoney) | "admin". Patrick is rules-admin with an operator profile (bookable).
   const snap = await getDoc(doc(db, "users", user.uid)).catch(() => null);
   const prof = snap && snap.exists() ? snap.data() : null;
   // Heartwood admins list only Heartwood profiles (rules deny every other company's staff).
@@ -170,7 +170,7 @@ onAuthStateChanged(auth, async user => {
     if (!users && staffSnap) HOME_UIDS = staffSnap.docs.filter(d => docCompanyId(d.data()) === companyId).map(d => d.id);
     const logins = (staffSnap ? staffSnap.docs : []).map(d => ({ uid: d.id, ...d.data() }))
       .filter(u => (u.companyId || u.tenantId || "heartwood") === companyId)
-      .filter(u => u.role === "operator" || u.role === "supervisor");
+      .filter(u => CREW_ROLES.includes(u.role) || u.role === "supervisor");
     staff = companyId === "heartwood"
       ? [{ uid: ALEX_UID, name: "Alex" }, ...logins.filter(u => u.uid !== ALEX_UID)]
       : logins;
@@ -186,7 +186,7 @@ onAuthStateChanged(auth, async user => {
     // Invoicing: every Done job (any date), admin only.
     const u2 = onSnapshot(companyJobs([where("status", "==", "Done")]), s => { ui.done = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); donePill(); if (ui.view === "invoices" || ui.view === "completed" || ui.view === "home") renderAdmin(); }, e => console.warn("done jobs", e.code || e.message));
     const u3 = onSnapshot(query(collection(db, "incidents"), where("companyId", "==", myCompanyId())), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); if (ui.view === "safety" || ui.view === "home") renderAdmin(); incRefresh(); }, e => console.warn("incidents", e.code));
-    const u4 = onSnapshot(query(collection(db, "invites"), where("tenantId", "==", myTenant())), s => {
+    const u4 = onSnapshot(query(collection(db, "invites"), where("tenantId", "==", myTenant()), where("role", "in", [...myInviteRoles()])), s => {
       ui.invites = s.docs.map(d => ({ id: d.id, ...d.data() })); ui.invitesErr = "";
       if (ui.view === "staff") renderAdmin();
       watchInviteMail();
@@ -202,7 +202,7 @@ onAuthStateChanged(auth, async user => {
     moneyStart(renderOperator);
     const u3 = onSnapshot(query(collection(db, "incidents"), where("companyId", "==", myCompanyId()), where("reportedBy", "==", user.uid)), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); if (!ui.opSel && (ui.opTab || "today") === "today") renderOperator(); incRefresh(); }, e => console.warn("incidents", e.code));
     const u4 = canInvite()
-      ? onSnapshot(query(collection(db, "invites"), where("tenantId", "==", myTenant())), s => {
+      ? onSnapshot(query(collection(db, "invites"), where("tenantId", "==", myTenant()), where("role", "in", [...myInviteRoles()])), s => {
         ui.invites = s.docs.map(d => ({ id: d.id, ...d.data() })); ui.invitesErr = "";
         if ((ui.opTab || "today") === "staff") renderOperator();
         watchInviteMail();
@@ -257,9 +257,9 @@ async function loadCompanyBrand() {
   const snap = await getDoc(doc(db, "companies", id)).catch(() => null);
   if (snap && snap.exists()) setActiveCompany({ ...snap.data(), companyId: id });
   else setActiveCompany(id === "heartwood" ? null : { companyId: id, name: "Your company" });
-  // Depot for quotes and run sheets: Heartwood's yard, or the company's own address.
-  const depot = id === "heartwood" ? "" : orgSettings().address;
-  setRouteDepot(depot); setDefaultDepot(depot);
+  // Depot for quotes and run sheets: the company's address from settings (Heartwood: Chuwar unless changed there).
+  const depot = orgSettings().address;
+  setRouteDepot(depot, { heartwood: id === "heartwood" }); setDefaultDepot(depot, { heartwood: id === "heartwood" });
   paintBrand();
 }
 function inviteDisplayNow() {
@@ -399,7 +399,7 @@ function paintBrand() {
     return;
   }
   const mark = org.isTest ? `<span class="co-badge co-test">TEST</span>` : org.plan === "friend" ? `<span class="co-badge co-friend">FRIEND</span>` : "";
-  const exit = me && me.testCompanyId ? `<button type="button" class="ghost" id="testexit">Back to Heartwood</button>` : "";
+  const exit = me && me.testCompanyId ? `<button type="button" class="ghost" id="testexit">Exit test company</button>` : "";
   const el = document.querySelector(".brand");
   if (el) el.innerHTML = `<span class="wordmark" aria-label="${esc(PRODUCT_NAME)}">Call<span>Up</span></span><span class="orgline">${orgLogoHtml(org)}${esc(org.name)} ${mark}</span>${exit}`;
   const back = document.querySelector("#testexit");
@@ -992,7 +992,7 @@ function dispatchView(all) {
       <button type="button" class="sm-btn route-open" id="optorder">Optimise order</button>
       <button id="new" class="sm-btn primary">+ New Job</button></div>
     ${leaveBanner}
-    <div class="dwrap"><div class="dboard"><p class="touchhint">Tap a job to open it. Press and hold a job to move it to another day or staff member.</p><div class="dgrid-scroll">${grid}</div><p class="sub muted">Drag a job to another day or staff member to reschedule (${esc(syncNote("saved in the app, sent to ServiceM8 by the next sync", "saved straight away"))}).</p></div>
+    <div class="dwrap"><div class="dboard"><p class="touchhint">Tap a job to open it. Press and hold a job to move it to another day or staff member.</p><div class="dgrid-scroll">${grid}</div><p class="sub muted">Drag a job to another day or staff member to reschedule (${esc(syncNote("saved in the app, synced at the next sync", "saved straight away"))}).</p></div>
       </div>`;
 }
 // Floating "Done today" card (dispatch board + job list). Today = Brisbane date of completedAt (fallback: job date when
@@ -2703,6 +2703,7 @@ function inviteMailMap() {
 async function saveInvite(fields) {
   const draft = buildInviteDraft({ ...fields, createdBy: me.uid, now: new Date(), token: newInviteToken(), tenantId: myTenant() });
   if (!draft.ok) return draft.reason;
+  if (!myInviteRoles().includes(draft.invite.role)) return "role";
   if (pendingInviteForEmail(ui.invites || [], draft.invite.email)) return "already-pending";
   const inviteRef = doc(collection(db, "invites"));
   const expiresAt = Timestamp.fromDate(draft.invite.expiresAt);
@@ -2728,9 +2729,17 @@ async function saveInvite(fields) {
   }
   return "";
 }
+// Roles this login may invite: admins all four (CallUp companies), supervisors labourer/operator/supervisor.
+function myInviteRoles() {
+  // me.role "admin" = rules-admin in the app (profile admin, or a Heartwood admin from the fixed list); Heartwood never gets "admin".
+  const role = me && (me.role === "admin" ? "admin" : ((me.cloudProfile && me.cloudProfile.role) || me.role));
+  // Heartwood: the app only treats someone as admin when the rules let them list staff (fixed list or a grant).
+  return invitableRoles({ uid: me && me.uid, profile: { role }, tenantId: myTenant(), heartwoodAdmin: role === "admin" });
+}
 async function resendInvite(id) {
   const row = (ui.invites || []).find(item => item.id === id);
   if (!row || row.status !== "pending") return;
+  if (!myInviteRoles().includes(row.role)) throw Object.assign(new Error("role"), { code: "admin-only" });
   const expiresAt = Timestamp.fromDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
   const token = newInviteToken();
   await runTransaction(db, async tx => {
@@ -2795,7 +2804,7 @@ function renderAdmin() {
   const fj = filtered(), und = (ui.undated || []).filter(j => (!ui.typeF || j.type === ui.typeF));
   const all = [...fj, ...und.filter(u => !fj.some(j => j.id === u.id))];
   const quotesHtml = ui.view === "quotes" ? adminViewRouter(ui.view, ui, { esc, $$, staff, jobs: all, todayStr, rerender: () => renderAdmin(), canEditQuoteRates }) : null;
-  const staffHtml = ui.view === "staff" ? staffViewHtml(ui.invites || [], { now: inviteDisplayNow(), error: ui.invitesErr || "", origin: appOriginFor(myCompanyId(), location.origin), emailStatus: inviteMailMap() }) : null;
+  const staffHtml = ui.view === "staff" ? staffViewHtml(ui.invites || [], { now: inviteDisplayNow(), error: ui.invitesErr || "", origin: appOriginFor(myCompanyId(), location.origin), emailStatus: inviteMailMap(), roles: myInviteRoles() }) : null;
   paintBrand();
   $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "master" ? masterView() : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : quotesHtml != null ? quotesHtml : jobsView(all));
   const A = $("#app"); inboxBadge();
@@ -2938,12 +2947,12 @@ async function splitJob(j, pick) {
     ...(canFindPo() && canSeeMoney() ? { poLookupCandidates: [] } : {}), updatedAt: serverTimestamp(), updatedBy: me.uid });
   if (canSeeMoney()) await jobMoneyWrite(j.id, {}, { splitUndoPoAmount: j.poAmount ?? null }).catch(() => {});
   $("#dlg").close();
-  undoToast(`Split #${jobNo(j)}: new ${TYPES[newType] || newType} job created${usesSm8Sync() ? " (syncs to ServiceM8 in ~10 min)" : ""}`, () => undoSplit({ ...j, splitTo: ref.id, splitUndo: undo }));
+  undoToast(`Split #${jobNo(j)}: new ${TYPES[newType] || newType} job created${usesSm8Sync() ? " (syncs in ~10 min)" : ""}`, () => undoSplit({ ...j, splitTo: ref.id, splitUndo: undo }));
 }
 async function undoSplit(j) {
   const nd = await getDoc(doc(db, "jobs", j.splitTo));
-  if (!nd.exists()) throw new Error(usesSm8Sync() ? "the new job has already synced to ServiceM8 - undo there" : "the new job no longer exists");
-  if (nd.data().sm8Uuid) throw new Error(usesSm8Sync() ? "the new job is already in ServiceM8 - undo there" : "the new job has already been changed");
+  if (!nd.exists()) throw new Error(usesSm8Sync() ? "the new job has already synced, so it can't be undone here" : "the new job no longer exists");
+  if (nd.data().sm8Uuid) throw new Error(usesSm8Sync() ? "the new job has already synced, so it can't be undone here" : "the new job has already been changed");
   const o = (await getDoc(doc(db, "jobs", j.id))).data() || {}, u = o.splitUndo || j.splitUndo;
   if (!u) throw new Error("no undo data");
   if (nd.exists()) await deleteDoc(doc(db, "jobs", j.splitTo));
@@ -2963,14 +2972,14 @@ function editJob(j) {
   // One id per New Job form, so a second tap (or a retry after no signal) cannot make a second job.
   const newRef = n ? doc(collection(db, "jobs")) : null, guard = saveGuard();
   const qq = n ? "Work Order" : queueOf(j), hist = [];
-  if (j.source === "sm8" && usesSm8Sync()) hist.push(["ServiceM8", `Imported from ServiceM8 job #${j.sm8JobNo || "?"} (${j.sm8Status || "?"})`]);
-  if (j.editedInApp && usesSm8Sync()) hist.push(["App", "Edited in the app – ServiceM8 import will no longer overwrite this job"]);
+  if (j.source === "sm8" && usesSm8Sync()) hist.push(["Import", `Imported job #${j.sm8JobNo || "?"} (${j.sm8Status || "?"})`]);
+  if (j.editedInApp && usesSm8Sync()) hist.push(["App", "Edited in the app – the sync will no longer overwrite this job"]);
   if (j.inboxId) hist.push(["Inbox", "Linked to a builder email"]);
   if (j.completedByName) hist.push([j.completedByName, `Completed${j.loads ? ` · ${j.loads} loads` : ""}`]);
   const SL = { "Scheduled": "Work Order – scheduled", "In progress": "Work Order – in progress", "Done": "Completed", "Cancelled": "Unsuccessful" };
   d.className = "jobcard"; d.onclose = () => refreshAfterImport();
   d.innerHTML = `<form method="dialog" id="jf" class="jc">
-    <div class="jc-top ${QCLS[qq]}"><div><div class="jc-no">${n ? "New Job" : "Job #" + esc(jobNo(j))}</div>${n ? "" : ipTop(j, "onbar")}<div class="jc-q">${qq}${j.sm8Status === "Quote" && usesSm8Sync() ? " (quote in ServiceM8)" : ""}</div></div>
+    <div class="jc-top ${QCLS[qq]}"><div><div class="jc-no">${n ? "New Job" : "Job #" + esc(jobNo(j))}</div>${n ? "" : ipTop(j, "onbar")}<div class="jc-q">${qq}${j.sm8Status === "Quote" && usesSm8Sync() ? " (quote)" : ""}</div></div>
       <label class="jc-st">Job Status<select name="status">${STATUSES.map(s => `<option value="${s}" ${j.status === s ? "selected" : ""}>${SL[s]}</option>`).join("")}</select></label>
       <button value="cancel" formnovalidate class="jc-x" title="Close">✕</button></div>
     <div class="jc-body"><div class="jc-col">
@@ -3001,7 +3010,7 @@ function editJob(j) {
       <div class="row"><label>Date<input type="date" name="date" value="${esc(j.date)}"></label>
         <label>Start<input type="time" name="time" value="${esc(j.time)}"></label>
         <label>Hours<input type="number" step="any" min="0" max="999" inputmode="decimal" name="durationHrs" value="${esc(j.durationHrs)}"></label></div>
-      ${!n && j.date && !["Done", "Cancelled"].includes(j.status) ? `<div class="row"><button type="button" id="unschbtn" class="btn">✕ Remove from dispatch board</button><span class="sub">Back to Unscheduled${usesSm8Sync() ? "; the ServiceM8 booking is removed at the next sync" : ""} (the job stays).</span></div>` : ""}
+      ${!n && j.date && !["Done", "Cancelled"].includes(j.status) ? `<div class="row"><button type="button" id="unschbtn" class="btn">✕ Remove from dispatch board</button><span class="sub">Back to Unscheduled${usesSm8Sync() ? "; the booking is removed at the next sync" : ""} (the job stays).</span></div>` : ""}
       <fieldset class="staffs">${staff.map(s => `<label class="ck"><input type="checkbox" name="assigned" value="${esc(skey(s))}" ${namesOf(j).map(x => x.toLowerCase()).includes(s.name.toLowerCase()) ? "checked" : ""}> <span class="av">${esc(s.name[0])}</span>${esc(label(s.name))}</label>`).join("")}</fieldset>
       <p id="leavewarn" class="leave-warn" hidden></p>
       <h4>Notes</h4>
@@ -3114,8 +3123,10 @@ function jobTabs(d, j) {
   show("details");
 }
 // ------------------------------------------------------------------ invoicing (admin only)
-// Invoice fields live on the job doc: invoiceNo (text), invoiceAmount (ex GST), invoiceDescription, invoiceContact,
+// Invoice fields live on the job doc: invoiceNo (text), invoiceDescription, invoiceContact,
 // invoiceDate (YYYY-MM-DD = job date, like hwdata.py), numberedAt/By, invoiced (bool), invoicedAt/By.
+// The price (invoiceAmount, ex GST) is office only: it lives on jobMoney/{jobId} (crew can read the job doc) and office
+// lists see it merged in by withMoney; a legacy copy still on the job is the fallback until the migration moves it.
 // Numbers: max(meta/invoicing.lastNo, meta/boxInvoiceMax.max (written by tools/export_completed.py from
 // completed.json), every job invoiceNo, 5402) + 1, assigned inside a Firestore transaction.
 const INV_FLOOR = 5402;                  // last number used on the planner's Completed sheet / completed.json (10/10/2026)
@@ -3776,8 +3787,9 @@ function bindInvoices(A) {
   A.querySelectorAll("[data-inv]").forEach(b => b.onclick = () => { ui.inv = b.dataset.inv; ui.invSel.clear(); renderAdmin(); });
   A.querySelectorAll(".isel").forEach(c => c.onchange = () => { const id = c.closest("[data-id]").dataset.id; c.checked ? ui.invSel.add(id) : ui.invSel.delete(id); renderAdmin(); });
   const ia = $("#iall"); if (ia) ia.onchange = () => { A.querySelectorAll(".isel").forEach(c => { const id = c.closest("[data-id]").dataset.id; ia.checked ? ui.invSel.add(id) : ui.invSel.delete(id); }); renderAdmin(); };
+  // writeJob: the price (invoiceAmount) goes to the office-only jobMoney doc and any legacy copy on the job is removed.
   const save = (el, field, conv) => el.onchange = async () => { const id = el.closest("[data-id]").dataset.id;
-    try { await updateDoc(doc(db, "jobs", id), { [field]: conv(el.value), updatedAt: serverTimestamp(), updatedBy: me.uid }); toast("Saved"); }
+    try { await writeJob(id, { [field]: conv(el.value), updatedAt: serverTimestamp(), updatedBy: me.uid }); toast("Saved"); }
     catch (e) { toast("Not saved: " + (e.code || e.message)); } };
   A.querySelectorAll(".iamt").forEach(el => save(el, "invoiceAmount", v => v === "" ? null : Math.round(+v * 100) / 100));
   A.querySelectorAll(".iamt").forEach(el => el.oninput = () => { const j = byId(el.closest("[data-id]").dataset.id); const o = el.parentNode.querySelector(".opo");
@@ -3834,9 +3846,12 @@ async function assignNumbers(list) {
       let n = Math.max(invFloor(), m.data()?.lastNo || 0, b?.data()?.max || 0, ...(ui.done || []).map(j => parseInt(j.invoiceNo) || 0));
       const res = [];
       for (const j of list) { n++;
-        const f = { invoiceNo: String(n), invoiceAmount: j.invoiceAmount, invoiceDescription: j.invoiceDescription, invoiceContact: invContact(j),
+        const f = { invoiceNo: String(n), invoiceDescription: j.invoiceDescription, invoiceContact: invContact(j),
           invoiceDate: j.date, invoiced: false, numberedAt: serverTimestamp(), numberedBy: me.uid, updatedAt: serverTimestamp(), updatedBy: me.uid };
-        tx.update(doc(db, "jobs", j.id), f); res.push({ ...j, ...f }); }
+        // The price is office only: it goes to jobMoney/{jobId} in the same transaction; any legacy copy on the job is removed.
+        tx.update(doc(db, "jobs", j.id), { ...f, invoiceAmount: deleteField() });
+        tx.set(doc(db, JOB_MONEY_COLLECTION, j.id), jobMoneyDoc(j.id, myCompanyId(), { invoiceAmount: j.invoiceAmount }, { updatedAt: serverTimestamp(), updatedBy: me.uid }), { merge: true });
+        res.push({ ...j, ...f, invoiceAmount: j.invoiceAmount }); }
       tx.set(mRef, { lastNo: n, updatedAt: serverTimestamp(), updatedBy: me.uid, ...(myCompanyId() === "heartwood" ? {} : { companyId: myCompanyId() }) }, { merge: true });
       return res;
     });
@@ -4029,8 +4044,8 @@ function renderOperator() {
   if (ui.opTab === "fleet") ui.opTab = "more";
   if (ui.opTab === "staff" && document.activeElement?.closest?.("#invitef")) return;
   if (ui.opTab === "staff" && canInvite()) {
-    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Staff</div><div class="mob-sub">Invite operators and supervisors</div></div>
-      <div class="pad">${staffViewHtml(ui.invites || [], { now: inviteDisplayNow(), error: ui.invitesErr || "", origin: appOriginFor(myCompanyId(), location.origin), emailStatus: inviteMailMap() })}</div>${opTabs("more")}</div>`;
+    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Staff</div><div class="mob-sub">Invite labourers, operators, supervisors and admins</div></div>
+      <div class="pad">${staffViewHtml(ui.invites || [], { now: inviteDisplayNow(), error: ui.invitesErr || "", origin: appOriginFor(myCompanyId(), location.origin), emailStatus: inviteMailMap(), roles: myInviteRoles() })}</div>${opTabs("more")}</div>`;
     bindOp(mine); bindStaff($("#app")); return;
   }
   if (ui.opTab === "staff") ui.opTab = "more";
@@ -4044,7 +4059,7 @@ function renderOperator() {
   if (ui.opTab === "more") {
     const quoteBtn = canQuote() && me.role !== "admin" ? `<button type="button" class="mob-more" data-go="quotes"><b>Quotes</b><small>Guided pricing for supervisors</small></button>` : "";
     const fleetBtn = COMP.canSee() ? `<button type="button" class="mob-more" data-go="fleet"><b>Compliance</b><small>Registration and COI status</small></button>` : "";
-    const staffBtn = canInvite() ? `<button type="button" class="mob-more" data-go="staff"><b>Staff</b><small>Invite operators and supervisors</small></button>` : "";
+    const staffBtn = canInvite() ? `<button type="button" class="mob-more" data-go="staff"><b>Staff</b><small>Invite labourers, operators, supervisors and admins</small></button>` : "";
     const inboxBtn = canImport() ? `<button type="button" class="mob-more" data-go="inbox"><b>Inbox</b><small>Import builder emails as jobs</small></button>` : "";
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">More</div><div class="mob-sub">${esc(me.name || "")} · ${esc(orgSettings().name)}</div></div>
       <div class="mob-menu">
@@ -4197,7 +4212,7 @@ async function opAction(j, act) {
 // The share must be started by a fresh tap (browsers require a user gesture), so the picked photos are shown in a
 // small dialog with a "Send" button.
 // Photos go to this company's office email (Heartwood: alex@heartwoodew.com via org defaults).
-const officeEmail = () => orgSettings().email || "alex@heartwoodew.com";
+const officeEmail = () => orgSettings().email || (myCompanyId() === "heartwood" ? "alex@heartwoodew.com" : "");
 const emailSubject = j => `[Job Photos] Job #${jobNo(j)} – ${j.address || "(no address)"}`;
 const emailBody = (j, infos, attached) => [`Job #${jobNo(j)}`, `Address: ${j.address || "-"}`, `Client: ${j.client || "-"}`, `PO: ${j.po || "-"}`,
   `Job date: ${j.date ? dayLabel(j.date) : "-"}`, "",
@@ -4303,8 +4318,8 @@ function emailDialog(j, files, infos, o = {}) {
     <div class="emthumbs">${files.map(f => `<img src="${URL.createObjectURL(f)}" alt="">`).join("")}</div>
     <p class="sub muted">${o.coll ? esc(j.reportNo) : "Job #" + esc(jobNo(j))} · ${esc(j.address || "")} · ${mb.toFixed(1)} MB${mb > 24 ? " — may be too big for one email, send fewer at a time" : ""}</p>
     ${canShare ? `<button type="button" class="mbtn complete" data-a="share">Send via email app</button>
-      <p class="sub muted">Choose Mail or Gmail, then put <b>${officeEmail()}</b> in the To box (the subject and job details are filled in).</p>`
-    : `<p class="sub">This browser can't attach photos automatically. Tap below to open an email to ${officeEmail()}, then attach the photos yourself.</p>
+      <p class="sub muted">Choose Mail or Gmail, then put <b>${officeEmail() || "your office's email"}</b> in the To box (the subject and job details are filled in).</p>`
+    : `<p class="sub">This browser can't attach photos automatically. Tap below to open an email to ${officeEmail() || "your office"}, then attach the photos yourself.</p>
       <a class="mbtn complete" data-a="mail" href="${mailto}">Open email to the office</a>
       <button type="button" class="mbtn" data-a="sent">I've sent it</button>`}
     <button type="button" class="mbtn ghost" data-a="x">Cancel</button></div>`;
@@ -4380,7 +4395,7 @@ function moveSheet(j) {
   v.innerHTML = `<form class="embox msheet"><h3>Move #${esc(jobNo(j))}</h3><p class="sub muted">${esc(j.address || "")}</p>
     <div class="row"><label>Date<input type="date" name="date" value="${esc(j.date || todayStr())}" required></label><label>Time<input type="time" name="time" value="${esc(j.time || "07:00")}"></label></div>
     <fieldset class="staffs">${staff.map(s => `<label class="ck"><input type="checkbox" name="st" value="${esc(skey(s))}" ${cur.includes(s.name.toLowerCase()) ? "checked" : ""}> ${esc(s.name)}</label>`).join("")}</fieldset>
-    <p class="sub muted">No one ticked = Unallocated. ${esc(syncNote("Saved to the app, then sent to ServiceM8 by the next sync.", "Saved straight away."))}</p>
+    <p class="sub muted">No one ticked = Unallocated. ${esc(syncNote("Saved to the app, then synced at the next sync.", "Saved straight away."))}</p>
     <button class="mbtn complete">Save</button><button type="button" class="mbtn" data-x>Cancel</button></form>`;
   document.body.appendChild(v);
   v.querySelector("[data-x]").onclick = () => v.remove();
@@ -4888,6 +4903,7 @@ ROUTE = installRouteOrder({
   db, doc, setDoc, updateDoc, serverTimestamp,
   todayStr, toast,
   getMe: () => me,
+  getCompanyId: () => myCompanyId(),
   getStaff: () => staff,
   getJobs: () => [...jobs, ...(ui.undated || [])],
   peekSheet: (uid, date) => {

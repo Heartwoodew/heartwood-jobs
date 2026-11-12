@@ -64,7 +64,7 @@ fieldset{border:1px solid var(--line);border-radius:8px;display:flex;flex-wrap:w
 .donebar{grid-column:1/-1;text-align:center;font-weight:700;color:#3f8f5a;font-size:18px}
 .opj.s-Done{opacity:.75}
 @media (max-width:700px){.tiles{grid-template-columns:repeat(2,1fr)}.job{grid-template-columns:52px 1fr}.mv{grid-column:2}.cal{grid-template-columns:repeat(7,minmax(0,1fr));gap:3px}.chip{font-size:10px}.cc{min-height:80px;padding:3px}}
-/* ===== ServiceM8-style theme (look & layout only; no SM8 logo/branding) ===== */
+/* ===== Job-board theme (look & layout only) ===== */
 :root{--sm-nav:#2c3440;--sm-side:#363f4c;--sm-blue:#1a8ad4;--sm-bg:#eef1f4;--sm-line:#d9dee4;--sm-ink:#2a3038;--sm-mut:#7a8592;
  --q-quote:#f39c12;--q-wo:#2f8fd8;--q-uns:#e74c3c;--q-comp:#3cb371}
 body.admin,body.operator{background:var(--sm-bg);color:var(--sm-ink);font-family:"Helvetica Neue",Helvetica,Arial,system-ui,sans-serif}
@@ -213,7 +213,7 @@ body.operator main{padding:0;max-width:560px}
 .msheet .ck input{width:24px;height:24px;min-height:0;margin:0}.msheet .staffs{display:grid;gap:4px;border:none;padding:0}
 .adminback{display:block;color:var(--sm-blue);background:#fff;padding:10px 14px;min-height:44px;width:100%;text-align:left;font-weight:600;border-bottom:1px solid var(--sm-line)}
 .pocand{margin:4px 0;padding:4px 6px;border:1px solid #ddd;border-radius:6px}.pocand .usepo{margin-left:6px;padding:2px 8px}#polk{display:block;margin-top:4px}
-/* job-list search (ServiceM8-style) */
+/* job-list search */
 .sbar{position:relative;display:flex;align-items:center;margin:8px 0 10px;max-width:520px}
 .sbar input{width:100%;height:36px;padding:0 34px 0 32px;border:1px solid #cfd6dd;border-radius:4px;background:#fff;font-size:15px;box-sizing:border-box;-webkit-appearance:none}
 .sbar input:focus{outline:none;border-color:#2b7de9;box-shadow:0 0 0 2px rgba(43,125,233,.15)}

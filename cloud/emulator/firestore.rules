@@ -442,8 +442,18 @@ service cloud.firestore {
         && email.size() <= 120
         && email.matches('^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$');
     }
+    // Labourer, operator or supervisor: any invite admin (admin or supervisor). Admin: a profile-role admin of a CallUp
+    // company, or a Heartwood admin (Alex, Patrick, or an accepted Heartwood admin grant in heartwoodAdmins/{uid}).
+    function inviteFullAdmin() {
+      return inviteCallerTenant() == "heartwood"
+        ? (inviteIsAlex() || inviteIsPatrick()
+          || (exists(/databases/$(database)/documents/heartwoodAdmins/$(request.auth.uid))
+            && inviteHasProfile() && inviteProfile().get("role", "") == "admin"))
+        : (inviteHasProfile() && "role" in inviteProfile() && inviteProfile().role == "admin");
+    }
     function inviteRoleOk() {
-      return request.resource.data.role == "operator" || request.resource.data.role == "supervisor";
+      return request.resource.data.role in ["labourer", "operator", "supervisor"]
+        || (request.resource.data.role == "admin" && inviteFullAdmin());
     }
     function inviteSame(key) {
       return (!(key in request.resource.data) && !(key in resource.data))
@@ -529,7 +539,9 @@ service cloud.firestore {
     }
 
     match /invites/{inviteId} {
-      allow get, list: if inviteAdmin() && resource.data.tenantId == inviteCallerTenant();
+      // Supervisors never read an admin invite (it carries the sign-up token): their list asks for the three crew/supervisor roles.
+      allow get, list: if inviteAdmin() && resource.data.tenantId == inviteCallerTenant()
+        && (resource.data.role in ["labourer", "operator", "supervisor"] || inviteFullAdmin());
       allow create: if inviteCreateOk(inviteId);
       allow update: if inviteUpdateOk(inviteId);
       allow delete: if false;
@@ -1135,23 +1147,36 @@ service cloud.firestore {
     }
     function routeSheetWorker(id) { return id[0:id.size()-11]; }
     function routeSheetDate(id) { return id[id.size()-10:id.size()]; }
+    // Run sheets belong to one company (12 Nov 2026): companyId on the sheet (missing = Heartwood). An admin reads and
+    // writes only their own company's sheets, for a worker of their own company. The depot is the company's own address
+    // (Heartwood: Chuwar from its settings / default), so it is checked for shape only.
+    function routeWorkerCompany(sheetId) {
+      let p = /databases/$(database)/documents/users/$(routeSheetWorker(sheetId));
+      return exists(p) ? docCompany(get(p).data) : "heartwood";
+    }
     function routeCanRead(sheetId) {
       return routeSignedIn() && routeSheetIdOk(sheetId)
-        && (routeIsAdmin() || request.auth.uid == routeSheetWorker(sheetId));
+        && (request.auth.uid == routeSheetWorker(sheetId)
+          || (routeIsAdmin() && (resource == null || docCompany(resource.data) == callerCompany())));
     }
     function routeCanWrite(sheetId) {
       return routeIsAdmin() && routeSheetIdOk(sheetId)
         && request.resource.data.keys().hasOnly([
           "workerUid", "workerName", "date", "jobIds", "returnToDepot", "status", "depot",
           "method", "provider", "tweaked", "totalMinutes", "totalKm", "currentMinutes", "currentKm",
-          "approvedBy", "approvedByName", "approvedAt"
+          "approvedBy", "approvedByName", "approvedAt", "companyId"
         ])
-        && request.resource.data.workerUid == routeSheetWorker(sheetId)
+        && request.resource.data.companyId is string
+        && request.resource.data.companyId == callerCompany()
+        && (resource == null || docCompany(resource.data) == callerCompany())
+        && routeWorkerCompany(sheetId) == callerCompany()
         && request.resource.data.approvedBy == request.auth.uid
         && request.resource.data.date == routeSheetDate(sheetId)
         && request.resource.data.date is string
         && request.resource.data.status == "approved"
-        && request.resource.data.depot == "208-220 Holdsworth Rd, Chuwar QLD 4306"
+        && request.resource.data.depot is string
+        && request.resource.data.depot.size() > 0
+        && request.resource.data.depot.size() <= 200
         && request.resource.data.returnToDepot is bool
         && request.resource.data.tweaked is bool
         && request.resource.data.jobIds is list
