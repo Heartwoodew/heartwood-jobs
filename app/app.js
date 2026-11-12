@@ -550,7 +550,7 @@ function bindSettings(A) {
 }
 function masterView() {
   const rows = ui.masterRows || [];
-  return masterPageHtml(rows, ui.masterFilters || {}, ui.friendInvites || []);
+  return masterPageHtml(rows, ui.masterFilters || {}, ui.friendInvites || [], location.origin, ui.friendOut || "");
 }
 function bindMaster(A) {
   const form = A.querySelector("#masterf");
@@ -569,6 +569,10 @@ function bindMaster(A) {
   if (testForm) testForm.onsubmit = ev => { ev.preventDefault(); createTestCompany(testForm); };
   const friendForm = A.querySelector("#friendinv");
   if (friendForm) friendForm.onsubmit = ev => { ev.preventDefault(); createFriendInvite(A.querySelector("#friendout")); };
+  A.querySelectorAll("[data-friend-copy]").forEach(b => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.friendCopy); toast("Link copied. Mail was not sent."); }
+    catch { toast("Select the link to copy it. Mail was not sent."); }
+  });
   A.querySelectorAll(".master-row").forEach(tr => {
     tr.onclick = () => {
       const row = (ui.masterRows || []).find(r => r.id === tr.dataset.company);
@@ -616,10 +620,15 @@ async function createFriendInvite(out) {
   const code = newFriendCode();
   try {
     await setDoc(doc(db, "friendInvites", code), { status: "pending", createdBy: me.uid, createdAt: serverTimestamp(), note: "" });
-    const link = friendInviteLink(code);
-    if (out) out.textContent = code + " · " + link;
-    toast("Friend invite created");
-  } catch (e) { if (out) out.textContent = e.code || e.message; }
+    const link = friendInviteLink(code, location.origin);
+    ui.friendOut = code + " · " + link;
+    if (out) out.textContent = ui.friendOut;
+    toast("Friend invite created. Copy the link below.");
+  } catch (e) {
+    const msg = e.code || e.message;
+    ui.friendOut = msg;
+    if (out) out.textContent = msg;
+  }
 }
 async function openTestCompany(companyId) {
   await setDoc(doc(db, "platformSessions", me.uid), { companyId });

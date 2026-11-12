@@ -26,7 +26,7 @@ main{max-width:1150px;margin:0 auto;padding:12px}
 .co-badge{display:inline-block;font-size:11px;font-weight:800;letter-spacing:.04em;border-radius:6px;padding:1px 6px;vertical-align:middle}
 .co-test{background:#f3d27a;color:#3b2a1a}
 .co-friend{background:#d7ead8;color:#1d4a28}
-.friend-codes{margin:8px 0 0;padding-left:18px}
+.friend-codes{margin:8px 0 0;padding:0;list-style:none}.friend-invite{margin:10px 0 0}
 @media(max-width:760px){.master-tools{grid-template-columns:1fr}.master-totals{grid-template-columns:1fr 1fr}}
 @media(max-width:760px){.master-totals{grid-template-columns:1fr 1fr}.signup{max-width:none}}
 label{display:grid;gap:4px;font-size:13px;color:var(--mut)}input,select,textarea{font:inherit;padding:9px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);width:100%}

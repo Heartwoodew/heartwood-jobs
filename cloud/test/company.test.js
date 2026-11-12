@@ -6,11 +6,12 @@ import { DEFAULT_ORG, orgSettings, setActiveCompany } from "../../app/org-settin
 import { parseMigrateArgs, LIVE_PROJECT } from "../scripts/migrate-company-id.mjs";
 import {
   HEARTWOOD_ACCOUNTS_EMAIL, HEARTWOOD_COMPANY_ID, TRIAL_DAYS, billingHook, buildCompanyCreate,
-  companyDetailPatch, docCompanyId, filterMaster, heartwoodSeed, hoursBrand, isPlatformOwner,
+  companyDetailPatch, docCompanyId, filterMaster, friendCodeOk, friendInviteLink, heartwoodSeed, hoursBrand, isPlatformOwner,
   masterRow, masterTotals, planCompanyField, scopeRecord, trialEnd, validateCompanyInput,
 } from "../../app/features/company.js";
+import { masterPageHtml } from "../../app/features/company-ui.js";
 import { locationConsent, TS_CONSENT } from "../../app/features/timesheet.js";
-import { profileFromInvite } from "../../app/features/staff-invites.js";
+import { CALLUP_APP_ORIGIN, CALLUP_FALLBACK_ORIGIN, HEARTWOOD_APP_ORIGIN, profileFromInvite } from "../../app/features/staff-invites.js";
 import { ACCOUNTS_TO, exportFileName, reportSheets, buildHoursReport } from "../../app/features/hours-export.js";
 
 test("Heartwood defaults and hours copy stay the same until a company is loaded", () => {
@@ -89,6 +90,29 @@ test("master rows are account-level and totals ignore job text", () => {
   assert.deepEqual(withExtras, { companies: 6, activeTrials: 1, paying: 2, friends: 1, staff: 11 });
   assert.equal(filterMaster([trial, paid, suspended], { q: "acme", status: "active", plan: "trial" }).length, 1);
   assert.equal(filterMaster([trial, paid], { plan: "paid" })[0].id, "heartwood");
+});
+
+test("friend invite links use the CallUp app address and the Master page shows a copyable link on pending invites", () => {
+  assert.equal(friendCodeOk("bknepa4v"), true);
+  const link = CALLUP_APP_ORIGIN + "/app?friend=bknepa4v";
+  assert.equal(friendInviteLink("bknepa4v"), link);
+  assert.equal(friendInviteLink("bknepa4v", HEARTWOOD_APP_ORIGIN), link);
+  assert.equal(friendInviteLink("bknepa4v", CALLUP_FALLBACK_ORIGIN), CALLUP_FALLBACK_ORIGIN + "/app?friend=bknepa4v");
+  const created = "bknepa4v · " + link;
+  const html = masterPageHtml([], {}, [
+    { id: "usedcode1", status: "used", companyId: "mate-co" },
+    { id: "bknepa4v", status: "pending" },
+    { id: "revoked1", status: "revoked" },
+  ], CALLUP_APP_ORIGIN, created);
+  assert.match(html, /id="friendout"[^>]*>bknepa4v · https:\/\/app\.callupapp\.com\.au\/app\?friend=bknepa4v/);
+  assert.match(html, /https:\/\/app\.callupapp\.com\.au\/app\?friend=bknepa4v/);
+  assert.match(html, /data-friend-copy="https:\/\/app\.callupapp\.com\.au\/app\?friend=bknepa4v"/);
+  assert.match(html, />Copy link</);
+  assert.match(html, /Copy the link below and send it yourself\. No email is sent\./);
+  assert.doesNotMatch(html, /friend=usedcode1/);
+  assert.doesNotMatch(html, /data-friend-copy="[^"]*usedcode1/);
+  assert.doesNotMatch(html, /data-friend-copy="[^"]*revoked1/);
+  assert.match(html, /usedcode1[\s\S]*mate-co/);
 });
 
 test("migration only adds a missing companyId and never replaces one", () => {
