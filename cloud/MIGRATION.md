@@ -251,7 +251,7 @@ whole job document, so `invoiceAmount` (the invoice price, ex GST) and `xeroChec
 - App: the Invoices price box and "Assign numbers" write the price to jobMoney (numbering does both writes in one
   transaction) and remove any legacy copy from the job. Office lists already merge jobMoney over the job (`withMoney`),
   so the Invoices screen, Xero queue (`amountEx`), CSV exports, totals and the Check Xero pill read the merged value.
-  Service worker `callup-shell-v97-invoice-office`.
+  Service worker `callup-shell-v98-photos-cloud`.
 - Rules (`firestore.production.rules`): `invoiceAmount` and `xeroCheck` are in `jobMoneyKeys()`, so app writers may not
   add or change them on a job (removal is allowed). The box sync user may not add or change them on a job either
   (`syncDeniedJobKeys`, `syncJobCreateOk`, `syncJobUpdateOk`). `jobMoneyOk` allows `invoiceAmount` (number or null) and
