@@ -121,8 +121,7 @@ test("phone shell, quote gate and handlers", async () => {
       }
       if (query.includes("open=job674")) {
         const text = await page.send("Runtime.evaluate", { expression: "document.querySelector('#jf')?.innerText || ''", returnByValue: true });
-        assert.match(text.result.value, /Email history \(4 photos\)/, name);
-        assert.match(text.result.value, /Email photos/, name);
+        assert.match(text.result.value, /Add photos/, name);
         if (query.includes("shot=empty")) {
           assert.match(text.result.value, /No cloud copies on this job yet\. The 4 emailed photos are separate from this gallery/, name);
           const n = await page.send("Runtime.evaluate", { expression: "document.querySelectorAll('[data-photo-grid] button.pth').length", returnByValue: true });
@@ -137,12 +136,11 @@ test("phone shell, quote gate and handlers", async () => {
       }
       if (query.includes("open=jobphotos")) {
         const text = await page.send("Runtime.evaluate", { expression: "document.querySelector('#jf')?.innerText || ''", returnByValue: true });
-        assert.match(text.result.value, /Email photos/, name);
+        assert.match(text.result.value, /Add photos/, name);
         assert.doesNotMatch(text.result.value, /📷 Photos/, name);
         if (query.includes("shot=empty")) {
           assert.match(text.result.value, /No cloud copies on this job yet/, name);
           assert.match(text.result.value, /The 4 emailed photos are separate from this gallery/, name);
-          assert.match(text.result.value, /Email history \(4 photos\)/, name);
         }
         if (query.includes("shot=gallery")) {
           const n = await page.send("Runtime.evaluate", { expression: "document.querySelectorAll('[data-photo-grid] button.pth').length", returnByValue: true });

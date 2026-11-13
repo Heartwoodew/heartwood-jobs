@@ -1,3 +1,5 @@
+**Update (13 Nov 2026, branch feat/photos-cloud-first-email-fallback):** Job photos are saved to private Storage first. The office email dialog is only shown if that upload fails or some files cannot be stored. Incident photos are still emailed. The in-app gallery is unchanged.
+
 # Photos, gallery, receipts, reimbursements
 
 **Status: LIVE** in the client on `main` `01f2c5a6f407e123f7f48432f07f1e9445a36007`. Cloud Functions that would pull Gmail are **IN REPO, NOT DEPLOYED** and do not read a mailbox. Storage rules are in the repo and `cloud/MIGRATION.md` says they have not been deployed. This audit did not check the live bucket.

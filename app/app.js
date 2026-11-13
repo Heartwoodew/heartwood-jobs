@@ -16,6 +16,7 @@ import { installRouteOrder, orderJobsForRun, runSheetId, geoPatch, setRouteDepot
 import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPlanned, jobPhotoPrefix, storageErrorCode, summarizePhotoListing } from "./features/cloud-storage.js";
 import { buildOperationalExport, retentionAdminText, retentionView } from "./features/cloud-retention.js";
 import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, lightboxHtml, photoFailureText } from "./features/photo-gallery.js";
+import { decidePhotoEmail } from "./features/photo-capture.js";
 import { installChatApp } from "./features/chat-ui.js";
 import { installCompliance } from "./features/compliance.js";
 import { SWMS, SWMS_VERSION, sigMs, sigExp, latestSig, statusOf, swmsSignatureData, buildPlaceholderPdf } from "./features/swms-sign.js";
@@ -1028,7 +1029,7 @@ async function mirrorJobPhotos(j, files) {
       photoId: (`p${i}${Math.random().toString(36).slice(2, 10)}`).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 41),
     })),
   });
-  if (!plan.ok) { console.warn("cloud photo mirror skipped", (plan.skipped || []).map(s => s.reason).join(",") || "none"); return; }
+  if (!plan.ok) { console.warn("cloud photo mirror skipped", (plan.skipped || []).map(s => s.reason).join(",") || "none"); return { ok: false, reason: (plan.skipped || []).map(s => s.reason).join(",") || "none", uploaded: [], skipped: plan.skipped || [] }; }
   plan = stampExpiresAfter(plan, j, at);
   await putPlanned(plan, target => {
     const file = files[target.sourceIndex];
@@ -1041,6 +1042,7 @@ async function mirrorJobPhotos(j, files) {
   if (me && me.role === "admin") updateDoc(doc(db, "jobs", j.id), { cloudPhotosAt: at.toISOString() }).catch(e => console.warn("cloud photo stamp not saved", e.code || e.message));
   await ensurePhotoList(j, true);
   paintPhotoSlots();
+  return { ok: true, uploaded: plan.uploads || [], skipped: plan.skipped || [] };
 }
 function galleryNow() {
   const pin = typeof window !== "undefined" ? window.HW_TODAY : "";
@@ -2549,13 +2551,9 @@ function reimbPill() {
 const gmBase = () => { const box = companyMailbox(orgSettings()); return "https://mail.google.com/mail/u/" + (box ? "?authuser=" + encodeURIComponent(box) : ""); };
 const jobPhotosUrl = j => gmBase() + "#search/" + encodeURIComponent(`subject:"[Job Photos]" "${jobNo(j)}"`);
 const hasPhotos = j => !!(j.photosEmailedAt || j.photosEmailedCount);
-const jobPhotosIcon = j => hasPhotos(j) ? ` <a class="phicon" href="${jobPhotosUrl(j)}" target="_blank" rel="noopener" title="Photos in Gmail" onclick="event.stopPropagation()">📷</a>` : "";
-const jobPhotosLink = j => !hasPhotos(j) ? "" : ` <a class="phlink" href="${jobPhotosUrl(j)}" target="_blank" rel="noopener">📷 Photos (${j.photosEmailedCount || 1} sent)</a>`;
-const emailedPhotosNote = j => {
-  const n = Number(j && j.photosEmailedCount) || 0;
-  if (n < 1) return "";
-  return `<span class="sub emailed-note"><a class="phlink" href="${jobPhotosUrl(j)}" target="_blank" rel="noopener">Email history (${n} photo${n === 1 ? "" : "s"})</a></span>`;
-};
+const jobPhotosIcon = () => "";
+const jobPhotosLink = () => "";
+const emailedPhotosNote = () => "";
 const greet = () => { const h = +new Intl.DateTimeFormat("en-AU", { hour: "numeric", hourCycle: "h23", timeZone: TZ }).format(new Date()); return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening"; };
 function homeRow(j) {
   const q = queueOf(j), names = namesOf(j);
@@ -3019,7 +3017,7 @@ function editJob(j) {
       <div class="diary">${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("")}
         ${hist.map(([w, t]) => `<div class="de sys"><span class="av">i</span><div><small>${esc(w)}</small><div>${esc(t)}</div></div></div>`).join("")}
         ${!(j.log || []).length && !hist.length ? `<p class="muted sub">No diary entries yet. Site notes from staff appear here.</p>` : ""}</div>
-      ${!n ? `<h4>Photos</h4><button type="button" class="sm-btn" id="emailph">📧 Email photos</button> <span data-photoslot="${esc(j.id)}" data-photorole="cloud" data-photovariant="sm"></span> ${emailedPhotosNote(j)} <button type="button" class="sm-btn incbtn" data-inc="${j.id}">⚠ Report incident</button> <button type="button" class="sm-btn" data-swms="${j.id}">📋 View SWMS</button>${jobReceiptsHtml(j)}${cloudRetentionHtml(j)}` : ""}
+      ${!n ? `<h4>Photos</h4><button type="button" class="sm-btn" id="emailph">Add photos</button> <span data-photoslot="${esc(j.id)}" data-photorole="cloud" data-photovariant="sm"></span> ${emailedPhotosNote(j)} <button type="button" class="sm-btn incbtn" data-inc="${j.id}">⚠ Report incident</button> <button type="button" class="sm-btn" data-swms="${j.id}">📋 View SWMS</button>${jobReceiptsHtml(j)}${cloudRetentionHtml(j)}` : ""}
     </div></div>
     <p id="ferr" class="err"></p>
     <div class="btns jc-foot"><button value="cancel" formnovalidate class="sm-btn">Close</button><button value="save" class="sm-btn primary">Save Job</button></div></form>`;
@@ -4287,6 +4285,10 @@ async function stampPhoto(f, j, info, max) {
     return b ? new File([b], `job${jobNo(j)}_${f.name.replace(/\.[^.]+$/, "")}.jpg`, { type: "image/jpeg" }) : f;
   } catch { return f; }       // a format the browser can't decode: send the original unstamped
 }
+function recordPhotosCaptured(j, n, o = {}) {
+  updateDoc(doc(db, o.coll || "jobs", j.id), { photosEmailedAt: new Date().toISOString(), photosEmailedCount: (j.photosEmailedCount || 0) + n, updatedAt: serverTimestamp(), updatedBy: me.uid })
+    .catch(e => console.warn("photosEmailed flag not saved", e.code || e.message));
+}
 function emailPhotos(j, o = {}) {
   const inp = document.createElement("input"); inp.type = "file"; inp.accept = "image/*"; inp.multiple = true;
   inp.style.cssText = "position:fixed;left:-9999px;opacity:0"; document.body.appendChild(inp);
@@ -4300,21 +4302,48 @@ function emailPhotos(j, o = {}) {
     const infos = picked.map((f, i) => ({ name: f.name, time: takenAt(f, exifs[i]).label,
       gps: exifs[i].lat != null ? { lat: exifs[i].lat, lng: exifs[i].lng, src: "photo" } : here && { ...here, src: "phone" } }));
     const files = await Promise.all(picked.map((f, i) => stampPhoto(f, j, infos[i], keep ? 0 : 2560)));
-    emailDialog(j, files, infos, o);
+    await afterPhotosPrepared(j, files, infos, o);
   };
   inp.click();
 }
+async function afterPhotosPrepared(j, files, infos, o = {}) {
+  let mirror = null;
+  if (!o.coll || o.coll === "jobs") {
+    toast("Saving photos to the job…");
+    try { mirror = await mirrorJobPhotos(j, files); }
+    catch (e) {
+      console.warn("cloud photo mirror", e && (e.code || e.message) || e);
+      mirror = { ok: false, reason: e && (e.code || e.message) || "mirror-failed", uploaded: [], skipped: files.map((f, sourceIndex) => ({ sourceIndex, name: f && f.name, reason: "mirror-failed" })) };
+    }
+  }
+  const decision = decidePhotoEmail({ collection: o.coll, mirror, fileCount: files.length });
+  if (!decision.email) {
+    recordPhotosCaptured(j, files.length, o);
+    const n = files.length;
+    const ref = doc(db, "jobs", j.id);
+    try {
+      await updateDoc(ref, { log: arrayUnion(logEntry(`Photos saved (${n}) by ${me.name}: ` + infos.map(x => `${x.time} @ ${fmtLL(x.gps)}`).join("; "))), updatedAt: serverTimestamp(), updatedBy: me.uid });
+      toast("Photos saved to the job");
+    } catch (e) { toast("Photos saved, but the diary was not updated: " + (e.code || e.message)); }
+    return;
+  }
+  if (decision.reason === "partial-mirror" && decision.storedCount) recordPhotosCaptured(j, decision.storedCount, o);
+  const idx = decision.fileIndexes;
+  const emailFiles = idx ? idx.map(i => files[i]).filter(Boolean) : files;
+  const emailInfos = idx ? idx.map(i => infos[i]) : infos;
+  const captured = j.photosEmailedCount || 0;
+  const jobForDialog = decision.storedCount ? { ...j, photosEmailedCount: captured + decision.storedCount } : j;
+  emailDialog(jobForDialog, emailFiles, emailInfos, o);
+}
 function emailDialog(j, files, infos, o = {}) {
   const subj = o.subject || emailSubject(j), body = o.body || emailBody;
-  if (!o.coll || o.coll === "jobs") mirrorJobPhotos(j, files).catch(e => console.warn("cloud photo mirror", e && (e.code || e.message) || e));
-  // Record on the job (or incident) that photos were emailed, so it shows a "Photos" link to the Gmail search. Best effort.
-  updateDoc(doc(db, o.coll || "jobs", j.id), { photosEmailedAt: new Date().toISOString(), photosEmailedCount: (j.photosEmailedCount || 0) + files.length, updatedAt: serverTimestamp(), updatedBy: me.uid })
-    .catch(e => console.warn("photosEmailed flag not saved", e.code || e.message));
+  // Job-photo Storage already ran in afterPhotosPrepared. Incident photos are email-only.
+  recordPhotosCaptured(j, files.length, o);
   const mb = files.reduce((a, f) => a + f.size, 0) / 1e6, n = files.length;
   const canShare = !!(navigator.canShare && navigator.canShare({ files }));
   const mailto = `mailto:${officeEmail()}?subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(body(j, infos, false))}`;
   const v = document.createElement("div"); v.className = "emdlg";
-  v.innerHTML = `<div class="embox"><h3>📧 Email ${n} photo${n > 1 ? "s" : ""}</h3>
+  v.innerHTML = `<div class="embox"><h3>📧 Email ${n} photo${n > 1 ? "s" : ""}</h3>${!o.coll || o.coll === "jobs" ? `<p class="sub">These photos could not be saved to the job, so they still need to be emailed to the office.</p>` : ""}
     <div class="emthumbs">${files.map(f => `<img src="${URL.createObjectURL(f)}" alt="">`).join("")}</div>
     <p class="sub muted">${o.coll ? esc(j.reportNo) : "Job #" + esc(jobNo(j))} · ${esc(j.address || "")} · ${mb.toFixed(1)} MB${mb > 24 ? " — may be too big for one email, send fewer at a time" : ""}</p>
     ${canShare ? `<button type="button" class="mbtn complete" data-a="share">Send via email app</button>
