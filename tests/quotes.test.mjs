@@ -107,8 +107,8 @@ test("quote module and service worker stay in place", () => {
   assert.match(app, /data-act="done"/);
   assert.match(app, /data-act="note"/);
   assert.match(app, /id="back"/);
-  assert.match(app, /canSeeMoney = \(\) => !!me && \(me\.role === "admin" \|\| me\.role === "supervisor" \|\| me\.staffRole === "supervisor"\)/);
-  assert.match(app, /canEditQuoteRates = \(\) => !!\(me && me\.role === "admin"\)/);
+  assert.match(app, /canSeeMoney = \(\) => !!me && \(me\.role === "admin" \|\| me\.role === "manager" \|\| me\.role === "supervisor" \|\| me\.staffRole === "manager" \|\| me\.staffRole === "supervisor"\)/);
+  assert.match(app, /canEditQuoteRates = \(\) => !!\(me && \(me\.role === "admin" \|\| me\.role === "manager" \|\| me\.staffRole === "manager"\)\)/);
   assert.equal(FLEET_MACHINES.map(m => m.id).join(","), "truck,skid,excavator");
 });
 

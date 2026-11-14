@@ -126,7 +126,7 @@ export async function buildHelperContext({ reader, membership, question, jobId, 
     if (timesheets.length >= 8) break;
   }
   const leave = [];
-  const canReadAllLeave = membership.rulesAdmin || membership.role === "supervisor";
+  const canReadAllLeave = membership.rulesAdmin || membership.role === "supervisor" || membership.role === "manager";
   for (const row of await optionalRows(reader, "leaveRequests", { limit: 40 })) {
     if (!row || jobTenantOf(row) !== membership.tenantId) continue;
     if (!canReadAllLeave && row.uid !== membership.uid) continue;

@@ -55,7 +55,7 @@ service firebase.storage {
       return isAlex() || isPatrick() || (hasProfile() && "role" in profile() && profile().role == "admin");
     }
     function canSeeMoney() {
-      return rulesAdmin() || (hasProfile() && "role" in profile() && profile().role == "supervisor");
+      return rulesAdmin() || (hasProfile() && "role" in profile() && profile().role in ["supervisor", "manager"]);
     }
     // Production allows two Firestore accesses per evaluation. exists() and get()
     // on the same path each count, and the emulator's cap is higher, so it did

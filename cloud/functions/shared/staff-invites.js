@@ -1,14 +1,22 @@
 // CallUp Base staff invites.
-// An admin invites a labourer, operator, supervisor or (CallUp companies) admin. The invitee sets a password.
+// An admin invites a labourer, operator, supervisor, manager or (CallUp companies) admin. The invitee sets a password.
 // The role on users/{uid} is copied from the invite by the accept function.
+// A manager invites up to manager. Only an admin invites an admin.
 // This module does not grant admin, does not write Firestore, and does not send email.
 
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-export const INVITE_ROLES = Object.freeze(["labourer", "operator", "supervisor", "admin"]);
+export const INVITE_ROLES = Object.freeze(["labourer", "operator", "supervisor", "manager", "admin"]);
 // Crew roles: same app access (assigned jobs, own timesheet/leave/receipts, prestarts and fleet meter); no dollar amounts.
 export const CREW_ROLES = Object.freeze(["labourer", "operator"]);
-// Supervisors keep their invite powers (labourer, operator, supervisor) but never create an admin.
+// Dollar amounts: supervisor, manager and admin. Crew still see the amount on their own receipts and claims.
+export const MONEY_ROLES = Object.freeze(["supervisor", "manager", "admin"]);
+// Company quote rates: manager and admin. Supervisors use the rates and do not save them.
+export const RATE_ROLES = Object.freeze(["manager", "admin"]);
+// Company billing, plan and company settings stay admin-only.
+export const COMPANY_SETTINGS_ROLES = Object.freeze(["admin"]);
+// Supervisors keep their invite powers (labourer, operator, supervisor) but never create a manager or an admin.
 export const SUPERVISOR_INVITE_ROLES = Object.freeze(["labourer", "operator", "supervisor"]);
+export const MANAGER_INVITE_ROLES = Object.freeze(["labourer", "operator", "supervisor", "manager"]);
 export const INVITE_LINK_ORIGIN = "https://jobs.heartwoodew.com/app";
 // Where the app lives. Heartwood stays on jobs.heartwoodew.com (GitHub Pages). Every other company uses the CallUp
 // address on Firebase Hosting (site "callupapp"). Until app.callupapp.com.au is connected, CallUp links use callupapp.web.app.
@@ -92,21 +100,34 @@ export function displayStatus(invite, now) {
 }
 
 export function roleLabel(role) {
-  return { labourer: "Labourer", operator: "Operator", supervisor: "Supervisor", admin: "Admin" }[role] || "";
+  return { labourer: "Labourer", operator: "Operator", supervisor: "Supervisor", manager: "Manager", admin: "Admin" }[role] || "";
+}
+
+export function seesMoney(role) {
+  return MONEY_ROLES.includes(role);
+}
+
+export function editsCompanyRates(role) {
+  return RATE_ROLES.includes(role);
+}
+
+export function editsCompanySettings(role) {
+  return role === "admin";
 }
 
 export function canManageInvites(membership) {
-  return !!(membership && membership.ok && (membership.rulesAdmin || membership.role === "supervisor"));
+  return !!(membership && membership.ok && (membership.rulesAdmin || membership.role === "supervisor" || membership.role === "manager"));
 }
 
-// Admins invite all four roles; supervisors labourer/operator/supervisor (never admin); crew nobody.
+// Admins invite every level. Managers invite up to manager. Supervisors invite labourer/operator/supervisor. Crew nobody.
 // Heartwood admin = Alex, Patrick, or an accepted Heartwood admin (heartwoodAdmin: grant in heartwoodAdmins/{uid}).
-// CallUp company admin = profile role admin.
+// CallUp company admin = profile role admin. A manager never invites or changes an admin.
 export function invitableRoles({ uid, profile, tenantId, heartwoodAdmin = false } = {}) {
   const role = profile && profile.role;
   const admin = uid === ALEX_UID || uid === PATRICK_UID
     || (tenantId === HEARTWOOD_TENANT ? heartwoodAdmin === true && role === "admin" : role === "admin");
   if (admin) return INVITE_ROLES;
+  if (role === "manager") return MANAGER_INVITE_ROLES;
   return role === "supervisor" ? SUPERVISOR_INVITE_ROLES : [];
 }
 export function inviterMayInvite({ uid, profile, heartwoodAdmin = false } = {}, role = "", tenantId = HEARTWOOD_TENANT) {
@@ -120,17 +141,29 @@ export function pendingInviteForEmail(invites, email) {
   return (invites || []).find(row => row && row.email === clean && row.status === "pending") || null;
 }
 
-export function buildInviteDraft({ name, email, role, createdBy, now, token, tenantId } = {}) {
+function cleanJobTitle(value) {
+  const raw = String(value ?? "");
+  if (!raw.trim()) return "";
+  if (/[\n\r\t<>]/.test(raw)) return null;
+  const s = raw.trim().replace(/ +/g, " ");
+  if (!s || s.length > 80) return null;
+  return s;
+}
+
+export function buildInviteDraft({ name, email, role, createdBy, now, token, tenantId, jobTitle, jobTitleId } = {}) {
   const rawName = String(name ?? "");
   if (/[\n\r\t<>]/.test(rawName)) return { ok: false, reason: "name" };
   const cleanName = rawName.trim().replace(/ +/g, " ");
   const cleanEmail = normalizeInviteEmail(email);
   const cleanRole = INVITE_ROLES.includes(role) ? role : "";
   const cleanTenant = typeof tenantId === "string" && TENANT_RE.test(tenantId) ? tenantId : "";
+  const title = cleanJobTitle(jobTitle);
+  const titleId = String(jobTitleId || "").replace(/[^A-Za-z0-9:_-]/g, "").slice(0, 60);
   const when = now instanceof Date ? now : new Date(now || Date.now());
   if (!cleanName || cleanName.length > 80 || /[\n\r\t<>]/.test(cleanName)) return { ok: false, reason: "name" };
   if (!cleanEmail) return { ok: false, reason: "email" };
   if (!cleanRole) return { ok: false, reason: "role" };
+  if (title === null) return { ok: false, reason: "jobTitle" };
   if (!tokenOk(token)) return { ok: false, reason: "token" };
   if (!cleanTenant) return { ok: false, reason: "tenant" };
   if (!createdBy || typeof createdBy !== "string" || createdBy.length > 128) return { ok: false, reason: "createdBy" };
@@ -149,6 +182,8 @@ export function buildInviteDraft({ name, email, role, createdBy, now, token, ten
       token,
       tenantId: cleanTenant,
       ...(cleanTenant !== HEARTWOOD_TENANT ? { companyId: cleanTenant } : {}),
+      ...(title ? { jobTitle: title } : {}),
+      ...(title && titleId ? { jobTitleId: titleId } : {}),
     },
   };
 }
@@ -161,6 +196,10 @@ export function profileFromInvite(invite) {
   const email = normalizeInviteEmail(invite.email);
   if (!name || name.length > 80 || !email) return null;
   const profile = { name, role: invite.role, email };
+  const title = cleanJobTitle(invite.jobTitle);
+  if (title) profile.jobTitle = title;
+  const titleId = String(invite.jobTitleId || "").replace(/[^A-Za-z0-9:_-]/g, "").slice(0, 60);
+  if (title && titleId) profile.jobTitleId = titleId;
   const companyId = typeof invite.companyId === "string" && invite.companyId ? invite.companyId : invite.tenantId;
   if (typeof companyId === "string" && companyId && companyId !== HEARTWOOD_TENANT) {
     if (!TENANT_RE.test(companyId)) return null;
@@ -176,7 +215,8 @@ export function inviteFailureText(code) {
   const map = {
     name: "Enter the person's name.",
     email: "Enter a valid email address.",
-    role: "Choose labourer, operator, supervisor or admin. Only an admin can invite an admin.",
+    role: "Choose labourer, operator, supervisor, manager or admin. Only an admin can invite an admin.",
+    jobTitle: "Check the job title.",
     "already-pending": "This email already has a pending invite. Resend or cancel it.",
     "weak-password": "Use a password of at least 8 characters.",
     "email-in-use": "That email already has a login. Ask an admin to cancel this invite.",
@@ -221,8 +261,9 @@ export function inviteEmailLine(status) {
   return "The invite email didn't go through. Copy the link and send it to them yourself (text or email).";
 }
 
-export function staffViewHtml(invites, { now = new Date(), error = "", origin = HEARTWOOD_APP_ORIGIN, emailStatus = null, roles = SUPERVISOR_INVITE_ROLES } = {}) {
+export function staffViewHtml(invites, { now = new Date(), error = "", origin = HEARTWOOD_APP_ORIGIN, emailStatus = null, roles = SUPERVISOR_INVITE_ROLES, titles = null } = {}) {
   const offer = INVITE_ROLES.filter(r => (roles || []).includes(r));
+  const titleRows = (Array.isArray(titles) ? titles : []).filter(t => t && offer.includes(t.level) && t.name && t.id);
   const rows = (invites || []).map(row => ({ ...row, viewStatus: displayStatus(row, now) }));
   const rank = { pending: 0, expired: 1, accepted: 2, cancelled: 3, invalid: 4 };
   rows.sort((a, b) => (rank[a.viewStatus] ?? 9) - (rank[b.viewStatus] ?? 9) || String(a.email).localeCompare(String(b.email)));
@@ -232,7 +273,7 @@ export function staffViewHtml(invites, { now = new Date(), error = "", origin = 
     return `<article class="inviterow" data-invite-status="${esc(row.viewStatus)}">
       <div>
         <b>${esc(row.name)}</b>
-        <div class="sub">${esc(row.email)} · ${esc(roleLabel(row.role) || row.role)}</div>
+        <div class="sub">${esc(row.email)} · ${esc(row.jobTitle ? row.jobTitle + " · " : "")}${esc(roleLabel(row.role) || row.role)}</div>
         <div class="sub">${esc(statusLabel(row.viewStatus))}${row.viewStatus === "pending" || row.viewStatus === "expired" ? " · " + esc(formatWhen(row.expiresAt)) : ""}</div>
         ${emailStatus && row.viewStatus === "pending" ? `<div class="sub invite-mail" data-invite-mail="${esc((emailStatus[row.id] && emailStatus[row.id].delivery) || "checking")}">${esc(inviteEmailLine(emailStatus[row.id] || null))}</div>` : ""}
         ${link ? `<p class="invite-link">${esc(link)}</p>` : ""}
@@ -250,7 +291,9 @@ export function staffViewHtml(invites, { now = new Date(), error = "", origin = 
       <h2>Invite staff</h2>
       <label>Name<input name="name" required maxlength="80" autocomplete="name"></label>
       <label>Email<input name="email" type="email" required maxlength="120" autocomplete="off" inputmode="email"></label>
-      <label>Role<select name="role">
+      ${titleRows.length ? `<label>Job title<select name="jobTitle">${titleRows.map((t, i) => `<option value="${esc(t.id)}" data-level="${esc(t.level)}" data-name="${esc(t.name)}"${t.level === "operator" && !titleRows.slice(0, i).some(x => x.level === "operator") ? " selected" : ""}>${esc(t.name)} · ${esc(roleLabel(t.level))}</option>`).join("")}</select></label>
+      <p class="sub">The job title sets the permission level.</p>` : ""}
+      <label>Permission level<select name="role">
         ${offer.map(r => `<option value="${r}"${r === "operator" ? " selected" : ""}>${roleLabel(r)}</option>`).join("\n        ")}
       </select></label>
       <button class="primary" type="submit">Send invite</button>

@@ -62,11 +62,11 @@ export function canViewServicing(plan) {
   return !!(plan && plan.features && plan.features.servicing);
 }
 export function canEditFleet(plan, role, staffRole) {
-  return canViewFleet(plan) && (role === "admin" || role === "supervisor" || staffRole === "supervisor");
+  return canViewFleet(plan) && (role === "admin" || role === "manager" || role === "supervisor" || staffRole === "manager" || staffRole === "supervisor");
 }
 
 export function canEditServicing(plan, role, staffRole) {
-  return canViewServicing(plan) && (role === "admin" || role === "supervisor" || staffRole === "supervisor");
+  return canViewServicing(plan) && (role === "admin" || role === "manager" || role === "supervisor" || staffRole === "manager" || staffRole === "supervisor");
 }
 export function canViewPrestart(plan) {
   return !!(plan && plan.features && plan.features.prestart);

@@ -3,9 +3,10 @@ import { orgSettings, POWERED_BY, PRODUCT_NAME } from "../org-settings.js";
 import { scopeRecord } from "./company.js";
 import { JOB_MONEY_COLLECTION, jobMoneyDoc } from "./job-money.js";
 import { attachAddressSearch, placesEnabled, sanitizePlace } from "./places.js";
+import { LINE_TYPES, measureQty, normalizeLineType, quotePackNote, rateSaveChoice, readyJobTypeMap, tradeToolsHtml } from "./trades.js";
 // Rates from meta/quoteRates only — never invent business rates.
 // Draft/Accepted are explicit quoteStatus fields.
-// Admins + supervisors (canQuote / canSeeMoney). Rate *edits* admin-only (canEditQuoteRates).
+// Admins, managers and supervisors (canQuote / canSeeMoney). Rate edits: admin or manager (canEditQuoteRates).
 // Depot: 208-220 Holdsworth Rd, Chuwar QLD 4306. Travel via Nominatim+OSRM — never straight-line as billable km.
 // Equipment: fleet Machine-register names; presets Truck ± skid ± excavator; each machine rate includes operator.
 // Optional labourer is a separate rate. Hours drive hourly packages; day rates use machineDays (not × hours).
@@ -101,6 +102,10 @@ function cleanPrice(v) {
   const n = numOrNull(v);
   return n == null || !Number.isFinite(n) ? null : Math.min(MAX_ITEM_PRICE, Math.max(0, Math.round(n * 100) / 100));
 }
+let quoteTrade = null;
+export function setQuoteTradeSetup(setup) { quoteTrade = setup || null; }
+export function quoteTradeSetup() { return quoteTrade; }
+
 let xSeq = 0;
 function newItemId() {
   xSeq = (xSeq + 1) % 1000;
@@ -123,7 +128,8 @@ export function sanitizeExtraItem(it) {
     qty: cleanQty(x.qty),
     unit: unitFor(kind, x.unit),
     unitPrice: cleanPrice(x.unitPrice),
-    note: cleanStr(x.note, 300)
+    note: cleanStr(x.note, 300),
+    lineType: normalizeLineType(x.lineType, kind)
   };
   if (TYPE_FIELD_KINDS.includes(kind)) out.material = cleanStr(x.material, 80);
   return out;
@@ -566,8 +572,10 @@ export function quotesViewHtml(ui, esc, $$, helpers = {}) {
     <td>${q.quoteStatus === "Draft" ? `<button type="button" class="sm-btn" data-qaccept="${esc(q.id)}">Accept → job</button>` : `<span class="sub">Job ${esc(q.jobId || "—")}</span>`}</td></tr>`;
   return `<div class="sm-head"><h1>Quotes</h1>
     <div class="row gap"><button type="button" class="sm-btn primary" id="newquote">＋ New quote</button>
-    ${editRates ? `<button type="button" class="sm-btn" id="editrates">Quote rates &amp; depot</button>` : `<span class="sub pad">Rates are set by an admin · depot ${esc(rates.yardAddress || DEFAULT_DEPOT.yardAddress)}</span>`}</div></div>
-    <p class="pad sub">Three steps: job details, setup (machine and optional labourer), then review. Travel, materials and rubbish sit on the review. Accepting creates an unscheduled job. Admins and supervisors only. Prices stay ex GST and are never invented. Quotes are for ${esc(orgSettings().legalName)}. ${esc(POWERED_BY)}.</p>
+    ${editRates ? `<button type="button" class="sm-btn" id="editrates">Quote rates &amp; depot</button>` : `<span class="sub pad">Rates are set by an admin or a manager · depot ${esc(rates.yardAddress || DEFAULT_DEPOT.yardAddress)}</span>`}</div></div>
+    <p class="pad sub">Three steps: job details, setup (machine and optional labourer), then review. Travel, materials and rubbish sit on the review. Accepting creates an unscheduled job. Admins, managers and supervisors only. Prices stay ex GST and are never invented. Quotes are for ${esc(orgSettings().legalName)}. ${esc(POWERED_BY)}.</p>
+    ${quotePackNote(quoteTrade)}
+    ${quoteTrade ? tradeToolsHtml(quoteTrade, { canEdit: editRates }) : ""}
     <p class="pad sub">Depot (travel start): <b>${esc(rates.yardAddress || DEFAULT_DEPOT.yardAddress || "not set")}</b>
       · <a href="${esc(rates.yardMapsUrl || DEFAULT_DEPOT.yardMapsUrl)}" target="_blank" rel="noopener">Maps</a></p>
     ${rateWarn ? `<p class="pad warnt">Set plant (incl. operator), labourer, travel, materials and tip rates before accepting — nothing is invented for you.</p>` : ""}
@@ -585,6 +593,13 @@ function bindAdminExtras(ctx) {
   ensureRates(false);
   A.querySelector("#newquote")?.addEventListener("click", () => openQuoteWizard(null));
   A.querySelector("#editrates")?.addEventListener("click", () => openRatesEditor());
+  A.querySelector("#tradeadd")?.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const id = ev.target.trade && ev.target.trade.value;
+    if (!id || typeof api.saveExtraTrade !== "function") return;
+    try { await api.saveExtraTrade(id); }
+    catch (e) { api.toast("Couldn't add that trade (" + ((e && e.code) || "error") + ")."); }
+  });
   A.querySelectorAll("[data-qid]").forEach(b => b.onclick = () => {
     const q = (ui.quotes || []).find(x => x.id === b.dataset.qid);
     if (q) openQuoteWizard(q);
@@ -597,7 +612,7 @@ function bindAdminExtras(ctx) {
 }
 
 function openRatesEditor() {
-  if (!canEditRates()) return api.toast("Only an admin can change quote rates");
+  if (!canEditRates()) return api.toast("Only an admin or a manager can change quote rates");
   const { $, esc, toast, db, doc, setDoc, serverTimestamp, getUi, renderAdmin, getMe } = api;
   const me = getMe();
   ensureRates(false).then(rates => {
@@ -831,7 +846,52 @@ function openQuoteWizard(existing, opts = {}) {
       });
       d.querySelectorAll("[data-xf]").forEach(inp => {
         const ev = inp.tagName === "SELECT" ? "change" : "input";
-        inp.addEventListener(ev, () => { readExtrasFromDom(); liveTotals(); });
+        inp.addEventListener(ev, () => {
+          readExtrasFromDom();
+          liveTotals();
+          if (inp.dataset.xf === "unitPrice") {
+            const row = inp.closest("[data-xi]");
+            const scope = row && row.querySelector("[data-xscope]");
+            if (scope) scope.hidden = false;
+          }
+        });
+      });
+      d.querySelectorAll("[data-xonly]").forEach(b => b.onclick = () => {
+        const row = b.closest("[data-xi]");
+        const scope = row && row.querySelector("[data-xscope]");
+        if (scope) scope.hidden = true;
+      });
+      d.querySelectorAll("[data-xdefault]").forEach(b => b.onclick = async () => {
+        if (rateSaveChoice("company") !== "company") return;
+        syncFormToState();
+        const it = state.extraItems[+b.dataset.xdefault];
+        if (it && await saveCompanyPreset(it)) {
+          const row = b.closest("[data-xi]");
+          const scope = row && row.querySelector("[data-xscope]");
+          if (scope) scope.hidden = true;
+          keepOpen(); paint();
+        }
+      });
+      d.querySelectorAll("[data-xcalc]").forEach(b => b.onclick = () => {
+        const row = d.querySelector(`[data-xi="${b.dataset.xcalc}"]`);
+        if (!row) return;
+        const val = name => row.querySelector(`[data-xf="${name}"]`);
+        const measured = measureQty({
+          measure: val("measure") && val("measure").value,
+          length: val("len") && val("len").value,
+          width: val("wid") && val("wid").value,
+          depth: val("dep") && val("dep").value,
+          wastePct: val("waste") && val("waste").value,
+        });
+        const err = d.querySelector("#qerr");
+        if (!measured.ok) { if (err) err.textContent = measured.reason; return; }
+        if (err) err.textContent = "";
+        const qty = row.querySelector("[data-xf=qty]");
+        if (qty) qty.value = String(measured.qty);
+        const unit = row.querySelector("[data-xf=unit]");
+        if (unit && [...unit.options].some(o => o.value === measured.unit)) unit.value = measured.unit;
+        readExtrasFromDom();
+        liveTotals();
       });
       d.querySelectorAll("[data-ov]").forEach(inp => inp.addEventListener("input", () => { readOverridesFromDom(); liveTotals(); }));
       d.querySelectorAll("[data-ovreset]").forEach(b => b.onclick = () => {
@@ -859,7 +919,8 @@ function openQuoteWizard(existing, opts = {}) {
           qty: val("qty") ? val("qty").value : cur.qty,
           unit: val("unit") ? val("unit").value : cur.unit,
           unitPrice: val("unitPrice") ? val("unitPrice").value : cur.unitPrice,
-          note: val("note") ? val("note").value : cur.note
+          note: val("note") ? val("note").value : cur.note,
+          lineType: val("lineType") ? val("lineType").value : cur.lineType
         });
       });
       state.extraItems = next;
@@ -1040,6 +1101,13 @@ function openQuoteWizard(existing, opts = {}) {
   });
 }
 
+function quoteTypes(TYPES) {
+  if (!quoteTrade) return TYPES;
+  const ready = readyJobTypeMap(quoteTrade);
+  if (ready && Object.keys(ready).length) return ready;
+  return {};
+}
+
 function stepHtml(step, d, calc, rates, esc, TYPES, CLIENTS, canSeeMoney, $$, isAdmin = false, legacyTruck = false) {
   const depot = rates.yardAddress || DEFAULT_DEPOT.yardAddress;
   const maps = rates.yardMapsUrl || DEFAULT_DEPOT.yardMapsUrl;
@@ -1049,8 +1117,8 @@ function stepHtml(step, d, calc, rates, esc, TYPES, CLIENTS, canSeeMoney, $$, is
     <label class="plc-wrap">Job address<input name="address" value="${esc(d.address || "")}" required autocomplete="street-address" placeholder="${placesEnabled() ? "Start typing to search Google Maps" : "Lot and street"}"></label>
     <p class="sub plc-tag" id="qaddrtag" ${d.addressPlace ? "" : "hidden"}>📍 Matched on Google Maps — travel uses this exact spot.</p>
     <label class="qw-hours">Hours on site<input name="hoursOnSite" type="number" min="0" step="any" value="${esc(d.hoursOnSite)}" inputmode="decimal"></label>
-    <label class="qw-native">Category<select name="type">${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${d.type === k ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></label>
-    <div class="qw-types" role="group" aria-label="Job type">${Object.entries(TYPES).map(([k, v]) => `<button type="button" class="qw-type ${d.type === k ? "on" : ""}" data-type="${esc(k)}" aria-pressed="${d.type === k ? "true" : "false"}"><span class="qw-tick" aria-hidden="true"></span><span>${esc(v)}</span></button>`).join("")}</div>
+    <label class="qw-native">Category<select name="type">${Object.entries(quoteTypes(TYPES)).map(([k, v]) => `<option value="${k}" ${d.type === k ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></label>
+    <div class="qw-types" role="group" aria-label="Job type">${Object.entries(quoteTypes(TYPES)).map(([k, v]) => `<button type="button" class="qw-type ${d.type === k ? "on" : ""}" data-type="${esc(k)}" aria-pressed="${d.type === k ? "true" : "false"}"><span class="qw-tick" aria-hidden="true"></span><span>${esc(v)}</span></button>`).join("") || `<p class="sub">Quote pack coming soon for this trade. Job types still show on the job. Add Earthworks to price with the plant wizard.</p>`}</div>
     <p class="sub">One category per job. Mixed work is still split later, from the job.</p>
     <label>Scope / notes<textarea name="description" rows="2">${esc(d.description || "")}</textarea></label>
   </div>`;
@@ -1177,7 +1245,18 @@ function extrasHtml(d, calc, rates, esc, canSeeMoney, $$, isAdmin) {
         <label>${AMOUNT_KINDS.includes(it.kind) ? "Amount" : "Qty"}<input data-xf="qty" type="number" min="0" step="0.1" inputmode="decimal" value="${esc(it.qty)}"></label>
         <label>Unit<select data-xf="unit">${unitOptions(it.kind, it.unit, esc)}</select></label>
         ${money ? `<label>$ / unit ex GST<input data-xf="unitPrice" type="number" min="0" step="0.01" inputmode="decimal" value="${esc(it.unitPrice ?? "")}" placeholder="price"></label>` : ""}
+        <label>Line<select data-xf="lineType">${LINE_TYPES.map(([id, label]) => `<option value="${esc(id)}"${it.lineType === id ? " selected" : ""}>${esc(label)}</option>`).join("")}</select></label>
       </div>
+      <div class="qx-calc">
+        <span class="sub">Measure</span>
+        <select data-xf="measure" aria-label="Measure"><option value="">Qty as entered</option><option value="area">Area m²</option><option value="volume">Volume m³</option><option value="linear">Linear metre</option></select>
+        <input data-xf="len" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Length m" aria-label="Length metres">
+        <input data-xf="wid" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Width m" aria-label="Width metres">
+        <input data-xf="dep" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Depth m" aria-label="Depth metres">
+        <input data-xf="waste" type="number" min="0" max="100" step="1" inputmode="decimal" placeholder="Waste %" aria-label="Waste percent">
+        <button type="button" class="sm-btn" data-xcalc="${i}">Apply measure</button>
+      </div>
+      ${isAdmin && money ? `<p class="qx-scope sub" data-xscope="${i}" hidden>This price changed. <button type="button" class="sm-btn" data-xonly="${i}">This quote only</button> <button type="button" class="sm-btn" data-xdefault="${i}">Save as company default</button></p>` : ""}
       <label class="qx-note">Note (optional)<input data-xf="note" value="${esc(it.note || "")}" placeholder="${esc(notePh(it))}" maxlength="300"></label>
       <div class="qx-acts">
         <button type="button" class="sm-btn" data-xmove="${i},-1" ${i === 0 ? "disabled" : ""} aria-label="Move item ${i + 1} up">↑</button>
