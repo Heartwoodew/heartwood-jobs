@@ -17,7 +17,7 @@
 
 A manager uses the staff shell, not the admin desktop. They do not get invoices, Xero, or the company billing card.
 
-Existing profiles keep their current `users.role`. A job title sets the level on a new invite. It does not rewrite people already on the books.
+Existing profiles keep their current `users.role`. A job title sets the level on a new invite, and `acceptStaffInvite` writes that role. The browser cannot change `users.role` afterwards (company admins and managers may update the job title and skill tags only). People already on the books keep the level they have.
 
 ## Trade
 

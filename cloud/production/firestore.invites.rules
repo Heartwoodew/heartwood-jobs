@@ -49,12 +49,8 @@
             && inviteHasProfile() && inviteProfile().get("role", "") == "admin"))
         : (inviteHasProfile() && "role" in inviteProfile() && inviteProfile().role == "admin");
     }
-    function inviteCanGrantManager() {
-      return inviteFullAdmin() || (inviteHasProfile() && inviteProfile().get("role", "") == "manager");
-    }
     function inviteRoleOk() {
-      return request.resource.data.role in ["labourer", "operator", "supervisor"]
-        || (request.resource.data.role == "manager" && inviteCanGrantManager())
+      return request.resource.data.role in ["labourer", "operator", "supervisor", "manager"]
         || (request.resource.data.role == "admin" && inviteFullAdmin());
     }
     function inviteSame(key) {
@@ -118,7 +114,7 @@
         && request.resource.data.cancelledAt == request.time
         && inviteSame("name") && inviteSame("email") && inviteSame("role") && inviteSame("createdBy")
         && inviteSame("createdAt") && inviteSame("expiresAt") && inviteSame("token") && inviteSame("tenantId")
-        && inviteSame("resentAt") && inviteSame("resentBy") && inviteSame("companyId") && inviteSame("jobTitle") && inviteSame("jobTitleId")
+        && inviteSame("resentAt") && inviteSame("resentBy") && inviteSame("companyId")
         && inviteLockAgrees(request.resource.data.email, inviteId);
     }
     function inviteResendOk(inviteId) {
@@ -129,7 +125,7 @@
         && request.resource.data.resentAt == request.time
         && inviteExpiryWindow()
         && inviteSame("name") && inviteSame("email") && inviteSame("role") && inviteSame("createdBy")
-        && inviteSame("createdAt") && inviteSame("tenantId") && inviteSame("companyId") && inviteSame("jobTitle") && inviteSame("jobTitleId")
+        && inviteSame("createdAt") && inviteSame("tenantId") && inviteSame("companyId")
         && inviteSame("cancelledAt") && inviteSame("cancelledBy")
         && inviteLockAgrees(request.resource.data.email, inviteId);
     }
@@ -143,9 +139,7 @@
     match /invites/{inviteId} {
       // Supervisors never read an admin invite (it carries the sign-up token): their list asks for the three crew/supervisor roles.
       allow get, list: if inviteAdmin() && resource.data.tenantId == inviteCallerTenant()
-        && (resource.data.role in ["labourer", "operator", "supervisor"]
-          || (resource.data.role == "manager" && inviteCanGrantManager())
-          || inviteFullAdmin());
+        && (resource.data.role in ["labourer", "operator", "supervisor", "manager"] || inviteFullAdmin());
       allow create: if inviteCreateOk(inviteId);
       allow update: if inviteUpdateOk(inviteId);
       allow delete: if false;

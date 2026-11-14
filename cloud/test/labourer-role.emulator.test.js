@@ -151,6 +151,7 @@ test("manager edits rates, leave is already open to supervisors, and a manager c
   }));
   await assertSucceeds(updateDoc(doc(db("bLab"), "users/bLab"), { skills: ["White card"] }));
   await assertFails(updateDoc(doc(db("bLab"), "users/bLab"), { skills: ["White card"], role: "manager" }));
-  await assertSucceeds(updateDoc(doc(mgr, "users/bOp"), { role: "supervisor", jobTitle: "Leading hand", jobTitleId: "earthworks:leading-hand" }));
-  await assertFails(updateDoc(doc(mgr, "users/bAdmin"), { role: "operator", jobTitle: "Operator", jobTitleId: "earthworks:operator" }));
+  await assertSucceeds(updateDoc(doc(mgr, "users/bOp"), { jobTitle: "Leading hand", jobTitleId: "earthworks:leading-hand" }));
+  await assertFails(updateDoc(doc(mgr, "users/bOp"), { role: "supervisor", jobTitle: "Leading hand", jobTitleId: "earthworks:leading-hand" }));
+  await assertFails(updateDoc(doc(mgr, "users/bAdmin"), { jobTitle: "Operator", jobTitleId: "earthworks:operator" }));
 });

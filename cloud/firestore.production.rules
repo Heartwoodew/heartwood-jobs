@@ -404,17 +404,14 @@ service cloud.firestore {
         && skillItem(list, 4) && skillItem(list, 5) && skillItem(list, 6) && skillItem(list, 7)
         && skillItem(list, 8) && skillItem(list, 9) && skillItem(list, 10) && skillItem(list, 11);
     }
-    function canGrantRole(actor, target) {
-      return (actor == "admin" && (target == "labourer" || target == "operator" || target == "supervisor" || target == "manager" || target == "admin"))
-        || (actor == "manager" && (target == "labourer" || target == "operator" || target == "supervisor" || target == "manager"));
-    }
     function staffEditOk(uid) {
       return signedIn() && request.auth.uid != uid && hasProfile()
+        && (profile().get("role", "") == "admin" || (profile().get("role", "") == "manager" && resource.data.get("role", "") != "admin"))
+        && callerCompany() != ""
         && docCompany(resource.data) == callerCompany()
         && docCompany(request.resource.data) == callerCompany()
-        && canGrantRole(profile().get("role", ""), resource.data.get("role", ""))
-        && canGrantRole(profile().get("role", ""), request.resource.data.get("role", ""))
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["role", "jobTitle", "jobTitleId", "skills"])
+        && request.resource.data.get("role", "") == resource.data.get("role", "")
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["jobTitle", "jobTitleId", "skills"])
         && request.resource.data.get("jobTitle", "") is string
         && request.resource.data.get("jobTitle", "").size() <= 80
         && request.resource.data.get("jobTitleId", "") is string
