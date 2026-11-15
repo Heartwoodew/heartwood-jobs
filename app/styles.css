@@ -859,7 +859,10 @@ dialog.jobcard:has(.qw){max-width:520px;background:#f6f1ea}
 .qw-types{display:grid;gap:8px;margin:8px 0}
 .qw-type{display:flex;align-items:center;gap:10px;width:100%;min-height:52px;padding:10px 14px;border-radius:14px;border:1px solid #eadfd3;background:#fffdf9;font-weight:750;text-align:left}
 .qw-type.on{border-color:#8a5a2b;background:#fbf6ef}
-.qw-tick{width:22px;height:22px;border-radius:50%;border:2px solid #c8b8a6;flex:none;box-sizing:border-box}
+.qw-tick{width:22px;height:22px;border-radius:6px;border:2px solid #c8b8a6;flex:none;box-sizing:border-box}
+.qw-sec{margin:0 0 14px;padding:10px 12px;border:1px solid #eadfd3;border-radius:14px;background:#fffdf9}
+.qw-sec>h4{margin:0 0 8px}
+.qw-sec>legend{font-weight:750}
 .qw-type.on .qw-tick{border-color:#8a5a2b;background:#8a5a2b radial-gradient(circle,#fff 0 3px,transparent 3.5px)}
 .qw-hours input{font-size:28px;font-weight:800;min-height:56px}
 .qw-presets{display:flex;flex-direction:column;gap:8px}

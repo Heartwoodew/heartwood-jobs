@@ -1,6 +1,11 @@
 // Measured-pack wizard markup. Data stays in each pack file. Dollars render only when the caller can see money.
 import { linesForPackage, prettyUnit, RATE_LABEL } from "./money.js";
 
+function fieldId(state, id) {
+  const scope = state && state.sectionId ? String(state.sectionId) : "";
+  return scope ? scope + "~" + id : id;
+}
+
 function numInput(groupId, field, label, value, esc, { step = "0.01", max = "" } = {}) {
   return `<label>${esc(label)}<input data-m="${esc(groupId)}" data-mf="${field}" type="number" min="0"${max ? ` max="${max}"` : ""} step="${step}" inputmode="decimal" value="${esc(value ?? "")}"></label>`;
 }
@@ -23,8 +28,9 @@ function selectedStyle(line, raw) {
 
 function groupHtml(lines, state, esc) {
   const primary = lines[0];
-  const groupId = primary.group || primary.id;
-  const raw = (state.measures && (state.measures[groupId] || state.measures[primary.id])) || {};
+  const logicalId = primary.group || primary.id;
+  const groupId = fieldId(state, logicalId);
+  const raw = (state.measures && (state.measures[logicalId] || state.measures[primary.id])) || {};
   const waste = raw.wastePct != null && raw.wastePct !== "" ? raw.wastePct : (primary.wastePct != null ? primary.wastePct : "");
   let fields = "";
   if (primary.styles) {
@@ -50,8 +56,9 @@ function groupHtml(lines, state, esc) {
   const extras = lines.slice(1).map(line => {
     const own = (state.measures && state.measures[line.id]) || {};
     const on = own.on === true;
-    const choice = line.options ? `<label>${esc(line.label)}<select data-m="${esc(line.id)}" data-mf="option">${line.options.map(o => `<option value="${esc(o.id)}" ${(own.option || (line.options[0] && line.options[0].id)) === o.id ? "selected" : ""}>${esc(o.label)}</option>`).join("")}</select></label>` : "";
-    return `<label class="ck"><input type="checkbox" data-mon="${esc(line.id)}" ${on ? "checked" : ""}> ${esc(line.includeLabel || line.label)}</label>${choice}`;
+    const mid = fieldId(state, line.id);
+    const choice = line.options ? `<label>${esc(line.label)}<select data-m="${esc(mid)}" data-mf="option">${line.options.map(o => `<option value="${esc(o.id)}" ${(own.option || (line.options[0] && line.options[0].id)) === o.id ? "selected" : ""}>${esc(o.label)}</option>`).join("")}</select></label>` : "";
+    return `<label class="ck"><input type="checkbox" data-mon="${esc(mid)}" ${on ? "checked" : ""}> ${esc(line.includeLabel || line.label)}</label>${choice}`;
   }).join("");
   const legend = primary.groupLabel || primary.label;
   return `<fieldset><legend>${esc(legend)}</legend><div class="qx-grid">${fields}</div>${extras}${primary.hint ? `<p class="sub">${esc(primary.hint)}</p>` : ""}</fieldset>`;
@@ -59,20 +66,22 @@ function groupHtml(lines, state, esc) {
 
 export function measureSetupHtml(pack, state, esc) {
   const pkg = state.packageId || (pack.packages[0] && pack.packages[0].id) || "";
-  const packages = pack.packages.length > 1 ? `<div class="qw-presets" role="radiogroup" aria-label="Package">${pack.packages.map(p => `<label class="ck qw-preset ${pkg === p.id ? "on" : ""}"><input type="radio" name="package" value="${esc(p.id)}" ${pkg === p.id ? "checked" : ""}><span><b>${esc(p.label)}</b><small>${esc(p.blurb || "")}</small></span></label>`).join("")}</div>` : "";
+  const pkgName = state.sectionId ? "package-" + state.sectionId : "package";
+  const labourId = state.sectionId ? "qinclabour-" + state.sectionId : "qinclabour";
+  const packages = pack.packages.length > 1 ? `<div class="qw-presets" role="radiogroup" aria-label="Package">${pack.packages.map(p => `<label class="ck qw-preset ${pkg === p.id ? "on" : ""}"><input type="radio" name="${esc(pkgName)}" data-secpkg="${esc(state.sectionId || "")}" value="${esc(p.id)}" ${pkg === p.id ? "checked" : ""}><span><b>${esc(p.label)}</b><small>${esc(p.blurb || "")}</small></span></label>`).join("")}</div>` : "";
   const groups = groupOf(linesForPackage(pack, pkg));
   return `<div class="qw-pane"><h4>${esc(pack.label)} measurements</h4>
     <p class="sub">${esc(pack.defaultsNote)}</p>
     ${packages}
     <div class="qw-measure">${groups.map(g => groupHtml(g, state, esc)).join("")}</div>
-    <label class="ck"><input type="checkbox" id="qinclabour" ${state.includeLabour ? "checked" : ""}> Price the allocated hours on this quote</label>
+    <label class="ck"><input type="checkbox" id="${esc(labourId)}" data-seclabour="${esc(state.sectionId || "")}" ${state.includeLabour ? "checked" : ""}> Price the allocated hours on this quote</label>
     <p class="sub">Allocated hours are copied onto the job for the crew. They are not written to a timesheet, and nothing here is required before the job can be marked done.</p>
   </div>`;
 }
 
 export function measureReviewHtml(calc, esc, canSeeMoney, canEdit) {
   if (!calc.ok) return `<div class="qw-pane"><p class="err">${esc(calc.reason)}</p></div>`;
-  const rows = (calc.lines || []).filter(l => String(l.key || "").startsWith("pack:")).map(l => {
+  const rows = (calc.lines || []).filter(l => String(l.baseKey || l.key || "").startsWith("pack:")).map(l => {
     const money = canSeeMoney ? `<div class="qx-grid"><label>$ / ${esc(prettyUnit(l.unit))} ex GST<input data-packprice="${esc(l.rateKey)}" data-packbase="${esc(l.baseRate ?? "")}" type="number" min="0" step="0.01" inputmode="decimal" value="${esc(l.rate ?? "")}"></label></div>
       <span class="qw-flag" data-packflag data-packidle="${esc(l.idleLabel || RATE_LABEL.default)}">${esc(l.rateLabel || RATE_LABEL[l.rateSource] || "")}</span>
       ${canEdit ? `<p class="qx-scope sub" data-packscope="${esc(l.rateKey)}" ${l.rateSource === "quote" ? "" : "hidden"}>This price changed. <button type="button" class="sm-btn" data-packonly="${esc(l.rateKey)}">This quote only</button> <button type="button" class="sm-btn" data-packdefault="${esc(l.rateKey)}">Save as company default</button></p>` : ""}` : "";

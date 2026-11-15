@@ -473,7 +473,7 @@ function dispatchChip(j, slot) {
   const late = slot && slot.pastFinish;
   const why = slot && slot.estSource === "quote" ? "Hours from the quote" : slot && slot.estSource === "history" ? "Median clocked time for this kind of job" : "Default for this kind of job";
   return `<div class="dchip ${QCLS[queueOf(j)]} t-${j.type} ${j.status === "In progress" ? "inprog" : ""} ${away ? "on-leave" : ""} ${late ? "past-finish" : ""}" draggable="true" data-id="${j.id}" title="${esc(j.client)} – ${esc(j.description)}${est ? " · " + esc(est) : ""}${late ? " · Runs past finish time" : ""}${away ? " · " + away : ""}">${ipTop(j, "sm")}
-      <b>${esc(time)}</b> ${esc((j.address || "").split(",")[0])}<div class="sub"><span class="est" title="${esc(why)}">${esc(est)}</span>${esc(TYPES[j.type] || "")} · #${esc(jobNo(j))}</div>${late ? `<div class="sub past-finish">Runs past finish time</div>` : ""}</div>`;
+      <b>${esc(time)}</b> ${esc((j.address || "").split(",")[0])}<div class="sub"><span class="est" title="${esc(why)}">${esc(est)}</span>${esc(jobTypeText(j) || TYPES[j.type] || "")} · #${esc(jobNo(j))}</div>${late ? `<div class="sub past-finish">Runs past finish time</div>` : ""}</div>`;
 }
 function inviteDisplayNow() {
   return window.HW_TODAY ? new Date(window.HW_TODAY + "T12:00:00+10:00") : new Date();
@@ -1070,7 +1070,7 @@ const label = n => staff.some(s => !s.uid && s.name === n) ? `${n} (no login)` :
 function filtered() {
   const f = ui.staffF, sel = staff.find(s => skey(s) === f);
   return jobs.filter(j => (!f || (f === "_none" ? !namesOf(j).length : namesOf(j).map(x => x.toLowerCase()).includes((sel?.name || "").toLowerCase())))
-    && (!ui.typeF || j.type === ui.typeF));
+    && jobHasType(j, ui.typeF));
 }
 // ServiceM8-style queues, derived from existing fields only (status + sm8Status from the importer).
 const QUEUES = ["Work Order", "Quote"];          // main Jobs screen: open work only; Completed/Unsuccessful have their own screen
@@ -1122,6 +1122,20 @@ function taskLines(desc) {
 }
 const mixedKinds = j => [...new Set(taskLines(j.description).map(x => x.k).filter(Boolean))];
 const isMixed = j => mixedKinds(j).length > 1;
+function jobTypeText(j) {
+  const ids = Array.isArray(j && j.types) && j.types.length ? j.types : [(j && j.type) || ""];
+  const labels = [];
+  for (const id of ids) {
+    const label = TYPES[id];
+    if (label && !labels.includes(label)) labels.push(label);
+  }
+  return labels.join(", ");
+}
+function jobHasType(j, type) {
+  if (!type) return true;
+  if (j && j.type === type) return true;
+  return !!(j && Array.isArray(j.types) && j.types.includes(type));
+}
 const ipPill = (j, cls = "") => j.status === "In progress" ? `<span class="qpill ip ${cls}">In progress</span>` : "";
 const ipTop = (j, cls = "") => j.status === "In progress" ? `<div class="ptop">${ipPill(j, cls)}</div>` : "";
 const mixedBadge = j => isMixed(j) ? ` <span class="qpill mixed" title="${esc(mixedKinds(j).map(k => TYPES[k] || k).join(" + "))} on one job - split it">Mixed work</span>` : "";
@@ -1129,7 +1143,7 @@ function jobRow(j) {
   const q = queueOf(j), names = namesOf(j).map(label).join(", ");
   return `<tr class="jr" data-id="${j.id}" draggable="true"><td><span class="qdot ${QCLS[q]}" title="${q}"></span></td>
     <td class="jn">#${esc(jobNo(j))}${jobPhotosIcon(j)}</td><td><b>${esc(j.client || "")}</b><div class="sub">${esc(j.address || "-")}</div></td>
-    <td>${esc(firstLine(j.description))}${mixedBadge(j)}<div class="sub">${esc(TYPES[j.type] || "")}${j.po ? " · PO " + esc(j.po) : ""}</div></td>
+    <td>${esc(firstLine(j.description))}${mixedBadge(j)}<div class="sub">${esc(jobTypeText(j) || TYPES[j.type] || "")}${j.po ? " · PO " + esc(j.po) : ""}</div></td>
     <td>${esc(shortDate(j.date))}<div class="sub">${esc(j.time || "")}${j.durationHrs ? " · " + esc(j.durationHrs) + "h" : ""}</div></td>
     <td>${names ? esc(names) : `<span class="unal">Unallocated</span>`}</td>
     <td><span class="pstack">${ipPill(j)}<span class="qpill ${QCLS[q]}">${q}</span></span></td></tr>`;
@@ -1139,7 +1153,7 @@ function jobRow(j) {
 const qWords = () => (ui.q || "").toLowerCase().replace(/#/g, " ").split(/\s+/).filter(Boolean);
 function matchQ(j) {
   const w = qWords(); if (!w.length) return true;
-  const hay = [jobNo(j), j.sm8JobNo, j.client, j.address, j.description, j.po, j.type, TYPES[j.type], namesOf(j).join(" ")].map(x => String(x ?? "")).join(" ").toLowerCase();
+  const hay = [jobNo(j), j.sm8JobNo, j.client, j.address, j.description, j.po, j.type, jobTypeText(j), TYPES[j.type], (j.types || []).join(" "), namesOf(j).join(" ")].map(x => String(x ?? "")).join(" ").toLowerCase();
   return w.every(x => hay.includes(x));
 }
 const searchBar = () => `<div class="sbar"><span class="sbar-ic">🔍</span><input id="jq" type="search" inputmode="search" autocomplete="off" placeholder="Search job #, address, client, PO, staff…" value="${esc(ui.q || "")}">${ui.q ? `<button type="button" id="jqx" class="sbar-x" title="Clear" aria-label="Clear search">✕</button>` : ""}</div>`;
@@ -1169,14 +1183,14 @@ function jobsView(all) {
 const createdOf = j => j.sm8Created || (j.createdAt && j.createdAt.toDate ? ymd(j.createdAt.toDate()) : "");
 function unscheduledView(all) {
   const t = ui.q.toLowerCase();
-  const list = all.filter(j => !j.date && QUEUES.includes(queueOf(j)) && (!ui.typeF || j.type === ui.typeF)
+  const list = all.filter(j => !j.date && QUEUES.includes(queueOf(j)) && jobHasType(j, ui.typeF)
       && matchQ(j))
     .sort((a, b) => createdOf(b).localeCompare(createdOf(a)) || String(b.sm8JobNo || "").localeCompare(String(a.sm8JobNo || ""), undefined, { numeric: true }));
   return `<div class="sm-head"><h1>Unscheduled jobs <span class="cnt">${list.length}</span></h1><button id="new" class="sm-btn primary">+ New Job</button></div>${searchBar()}
     <p class="sub muted">Open jobs with no booking date, newest first.${myCompanyId() === "heartwood" ? " Jobs created more than 3 months ago are not shown." : ""}</p>
     <table class="jt"><thead><tr><th></th><th>Job #</th><th>Client / Site</th><th>Description</th><th>PO</th><th>Created</th><th></th></tr></thead>
     <tbody>${list.map(j => `<tr class="jr" data-id="${j.id}"><td><span class="qdot ${QCLS[queueOf(j)]}"></span></td><td class="jn">#${esc(jobNo(j))}${jobPhotosIcon(j)}</td>
-      <td><b>${esc(j.client || "")}</b><div class="sub">${esc(j.address || "-")}</div></td><td>${esc(firstLine(j.description))}<div class="sub">${esc(TYPES[j.type] || "")}</div></td>
+      <td><b>${esc(j.client || "")}</b><div class="sub">${esc(j.address || "-")}</div></td><td>${esc(firstLine(j.description))}<div class="sub">${esc(jobTypeText(j) || TYPES[j.type] || "")}</div></td>
       <td>${esc(j.po || "—")}</td><td>${createdOf(j) ? esc(shortDate(createdOf(j))) : "—"}</td>
       <td><button type="button" class="sm-btn primary" data-sched="${j.id}">Schedule</button></td></tr>`).join("") || `<tr><td colspan="7" class="muted pad">Nothing unscheduled – nice.</td></tr>`}</tbody></table>`;
 }
@@ -1217,7 +1231,7 @@ function bindXc(root, pool) { root.querySelectorAll("[data-xc]").forEach(b => b.
 function completedView(all) {
   const kind = ui.cq === "Unsuccessful" ? "Unsuccessful" : "Completed", t = ui.q.toLowerCase();
   const m = new Map(); for (const j of [...all, ...(ui.done || [])]) if (!m.has(j.id)) m.set(j.id, j);
-  const pool = [...m.values()].filter(j => (!ui.typeF || j.type === ui.typeF) && matchQ(j));
+  const pool = [...m.values()].filter(j => jobHasType(j, ui.typeF) && matchQ(j));
   const cnt = k => pool.filter(j => queueOf(j) === k).length;
   const list = pool.filter(j => queueOf(j) === kind).sort((a, b) => ((b.date || "") + (b.time || "")).localeCompare((a.date || "") + (a.time || "")));
   const xc = canXero() && kind === "Completed"; ui.xcList = xc ? list : [];
@@ -1764,7 +1778,7 @@ function donePill() {
   el.className = "donepill" + (open ? " open" : "");
   el.innerHTML = `<button type="button" class="dp-head" aria-expanded="${open}"><span class="dp-tick">✓</span> <b>${L.length}</b> done today${canSeeMoney() && known.length ? ` · ${$$(tot)}` : ""}<span class="dp-car">${open ? "▾" : "▴"}</span></button>
     ${open ? `<div class="dp-body">${L.map(j => `<button type="button" class="dp-row" data-dp="${esc(j.id)}"><span class="dp-no">#${esc(jobNo(j))}</span>
-      <span class="dp-main"><b>${esc(tidyAddress(j.address || "").split(",")[0])}</b> · ${esc(TYPES[j.type] || firstLine(j.description || ""))}<small>${esc(who(j))}</small></span>
+      <span class="dp-main"><b>${esc(tidyAddress(j.address || "").split(",")[0])}</b> · ${esc(jobTypeText(j) || TYPES[j.type] || firstLine(j.description || ""))}<small>${esc(who(j))}</small></span>
       <span class="dp-amt">${canSeeMoney() && amt(j) != null ? $$(amt(j)) : ""}</span></button>`).join("") || `<p class="sub pad">Nothing completed yet today.</p>`}
       ${canSeeMoney() ? `<div class="dp-foot sub">Total ex GST ${$$(tot)}${known.length < L.length ? ` (${L.length - known.length} without a PO/invoice amount)` : ""}</div>` : ""}</div>` : ""}`;
   el.querySelector(".dp-head").onclick = () => { localStorage.setItem("hwDonePill", open ? "closed" : "open"); donePill(); };
@@ -3528,7 +3542,7 @@ function renderAdmin() {
   if (ui.view === "chat" && document.activeElement?.closest?.(".chat-compose")) return;
   if (ui.view === "staff" && document.activeElement?.closest?.("#invitef")) return;
   document.body.className = "admin";
-  const fj = filtered(), und = (ui.undated || []).filter(j => (!ui.typeF || j.type === ui.typeF));
+  const fj = filtered(), und = (ui.undated || []).filter(j => jobHasType(j, ui.typeF));
   const all = [...fj, ...und.filter(u => !fj.some(j => j.id === u.id))];
   const quotesHtml = ui.view === "quotes" ? adminViewRouter(ui.view, ui, { esc, $$, staff, jobs: all, todayStr, rerender: () => renderAdmin(), canEditQuoteRates }) : null;
   const staffHtml = ui.view === "staff" ? staffPageHtml() : null;
@@ -3750,6 +3764,7 @@ function editJob(j) {
       ${!n && j.splitTo && !j.splitSynced ? `<div class="splitbox">Split into a new job (${esc(j.splitTo)}). <button type="button" id="splitundo" class="btn">↩ Undo split</button></div>` : ""}
       <p class="hint">Spoil removal is always its own job — never add spoil to a backslab job.</p>
       <div class="row"><label>Category<select name="type">${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${j.type === k ? "selected" : ""}>${v}</option>`).join("")}</select></label>
+        ${Array.isArray(j.types) && j.types.length > 1 ? `<p class="hint">Categories on this job: ${esc(jobTypeText(j))}.</p>` : ""}
         <label>Purchase Order #<input name="po" value="${esc(j.po)}"></label>
         <label>Loads<input type="number" min="0" name="loads" value="${esc(j.loads ?? "")}"></label></div>
       ${canSeeMoney() ? `<div class="row"><label>PO value $ (ex GST)<input type="number" step="0.01" min="0" name="poAmount" value="${esc(j.poAmount ?? "")}" placeholder="from the PO"></label></div>
@@ -4360,7 +4375,7 @@ async function emailSupervisor(j, amt) {
       .catch(e2 => toast("Email not remembered: " + (e2.code || e2.message)));
     updateDoc(doc(db, "jobs", j.id), { supervisorEmail: e, updatedAt: serverTimestamp(), updatedBy: me.uid }).catch(() => {});
   }
-  const a = amt ?? j.invoiceAmount, po = j.po || "(no PO)", task = (j.invoiceDescription || j.description || TYPES[j.type] || "").split("\n")[0];
+  const a = amt ?? j.invoiceAmount, po = j.po || "(no PO)", task = (j.invoiceDescription || j.description || jobTypeText(j) || TYPES[j.type] || "").split("\n")[0];
   const first = (s.name || "").split(" ")[0];
   const body = `Hi ${first || "there"},
 
@@ -4704,7 +4719,7 @@ function slotFor(j) {
 function opCard(j) {
   const p = phonePlace(j.address);
   const crew = namesOf(j);
-  const type = TYPES[j.type] || j.client || "Job";
+  const type = jobTypeText(j) || TYPES[j.type] || j.client || "Job";
   const st = j.status === "In progress" ? "inprog" : j.status === "Done" ? "done" : "";
   const stop = ui.runStops && ui.runStops[j.id];
   const slot = slotFor(j);
@@ -4948,7 +4963,7 @@ function renderOpDetail(j) {
   const q = queueOf(j), done = j.status === "Done", started = j.status === "In progress";
   const p = phonePlace(j.address);
   const crew = namesOf(j);
-  const type = TYPES[j.type] || "Job";
+  const type = jobTypeText(j) || TYPES[j.type] || "Job";
   const addrLine = [p.street, p.place].filter(Boolean).join(", ") || p.full || j.address || "";
   const onChat = ui.jobPane === "chat";
   $("#app").innerHTML = `<div class="mob"><div class="mob-bar det ${QCLS[q]}"><button class="mback" id="back" type="button">${ICO.back}<span class="sr">Jobs</span></button>
