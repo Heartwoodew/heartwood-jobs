@@ -32,7 +32,11 @@ The live security rules for incidents are **GAP** (not in this repo). The emulat
 
 ## SWMS list
 
-`app/features/swms-sign.js` `SWMS` (lines 9–15), version `2026-07` (`SWMS_VERSION`, line 5):
+SWMS are **Heartwood-only for now**. `companySwms` in `app/features/swms-sign.js` uses `isHeartwoodCompany` from `app/features/company.js`. Company id `heartwood`, and a missing company id (legacy Heartwood records), get the five documents below. Other companies start with none, including a new sign-up and a test company.
+
+An empty list means no SWMS reminder on admin Home or operator Today, no Sign SWMS prompt, and no due or overdue counts. A job hides **View SWMS**. The SWMS screen says `No SWMS set up for your company yet.` It does not list Heartwood titles and it does not build a placeholder PDF. Incidents keep working unchanged.
+
+`app/features/swms-sign.js` `SWMS`, version `2026-07` (`SWMS_VERSION`):
 
 | Id | Title |
 | --- | --- |
@@ -77,7 +81,7 @@ Toast: `Signed {title} · valid to {date}`. Save failure: `Could not save: {code
 
 The page rewrites ok / due / exp labels with Brisbane dates (`swmsStatus`, `app/app.js` lines 2372–2378).
 
-`swmsReminderHtml` (lines 2382–2388) shows when any of the five is not `ok`. It is on admin Home and on the operator Today screen.
+`swmsReminderHtml` shows when the company's list is non-empty and any document is not `ok`. Today that list is Heartwood's five. Other companies get no reminder. It is on admin Home and on the operator Today screen.
 
 Everyone subscribes to their own signatures. Admins also subscribe to the whole collection (`swmsSub`, lines 2389–2395). A listen error is `console.warn` only.
 
@@ -87,7 +91,7 @@ Everyone subscribes to their own signatures. Admins also subscribe to the whole 
 
 **View signature** shows the stored PNG (`sigDetail`, lines 2437–2445). It includes the uid.
 
-**Download signed PDF** (`downloadSigned` from line 2634, `buildSignedSwmsPdf` lines 2565–2613) copies the SWMS pages (or the placeholder) and adds a sign-off sheet for Heartwood Earthworx Pty Ltd, ABN `31 667 738 098` (`COMPANY`, `COMPANY_ABN`, line 2551). Current valid signers are status ok or due (`validSigners`, lines 2560–2564). Filter by job or one signer. Empty set: `No current valid signatures`. Placeholder downloads say not to send the file to a client as the SWMS (`deliverPdf`, line 2625). Share / Download / Open uses a blob URL.
+**Download signed PDF** (`downloadSigned`, `buildSignedSwmsPdf`) copies the SWMS pages (or the placeholder) and adds a sign-off sheet. For Heartwood that sheet is Heartwood Earthworx Pty Ltd, ABN `31 667 738 098`. Another company is not offered the download, because its list is empty. If a sheet is still built, `swmsSignoffOrg` prints that company's own legal name and ABN and does not print Heartwood's name or ABN. Current valid signers are status ok or due (`validSigners`). Filter by job or one signer. Empty set: `No current valid signatures`. Placeholder downloads say not to send the file to a client as the SWMS (`deliverPdf`). Share / Download / Open uses a blob URL.
 
 If pop-ups are blocked when opening a SWMS in a new tab: `Pop-up blocked. Allow pop-ups to read the SWMS, then sign.` (`openSwms`, line 2540). `PDF library failed to load` comes from `loadPdfLib` (line 2556).
 

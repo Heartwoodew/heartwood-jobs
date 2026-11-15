@@ -7,7 +7,7 @@
 `homeView` / `homeBody` (`app/app.js` lines 1021–1038).
 
 - Greeting from the Brisbane hour: before 12 Good morning, before 17 Good afternoon, else Good evening (`greet`, line 936). First word of `me.name`.
-- Compliance banner, then the cloud-expiry sentence for admins, then the SWMS reminder.
+- Compliance banner, then the cloud-expiry sentence for admins, then the SWMS reminder when that company has SWMS. SWMS are Heartwood-only for now. Other companies start with none, so they see no reminder.
 - **Needs attention** (`attentionHtml`, lines 1000–1020), admin only:
   - jobs with a date today or later, not done, nobody allocated
   - jobs with no PO that are done and not invoiced, or dated within 7 days, or in progress
@@ -23,7 +23,7 @@ There is no separate “reminders” collection. Reminders on Home are the SWMS 
 
 ## Operator Home
 
-The Today tab (`renderOperator`, lines 1931–1942): greeting, job count, approved driving-order note, fleet banner, SWMS reminder, today’s cards. Tomorrow is the Jobs tab, not a second home column. **Report incident** and **SWMS** are on More, and also as buttons in `homeBody` when `admin` is false (line 1031). The operator shell does not call `homeBody`. It uses the Today tab.
+The Today tab (`renderOperator`): greeting, job count, approved driving-order note, fleet banner, SWMS reminder when the company has SWMS (Heartwood only; other companies start with none), today’s cards. Tomorrow is the Jobs tab, not a second home column. **Report incident** and **SWMS** are on More, and also as buttons in `homeBody` when `admin` is false. The operator shell does not call `homeBody`. It uses the Today tab. A company with no SWMS still has **Report incident**. Its SWMS screen says none are set up yet.
 
 ## Inbox (owner only)
 

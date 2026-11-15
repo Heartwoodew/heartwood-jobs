@@ -27,7 +27,7 @@ import { mountDocuments, unmountDocuments, openDocumentBlob } from "./features/j
 import { installChatApp } from "./features/chat-ui.js";
 import { installPush } from "./features/push.js";
 import { installCompliance } from "./features/compliance.js";
-import { SWMS, SWMS_VERSION, sigMs, sigExp, latestSig, statusOf, swmsSignatureData, buildPlaceholderPdf } from "./features/swms-sign.js";
+import { SWMS, SWMS_EMPTY, SWMS_VERSION, sigMs, sigExp, latestSig, statusOf, swmsSignatureData, buildPlaceholderPdf, companySwms, swmsReminderModel, swmsSignoffOrg } from "./features/swms-sign.js";
 import {
   acceptLoadingHtml, acceptScreenModel, acceptViewHtml, buildInviteDraft, inviteFailureText,
   newInviteToken, pendingInviteForEmail, staffViewHtml, appOriginFor, invitableRoles, CREW_ROLES,
@@ -47,7 +47,7 @@ import {
   friendCodeOk, friendInviteLink, hoursBrand, isPlatformOwner, newFriendCode,
   ownerProfile, scopeRecord, trialEnd, validateCompanyInput, masterRow, CARD_SETUP_LATER,
   builderSignoff, clientDocId, companyClientNames, companyJobPrefix, companyMailbox, companyStdClients, timesheetMailParts,
-  supervisorsPath, docCompanyId,
+  supervisorsPath, docCompanyId, isHeartwoodCompany,
 } from "./features/company.js";
 import { companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, pausedAdminHtml, pausedStaffHtml, signupFormHtml, trialBannerHtml } from "./features/company-ui.js";
 import {
@@ -4252,7 +4252,7 @@ function editJob(j) {
       <div class="diary">${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("")}
         ${hist.map(([w, t]) => `<div class="de sys"><span class="av">i</span><div><small>${esc(w)}</small><div>${esc(t)}</div></div></div>`).join("")}
         ${!(j.log || []).length && !hist.length ? `<p class="muted sub">No diary entries yet. Site notes from staff appear here.</p>` : ""}</div>
-      ${!n ? `<h4>Photos</h4><button type="button" class="sm-btn" id="emailph">Add photos</button> <span data-photoslot="${esc(j.id)}" data-photorole="cloud" data-photovariant="sm"></span> ${emailedPhotosNote(j)} <button type="button" class="sm-btn incbtn" data-inc="${j.id}">⚠ Report incident</button> <button type="button" class="sm-btn" data-swms="${j.id}">📋 View SWMS</button>${jobReceiptsHtml(j)}${cloudRetentionHtml(j)}` : ""}
+      ${!n ? `<h4>Photos</h4><button type="button" class="sm-btn" id="emailph">Add photos</button> <span data-photoslot="${esc(j.id)}" data-photorole="cloud" data-photovariant="sm"></span> ${emailedPhotosNote(j)} <button type="button" class="sm-btn incbtn" data-inc="${j.id}">⚠ Report incident</button>${companyHasSwms() ? ` <button type="button" class="sm-btn" data-swms="${j.id}">📋 View SWMS</button>` : ""}${jobReceiptsHtml(j)}${cloudRetentionHtml(j)}` : ""}
     </div></div>
     <p id="ferr" class="err"></p>
     <div class="btns jc-foot"><button value="cancel" formnovalidate class="sm-btn">Close</button><button value="save" class="sm-btn primary">Save Job</button></div></form>`;
@@ -4347,7 +4347,7 @@ function jobTabs(d, j) {
   P.sup.insertAdjacentHTML("afterbegin", `<h4>Supervisor</h4>`);
   P.photos.querySelectorAll(".incbtn,[data-swms]").forEach(x => x.remove());
   const incs = (ui.incidents || []).filter(r => r.jobId === j.id || (r.jobNo && String(r.jobNo) === String(jobNo(j))));
-  P.safety.innerHTML = `<h4>Safety</h4><div class="safebtns"><button type="button" class="sm-btn" data-swms="${j.id}">📋 View SWMS</button><button type="button" class="sm-btn incbtn" data-inc="${j.id}">⚠ Report incident on this job</button></div>
+  P.safety.innerHTML = `<h4>Safety</h4><div class="safebtns">${companyHasSwms() ? `<button type="button" class="sm-btn" data-swms="${j.id}">📋 View SWMS</button>` : ""}<button type="button" class="sm-btn incbtn" data-inc="${j.id}">⚠ Report incident on this job</button></div>
     <h4>Incidents on this job</h4>${incs.map(r => `<div class="at-j" data-incid="${esc(r.id)}"><b>${esc(r.reportNo || "")}</b> ${esc(r.type || "")} · <span class="qpill ${incCls(r)}">${esc(r.status)}</span></div>`).join("") || `<p class="muted sub">None reported.</p>`}`;
   if (!P.hist.children.length) P.hist.innerHTML = `<p class="muted sub">No history yet.</p>`;
   P.chat.innerHTML = CHAT.jobHtml(j);
@@ -5369,7 +5369,7 @@ function renderOperator() {
         <button type="button" class="mob-more" data-go="claims"><b>Reimbursements</b><small>Claim back fuel, parts, tip fees…</small></button>
         <button type="button" class="mob-more" data-go="done"><b>Completed</b><small>Finished in the last 30 days</small></button>
         <div class="mob-sec">Safety</div>
-        <button type="button" class="mob-more" data-go="swms"><b>SWMS</b><small>Read and sign</small></button>
+        <button type="button" class="mob-more" data-go="swms"><b>SWMS</b><small>${companyHasSwms() ? "Read and sign" : "None set up yet"}</small></button>
         ${COMP.canPrestart() ? `<button type="button" class="mob-more" data-go="prestart"><b>Prestart</b><small>Any machine, before you use it</small></button>` : ""}
         ${fleetBtn}
         <button type="button" class="mob-more incbtn" data-inc=""><b>Report incident</b><small>Safety report</small></button>
@@ -5467,7 +5467,7 @@ function renderOpDetail(j) {
         <button class="mnote" type="button" data-act="note">Add note</button></div>
       <div class="mcard"><div class="mlbl">Photos</div><div data-photoslot="${esc(j.id)}" data-photorole="cloud"></div>${emailedPhotosNote(j)}<div class="muted sub">Cloud photos are the private copies stored for this job.</div></div>
       <div class="mcard job-docs" data-job-docs="${esc(j.id)}"></div>
-      <div class="mcard safecard"><div class="mlbl">Safety</div><button type="button" class="mnote" data-swms="${j.id}">View SWMS</button><button type="button" class="mnote incbtn" data-inc="${j.id}">Report incident</button>
+      <div class="mcard safecard"><div class="mlbl">Safety</div>${companyHasSwms() ? `<button type="button" class="mnote" data-swms="${j.id}">View SWMS</button>` : ""}<button type="button" class="mnote incbtn" data-inc="${j.id}">Report incident</button>
         ${ui.take5On !== false || (ui.take5s || []).some(row => row.jobId === j.id) ? `<div id="take5slot">${take5JobHtml(ui.take5s || [], j.id, { ownUid: me.uid, canView: canViewTake5(me) })}</div>` : ""}</div>
       <div class="mcard">${jobReceiptsHtml(j)}</div>
     </div>
@@ -5935,13 +5935,18 @@ const swmsStatus = sig => {
 };
 const swD = ms => new Date(ms).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric", timeZone: TZ });
 const swDT = ms => new Date(ms).toLocaleString("en-AU", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit", timeZone: TZ });
-const mySwms = () => SWMS.map(([id, t, d]) => ({ id, t, d, st: swmsStatus(latestSig(ui.mySigs, me && me.uid, id)) }));
+function companyHasSwms() { return companySwms(myCompanyId()).length > 0; }
+const mySwms = () => companySwms(myCompanyId()).map(([id, t, d]) => ({ id, t, d, st: swmsStatus(latestSig(ui.mySigs, me && me.uid, id)) }));
 function swmsReminderHtml() {
   if (!me || !ui.mySigs) return "";
-  const bad = mySwms().filter(x => x.st.k !== "ok"); if (!bad.length) return "";
-  const exp = bad.filter(x => x.st.k !== "due").length, due = bad.length - exp;
+  const model = swmsReminderModel(myCompanyId(), ui.mySigs, me.uid, swNow());
+  if (!model) return "";
+  const { exp, due, titles } = model;
   return `<button type="button" class="swremind ${exp ? "sw-exp" : "sw-due"}" data-swms=""><span class="ic">✍</span><span><b>${exp ? `${exp} SWMS need${exp === 1 ? "s" : ""} signing${due ? ` · ${due} due soon` : ""}` : `${due} SWMS due for re-signing`}</b>
-    <small>${bad.map(x => esc(x.t)).join(" · ")}</small></span><span class="chev">›</span></button>`;
+    <small>${titles.map(t => esc(t)).join(" · ")}</small></span><span class="chev">›</span></button>`;
+}
+function swmsEmptyHtml() {
+  return `<p class="muted pad">${esc(SWMS_EMPTY)}</p>`;
 }
 function swmsSub() {          // my signatures (everyone); all signatures (admins)
   if (ui.swmsUnsub || !me) return;
@@ -5965,24 +5970,28 @@ const swmsList = (jobId = "") => `<div class="swlistwrap"><div class="swlist">${
       <button type="button" class="swbtn ${st.k === "ok" ? "" : "primary"}" data-swsign="${id}" data-job="${esc(jobId)}">${st.k === "none" ? "Read & sign" : st.k === "ok" ? "Sign again" : "Re-sign"}</button></div></div>`).join("")}</div>
   <p class="sub muted">${esc(orgSettings().name)} SWMS · version July 2026 · tap a title to read the PDF. Signatures last 12 months. A signature due within 30 days asks you to sign again. ${esc(POWERED_BY)}.</p></div>`;
 function swmsView() {
+  if (!companyHasSwms()) return `<div class="sm-head"><h1>SWMS</h1></div>${swmsEmptyHtml()}`;
   return `<div class="sm-head"><h1>SWMS</h1></div>${swmsReminderHtml()}<h3 class="swh">My signatures</h3>${swmsList()}${me.role === "admin" ? swmsAdminHtml() : ""}`;
 }
 function swmsOverlay(jobId = "") {
-  const v = incOverlay(`<h3>📋 SWMS</h3>${swmsList(jobId)}<div class="btns"><button type="button" class="mbtn ghost" data-x>Back</button></div>`);
+  const body = companyHasSwms() ? swmsList(jobId) : swmsEmptyHtml();
+  const v = incOverlay(`<h3>📋 SWMS</h3>${body}<div class="btns"><button type="button" class="mbtn ghost" data-x>Back</button></div>`);
   v.classList.add("swov"); v.dataset.job = jobId; v.querySelector("[data-x]").onclick = () => v.remove();
 }
 // ---- Admin: who signed what, expiry, who is overdue
 function swmsAdminHtml() {
+  const catalogue = companySwms(myCompanyId());
+  if (!catalogue.length) return "";
   const all = ui.allSigs || [];
   const people = [...new Map([...staff.filter(s => s.uid).map(s => [useEmulator && s.uid === ALEX_UID ? "ALEX_UID" : s.uid, s.name]), ...all.map(s => [s.uid, s.name])]).entries()];
-  const cells = people.map(([uid, name]) => ({ uid, name, sts: SWMS.map(([id]) => swmsStatus(latestSig(all, uid, id))) }));
+  const cells = people.map(([uid, name]) => ({ uid, name, sts: catalogue.map(([id]) => swmsStatus(latestSig(all, uid, id))) }));
   const over = cells.filter(c => c.sts.some(s => s.k !== "ok" && s.k !== "due")).length, dueN = cells.filter(c => c.sts.some(s => s.k === "due")).length;
   const short = { "working-near-roads": "Roads", "mobile-plant": "Plant", "working-with-silica": "Silica", "hazardous-substances": "Haz subs", "electrical": "Electrical" };
   const rows = [...all].sort((a, b) => sigMs(b) - sigMs(a));
-  const cards = `<div class="swpeople">${cells.map(c => `<article class="swperson"><b>${esc(c.name)}</b>${c.sts.map((s, i) => `<div class="swprow"><span>${short[SWMS[i][0]]}</span><span class="swpill ${s.cls}" data-swstatus="${s.k}" ${s.sig ? `data-swsig="${esc(s.sig.id)}"` : ""}>${esc(swFlag(s))}</span></div>`).join("")}</article>`).join("")}</div>`;
+  const cards = `<div class="swpeople">${cells.map(c => `<article class="swperson"><b>${esc(c.name)}</b>${c.sts.map((s, i) => `<div class="swprow"><span>${short[catalogue[i][0]]}</span><span class="swpill ${s.cls}" data-swstatus="${s.k}" ${s.sig ? `data-swsig="${esc(s.sig.id)}"` : ""}>${esc(swFlag(s))}</span></div>`).join("")}</article>`).join("")}</div>`;
   return `<h3 class="swh">Team status <span class="swpill sw-exp">${over} overdue or missing</span> <span class="swpill sw-due">${dueN} due soon</span></h3>
   ${cards}
-  <div class="swtablewrap team"><table class="swtable"><thead><tr><th>Worker</th>${SWMS.map(([id]) => `<th>${short[id]}</th>`).join("")}</tr></thead><tbody>
+  <div class="swtablewrap team"><table class="swtable"><thead><tr><th>Worker</th>${catalogue.map(([id]) => `<th>${short[id]}</th>`).join("")}</tr></thead><tbody>
   ${cells.map(c => `<tr><td><b>${esc(c.name)}</b></td>${c.sts.map(s => `<td><span class="swpill ${s.cls}" data-swstatus="${s.k}" ${s.sig ? `data-swsig="${esc(s.sig.id)}"` : ""}>${esc(swFlag(s))}</span></td>`).join("")}</tr>`).join("")}
   </tbody></table></div>
   ${swmsDownloadHtml()}
@@ -6005,7 +6014,9 @@ function sigDetail(id) {
 }
 // ---- Sign flow: read (open PDF) -> tick -> optional job -> finger signature + printed name -> Sign
 function signSwms(id, jobId) {
-  const [, title, desc] = SWMS.find(x => x[0] === id);
+  const row = companySwms(myCompanyId()).find(x => x[0] === id);
+  if (!row) return;
+  const [, title, desc] = row;
   const opts = jobs.filter(j => j.status !== "Cancelled" && (j.assigned || []).includes(me.uid) && j.date >= addDays(todayStr(), -7) && j.date <= addDays(todayStr(), 14))
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   if (jobId && !opts.some(j => j.id === jobId)) { const j = jobs.find(x => x.id === jobId); if (j) opts.unshift(j); }
@@ -6083,9 +6094,10 @@ async function swmsChunkBytes(id) {
   } catch { return null; }
 }
 async function swmsBytes(id) {          // official SWMS PDF, or a labelled placeholder when the PDF is not in swmsChunks
+  // Only Heartwood has these documents. Other companies are not offered a placeholder PDF.
+  if (!isHeartwoodCompany(myCompanyId())) return null;
   if (!swmsBin[id]) {
-    // The uploaded SWMS PDFs are Heartwood's own documents. Other companies get the labelled placeholder.
-    const got = myCompanyId() === "heartwood" ? await swmsChunkBytes(id) : null;
+    const got = await swmsChunkBytes(id);
     if (got) { swmsPlaceholder[id] = false; swmsBin[id] = got; }
     else {
       const known = SWMS.find(x => x[0] === id);
@@ -6097,6 +6109,7 @@ async function swmsBytes(id) {          // official SWMS PDF, or a labelled plac
   return swmsBin[id];
 }
 async function openSwms(id) {
+  if (!companySwms(myCompanyId()).some(row => row[0] === id)) return false;
   const w = window.open("", "_blank");            // open now (inside the tap) so phones don't block the popup
   if (!w) { toast("Pop-up blocked. Allow pop-ups to read the SWMS, then sign."); return false; }
   try { w.document.write("<p style='font:16px sans-serif;padding:20px'>Loading SWMS…</p>"); } catch { /* already navigating */ }
@@ -6109,7 +6122,8 @@ async function openSwms(id) {
 }
 // ---- Signed download (admins): original SWMS pages + a sign-off sheet, built in the browser with pdf-lib
 // (vendor/pdf-lib.min.js, MIT, loaded on first use only — no CDN).
-// Organisation legal name and ABN come from org settings. CallUp is the product line.
+// Sign-off sheet names the signed-in company. Heartwood keeps its legal name and ABN.
+// Another company never gets Heartwood's name or ABN on this sheet. CallUp is the product line.
 let pdfLibP = null;
 const loadPdfLib = () => pdfLibP || (pdfLibP = new Promise((ok, no) => {
   if (window.PDFLib) return ok(window.PDFLib);
@@ -6125,13 +6139,17 @@ function validSigners(id, job = "") {
 }
 async function buildSignedSwmsPdf(id, sigs, jobLabel = "", single = false) {
   const L = await loadPdfLib(), { PDFDocument, StandardFonts, rgb } = L;
-  const [, title, desc] = SWMS.find(x => x[0] === id);
-  const out = await PDFDocument.create(), src = await PDFDocument.load(await swmsBytes(id), { ignoreEncryption: true });
+  const known = companySwms(myCompanyId()).find(x => x[0] === id);
+  if (!known) throw new Error("No SWMS for this company");
+  const [, title, desc] = known;
+  const bytes = await swmsBytes(id);
+  if (!bytes) throw new Error("No SWMS for this company");
+  const out = await PDFDocument.create(), src = await PDFDocument.load(bytes, { ignoreEncryption: true });
   (await out.copyPages(src, src.getPageIndices())).forEach(pg => out.addPage(pg));
   const F = await out.embedFont(StandardFonts.Helvetica), B = await out.embedFont(StandardFonts.HelveticaBold);
   const T = x => String(x ?? "").replace(/[\u00a0\u202f\u2009]/g, " ").replace(/[^\x20-\x7e\u00a1-\u00ff\u2013\u2014\u2018\u2019\u201c\u201d\u2022]/g, "?");
   const fit = (t, f, sz, w) => { t = T(t); while (t.length > 1 && f.widthOfTextAtSize(t, sz) > w) t = t.slice(0, -2) + "…"; return t; };
-  const org = orgSettings();
+  const org = swmsSignoffOrg(orgSettings(), myCompanyId());
   const W = 595.28, H = 841.89, M = 32, navy = rgb(0.043, 0.122, 0.227), grey = rgb(0.4, 0.42, 0.45), line = rgb(0.75, 0.77, 0.8), red = rgb(0.55, 0.08, 0.08);
   const cols = [[M, 100, "Name"], [M + 100, 118, "Signature"], [M + 218, 108, "Signed"], [M + 326, 128, "Job"], [M + 454, W - M - (M + 454), "Expires"]];
   const RH = 58, gen = swDT(swNow()), ph = !!swmsPlaceholder[id];
@@ -6140,7 +6158,7 @@ async function buildSignedSwmsPdf(id, sigs, jobLabel = "", single = false) {
     pg = out.addPage([W, H]); y = H - M; n++;
     pg.drawRectangle({ x: 0, y: H - 6, width: W, height: 6, color: navy });
     pg.drawText(fit(org.legalName, B, 16, W * 0.62), { x: M, y: y - 14, size: 16, font: B, color: navy });
-    pg.drawText("ABN " + org.abn, { x: M, y: y - 30, size: 9.5, font: F, color: grey });
+    if (org.abn) pg.drawText("ABN " + org.abn, { x: M, y: y - 30, size: 9.5, font: F, color: grey });
     if (org.companyId && org.companyId !== "heartwood") {
       const contact = [org.address, [org.phone, org.email].filter(Boolean).join(" · ")].filter(Boolean).join("  ");
       if (contact) { y -= 12; pg.drawText(fit(contact, F, 8, W - 2 * M), { x: M, y: y - 30, size: 8, font: F, color: grey }); }
@@ -6180,7 +6198,8 @@ async function buildSignedSwmsPdf(id, sigs, jobLabel = "", single = false) {
   return out.save();
 }
 function signedFileName(id, job, one) {
-  const t = SWMS.find(x => x[0] === id)[1], slug = x => String(x).replace(/[^A-Za-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 40);
+  const found = SWMS.find(x => x[0] === id);
+  const t = found ? found[1] : "SWMS", slug = x => String(x).replace(/[^A-Za-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 40);
   return `SWMS_${slug(t)}_v${SWMS_VERSION}_signed${one ? "_" + slug(one) : job ? "_" + slug(job) : ""}_${ymd(new Date(swNow()))}.pdf`;
 }
 // Ready sheet: a fresh tap for Share (iPhone/iPad share sheet: Mail, Messages, Files…) / Download / Open.
@@ -6200,9 +6219,12 @@ function deliverPdf(bytes, name, placeholder = false) {
 }
 async function downloadSigned(id, job = "", sigId = "") {
   if (!me || me.role !== "admin") return;
+  const catalogue = companySwms(myCompanyId());
+  if (!catalogue.length) return;
   const all = ui.allSigs || [];
   const one = sigId && all.find(x => x.id === sigId);
   const sigs = one ? [one] : validSigners(id || "", job), sid = one ? one.swmsId : id;
+  if (!catalogue.some(row => row[0] === sid)) return;
   const jobLabel = one ? (one.jobLabel || "") : job ? ((all.find(s => sigJobKey(s) === job) || {}).jobLabel || job) : "";
   if (!one && !sigs.length) return toast("No current valid signatures" + (job ? " for that job" : "") + ".");
   toast("Building signed PDF…");
@@ -6210,8 +6232,10 @@ async function downloadSigned(id, job = "", sigId = "") {
   catch (e) { console.warn(e); toast("Could not build PDF: " + (e.code || e.message)); }
 }
 function swmsDownloadHtml() {
+  const catalogue = companySwms(myCompanyId());
+  if (!catalogue.length) return "";
   return `<h3 class="swh">Signed downloads <small class="muted">for clients · SWMS + sign-off sheet</small></h3><div class="swdl">
-  ${SWMS.map(([id, t]) => { const v = validSigners(id), jobsM = new Map(v.filter(s => sigJobKey(s)).map(s => [sigJobKey(s), s.jobLabel || sigJobKey(s)]));
+  ${catalogue.map(([id, t]) => { const v = validSigners(id), jobsM = new Map(v.filter(s => sigJobKey(s)).map(s => [sigJobKey(s), s.jobLabel || sigJobKey(s)]));
     return `<div class="swdlrow"><div class="swdlt"><b>${esc(t)}</b><small class="muted">${v.length} current valid signer${v.length === 1 ? "" : "s"}</small></div>
     <select class="swdljob" data-for="${id}" aria-label="Job filter for ${esc(t)}"><option value="">All current valid signatures</option>${[...jobsM].map(([k, l]) => `<option value="${esc(k)}">Job: ${esc(l)}</option>`).join("")}</select>
     <button type="button" class="swbtn primary" data-swdl="${id}" ${v.length ? "" : "disabled"}>⬇ Download signed PDF</button></div>`; }).join("")}</div>`;

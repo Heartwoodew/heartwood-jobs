@@ -44,7 +44,7 @@ Public host named in-repo: `jobs.heartwoodew.com` (`CNAME`, one line). The manif
 | `app/features/chat.js` | Chat payload and path rules |
 | `app/features/chat-ui.js` | Chat screen |
 | `app/features/compliance.js` | Fleet and policies |
-| `app/features/swms-sign.js` | SWMS ids, 12-month validity, placeholder PDF |
+| `app/features/swms-sign.js` | Heartwood-only SWMS list (other companies start with none), 12-month validity, placeholder PDF |
 | `app/vendor/pdf-lib.min.js` | MIT PDF library, loaded on first signed-SWMS download (`app/app.js` `loadPdfLib`, lines 2553–2557) |
 | `app/icons/*` | PWA icons |
 
@@ -168,7 +168,7 @@ Header search (`gsearch`, lines 2661–2684) is shown whenever someone is signed
 
 | Tab | Screen |
 | --- | --- |
-| Today | Today’s jobs, run-sheet order if one is approved, SWMS reminder, fleet banner |
+| Today | Today’s jobs, run-sheet order if one is approved, SWMS reminder when the company has SWMS (Heartwood only; other companies start with none), fleet banner |
 | Jobs | Upcoming through 7 days ahead (`wkEnd`, line 1866) |
 | Chat | Team chat |
 | Photos | Jobs plus “Add photos” |
@@ -196,8 +196,8 @@ Job detail (`renderOpDetail`, lines 1957–2008) has two tabs: Job and Chat. Act
 | Chat | Yes | Yes | Yes |
 | Photos / receipts upload | Yes | Yes | Yes. Operators are not meant to read a receipt image back; see photos topic. |
 | Safety incidents | All incidents | Own reports | Own reports |
-| SWMS sign | Yes | Yes | Yes |
-| SWMS team register and signed PDF | Admin | No | No |
+| SWMS sign | Heartwood only. Other companies start with none | Heartwood only | Heartwood only |
+| SWMS team register and signed PDF | Heartwood admin | No | No |
 | Compliance edit | Admin, and only if the plan includes fleet | Read-only fleet if the plan includes it | Same |
 | Policies | Admin only | Hidden | Hidden |
 | Inbox | Owner only | “Owner only.” | “Owner only.” |
@@ -658,7 +658,11 @@ The live security rules for incidents are **GAP** (not in this repo). The emulat
 
 ## SWMS list
 
-`app/features/swms-sign.js` `SWMS` (lines 9–15), version `2026-07` (`SWMS_VERSION`, line 5):
+SWMS are **Heartwood-only for now**. `companySwms` in `app/features/swms-sign.js` uses `isHeartwoodCompany` from `app/features/company.js`. Company id `heartwood`, and a missing company id (legacy Heartwood records), get the five documents below. Other companies start with none, including a new sign-up and a test company.
+
+An empty list means no SWMS reminder on admin Home or operator Today, no Sign SWMS prompt, and no due or overdue counts. A job hides **View SWMS**. The SWMS screen says `No SWMS set up for your company yet.` It does not list Heartwood titles and it does not build a placeholder PDF. Incidents keep working unchanged.
+
+`app/features/swms-sign.js` `SWMS`, version `2026-07` (`SWMS_VERSION`):
 
 | Id | Title |
 | --- | --- |
@@ -703,7 +707,7 @@ Toast: `Signed {title} · valid to {date}`. Save failure: `Could not save: {code
 
 The page rewrites ok / due / exp labels with Brisbane dates (`swmsStatus`, `app/app.js` lines 2372–2378).
 
-`swmsReminderHtml` (lines 2382–2388) shows when any of the five is not `ok`. It is on admin Home and on the operator Today screen.
+`swmsReminderHtml` shows when the company's list is non-empty and any document is not `ok`. Today that list is Heartwood's five. Other companies get no reminder. It is on admin Home and on the operator Today screen.
 
 Everyone subscribes to their own signatures. Admins also subscribe to the whole collection (`swmsSub`, lines 2389–2395). A listen error is `console.warn` only.
 
@@ -713,7 +717,7 @@ Everyone subscribes to their own signatures. Admins also subscribe to the whole 
 
 **View signature** shows the stored PNG (`sigDetail`, lines 2437–2445). It includes the uid.
 
-**Download signed PDF** (`downloadSigned` from line 2634, `buildSignedSwmsPdf` lines 2565–2613) copies the SWMS pages (or the placeholder) and adds a sign-off sheet for Heartwood Earthworx Pty Ltd, ABN `31 667 738 098` (`COMPANY`, `COMPANY_ABN`, line 2551). Current valid signers are status ok or due (`validSigners`, lines 2560–2564). Filter by job or one signer. Empty set: `No current valid signatures`. Placeholder downloads say not to send the file to a client as the SWMS (`deliverPdf`, line 2625). Share / Download / Open uses a blob URL.
+**Download signed PDF** (`downloadSigned`, `buildSignedSwmsPdf`) copies the SWMS pages (or the placeholder) and adds a sign-off sheet. For Heartwood that sheet is Heartwood Earthworx Pty Ltd, ABN `31 667 738 098`. Another company is not offered the download, because its list is empty. If a sheet is still built, `swmsSignoffOrg` prints that company's own legal name and ABN and does not print Heartwood's name or ABN. Current valid signers are status ok or due (`validSigners`). Filter by job or one signer. Empty set: `No current valid signatures`. Placeholder downloads say not to send the file to a client as the SWMS (`deliverPdf`). Share / Download / Open uses a blob URL.
 
 If pop-ups are blocked when opening a SWMS in a new tab: `Pop-up blocked. Allow pop-ups to read the SWMS, then sign.` (`openSwms`, line 2540). `PDF library failed to load` comes from `loadPdfLib` (line 2556).
 
@@ -786,7 +790,7 @@ Provenance: `app/features/compliance.js`; `app/app.js` nav and `COMP` wiring (li
 `homeView` / `homeBody` (`app/app.js` lines 1021–1038).
 
 - Greeting from the Brisbane hour: before 12 Good morning, before 17 Good afternoon, else Good evening (`greet`, line 936). First word of `me.name`.
-- Compliance banner, then the cloud-expiry sentence for admins, then the SWMS reminder.
+- Compliance banner, then the cloud-expiry sentence for admins, then the SWMS reminder when that company has SWMS. SWMS are Heartwood-only for now. Other companies start with none, so they see no reminder.
 - **Needs attention** (`attentionHtml`, lines 1000–1020), admin only:
   - jobs with a date today or later, not done, nobody allocated
   - jobs with no PO that are done and not invoiced, or dated within 7 days, or in progress
@@ -802,7 +806,7 @@ There is no separate “reminders” collection. Reminders on Home are the SWMS 
 
 ## Operator Home
 
-The Today tab (`renderOperator`, lines 1931–1942): greeting, job count, approved driving-order note, fleet banner, SWMS reminder, today’s cards. Tomorrow is the Jobs tab, not a second home column. **Report incident** and **SWMS** are on More, and also as buttons in `homeBody` when `admin` is false (line 1031). The operator shell does not call `homeBody`. It uses the Today tab.
+The Today tab (`renderOperator`): greeting, job count, approved driving-order note, fleet banner, SWMS reminder when the company has SWMS (Heartwood only; other companies start with none), today’s cards. Tomorrow is the Jobs tab, not a second home column. **Report incident** and **SWMS** are on More, and also as buttons in `homeBody` when `admin` is false. The operator shell does not call `homeBody`. It uses the Today tab. A company with no SWMS still has **Report incident**. Its SWMS screen says none are set up yet.
 
 ## Inbox (owner only)
 
@@ -1195,7 +1199,7 @@ Provenance: `gh pr list` and `gh pr view` on 2026-11-08; `git show` of the three
 | No straight-line distance as drive kilometres | `route-config.js` line 10 |
 | Quote total blocked until every used rate is set | `quotes.js` `calcQuote` |
 | One category per quote; spoil must not be saved on a backslab description | quotes step 0; `editJob` lines 1265–1267 |
-| SWMS signature PNG data URL ≤ 90000 characters; 12 calendar months; five document ids | `signSwms`; `swms-sign.js`; SWMS rules |
+| SWMS signature PNG data URL ≤ 90000 characters; 12 calendar months; five document ids for Heartwood only. Other companies start with none | `signSwms`; `companySwms` in `swms-sign.js`; SWMS rules |
 | SWMS official PDF absent from git | `swms-sign.js` lines 1–3 |
 | Export zip refuses above 32 MiB | `MAX_EXPORT_BYTES` |
 | Timesheet lunch 30 minutes on every complete day | `TS_LUNCH` |

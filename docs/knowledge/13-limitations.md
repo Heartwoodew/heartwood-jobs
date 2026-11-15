@@ -38,7 +38,7 @@
 | No straight-line distance as drive kilometres | `route-config.js` line 10 |
 | Quote total blocked until every used rate is set | `quotes.js` `calcQuote` |
 | One category per quote; spoil must not be saved on a backslab description | quotes step 0; `editJob` lines 1265–1267 |
-| SWMS signature PNG data URL ≤ 90000 characters; 12 calendar months; five document ids | `signSwms`; `swms-sign.js`; SWMS rules |
+| SWMS signature PNG data URL ≤ 90000 characters; 12 calendar months; five document ids for Heartwood only. Other companies start with none | `signSwms`; `companySwms` in `swms-sign.js`; SWMS rules |
 | SWMS official PDF absent from git | `swms-sign.js` lines 1–3 |
 | Export zip refuses above 32 MiB | `MAX_EXPORT_BYTES` |
 | Timesheet lunch 30 minutes on every complete day | `TS_LUNCH` |
