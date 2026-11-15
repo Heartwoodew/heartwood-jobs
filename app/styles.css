@@ -1200,3 +1200,21 @@ dialog.comp-alert h2 { margin: 0 0 8px; font-size: 1.1rem; }
 .doc-copy input{width:100%;min-height:44px;font:inherit;padding:8px;border:1px solid var(--line);border-radius:8px}
 .mcard.job-docs{display:block}
 .rev-diff{margin:0;padding-left:18px}
+.perf{margin:0 0 18px;padding:12px;background:#fff;border:1px solid var(--sm-line);border-radius:8px}
+.perf h2{font-size:18px;margin:0}
+.perf-bar{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:end;margin:8px 0}
+.perf-bar label,.perf-weights label{display:flex;flex-direction:column;gap:4px;font-size:13px}
+.perf-toggle{flex-direction:row !important;align-items:center;gap:8px;min-height:40px}
+.perf-tip{margin:6px 0 10px}
+.perf-tip p{margin:6px 0}
+.perf-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.perf-table{min-width:920px}
+.perf-row.on{background:#f4f7fb}
+.perf-break{margin-top:10px;padding:10px;background:#f7f1e8;border-radius:8px}
+.perf-break h3{margin:0 0 6px;font-size:16px}
+.perf-jobs{margin:8px 0 0;padding-left:18px}
+.perf-set{border-top:1px solid var(--sm-line);margin-top:12px}
+.perf-weights{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:8px 0}
+.take5{display:flex;flex-direction:column;gap:8px}
+.take5-step{display:flex;gap:8px;align-items:center;min-height:40px}
+.take5 fieldset{border:1px solid var(--sm-line);border-radius:8px;padding:8px}

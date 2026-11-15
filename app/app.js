@@ -34,6 +34,13 @@ import {
   canSendPasswordReset, forgotPasswordMessage, GOOGLE_ONLY_RESET,
 } from "./features/staff-invites.js";
 import { saveGuard, settleOrQueue } from "./features/pending-write.js";
+import {
+  DEFAULT_WEIGHTS, canEditPerformanceSettings, canSeeStaffPerformance,
+  performancePanelHtml, performanceSettingsHtml, periodBounds, rankPerformance, sanitizeWeights, weightsFromForm,
+} from "./features/performance.js";
+import {
+  canViewTake5, hasTake5, shouldPromptTake5, take5Enabled, take5FormHtml, take5IdFor, take5JobHtml, take5ListHtml, take5Payload, take5PhotoPath,
+} from "./features/take5.js";
 import { PRODUCT_NAME, POWERED_BY, orgSettings, saveOrgSettings, setActiveCompany } from "./org-settings.js";
 import {
   buildCompanyCreate, buildFriendCompany, buildTestCompany, companyAccess, companyDetailPatch, companyIdFromName, demoBundle,
@@ -223,7 +230,7 @@ onAuthStateChanged(auth, async user => {
     }, e => console.warn("older open jobs", e.code, e.message));
     // Invoicing: every Done job (any date), admin only.
     const u2 = onSnapshot(companyJobs([where("status", "==", "Done")]), s => { ui.done = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); donePill(); if (ui.view === "invoices" || ui.view === "completed" || ui.view === "home") renderAdmin(); }, e => console.warn("done jobs", e.code || e.message));
-    const u3 = onSnapshot(query(collection(db, "incidents"), where("companyId", "==", myCompanyId())), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); if (ui.view === "safety" || ui.view === "home") renderAdmin(); incRefresh(); }, e => console.warn("incidents", e.code));
+    const u3 = onSnapshot(query(collection(db, "incidents"), where("companyId", "==", myCompanyId())), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); ui.perfIncState = "ok"; if (ui.view === "safety" || ui.view === "home" || ui.view === "staff") renderAdmin(); incRefresh(); }, e => { ui.perfIncState = "absent"; console.warn("incidents", e.code); });
     const u4 = onSnapshot(query(collection(db, "invites"), where("tenantId", "==", myTenant()), where("role", "in", [...myInviteRoles()])), s => {
       ui.invites = s.docs.map(d => ({ id: d.id, ...d.data() })); ui.invitesErr = "";
       if (ui.view === "staff") renderAdmin();
@@ -233,7 +240,7 @@ onAuthStateChanged(auth, async user => {
     const u6 = watchStaffRoster();
     moneyStart(renderAdmin);
     const stopCap = startCapacityWatch();
-    unsub = () => { u1(); u2(); u3(); u4(); u5(); u6(); stopCap(); moneyStop(); CHAT.stop(); PUSH.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; }; swmsSub(); COMP.start(); leaveStart(); claimsStart(); if (me.platformOwner) watchMaster();
+    unsub = () => { u1(); u2(); u3(); u4(); u5(); u6(); stopCap(); moneyStop(); CHAT.stop(); PUSH.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; }; swmsSub(); COMP.start(); leaveStart(); claimsStart(); watchTake5Flag(); if (me.platformOwner) watchMaster();
     getDocs(companyJobs([where("date", "==", "")])).then(s => { ui.undated = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); addNameOnlyStaff(ui.undated); renderAdmin(); }).catch(e => console.warn("undated", e.code, e.message));
   } else {
     // Operators may only list jobs assigned to them (enforced by firestore.rules).
@@ -252,7 +259,7 @@ onAuthStateChanged(auth, async user => {
     const u6 = watchStaffRoster();
     if (canInvite() && window.HW_PREVIEW_VIEW === "staff") ui.opTab = "staff";
     const stopCap = startCapacityWatch();
-    unsub = () => { u1(); u3(); u4(); u6(); stopCap(); moneyStop(); CHAT.stop(); PUSH.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start(); leaveStart(); claimsStart();
+    unsub = () => { u1(); u3(); u4(); u6(); stopCap(); moneyStop(); CHAT.stop(); PUSH.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start(); leaveStart(); claimsStart(); watchTake5Flag();
   }
 });
 
@@ -855,7 +862,8 @@ function settingsView() {
     ? `<section class="pad setrates"><h3>Quote rates</h3><p class="sub">Your plant, labour, travel and tip rates for quotes. They start blank and are only used by your company.</p><button type="button" id="setrates" class="sm-btn">Edit quote rates</button></section>`
     : "";
   const trades = (ui.tradeSetup && ui.tradeSetup.enabled) || readTradeList(org, null);
-  return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin"), trades, canEditTrades: canEditTitles() }) + rates + PUSH.panelHtml()
+  const perfSet = canEditPerformanceSettings(me) ? performanceSettingsHtml(ui.perfSettings || { weights: DEFAULT_WEIGHTS }, { take5On: ui.take5On !== false }) : "";
+  return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin"), trades, canEditTrades: canEditTitles() }) + rates + perfSet + PUSH.panelHtml()
     + dispatchSettingsHtml(dispatchSettingsNow(), { canEdit: canEditTitles() });
 }
 async function saveDispatchForm(form) {
@@ -913,6 +921,25 @@ function bindTradeList(A) {
 }
 function bindSettings(A) {
   bindTradeList(A);
+  if (canEditPerformanceSettings(me)) ensurePerfWatch();
+  const take5Form = A.querySelector("#take5set");
+  if (take5Form) take5Form.onsubmit = async ev => {
+    ev.preventDefault();
+    try {
+      await setDoc(doc(db, "take5Settings", myCompanyId()), {
+        companyId: myCompanyId(), enabled: !!(take5Form.enabled && take5Form.enabled.checked),
+        updatedBy: me.uid, updatedAt: serverTimestamp(),
+      });
+      ui.take5On = !!(take5Form.enabled && take5Form.enabled.checked);
+      toast(ui.take5On ? "Take 5s are on" : "Take 5s are off");
+    } catch (e) { toast("Not saved: " + (e.code || e.message)); }
+  };
+  const weightForm = A.querySelector("#perfweights");
+  if (weightForm) weightForm.onsubmit = async ev => {
+    ev.preventDefault();
+    try { await savePerfDoc({ weights: weightsFromForm(weightForm) }); toast("Ranking weights saved"); }
+    catch (e) { toast("Not saved: " + (e.code || e.message)); }
+  };
   const dispatchForm = A.querySelector("#dispatchform");
   if (dispatchForm) dispatchForm.onsubmit = ev => { ev.preventDefault(); saveDispatchForm(dispatchForm); };
   const rb = A.querySelector("#setrates");
@@ -2373,13 +2400,14 @@ function leaveStart() {
     : query(lvColl(), where("uid", "==", me.uid));
   ui.leaveUnsub = onSnapshot(src, snap => {
     ui.leave = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    ui.leaveState = "ok";
     const jobForm = document.getElementById("jf");
     if (jobForm) refreshJobLeaveWarn(jobForm);
     if (document.activeElement?.closest?.("#leaveform, .lv-decide")) return;
     const admin = me.role === "admin" && !ui.myJobs;
     if (admin && (ui.view === "leave" || ui.view === "timesheet" || ui.view === "dispatch" || ui.view === "capacity")) renderAdmin();
     else if (!admin && (ui.opTab === "leave" || ui.opTab === "hours")) renderOperator();
-  }, () => { ui.leave = []; });
+  }, () => { ui.leave = []; ui.leaveState = "absent"; });
 }
 function leavePeople(names) {
   return (names || []).map(name => {
@@ -3472,9 +3500,247 @@ function watchStaffRoster() {
     staffRerender();
   });
 }
+function docData(snap) {
+  if (!snap || typeof snap.exists !== "function" || !snap.exists() || typeof snap.data !== "function") return null;
+  return snap.data() || null;
+}
+function perfStop() {
+  ui.perfSetUnsub?.(); ui.perfSetUnsub = null;
+  ui.perfSheetUnsub?.(); ui.perfSheetUnsub = null; ui.perfSheetKey = "";
+  ui.prestartPerfUnsub?.(); ui.prestartPerfUnsub = null;
+  ui.take5Unsub?.(); ui.take5Unsub = null;
+  ui.take5FlagUnsub?.(); ui.take5FlagUnsub = null;
+  ui.perfDoneUnsub?.(); ui.perfDoneUnsub = null;
+  ui.perfIncUnsub?.(); ui.perfIncUnsub = null;
+}
+function perfRefresh() {
+  if (ui.perfTimer) return;
+  ui.perfTimer = setTimeout(() => {
+    ui.perfTimer = 0;
+    if (document.activeElement?.closest?.("#take5form, #perfweights, #take5set, #perffrom, #perfto")) return;
+    if (me && me.role === "admin" && !ui.myJobs) {
+      if (ui.view === "staff" || ui.view === "safety" || ui.view === "settings") renderAdmin();
+    } else if (!ui.opSel && (ui.opTab === "staff" || ui.opTab === "take5")) renderOperator();
+    else if (ui.opSel) renderOperator();
+  }, 30);
+}
+function watchTake5Flag() {
+  if (!me || ui.take5FlagUnsub) return;
+  ui.take5FlagUnsub = onSnapshot(doc(db, "take5Settings", myCompanyId()), s => {
+    ui.take5On = take5Enabled(docData(s));
+    watchTake5List();
+    perfRefresh();
+  }, () => { ui.take5On = true; });
+  watchTake5List();
+}
+function perfExcludeOn() {
+  if (typeof ui.perfExclude === "boolean") return ui.perfExclude;
+  if (ui.perfSettings && ui.perfSettings.excludeLeaders === false) return false;
+  return true;
+}
+function perfPeople() {
+  const rows = (ui.staffLogins && ui.staffLogins.length ? ui.staffLogins : staff) || [];
+  const seen = new Set();
+  const out = [];
+  for (const person of rows) {
+    if (!person || !person.uid || seen.has(person.uid)) continue;
+    seen.add(person.uid);
+    out.push({ uid: person.uid, name: person.name || "Staff", role: person.role || person.staffRole || "" });
+  }
+  return out;
+}
+function perfJobs() {
+  const map = new Map();
+  for (const list of [jobs, ui.done, ui.undated, ui.officeJobs, ui.perfDone]) {
+    for (const job of list || []) if (job && job.id && !map.has(job.id)) map.set(job.id, withMoney(job));
+  }
+  return [...map.values()];
+}
+function perfModel() {
+  const period = periodBounds(ui.perfKind || "month", todayStr(), { start: ui.perfFrom || "", end: ui.perfTo || "" });
+  const incidents = me && me.role === "admin" ? (ui.incidents || []) : (ui.perfIncidents || ui.incidents || []);
+  const incidentState = (me && me.role === "admin" && ui.perfIncState === "ok") || ui.perfIncState === "ok" ? "ok" : "absent";
+  return rankPerformance({
+    people: perfPeople(),
+    timesheets: ui.perfSheets || [],
+    jobs: perfJobs(),
+    incidents,
+    leaves: ui.leave || [],
+    prestarts: ui.perfPrestarts || [],
+    take5s: ui.take5s || [],
+    period,
+    excludeLeaders: perfExcludeOn(),
+    weights: (ui.perfSettings && ui.perfSettings.weights) || DEFAULT_WEIGHTS,
+    take5On: ui.take5On !== false,
+    sources: {
+      leave: ui.leaveState === "ok" ? "ok" : "absent",
+      incidents: incidentState,
+      prestarts: ui.perfPreState === "ok" ? "ok" : "absent",
+      timesheets: ui.perfSheetState === "ok" ? "ok" : "absent",
+      take5: ui.take5On === false || ui.take5State === "ok" ? "ok" : "absent",
+    },
+  });
+}
+function ensurePerfWatch() {
+  if (!canSeeStaffPerformance(me)) return;
+  if (!ui.perfSetUnsub) {
+    ui.perfSetUnsub = onSnapshot(doc(db, "performanceSettings", myCompanyId()), s => {
+      ui.perfSettings = docData(s);
+      perfRefresh();
+    }, () => { ui.perfSettings = null; });
+  }
+  const period = periodBounds(ui.perfKind || "month", todayStr(), { start: ui.perfFrom || "", end: ui.perfTo || "" });
+  const key = `${myCompanyId()}:${period.start}:${period.end}`;
+  if (ui.perfSheetKey !== key) {
+    ui.perfSheetUnsub?.();
+    ui.perfSheetKey = key;
+    ui.perfSheetState = "";
+    const q = query(collection(db, "timesheets"), where("companyId", "==", myCompanyId()), where("weekStart", ">=", weekStartOf(period.start)), where("weekStart", "<=", weekStartOf(period.end)));
+    ui.perfSheetUnsub = onSnapshot(q, s => {
+      ui.perfSheets = s.docs.map(d => ({ id: d.id, ...d.data() }));
+      ui.perfSheetState = "ok";
+      if (myCompanyId() === "heartwood") fillHeartwoodSheets(period.start, period.end);
+      else perfRefresh();
+    }, () => { ui.perfSheets = []; ui.perfSheetState = "absent"; perfRefresh(); });
+  }
+  if (!ui.prestartPerfUnsub) {
+    ui.prestartPerfUnsub = onSnapshot(collection(db, "tenants", myCompanyId(), "prestarts"), s => {
+      ui.perfPrestarts = s.docs.map(d => ({ id: d.id, ...d.data() }));
+      ui.perfPreState = "ok";
+      perfRefresh();
+    }, () => { ui.perfPrestarts = []; ui.perfPreState = "absent"; perfRefresh(); });
+  }
+  if (me.role !== "admin" && !ui.perfIncUnsub) {
+    ui.perfIncUnsub = onSnapshot(query(collection(db, "incidents"), where("companyId", "==", myCompanyId())), s => {
+      ui.perfIncidents = s.docs.map(d => ({ id: d.id, ...d.data() }));
+      ui.perfIncState = "ok";
+      perfRefresh();
+    }, () => { ui.perfIncidents = []; ui.perfIncState = "absent"; perfRefresh(); });
+  }
+  if (me.role !== "admin" && !ui.perfDoneUnsub) {
+    ui.perfDoneUnsub = onSnapshot(companyJobs([where("status", "==", "Done")]), s => {
+      ui.perfDone = s.docs.map(d => withMoney({ id: d.id, ...d.data() }));
+      perfRefresh();
+    }, () => { ui.perfDone = []; });
+  }
+  watchTake5List();
+}
+function fillHeartwoodSheets(start, end) {
+  const weeks = [];
+  let week = weekStartOf(start);
+  const last = weekStartOf(end);
+  while (week && week <= last && weeks.length < 30) { weeks.push(week); week = addDays(week, 7); }
+  const have = new Set((ui.perfSheets || []).map(sheet => sheet.id));
+  const ids = [];
+  for (const person of perfPeople().slice(0, 40)) {
+    for (const item of weeks) {
+      const id = `${person.uid}_${item}`;
+      if (!have.has(id)) ids.push(id);
+    }
+  }
+  if (!ids.length) { perfRefresh(); return; }
+  Promise.all(ids.map(id => getDoc(doc(db, "timesheets", id)).catch(() => null))).then(rows => {
+    const add = rows.filter(row => row && row.exists()).map(row => ({ id: row.id, ...row.data() }));
+    if (add.length) ui.perfSheets = [...(ui.perfSheets || []), ...add];
+    ui.perfSheetState = "ok";
+    perfRefresh();
+  });
+}
+function watchTake5List() {
+  if (!me || ui.take5Unsub || !canViewTake5(me)) return;
+  ui.take5Unsub = onSnapshot(query(collection(db, "take5s"), where("companyId", "==", myCompanyId())), s => {
+    ui.take5s = s.docs.map(d => ({ id: d.id, ...d.data() }));
+    ui.take5State = "ok";
+    perfRefresh();
+  }, () => { ui.take5s = []; ui.take5State = "absent"; });
+}
+async function savePerfDoc(patch) {
+  const ref = doc(db, "performanceSettings", myCompanyId());
+  const excludeLeaders = patch && typeof patch.excludeLeaders === "boolean" ? patch.excludeLeaders : perfExcludeOn();
+  if (ui.perfSettings && !(patch && patch.weights)) {
+    await updateDoc(ref, { excludeLeaders, updatedBy: me.uid, updatedAt: serverTimestamp() });
+    return;
+  }
+  const weights = sanitizeWeights((patch && patch.weights) || (ui.perfSettings && ui.perfSettings.weights) || DEFAULT_WEIGHTS);
+  const body = { companyId: myCompanyId(), excludeLeaders, weights, updatedBy: me.uid, updatedAt: serverTimestamp() };
+  if (ui.perfSettings) await updateDoc(ref, body);
+  else await setDoc(ref, body);
+}
+async function fileToJpeg(file) {
+  if (!file) return null;
+  if (file.type === "image/jpeg" && file.size <= 1200000) return file;
+  const bmp = await createImageBitmap(file);
+  const max = 1600;
+  const scale = Math.min(1, max / Math.max(bmp.width, bmp.height, 1));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bmp.width * scale));
+  canvas.height = Math.max(1, Math.round(bmp.height * scale));
+  canvas.getContext("2d").drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.7));
+  if (bmp.close) bmp.close();
+  return blob;
+}
+function openTake5(job, after) {
+  const v = incOverlay(take5FormHtml(job, { name: me.name || "", day: todayStr() }));
+  v.querySelector("[data-x]").onclick = () => v.remove();
+  v.querySelector("#take5form").onsubmit = async ev => {
+    ev.preventDefault();
+    const form = ev.target;
+    const btn = form.querySelector(".complete");
+    if (btn) btn.disabled = true;
+    const id = take5IdFor(me.uid, job.id);
+    let photoPath = "";
+    const file = form.photo && form.photo.files && form.photo.files[0];
+    if (file && navigator.onLine !== false) {
+      try {
+        const blob = await fileToJpeg(file);
+        photoPath = take5PhotoPath(myCompanyId(), me.uid, id);
+        if (blob) await uploadBytes(storageRef(storage, photoPath), blob, { contentType: "image/jpeg", customMetadata: { purpose: "take5", uploaderUid: me.uid, companyId: myCompanyId() } });
+      } catch { photoPath = ""; }
+    }
+    const built = take5Payload({
+      id, uid: me.uid, name: me.name, companyId: myCompanyId(), job: { id: job.id, jobNo: jobNo(job), sm8JobNo: job.sm8JobNo },
+      note: form.note.value, day: todayStr(), photoPath,
+      steps: { stop: form.stop.checked, look: form.look.checked, assess: form.assess.checked, control: form.control.checked, proceed: form.proceed.checked },
+    });
+    if (!built.ok) { if (btn) btn.disabled = false; return toast(built.reason); }
+    try {
+      const result = await settleOrQueue(setDoc(doc(db, "take5s", id), { ...built.data, createdAt: serverTimestamp() }));
+      ui.take5s = [...(ui.take5s || []).filter(row => row.id !== id), { id, ...built.data }];
+      v.remove();
+      toast(result.queued ? "Take 5 saved on this phone. It sends when you are back in range." : "Take 5 saved");
+      if (after) await after();
+    } catch (e) {
+      const existing = await getDoc(doc(db, "take5s", id)).catch(() => null);
+      if (existing && existing.exists() && existing.data().uid === me.uid) {
+        v.remove();
+        if (after) await after();
+        return;
+      }
+      if (btn) btn.disabled = false;
+      toast("Not saved: " + (e.code || e.message));
+    }
+  };
+}
+function rememberOwnTake5(job) {
+  if (!job || !me) return;
+  getDoc(doc(db, "take5s", take5IdFor(me.uid, job.id))).then(snap => {
+    const data = docData(snap);
+    if (!data) return;
+    const row = { id: snap.id, ...data };
+    if (hasTake5(ui.take5s, me.uid, job.id)) return;
+    ui.take5s = [...(ui.take5s || []), row];
+    if (ui.opSel === job.id) renderOperator();
+  }).catch(() => {});
+}
+async function startJobDoc(job) {
+  await updateDoc(doc(db, "jobs", job.id), { updatedAt: serverTimestamp(), updatedBy: me.uid, status: "In progress", startedAt: serverTimestamp() });
+  toast("Started");
+}
 function staffPageHtml() {
   const setup = ui.tradeSetup || resolveCompanySetup({ companyId: myCompanyId() }, null);
-  return staffViewHtml(ui.invites || [], {
+  const perf = canSeeStaffPerformance(me) ? performancePanelHtml(perfModel(), { periodKind: ui.perfKind || "month", custom: { start: ui.perfFrom || "", end: ui.perfTo || "" }, selected: ui.perfWho || "" }) : "";
+  return perf + staffViewHtml(ui.invites || [], {
     now: inviteDisplayNow(), error: ui.invitesErr || "", origin: appOriginFor(myCompanyId(), location.origin),
     emailStatus: inviteMailMap(), roles: myInviteRoles(), titles: setup.titles,
     logins: ui.staffLogins || [], companyId: myCompanyId(), loginsNote: ui.staffLoginsErr || "",
@@ -3544,6 +3810,22 @@ function redrawAfterSave() {
   if (me && me.role === "admin" && !ui.myJobs) renderAdmin(); else renderOperator();
 }
 function bindStaff(A) {
+  if (canSeeStaffPerformance(me)) ensurePerfWatch();
+  const period = A.querySelector("#perfperiod");
+  if (period) period.onchange = () => { ui.perfKind = period.value; ui.perfWho = ""; ensurePerfWatch(); perfRefresh(); };
+  const from = A.querySelector("#perffrom");
+  const to = A.querySelector("#perfto");
+  const applyCustom = () => { ui.perfFrom = from && from.value; ui.perfTo = to && to.value; ui.perfKind = "custom"; ensurePerfWatch(); perfRefresh(); };
+  if (from) from.onchange = applyCustom;
+  if (to) to.onchange = applyCustom;
+  const exclude = A.querySelector("#perfexclude");
+  if (exclude) exclude.onchange = async () => {
+    ui.perfExclude = exclude.checked;
+    try { await savePerfDoc({ excludeLeaders: exclude.checked }); }
+    catch (e) { toast(String(e && e.code || "").includes("permission-denied") ? "Saved on this phone. The ranking choice reaches other phones once performance rules are deployed." : "Couldn't save that ranking choice."); }
+    perfRefresh();
+  };
+  A.querySelectorAll("[data-perf]").forEach(row => row.onclick = () => { ui.perfWho = ui.perfWho === row.dataset.perf ? "" : row.dataset.perf; perfRefresh(); });
   const form = A.querySelector("#invitef");
   if (form) form.onsubmit = async ev => {
     ev.preventDefault();
@@ -5035,6 +5317,12 @@ function renderOperator() {
     return;
   }
   if (ui.opTab === "fleet") ui.opTab = "more";
+  if (ui.opTab === "take5" && canViewTake5(me) && !ui.opSel) {
+    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Take 5s</div><div class="mob-sub">Stop, look, assess, control, proceed</div></div>
+      <div class="pad">${take5ListHtml(ui.take5s || [])}</div>${opTabs("more")}</div>`;
+    bindOp(mine); return;
+  }
+  if (ui.opTab === "take5") ui.opTab = "more";
   if (ui.opTab === "staff" && document.activeElement?.closest?.("#invitef")) return;
   if (ui.opTab === "staff" && canInvite()) {
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Staff</div><div class="mob-sub">Logins and invites</div></div>
@@ -5085,6 +5373,7 @@ function renderOperator() {
         ${COMP.canPrestart() ? `<button type="button" class="mob-more" data-go="prestart"><b>Prestart</b><small>Any machine, before you use it</small></button>` : ""}
         ${fleetBtn}
         <button type="button" class="mob-more incbtn" data-inc=""><b>Report incident</b><small>Safety report</small></button>
+        ${canViewTake5(me) && (ui.take5On !== false || (ui.take5s || []).length) ? `<button type="button" class="mob-more" data-go="take5"><b>Take 5s</b><small>Checks done at the start of a job</small></button>` : ""}
         ${capBtn}
         ${quoteBtn}
         ${staffBtn}
@@ -5178,7 +5467,8 @@ function renderOpDetail(j) {
         <button class="mnote" type="button" data-act="note">Add note</button></div>
       <div class="mcard"><div class="mlbl">Photos</div><div data-photoslot="${esc(j.id)}" data-photorole="cloud"></div>${emailedPhotosNote(j)}<div class="muted sub">Cloud photos are the private copies stored for this job.</div></div>
       <div class="mcard job-docs" data-job-docs="${esc(j.id)}"></div>
-      <div class="mcard safecard"><div class="mlbl">Safety</div><button type="button" class="mnote" data-swms="${j.id}">View SWMS</button><button type="button" class="mnote incbtn" data-inc="${j.id}">Report incident</button></div>
+      <div class="mcard safecard"><div class="mlbl">Safety</div><button type="button" class="mnote" data-swms="${j.id}">View SWMS</button><button type="button" class="mnote incbtn" data-inc="${j.id}">Report incident</button>
+        ${ui.take5On !== false || (ui.take5s || []).some(row => row.jobId === j.id) ? `<div id="take5slot">${take5JobHtml(ui.take5s || [], j.id, { ownUid: me.uid, canView: canViewTake5(me) })}</div>` : ""}</div>
       <div class="mcard">${jobReceiptsHtml(j)}</div>
     </div>
     <div class="mactions"${onChat ? " hidden" : ""}>${done ? `<div class="donebar">Completed${j.loads ? ` · ${esc(j.loads)} loads` : ""}</div>` :
@@ -5189,6 +5479,7 @@ function renderOpDetail(j) {
     </div></div>`;
   rememberJob(j); $("#emailph").onclick = () => emailPhotos(j); wireJobReceipts(j); fillSupCard(j); watchJobPhotos(j); paintPhotoSlots();
   wireJobDocuments(document.querySelector("[data-job-docs]"), j);
+  if (!hasTake5(ui.take5s, me.uid, j.id)) rememberOwnTake5(j);
   const showJobPane = which => {
     ui.jobPane = which === "chat" ? "chat" : "job";
     $("#app").querySelectorAll("[data-jtab]").forEach(b => { b.classList.toggle("on", b.dataset.jtab === ui.jobPane); b.setAttribute("aria-selected", b.dataset.jtab === ui.jobPane ? "true" : "false"); });
@@ -5207,7 +5498,13 @@ function renderOpDetail(j) {
 const logEntry = text => ({ text, by: me.uid, byName: me.name, at: new Date().toLocaleString("en-AU", { timeZone: TZ, dateStyle: "short", timeStyle: "short" }) });
 async function opAction(j, act) {
   const ref = doc(db, "jobs", j.id), base = { updatedAt: serverTimestamp(), updatedBy: me.uid };
-  if (act === "start") { await updateDoc(ref, { ...base, status: "In progress", startedAt: serverTimestamp() }); return toast("Started"); }
+  if (act === "start") {
+    if (shouldPromptTake5(me, ui.take5On !== false) && !hasTake5(ui.take5s, me.uid, j.id)) {
+      const existing = await getDoc(doc(db, "take5s", take5IdFor(me.uid, j.id))).catch(() => null);
+      if (!(existing && existing.exists())) { openTake5(j, () => startJobDoc(j)); return; }
+    }
+    await startJobDoc(j); return;
+  }
   const d = $("#dlg"); d.className = ""; d.onclose = null;
   d.innerHTML = `<form method="dialog" id="of" class="jf"><h2>${act === "done" ? "Complete job" : "Add note"}</h2>
     <p class="muted">${esc(j.address)}</p>
@@ -5515,6 +5812,7 @@ function incidentForm(j) {
       <label>Job (optional)<input name="jobNo" value="${j ? esc(jobNo(j)) : ""}" placeholder="Job #"></label>
       <label>Location / address<input name="location" value="${esc(j ? j.address || "" : "")}" required></label>
       <label>People involved<input name="people" placeholder="Names, incl. visitors / subbies"></label>
+      ${(staff || []).some(s => s.uid) ? `<fieldset class="take5"><legend>Staff involved</legend>${staff.filter(s => s.uid).map(s => `<label class="take5-step"><input type="checkbox" name="involved" value="${esc(s.uid)}"> ${esc(s.name)}</label>`).join("")}</fieldset>` : ""}
       <label>What happened<textarea name="what" rows="4" required></textarea></label>
       <label class="injf hidden">Injury details (body part, nature, treatment)<textarea name="injury" rows="3"></textarea></label>
       <label>Immediate action taken<textarea name="action" rows="3" required></textarea></label>
@@ -5526,8 +5824,9 @@ function incidentForm(j) {
   v.querySelector("[data-x]").onclick = () => v.remove();
   f.onsubmit = async ev => {
     ev.preventDefault(); const btn = f.querySelector(".complete"); btn.disabled = true;
+    const involved = [...f.querySelectorAll("[name=involved]:checked")].map(x => x.value).slice(0, 30);
     const data = { type: f.type.value, occurredAt: f.occurredAt.value, jobId: j ? j.id : "", jobNo: f.jobNo.value.trim(), location: f.location.value.trim(),
-      people: f.people.value.trim(), what: f.what.value.trim(), injury: f.type.value === "Injury" ? f.injury.value.trim() : "", action: f.action.value.trim(),
+      people: f.people.value.trim(), ...(involved.length ? { staffInvolved: involved } : {}), what: f.what.value.trim(), injury: f.type.value === "Injury" ? f.injury.value.trim() : "", action: f.action.value.trim(),
       reportedBy: me.uid, reportedByName: me.name, reportedAt: new Date().toISOString(), createdAt: serverTimestamp(), status: "Open",
       companyId: myCompanyId(), ...(myCompanyId() === "heartwood" ? {} : { tenantId: myCompanyId() }),
       rootCause: "", actions: [], history: [{ at: stamp(), by: me.name, text: "Reported" }] };
@@ -5605,7 +5904,9 @@ function safetyView() {
     document.querySelectorAll("[data-incs]").forEach(b => b.onclick = () => { ui.incS = b.dataset.incs; renderAdmin(); });
     const t = $("#inct"); if (t) t.onchange = () => { ui.incT = t.value; renderAdmin(); };
   });
+  const take5Block = canViewTake5(me) && (ui.take5On !== false || (ui.take5s || []).length) ? `<h3 class="swh">Take 5s</h3>${take5ListHtml(ui.take5s || [])}` : "";
   return `<div class="sm-head"><h1>Safety</h1><span class="headbtns"><button class="sm-btn" data-view="swms">📋 SWMS</button><button class="sm-btn primary" data-inc="">⚠ Report incident</button></span></div>
+    ${take5Block}
     <div class="qtabs">${["Open", "Closed", "All"].map(k => `<button data-incs="${k}" class="${ui.incS === k ? "on" : ""}">${k} <span>${cnt(k)}</span></button>`).join("")}</div>
     <div class="filters"><select id="inct"><option value="">All types</option>${INC_TYPES.map(t => `<option ${ui.incT === t ? "selected" : ""}>${t}</option>`).join("")}</select></div>
     <table class="jt"><thead><tr><th>Report</th><th>Type</th><th>When</th><th>Location / job</th><th>What happened</th><th>Reported by</th><th>Actions</th><th>Status</th></tr></thead><tbody>

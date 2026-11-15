@@ -149,7 +149,9 @@ test("home shows the crew card for managers and admins, and never the profit cha
 test("the map library is not part of the offline shell", () => {
   const sw = read("../../app/sw.js");
   const app = read("../../app/app.js");
-  assert.match(sw, /callup-shell-v112-staff-location/);
+
+  assert.match(sw, /callup-shell-v113-staff-performance/);
+
   assert.match(sw, /features\/live-location\.js/);
   assert.doesNotMatch(sw, /leaflet|openstreetmap|unpkg\.com/i);
   assert.match(app, /LIVE_SHARE_TEXT/);
