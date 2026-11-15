@@ -159,6 +159,29 @@ test("manager edits rates, leave is already open to supervisors, and a manager c
   await assertFails(updateDoc(doc(mgr, "companies/bravo"), { trades: ["earthworks"], plan: "paid" }));
 });
 
+test("staff roster reads stay inside the company: managers and admins, not crew or another company", async () => {
+  const own = await assertSucceeds(invite(db("bMgr"), "bMgr", "labourer", "roster.lab@bravo.test"));
+  const managerInvite = await assertSucceeds(invite(db("bAdmin"), "bAdmin", "manager", "roster.mgr@bravo.test"));
+  const listed = await assertSucceeds(getDocs(query(collection(db("bMgr"), "invites"), where("tenantId", "==", "bravo"),
+    where("role", "in", ["labourer", "operator", "supervisor", "manager"]))));
+  assert.equal(listed.docs.some(d => d.id === own.id), true);
+  const people = await assertSucceeds(getDocs(query(collection(db("bMgr"), "users"), where("companyId", "==", "bravo"))));
+  assert.equal(people.docs.some(d => d.id === "bLab"), true);
+  await assertSucceeds(getDocs(query(collection(db("bAdmin"), "users"), where("companyId", "==", "bravo"))));
+  await assertSucceeds(getDocs(query(collection(db("hwMgr"), "users"), where("companyId", "==", "heartwood"))));
+  await assertFails(getDocs(query(collection(db("bMgr"), "invites"), where("tenantId", "==", "heartwood"),
+    where("role", "in", ["labourer", "operator", "supervisor", "manager"]))));
+  await assertFails(getDocs(query(collection(db("bMgr"), "users"), where("companyId", "==", "heartwood"))));
+  await assertFails(getDoc(doc(db("hwMgr"), "invites", own.id)));
+  await assertFails(getDoc(doc(db("bSup"), "invites", managerInvite.id)));
+  await assertFails(getDocs(query(collection(db("bLab"), "invites"), where("tenantId", "==", "bravo"),
+    where("role", "in", ["labourer", "operator", "supervisor"]))));
+  await assertFails(getDocs(query(collection(db("bOp"), "invites"), where("tenantId", "==", "bravo"),
+    where("role", "in", ["labourer", "operator"]))));
+  await assertFails(getDocs(query(collection(db("bLab"), "users"), where("companyId", "==", "bravo"))));
+  await assertFails(getDocs(query(collection(db("bOp"), "users"), where("companyId", "==", "bravo"))));
+});
+
 test("only a manager or an admin can approve a reimbursement claim", async () => {
   const id = "rcbravo00000000009";
   const claim = {

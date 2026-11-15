@@ -70,15 +70,21 @@ test("phone shell, quote gate and handlers", async () => {
         assert.equal(options.result.value, "labourer,operator,supervisor,manager,admin", name);
         const list = await page.send("Runtime.evaluate", { expression: "document.querySelector('.invitelist')?.innerText || ''", returnByValue: true });
         assert.match(list.result.value, /Casey Nguyen/, name);
-        assert.match(list.result.value, /Pending/, name);
+        assert.match(list.result.value, /Invite pending/, name);
+        assert.match(list.result.value, /sent 5 Nov 2026/, name);
         assert.match(list.result.value, /Sam Lee/, name);
-        assert.match(list.result.value, /Accepted/, name);
+        assert.match(list.result.value, /Active/, name);
+        assert.match(list.result.value, /White card/, name);
+        assert.match(list.result.value, /Jordan Blake/, name);
+        assert.match(list.result.value, /Excavator operator/, name);
         assert.match(list.result.value, /Riley Chen/, name);
-        assert.match(list.result.value, /Expired/, name);
+        assert.match(list.result.value, /Invite expired/, name);
         assert.match(list.result.value, /Resend/, name);
         assert.match(list.result.value, /Cancel/, name);
         assert.match(list.result.value, /https:\/\/jobs\.heartwoodew\.com\/app\?invite=/, name);
-        assert.doesNotMatch(list.result.value, /admin@|alex@heartwoodew/i, name);
+        assert.doesNotMatch(list.result.value, /hourlyRate|\$65/, name);
+        const sams = await page.send("Runtime.evaluate", { expression: "document.querySelectorAll('[data-staff-email=\"sam.lee@example.com\"]').length", returnByValue: true });
+        assert.equal(sams.result.value, 1, name);
       }
       if (query.includes("open=accept")) {
         const text = await page.send("Runtime.evaluate", { expression: "document.querySelector('#acceptf')?.innerText || ''", returnByValue: true });

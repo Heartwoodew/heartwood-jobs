@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import "../../tests/staff-roster.test.mjs";
 import { readFileSync } from "node:fs";
 import { resolveMembership } from "../../app/features/cloud-storage.js";
 import {
@@ -223,15 +224,18 @@ test("staff screen lists pending, accepted and expired with resend and cancel; a
   assert.match(html, /value="supervisor"/);
   assert.match(html, /value="labourer"/);
   assert.doesNotMatch(html, /value="admin"/);
-  assert.match(html, /data-invite-status="pending"/);
-  assert.match(html, /data-invite-status="accepted"/);
-  assert.match(html, /data-invite-status="expired"/);
+  assert.match(html, /data-staff-status="pending"/);
+  assert.match(html, /data-staff-status="active"/);
+  assert.match(html, /data-staff-status="expired"/);
+  assert.match(html, /Invite pending/);
+  assert.match(html, /Active/);
+  assert.match(html, /Invite expired/);
   assert.match(html, /Resend/);
   assert.match(html, /Cancel/);
   assert.match(html, /jobs\.heartwoodew\.com\/app\?invite=/);
   assert.match(html, /Mail is not sent from this screen/);
-  const accepted = html.slice(html.indexOf('data-invite-status="accepted"'));
-  assert.doesNotMatch(accepted, /data-invite-resend|data-invite-cancel/);
+  const active = html.slice(html.indexOf('data-staff-status="active"'));
+  assert.doesNotMatch(active, /data-invite-resend|data-invite-cancel/);
 });
 
 test("email stays held unless explicitly enabled, and tests cannot queue a live send", async () => {

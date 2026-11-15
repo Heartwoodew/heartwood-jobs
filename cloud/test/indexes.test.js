@@ -6,6 +6,14 @@ import { readFileSync } from "node:fs";
 
 const idx = JSON.parse(readFileSync(new URL("../firestore.indexes.json", import.meta.url), "utf8"));
 
+test("staff invites can be listed by company and role", () => {
+  const hit = (idx.indexes || []).find(i => i.collectionGroup === "invites"
+    && (i.fields || []).some(f => f.fieldPath === "tenantId" && f.order === "ASCENDING")
+    && (i.fields || []).some(f => f.fieldPath === "role" && f.order === "ASCENDING"));
+  assert.ok(hit, "composite index invites tenantId + role");
+  assert.equal(hit.queryScope, "COLLECTION");
+});
+
 test("push tokens can be found by company across users (collection group index)", () => {
   const o = (idx.fieldOverrides || []).find(x => x.collectionGroup === "fcmTokens" && x.fieldPath === "companyId");
   assert.ok(o, "fieldOverrides entry for fcmTokens.companyId");

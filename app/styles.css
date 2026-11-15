@@ -955,6 +955,10 @@ body.operator .job-chat .chat-screen{height:calc(100dvh - 168px - env(safe-area-
 .invitef h2{margin:0;font-size:18px}
 .invite-note{margin:0 0 12px}
 .inviterow{display:flex;gap:12px;justify-content:space-between;align-items:flex-start;background:#fff;border:1px solid var(--sm-line);border-radius:8px;padding:12px;margin:0 0 8px}
+.staff-status{font-weight:600;color:var(--sm-ink)}
+.inviterow[data-staff-status="pending"] .staff-status{color:#8a5a00}
+.inviterow[data-staff-status="expired"] .staff-status{color:#8a2a2a}
+.inviterow[data-staff-status="active"] .staff-status{color:#1b7a3a}
 .inviteacts{display:flex;gap:6px;flex-wrap:wrap}
 .invite-link{font-size:12px;word-break:break-all;color:var(--sm-mut);margin:6px 0 0;user-select:all}
 .invite-who{margin:0 0 4px}

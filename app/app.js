@@ -174,6 +174,8 @@ onAuthStateChanged(auth, async user => {
     if (cid) me.testCompanyId = cid;
   }
   await loadCompanyBrand();
+  ui.staffLogins = [];
+  ui.staffLoginsErr = "";
   CLI = null; refreshClientLists();
   if (myCompanyId() !== "heartwood" && (me.role === "admin" || me.role === "manager" || me.role === "supervisor")) loadClients().catch(() => {});
   $("#who").textContent = `${me.name} · ${me.role}`; $("#logout").classList.remove("hidden");
@@ -210,8 +212,10 @@ onAuthStateChanged(auth, async user => {
       if (ui.view === "staff") renderAdmin();
       watchInviteMail();
     }, e => { ui.invites = []; ui.invitesErr = e.code || "permission-denied"; if (ui.view === "staff") renderAdmin(); });
+    // Company logins for the Staff tab. onSnapshot reads the persistent cache when the phone is offline.
+    const u6 = watchStaffRoster();
     moneyStart(renderAdmin);
-    unsub = () => { u1(); u2(); u3(); u4(); u5(); moneyStop(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; }; swmsSub(); COMP.start(); leaveStart(); claimsStart(); if (me.platformOwner) watchMaster();
+    unsub = () => { u1(); u2(); u3(); u4(); u5(); u6(); moneyStop(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; }; swmsSub(); COMP.start(); leaveStart(); claimsStart(); if (me.platformOwner) watchMaster();
     getDocs(companyJobs([where("date", "==", "")])).then(s => { ui.undated = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); addNameOnlyStaff(ui.undated); renderAdmin(); }).catch(e => console.warn("undated", e.code, e.message));
   } else {
     // Operators may only list jobs assigned to them (enforced by firestore.rules).
@@ -227,8 +231,9 @@ onAuthStateChanged(auth, async user => {
         watchInviteMail();
       }, e => { ui.invites = []; ui.invitesErr = e.code || "permission-denied"; if ((ui.opTab || "today") === "staff") renderOperator(); })
       : () => {};
+    const u6 = watchStaffRoster();
     if (canInvite() && window.HW_PREVIEW_VIEW === "staff") ui.opTab = "staff";
-    unsub = () => { u1(); u3(); u4(); moneyStop(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start(); leaveStart(); claimsStart();
+    unsub = () => { u1(); u3(); u4(); u6(); moneyStop(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start(); leaveStart(); claimsStart();
   }
 });
 
@@ -3256,11 +3261,38 @@ function watchInviteMail() {
 function inviteMailMap() {
   return inviteMailShown() ? (ui.inviteMail || {}) : null;
 }
+// Alex has no users/{uid} document. He still has a login, so the Heartwood Staff tab includes him.
+function withHeartwoodOwner(rows, companyId) {
+  if (companyId !== "heartwood" || (rows || []).some(u => u && u.uid === ALEX_UID)) return rows || [];
+  return [{ uid: ALEX_UID, name: "Alex", role: "admin", email: "alex@heartwoodew.com", companyId: "heartwood" }, ...rows];
+}
+function watchStaffRoster() {
+  if (!canInvite()) return () => {};
+  const companyId = myCompanyId();
+  return onSnapshot(query(collection(db, "users"), where("companyId", "==", companyId)), s => {
+    const rows = s.docs.map(d => ({ ...d.data(), uid: d.id })).filter(u => docCompanyId(u) === companyId);
+    ui.staffLogins = withHeartwoodOwner(rows, companyId);
+    ui.staffLoginsErr = "";
+    // Dispatch keeps the same bookable people as before (crew, supervisors, managers, plus Alex at Heartwood).
+    if (me && me.role === "admin") {
+      const bookable = rows.filter(u => CREW_ROLES.includes(u.role) || u.role === "supervisor" || u.role === "manager");
+      staff = companyId === "heartwood"
+        ? [{ uid: ALEX_UID, name: "Alex" }, ...bookable.filter(u => u.uid !== ALEX_UID)]
+        : bookable;
+    }
+    staffRerender();
+  }, () => {
+    ui.staffLogins = withHeartwoodOwner([], companyId);
+    ui.staffLoginsErr = "Some people with a login are not listed.";
+    staffRerender();
+  });
+}
 function staffPageHtml() {
   const setup = ui.tradeSetup || resolveCompanySetup({ companyId: myCompanyId() }, null);
   return staffViewHtml(ui.invites || [], {
     now: inviteDisplayNow(), error: ui.invitesErr || "", origin: appOriginFor(myCompanyId(), location.origin),
     emailStatus: inviteMailMap(), roles: myInviteRoles(), titles: setup.titles,
+    logins: ui.staffLogins || [], companyId: myCompanyId(), loginsNote: ui.staffLoginsErr || "",
   }) + titlesEditorHtml(setup.titles, { canEdit: canEditTitles() })
     + skillsEditorHtml((me && me.cloudProfile && me.cloudProfile.skills) || [], { canEdit: true });
 }
@@ -4735,7 +4767,7 @@ function renderOperator() {
   if (ui.opTab === "fleet") ui.opTab = "more";
   if (ui.opTab === "staff" && document.activeElement?.closest?.("#invitef")) return;
   if (ui.opTab === "staff" && canInvite()) {
-    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Staff</div><div class="mob-sub">Invite labourers, operators, supervisors and admins</div></div>
+    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Staff</div><div class="mob-sub">Logins and invites</div></div>
       <div class="pad">${staffPageHtml()}</div>${opTabs("more")}</div>`;
     bindOp(mine); bindStaff($("#app")); return;
   }
@@ -4762,7 +4794,7 @@ function renderOperator() {
     const quoteBtn = canQuote() && me.role !== "admin" ? `<button type="button" class="mob-more" data-go="quotes"><b>Quotes</b><small>Guided pricing for supervisors</small></button>` : "";
     const crewBtn = canSeeCrewMap(me) ? `<button type="button" class="mob-more" data-go="crew"><b>Crew map</b><small>Who is clocked on right now</small></button>` : "";
     const fleetBtn = COMP.canSee() ? `<button type="button" class="mob-more" data-go="fleet"><b>Compliance</b><small>Registration and COI status</small></button>` : "";
-    const staffBtn = canInvite() ? `<button type="button" class="mob-more" data-go="staff"><b>Staff</b><small>Invite labourers, operators, supervisors and admins</small></button>` : "";
+    const staffBtn = canInvite() ? `<button type="button" class="mob-more" data-go="staff"><b>Staff</b><small>Everyone with a login or an invite</small></button>` : "";
     const inboxBtn = canImport() ? `<button type="button" class="mob-more" data-go="inbox"><b>Inbox</b><small>Import builder emails as jobs</small></button>` : "";
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">More</div><div class="mob-sub">${esc(me.name || "")} · ${esc(orgSettings().name)}</div></div>
       <div class="mob-menu">
