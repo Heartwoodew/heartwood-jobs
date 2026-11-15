@@ -6,7 +6,7 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator,
   collection, doc, getDoc, getDocFromCache, getDocs, query, where, orderBy, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, deleteField, serverTimestamp, arrayUnion, runTransaction, Timestamp }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { getStorage, ref as storageRef, uploadBytes, connectStorageEmulator, listAll, getMetadata, getBlob }
+import { getStorage, ref as storageRef, uploadBytes, uploadBytesResumable, deleteObject, connectStorageEmulator, listAll, getMetadata, getBlob }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
 import { firebaseConfig, useEmulator, vapidKey } from "./firebase-config.js";
 import { installQuotes, adminViewRouter, setDefaultDepot, noDollars, setQuoteTradeSetup, setQuoteFocus } from "./features/quotes.js";
@@ -23,6 +23,7 @@ import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPla
 import { buildOperationalExport, retentionAdminText, retentionView } from "./features/cloud-retention.js";
 import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, lightboxHtml, photoFailureText } from "./features/photo-gallery.js";
 import { decidePhotoEmail } from "./features/photo-capture.js";
+import { mountDocuments, unmountDocuments, openDocumentBlob } from "./features/job-documents.js";
 import { installChatApp } from "./features/chat-ui.js";
 import { installPush } from "./features/push.js";
 import { installCompliance } from "./features/compliance.js";
@@ -67,8 +68,8 @@ import {
   paidShift, prestartStatus, sheetHours, shiftHours, sortedEntries, stampText,
 } from "./features/timesheet.js";
 import {
-  LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, canSeeCrewMap, crewListHtml, crewMapModel,
-  liveCollectionPath, liveLocationBody, shareIndicator, shouldSendPosition,
+  LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, canSeeCrewMap, companySharesLocation, crewListHtml, crewMapModel,
+  homeCrewSlot, liveCollectionPath, liveLocationBody, shareIndicator, shouldSendPosition,
 } from "./features/live-location.js";
 import {
   assignmentWarning, cellLeaveText, certificateContentType, certificateObjectName, certificateStoragePath,
@@ -354,6 +355,7 @@ async function loadCompanyBrand() {
   const snap = await getDoc(doc(db, "companies", id)).catch(() => null);
   const loaded = snap && snap.exists() ? { ...snap.data(), companyId: id } : null;
   ui.companyRecord = loaded;
+  ui.companyStatus = loaded ? String(loaded.status || "") : "";
   const fallback = { companyId: id, name: id === "heartwood" ? "" : "Your company" };
   if (loaded) setActiveCompany(loaded);
   else setActiveCompany(id === "heartwood" ? null : fallback);
@@ -2849,6 +2851,7 @@ function armShareWatch() {
   }
 }
 function liveShareStart(entryId, weekStart, firstFix) {
+  if (!companySharesLocation({ status: ui.companyStatus })) { liveShareStop(false); return; }
   if (!me || !entryId || !weekStart) return;
   if (shareRun && shareRun.entryId === entryId && shareRun.weekStart === weekStart) {
     if (firstFix && !document.hidden) considerShareFix(firstFix);
@@ -2931,8 +2934,19 @@ function crewMapScreen() {
     <div id="crewlist"><p class="crew-note">Loading crew…</p></div>
   </div>`;
 }
+function homeCrewCard() {
+  if (homeCrewSlot(me) !== "crew") return "";
+  return `<section class="hsec crew-home" aria-label="Crew on the clock"><div class="hsec-h">Crew <small>clocked on now</small></div>${crewMapScreen()}</section>`;
+}
 function openCrewScreen() {
   if (!canSeeCrewMap(me)) return;
+  if (!companySharesLocation({ status: ui.companyStatus })) {
+    leaveCrewScreen();
+    ui.crewLive = [];
+    ui.crewErr = "paused";
+    paintCrew();
+    return;
+  }
   if (!ui.crewSubsOn) {
     ui.crewSubsOn = true;
     ui.crewErr = "";
@@ -2953,9 +2967,15 @@ function openCrewScreen() {
 function paintCrew() {
   const list = document.getElementById("crewlist");
   if (!list || !canSeeCrewMap(me)) return;
+  const status = document.getElementById("crewmapstatus");
+  if (!companySharesLocation({ status: ui.companyStatus }) || ui.crewErr === "paused") {
+    list.innerHTML = `<p class="crew-note">Location sharing is off while this company is paused.</p>`;
+    if (status) status.textContent = "A paused company cannot see or share locations.";
+    if (ui.crewLayer) ui.crewLayer.clearLayers();
+    return;
+  }
   const model = crewMapModel({ locations: ui.crewLive || [], jobs: ui.crewJobs || [], today: todayStr(), now: new Date() });
   list.innerHTML = crewListHtml(model, esc);
-  const status = document.getElementById("crewmapstatus");
   if (status) status.textContent = ui.crewErr ? "The crew list isn't available on this sign-in." : "Blue dots are people clocked on. Amber dots are today's jobs that already have a map pin.";
   ensureCrewMap(model);
 }
@@ -3300,7 +3320,8 @@ function homeLists(all, admin) {
   const by = d => live.filter(j => j.date === d || (d === t0 && j.date && j.date < t0 && j.status === "In progress")).sort((a, b) => (a.time || "99").localeCompare(b.time || "99"));
   return { live, today: by(t0), tomorrow: by(t1), t0, t1 };
 }
-// ---- Monthly PROFIT chart (Alex only). Figures are Xero's Profit and Loss (cash basis, ex GST), copied by a box script
+// ---- Monthly PROFIT chart. Not shown on Home (managers and admins see the live crew card there; supervisors and below see neither).
+// Figures are Xero's Profit and Loss (cash basis, ex GST), copied by a box script
 // (tools/xero_profit_sync.py) into meta/profitHistory, because the app can't call Xero itself. Nothing here is estimated.
 function profHistLoad() { if (ui.profReq || !canXero()) return; ui.profReq = true;
   getDoc(doc(db, "meta", "profitHistory")).then(s => { ui.profHist = s && s.exists() ? s.data() : null; if (ui.view === "home") renderAdmin(); }).catch(() => { ui.profHist = null; }); }
@@ -3404,7 +3425,7 @@ function homeBody(all, admin, btns) {
     ${js.map(homeRow).join("") || `<p class="muted pad">Nothing booked for ${esc(orgSettings().name)}.</p>`}</div>`;
   return `<div class="home"><div class="hhead"><h1>${greet()}, ${esc(String(me.name || "").split(" ")[0])}</h1><div class="muted">${esc(dayLabel(t0))} · ${esc(orgSettings().name)}</div></div>
     ${admin ? COMP.adminBannerHtml() : ""}${admin ? cloudExpiryNotice(all) : ""}
-    ${swmsReminderHtml()}${admin ? attentionHtml(all) + (canXero() ? profitChartHtml() : "") : `<div class="hbtns opbtns"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button><button class="hbtn" data-go="swms"><span class="ic">📋</span>SWMS</button></div>`}
+    ${swmsReminderHtml()}${admin ? attentionHtml(all) + homeCrewCard() : `<div class="hbtns opbtns"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button><button class="hbtn" data-go="swms"><span class="ic">📋</span>SWMS</button></div>`}
     <div class="hstats hidden">${stat(today.length, "Today", "q-wo")}${stat(ip, "In progress", "ip", admin ? "q-ip" : "")}${admin ? stat(ready, "Ready to invoice", "q-comp", "invoices") + stat(unal, "Unallocated", "q-uns", "dispatch") + (canImport() && ui.inbox ? stat(inboxUnread(), "Unread builder emails", "q-inbox", "inbox") : "") : stat(tomorrow.length, "Tomorrow", "q-quote")}</div>
     <div class="hbtns hidden"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button>${btns.map(([go, ic, n]) => `<button class="hbtn" data-go="${go}"><span class="ic">${ic}</span>${n}</button>`).join("")}</div>
     ${sec("Today", t0, byPlan(today))}${sec("Tomorrow", t1, byPlan(tomorrow))}${admin ? "" : myIncidentsHtml()}</div>`;
@@ -3921,7 +3942,8 @@ function renderAdmin() {
   const force = ui.forceRender; ui.forceRender = false;
   if (ui.view === "crew" && !canSeeCrewMap(me)) ui.view = "home";
   if (ui.view === "crew" && !force && document.getElementById("crewmap")) { paintCrew(); return; }
-  if (ui.view !== "crew") leaveCrewScreen();
+  const crewHere = canSeeCrewMap(me) && (ui.view === "crew" || ui.view === "home");
+  if (!crewHere) leaveCrewScreen();
   else destroyCrewMap();
   if (!force && (ui.view === "compliance" || ui.view === "prestart") && document.querySelector("#compform, #prestartform")) return;
   if (!ui.tsForce && ui.view === "timesheet" && (ui.tsBusy || ui.tsAsk || (ui.tsMachineShift && document.getElementById("tsmachine")))) return;
@@ -3953,7 +3975,7 @@ function renderAdmin() {
   if (ui.view === "settings") bindSettings(A);
   PUSH.mount(A);
   if (ui.view === "master") bindMaster(A);
-  if (ui.view === "crew") openCrewScreen();
+  if (ui.view === "crew" || (ui.view === "home" && homeCrewSlot(me) === "crew")) openCrewScreen();
   A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.navOpen = false;
     if (b.dataset.view === "myjobs") { ui.myJobs = true; ui.opSel = null; window.scrollTo(0, 0); return renderAdmin(); }
     if (b.dataset.view !== "compliance") COMP.abandon();
@@ -4119,6 +4141,59 @@ async function undoSplit(j) {
   if ($("#dlg").open) $("#dlg").close();
   toast("Split undone");
 }
+function documentActorRole() {
+  if (!me) return "";
+  if (me.role === "admin" || me.role === "manager" || me.role === "supervisor") return me.role;
+  return (me.cloudProfile && me.cloudProfile.role) || me.role || "";
+}
+function wireJobDocuments(el, job) {
+  if (!el || !job || !job.id || !me) return;
+  mountDocuments(el, {
+    job,
+    role: documentActorRole(),
+    companyId: myCompanyId(),
+    uid: me.uid,
+    uploaderName: me.name || "Staff",
+    online: () => typeof navigator === "undefined" || navigator.onLine !== false,
+    listen(crewOnly, onData, onError) {
+      const col = collection(db, "jobs", job.id, "documents");
+      const q = crewOnly ? query(col, where("visibility", "==", "crew")) : col;
+      return onSnapshot(q, snap => onData(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError);
+    },
+    upload(planned, file, onProgress) {
+      return new Promise((resolve, reject) => {
+        const task = uploadBytesResumable(storageRef(storage, planned.path), file, {
+          contentType: planned.contentType,
+          customMetadata: planned.metadata,
+        });
+        task.on("state_changed", snap => {
+          const pct = snap.totalBytes ? Math.round(100 * snap.bytesTransferred / snap.totalBytes) : 0;
+          if (onProgress) onProgress(pct);
+        }, reject, () => resolve());
+      });
+    },
+    writeDoc(planned) {
+      return setDoc(doc(db, "jobs", planned.firestore.jobId, "documents", planned.id), {
+        ...planned.firestore,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    },
+    rename(id, name) {
+      return updateDoc(doc(db, "jobs", job.id, "documents", id), { name, updatedAt: serverTimestamp() });
+    },
+    async remove(row) {
+      try { await deleteObject(storageRef(storage, row.storagePath)); }
+      catch (e) { if (!e || e.code !== "storage/object-not-found") throw e; }
+      await deleteDoc(doc(db, "jobs", row.jobId || job.id, "documents", row.id));
+    },
+    async open(row) {
+      const blob = await getBlob(storageRef(storage, row.storagePath));
+      openDocumentBlob(blob, row.name || row.fileName);
+    },
+    toast,
+  });
+}
 function editJob(j) {
   const importing = !!(j && j._import);
   const n = !j || !j.id;
@@ -4132,7 +4207,7 @@ function editJob(j) {
   if (j.inboxId) hist.push(["Inbox", "Linked to a builder email"]);
   if (j.completedByName) hist.push([j.completedByName, `Completed${j.loads ? ` · ${j.loads} loads` : ""}`]);
   const SL = { "Scheduled": "Work Order – scheduled", "In progress": "Work Order – in progress", "Done": "Completed", "Cancelled": "Unsuccessful" };
-  d.className = "jobcard"; d.onclose = () => refreshAfterImport();
+  d.className = "jobcard"; d.onclose = () => { unmountDocuments(); refreshAfterImport(); };
   d.innerHTML = `<form method="dialog" id="jf" class="jc">
     <div class="jc-top ${QCLS[qq]}"><div><div class="jc-no">${n ? "New Job" : "Job #" + esc(jobNo(j))}</div>${n ? "" : ipTop(j, "onbar")}<div class="jc-q">${qq}${j.sm8Status === "Quote" && usesSm8Sync() ? " (quote)" : ""}</div></div>
       <label class="jc-st">Job Status<select name="status">${STATUSES.map(s => `<option value="${s}" ${j.status === s ? "selected" : ""}>${SL[s]}</option>`).join("")}</select></label>
@@ -4172,6 +4247,7 @@ function editJob(j) {
       <p id="leavewarn" class="leave-warn" hidden></p>
       <h4>Notes</h4>
       <textarea name="notes" rows="2" placeholder="Office notes">${esc(j.notes)}</textarea>
+      ${!n ? `<div class="job-docs" data-job-docs="${esc(j.id)}"></div>` : ""}
       <h4>Diary</h4>
       <div class="diary">${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("")}
         ${hist.map(([w, t]) => `<div class="de sys"><span class="av">i</span><div><small>${esc(w)}</small><div>${esc(t)}</div></div></div>`).join("")}
@@ -4182,7 +4258,7 @@ function editJob(j) {
     <div class="btns jc-foot"><button value="cancel" formnovalidate class="sm-btn">Close</button><button value="save" class="sm-btn primary">Save Job</button></div></form>`;
   d.showModal();
   if (!n) jobTabs(d, j);
-  if (!n) { rememberJob(j); $("#emailph").onclick = () => emailPhotos(j); watchJobPhotos(j); paintPhotoSlots(); }
+  if (!n) { rememberJob(j); $("#emailph").onclick = () => emailPhotos(j); watchJobPhotos(j); paintPhotoSlots(); wireJobDocuments(d.querySelector("[data-job-docs]"), j); }
   if (!n && $("#cloudexport")) $("#cloudexport").onclick = () => downloadGalleryCopy(j).catch(e => toast(e.message || "Download failed"));
   if (!n) { wireFindPo(j); supervisors(); wireJobReceipts(j); fillSupCard(j); }
   if (!n && $("#unschbtn")) $("#unschbtn").onclick = ev => { if (!armBtn(ev.currentTarget, "✕ Remove from dispatch board", "Tap again to remove from the board")) return;
@@ -5180,9 +5256,11 @@ function renderOperator() {
   const forceOp = ui.forceRender;
   if (!forceOp && document.querySelector("#compform, #prestartform")) return;
   ui.forceRender = false;
+  if (!ui.opTab || ui.opTab === "home") ui.opTab = "today";
   if (ui.opTab === "crew" && !canSeeCrewMap(me)) ui.opTab = "more";
   if (ui.opTab === "crew" && !forceOp && document.getElementById("crewmap")) { paintCrew(); return; }
-  if (ui.opTab !== "crew") leaveCrewScreen();
+  const opCrew = canSeeCrewMap(me) && (ui.opTab === "crew" || ui.opTab === "today");
+  if (!opCrew) leaveCrewScreen();
   else destroyCrewMap();
   document.body.className = "operator";
   ui.runStops = {};
@@ -5192,8 +5270,8 @@ function renderOperator() {
   prepareOperatorPlan(mine);
   const sel = ui.opSel && mine.find(j => j.id === ui.opSel);
   if (sel) return renderOpDetail(sel);
+  unmountDocuments();
   if (ui.opTab === "chat" && document.activeElement?.closest?.(".chat-compose")) return;
-  if (!ui.opTab || ui.opTab === "home") ui.opTab = "today";
   if (ui.opTab === "quotes" && !(canQuote() && me.role !== "admin")) ui.opTab = "more";
   if (ui.opTab === "capacity" && !canSeeCapacity()) ui.opTab = "more";
   if (ui.opTab === "quotes") {
@@ -5295,7 +5373,7 @@ function renderOperator() {
         ${COMP.canPrestart() ? `<button type="button" class="mob-more" data-go="prestart"><b>Prestart</b><small>Any machine, before you use it</small></button>` : ""}
         ${fleetBtn}
         <button type="button" class="mob-more incbtn" data-inc=""><b>Report incident</b><small>Safety report</small></button>
-        ${canViewTake5(me) && (ui.take5On || (ui.take5s || []).length) ? `<button type="button" class="mob-more" data-go="take5"><b>Take 5s</b><small>Checks done at the start of a job</small></button>` : ""}
+        ${canViewTake5(me) && (ui.take5On !== false || (ui.take5s || []).length) ? `<button type="button" class="mob-more" data-go="take5"><b>Take 5s</b><small>Checks done at the start of a job</small></button>` : ""}
         ${capBtn}
         ${quoteBtn}
         ${staffBtn}
@@ -5338,9 +5416,12 @@ function renderOperator() {
         <h1 class="mob-hello">${esc(greet())}, ${first}</h1><p class="mob-count">${n} job${n === 1 ? "" : "s"} today</p>${todaySheet ? `<p class="run-note">Approved driving order${todaySheet.returnToDepot ? " · back to the depot" : ""}</p>` : ""}${opSeg("today")}</div>
       ${COMP.staffBannerHtml()}
       ${swmsReminderHtml()}
+      ${homeCrewCard()}
       <div class="mob-list">${todayJobs.map(opCard).join("") || `<p class="muted pad">Nothing booked for ${esc(orgSettings().name)}.</p>`}</div>
       ${opTabs("today")}</div>`;
-    bindOp(mine); return;
+    bindOp(mine);
+    if (homeCrewSlot(me) === "crew") openCrewScreen();
+    return;
   }
   const groups = ui.opTab === "done" ? groupByDate(doneL).map(([d, js]) => [d === t0 ? "Today · " + dayLabel(d) : dayLabel(d), js])
     : groupByDate(withRunOrder(open.filter(j => j.date >= t1 && j.date <= wkEnd))).map(([d, js]) => [(d === t1 ? "Tomorrow · " : "") + dayLabel(d), js]);
@@ -5385,8 +5466,9 @@ function renderOpDetail(j) {
       <div class="mcard"><div class="mlbl">Diary</div>${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("") || `<div class="muted sub">No notes yet</div>`}
         <button class="mnote" type="button" data-act="note">Add note</button></div>
       <div class="mcard"><div class="mlbl">Photos</div><div data-photoslot="${esc(j.id)}" data-photorole="cloud"></div>${emailedPhotosNote(j)}<div class="muted sub">Cloud photos are the private copies stored for this job.</div></div>
+      <div class="mcard job-docs" data-job-docs="${esc(j.id)}"></div>
       <div class="mcard safecard"><div class="mlbl">Safety</div><button type="button" class="mnote" data-swms="${j.id}">View SWMS</button><button type="button" class="mnote incbtn" data-inc="${j.id}">Report incident</button>
-        ${ui.take5On || (ui.take5s || []).some(row => row.jobId === j.id) ? `<div id="take5slot">${take5JobHtml(ui.take5s || [], j.id, { ownUid: me.uid, canView: canViewTake5(me) })}</div>` : ""}</div>
+        ${ui.take5On !== false || (ui.take5s || []).some(row => row.jobId === j.id) ? `<div id="take5slot">${take5JobHtml(ui.take5s || [], j.id, { ownUid: me.uid, canView: canViewTake5(me) })}</div>` : ""}</div>
       <div class="mcard">${jobReceiptsHtml(j)}</div>
     </div>
     <div class="mactions"${onChat ? " hidden" : ""}>${done ? `<div class="donebar">Completed${j.loads ? ` · ${esc(j.loads)} loads` : ""}</div>` :
@@ -5396,6 +5478,7 @@ function renderOpDetail(j) {
       <a class="mcard link mbtn outline" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener">${ICO.pin}<span>Get directions</span></a>
     </div></div>`;
   rememberJob(j); $("#emailph").onclick = () => emailPhotos(j); wireJobReceipts(j); fillSupCard(j); watchJobPhotos(j); paintPhotoSlots();
+  wireJobDocuments(document.querySelector("[data-job-docs]"), j);
   if (!hasTake5(ui.take5s, me.uid, j.id)) rememberOwnTake5(j);
   const showJobPane = which => {
     ui.jobPane = which === "chat" ? "chat" : "job";
@@ -5416,7 +5499,7 @@ const logEntry = text => ({ text, by: me.uid, byName: me.name, at: new Date().to
 async function opAction(j, act) {
   const ref = doc(db, "jobs", j.id), base = { updatedAt: serverTimestamp(), updatedBy: me.uid };
   if (act === "start") {
-    if (shouldPromptTake5(me, ui.take5On) && !hasTake5(ui.take5s, me.uid, j.id)) {
+    if (shouldPromptTake5(me, ui.take5On !== false) && !hasTake5(ui.take5s, me.uid, j.id)) {
       const existing = await getDoc(doc(db, "take5s", take5IdFor(me.uid, j.id))).catch(() => null);
       if (!(existing && existing.exists())) { openTake5(j, () => startJobDoc(j)); return; }
     }
@@ -5821,7 +5904,7 @@ function safetyView() {
     document.querySelectorAll("[data-incs]").forEach(b => b.onclick = () => { ui.incS = b.dataset.incs; renderAdmin(); });
     const t = $("#inct"); if (t) t.onchange = () => { ui.incT = t.value; renderAdmin(); };
   });
-  const take5Block = canViewTake5(me) && (ui.take5On || (ui.take5s || []).length) ? `<h3 class="swh">Take 5s</h3>${take5ListHtml(ui.take5s || [])}` : "";
+  const take5Block = canViewTake5(me) && (ui.take5On !== false || (ui.take5s || []).length) ? `<h3 class="swh">Take 5s</h3>${take5ListHtml(ui.take5s || [])}` : "";
   return `<div class="sm-head"><h1>Safety</h1><span class="headbtns"><button class="sm-btn" data-view="swms">📋 SWMS</button><button class="sm-btn primary" data-inc="">⚠ Report incident</button></span></div>
     ${take5Block}
     <div class="qtabs">${["Open", "Closed", "All"].map(k => `<button data-incs="${k}" class="${ui.incS === k ? "on" : ""}">${k} <span>${cnt(k)}</span></button>`).join("")}</div>

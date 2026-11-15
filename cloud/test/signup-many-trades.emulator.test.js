@@ -22,7 +22,7 @@ async function signup(uid, trades, token) {
   out.trades = await r(setDoc(doc(db, "companyTrades", companyId), { ...companyTradesDoc(companyId, trades, uid), updatedAt: serverTimestamp() }));
   return out;
 }
-for (const trades of [["earthworks"], ["earthworks", "landscaping"], ["earthworks", "landscaping", "fencing", "plumbing"], ["landscaping", "fencing"], ["earthworks","landscaping","concreting","fencing","carpentry","tiling","plumbing","electrical"]]) {
+for (const trades of [["earthworks"], ["earthworks", "landscaping"], ["earthworks", "landscaping", "fencing", "plumbing"], ["landscaping", "fencing"], ["concrete-cutting", "plumbing"], ["earthworks","landscaping","concreting","fencing","carpentry","tiling","plumbing","electrical"], ["concrete-cutting","earthworks","landscaping","concreting","fencing","carpentry","tiling","plumbing","electrical"]]) {
   test("fresh signup " + trades.join("+"), async () => {
     await env.clearFirestore();
     const out = await signup("fresh" + trades.length, trades, { email: "p@example.test", email_verified: false });
@@ -38,6 +38,19 @@ test("existing Heartwood member creates company B", async () => {
   console.log(JSON.stringify({ existing: true, ...out }));
   // By design an existing member can't open a second company with the same login; the app's sign-up always makes a new login.
   assert.notEqual(out.company, "ok"); assert.notEqual(out.profile, "ok");
+});
+test("concrete-cutting plus every other trade is accepted", async () => {
+  const trades = ["concrete-cutting", "earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical"];
+  assert.equal(trades.length, 9);
+  const catalog = companyTradesDoc("ignored", trades, "cutter9");
+  assert.deepEqual(catalog.trades, trades);
+  assert.equal(catalog.extraTrades.length, 8);
+  assert.equal(catalog.titles.some(row => row.id === "concrete-cutting:admin" && row.level === "admin"), true);
+  await env.clearFirestore();
+  const out = await signup("cutter9", trades, { email: "cut@example.test", email_verified: false });
+  assert.equal(out.company, "ok", out.company);
+  assert.equal(out.profile, "ok", out.profile);
+  assert.equal(out.trades, "ok", out.trades);
 });
 test("unknown trade still rejected on companyTrades", async () => {
   await env.clearFirestore();
