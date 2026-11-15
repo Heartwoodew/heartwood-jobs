@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, SHARE_MIN_METRES, SHARE_MIN_MS,
-  canSeeCrewMap, crewListHtml, crewMapModel, haversineMetres, jobPoint,
+  canSeeCrewMap, companySharesLocation, crewListHtml, crewMapModel, haversineMetres, homeCrewSlot, jobPoint,
   lastSeenLabel, liveCollectionPath, liveLocationBody, shareIndicator, shouldSendPosition,
 } from "../../app/features/live-location.js";
 
@@ -65,6 +65,7 @@ test("the map shows clocked-on crew and today's job pins, with no prices", () =>
       { uid: "op1", name: "Sam", companyId: "heartwood", clockedOn: true, sharing: "gps", lat: -27.47, lng: 153.02, accuracy: 8, updatedAt: now },
       { uid: "lab1", name: "Lee", companyId: "heartwood", clockedOn: true, sharing: "off", updatedAt: new Date(now.getTime() - 120000) },
       { uid: "gone", name: "Gone", clockedOn: false, sharing: "gps", lat: 1, lng: 1 },
+      { uid: "nostatus", name: "No status", sharing: "gps", lat: 1, lng: 1 },
     ],
     jobs: [
       { id: "j1", date: "2026-11-15", status: "Scheduled", client: "Orbit", address: "10 Creek Rd, Brisbane", time: "07:00", sm8JobNo: "659", assigned: ["op1"], invoiceAmount: 8800, poAmount: 1200, geo: { lat: -27.48, lng: 153.03, query: "10 Creek Rd, Brisbane" } },
@@ -75,6 +76,7 @@ test("the map shows clocked-on crew and today's job pins, with no prices", () =>
   assert.deepEqual(model.people.map(p => p.name), ["Lee", "Sam"]);
   assert.equal(model.people.find(p => p.uid === "lab1").sharing, "off");
   assert.equal(model.people.find(p => p.uid === "gone"), undefined);
+  assert.equal(model.people.find(p => p.uid === "nostatus"), undefined);
   const sam = model.people.find(p => p.uid === "op1");
   assert.equal(sam.jobs.length, 1);
   assert.equal(sam.jobs[0].jobNo, "659");
@@ -111,12 +113,43 @@ test("live location rules match in the emulator model and the production rules",
   assert.doesNotMatch(prod, /llRole\(\) == "supervisor"|llRole\(\) == "operator"|llRole\(\) == "labourer"/);
   assert.match(prod, /entry.status == "open" \|\| entry.status == "break"/);
   assert.match(prod, /allow delete: if signedIn\(\) && request.auth.uid == id/);
+  assert.match(prod, /function llPaused\(id\)/);
+  assert.match(prod, /get\(path\)\.data\.get\("status", ""\) == "paused"/);
+  assert.match(prod, /!llPaused\("heartwood"\)/);
+  assert.match(prod, /!llPaused\(c\)/);
+});
+
+test("home shows the crew card for managers and admins, and never the profit chart", () => {
+  const app = read("../../app/app.js");
+  const start = app.indexOf("function homeBody");
+  const end = app.indexOf("function homeView");
+  assert.ok(start >= 0 && end > start);
+  const home = app.slice(start, end);
+  assert.equal(home.includes("profitChartHtml"), false);
+  assert.doesNotMatch(home, /Profit by month|net profit|\$\$\(/);
+  assert.match(home, /homeCrewCard\(\)/);
+  assert.equal(homeCrewSlot({ role: "manager" }), "crew");
+  assert.equal(homeCrewSlot({ role: "admin" }), "crew");
+  assert.equal(homeCrewSlot({ role: "admin", staffRole: "operator" }), "crew");
+  for (const role of ["supervisor", "operator", "labourer"]) {
+    assert.equal(homeCrewSlot({ role }), "none", role);
+    assert.equal(homeCrewSlot({ role, staffRole: "manager" }), "none", role);
+  }
+  assert.equal(companySharesLocation(null), true);
+  assert.equal(companySharesLocation({}), true);
+  assert.equal(companySharesLocation({ status: "active" }), true);
+  assert.equal(companySharesLocation({ status: "paused" }), false);
+  assert.match(app, /ui\.companyStatus/);
+  assert.match(app, /companySharesLocation\(\{ status: ui\.companyStatus \}\)/);
+  const today = app.slice(app.indexOf('if (ui.opTab === "today")'), app.indexOf("const groups = ui.opTab"));
+  assert.match(today, /homeCrewCard\(\)/);
+  assert.doesNotMatch(today, /profitChartHtml|\$\$\(/);
 });
 
 test("the map library is not part of the offline shell", () => {
   const sw = read("../../app/sw.js");
   const app = read("../../app/app.js");
-  assert.match(sw, /callup-shell-v108-password-reset/);
+  assert.match(sw, /callup-shell-v112-staff-location/);
   assert.match(sw, /features\/live-location\.js/);
   assert.doesNotMatch(sw, /leaflet|openstreetmap|unpkg\.com/i);
   assert.match(app, /LIVE_SHARE_TEXT/);

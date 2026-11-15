@@ -17,6 +17,16 @@ export function canSeeCrewMap(me) {
   return me.staffRole === "manager";
 }
 
+/** Home never shows profit. Managers and admins get the live crew card; everyone else gets neither. */
+export function homeCrewSlot(me) {
+  return canSeeCrewMap(me) ? "crew" : "none";
+}
+
+/** A missing company, or any status other than paused, can share. Paused cannot read or write. */
+export function companySharesLocation(company) {
+  return !company || company.status !== "paused";
+}
+
 export function liveCollectionPath(companyId) {
   return companyId === "heartwood" ? ["liveLocations"] : ["companies", companyId, "liveLocations"];
 }
@@ -133,7 +143,7 @@ function jobLabel(job) {
 }
 
 export function crewMapModel({ locations, jobs, today, now = new Date() } = {}) {
-  const people = (locations || []).filter(d => d && d.clockedOn !== false).map(d => {
+  const people = (locations || []).filter(d => d && d.clockedOn === true).map(d => {
     const lat = +d.lat, lng = +d.lng;
     const sharing = d.sharing === "gps" && Number.isFinite(lat) && Number.isFinite(lng) ? "gps" : "off";
     const person = { uid: d.uid || d.id, name: String(d.name || "Staff") };

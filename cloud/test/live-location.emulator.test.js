@@ -28,6 +28,11 @@ test.before(async () => {
       ["bMgr", "manager", "Mo", "bravo"],
       ["bAdm", "admin", "Bea", "bravo"],
       ["cAdm", "admin", "Cy", "charlie"],
+      ["pOp", "operator", "Pam", "pausedco"],
+      ["pIdle", "operator", "Ida", "pausedco"],
+      ["pSup", "supervisor", "Sol", "pausedco"],
+      ["pMgr", "manager", "Max", "pausedco"],
+      ["pAdm", "admin", "Ann", "pausedco"],
     ];
     for (const [uid, role, name, companyId] of people) {
       await setDoc(doc(d, "users/" + uid), { role, name, companyId, tenantId: companyId });
@@ -41,6 +46,10 @@ test.before(async () => {
     await open("sup1", "Sue", "heartwood", "break");
     await open("idle1", "Idle", "heartwood", "closed");
     await open("bOp", "Bo", "bravo");
+    await open("pOp", "Pam", "pausedco");
+    await open("pIdle", "Ida", "pausedco", "closed");
+    await setDoc(doc(d, "companies/pausedco"), { status: "paused", name: "Paused Co", companyId: "pausedco" });
+    await setDoc(doc(d, "companies/bravo"), { status: "active", name: "Bravo", companyId: "bravo" });
     await setDoc(doc(d, "jobs/hw1"), { companyId: "heartwood", client: "Orbit", address: "10 Creek Rd", date: "2026-11-15", assigned: ["op1"], status: "Scheduled" });
     await setDoc(doc(d, "jobs/b1"), { companyId: "bravo", client: "Bravo", date: "2026-11-15", assigned: ["bOp"], status: "Scheduled" });
   });
@@ -113,6 +122,43 @@ test("clock off clears only that person's live doc", async () => {
   const left = await getDocs(query(collection(db("hwMgr"), "liveLocations"), where("companyId", "==", "heartwood")));
   assert.equal(left.docs.some(d => d.id === "op1"), false);
   assert.equal(left.docs.some(d => d.id === "lab1"), true);
+});
+
+test("a paused company cannot read or write live locations, including someone who is not clocked on", async () => {
+  await assertFails(setDoc(doc(db("pOp"), "companies/pausedco/liveLocations/pOp"), gps("pOp", "Pam", "pausedco")));
+  await assertFails(setDoc(doc(db("pIdle"), "companies/pausedco/liveLocations/pIdle"), gps("pIdle", "Ida", "pausedco")));
+  await assertFails(setDoc(doc(db("pMgr"), "companies/pausedco/liveLocations/pMgr"), gps("pMgr", "Max", "pausedco")));
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), "companies/pausedco/liveLocations/pOp"), {
+      uid: "pOp", name: "Pam", companyId: "pausedco", clockedOn: true, sharing: "off",
+      weekStart: "2026-11-09", entryId: "entry0001abcd",
+    });
+  });
+  for (const uid of ["pMgr", "pAdm", "pSup", "pOp", "pIdle"]) {
+    await assertFails(getDoc(doc(db(uid), "companies/pausedco/liveLocations/pOp")), uid + " read");
+    await assertFails(getDocs(query(collection(db(uid), "companies/pausedco/liveLocations"), where("companyId", "==", "pausedco"))), uid + " list");
+  }
+  await assertFails(deleteDoc(doc(db("pOp"), "companies/pausedco/liveLocations/pOp")));
+  await assertFails(getDoc(doc(db("hwMgr"), "companies/pausedco/liveLocations/pOp")));
+  await assertFails(getDoc(doc(db("bAdm"), "companies/pausedco/liveLocations/pOp")));
+  await assertFails(setDoc(doc(db("bOp"), "companies/pausedco/liveLocations/bOp"), gps("bOp", "Bo", "pausedco")));
+});
+
+test("pausing Heartwood blocks its live locations until the pause is lifted", async () => {
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), "companies/heartwood"), { status: "paused", name: "Heartwood", companyId: "heartwood" });
+  });
+  try {
+    await assertFails(setDoc(doc(db("op1"), "liveLocations/op1"), gps("op1", "Sam", "heartwood")));
+    await assertFails(getDoc(doc(db("hwMgr"), "liveLocations/lab1")));
+    await assertFails(getDocs(query(collection(db("hwAdm"), "liveLocations"), where("companyId", "==", "heartwood"))));
+    await assertFails(deleteDoc(doc(db("lab1"), "liveLocations/lab1")));
+  } finally {
+    await env.withSecurityRulesDisabled(async ctx => {
+      await deleteDoc(doc(ctx.firestore(), "companies/heartwood"));
+    });
+  }
+  await assertSucceeds(setDoc(doc(db("op1"), "liveLocations/op1"), gps("op1", "Sam", "heartwood")));
 });
 
 test("a Heartwood manager can read Heartwood jobs for the map and cannot change them or open another company", async () => {
