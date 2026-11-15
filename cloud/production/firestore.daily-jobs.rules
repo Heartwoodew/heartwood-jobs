@@ -1,0 +1,10 @@
+// One send record per person per company per Brisbane date.
+// The scheduled function writes this with the Admin SDK.
+// Clients cannot read or write it. Paste inside the live rules match block.
+// Do not deploy cloud/emulator/firestore.rules as the whole ruleset.
+
+// BEGIN DAILY JOB RULES
+    match /dailyJobDigest/{id} {
+      allow read, write: if false;
+    }
+// END DAILY JOB RULES
