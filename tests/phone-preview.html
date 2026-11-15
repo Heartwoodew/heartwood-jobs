@@ -35,9 +35,13 @@
   if (q.get("open") === "staff") {
     window.HW_PREVIEW_VIEW = "staff";
     window.HW_INVITES = [
-      { id: "p1", name: "Casey Nguyen", email: "casey.nguyen@example.com", role: "operator", status: "pending", token: "pendingpreviewtoken00000000000000000000000", expiresAt: "2026-11-14T10:00:00+10:00" },
-      { id: "a1", name: "Sam Lee", email: "sam.lee@example.com", role: "supervisor", status: "accepted", token: "acceptedpreviewtoken000000000000000000000", expiresAt: "2026-11-20T10:00:00+10:00" },
-      { id: "e1", name: "Riley Chen", email: "riley.chen@example.com", role: "operator", status: "pending", token: "expiredpreviewtoken00000000000000000000000", expiresAt: "2026-11-01T10:00:00+10:00" }
+      { id: "p1", name: "Casey Nguyen", email: "casey.nguyen@example.com", role: "operator", status: "pending", token: "pendingpreviewtoken00000000000000000000000", createdAt: "2026-11-05T09:00:00+10:00", expiresAt: "2026-11-14T10:00:00+10:00", jobTitle: "Operator" },
+      { id: "a1", name: "Sam Lee", email: "Sam.Lee@example.com", role: "supervisor", status: "accepted", token: "acceptedpreviewtoken000000000000000000000", createdAt: "2026-10-20T09:00:00+10:00", expiresAt: "2026-11-20T10:00:00+10:00" },
+      { id: "e1", name: "Riley Chen", email: "riley.chen@example.com", role: "operator", status: "pending", token: "expiredpreviewtoken00000000000000000000000", createdAt: "2026-10-20T09:00:00+10:00", expiresAt: "2026-11-01T10:00:00+10:00" }
+    ];
+    window.HW_STAFF_LOGINS = [
+      { id: "sam-lee", name: "Sam Lee", email: "sam.lee@example.com", role: "supervisor", jobTitle: "Supervisor", skills: ["White card"], companyId: "heartwood", hourlyRate: "$65" },
+      { id: "jordan", name: "Jordan Blake", email: "jordan.blake@example.com", role: "operator", jobTitle: "Excavator operator", skills: ["Excavator"], companyId: "heartwood" }
     ];
   }
   if (q.get("amounts") === "1") {

@@ -250,6 +250,214 @@ function statusLabel(status) {
   return "Invite";
 }
 
+// A missing company id is Heartwood, including records that only carry tenantId.
+function rosterCompanyId(row) {
+  if (!row || typeof row !== "object") return HEARTWOOD_TENANT;
+  const company = typeof row.companyId === "string" ? row.companyId.trim() : "";
+  if (company) return company;
+  const tenant = typeof row.tenantId === "string" ? row.tenantId.trim() : "";
+  return tenant || HEARTWOOD_TENANT;
+}
+
+function rosterTags(row) {
+  const list = [];
+  if (row && Array.isArray(row.skills)) list.push(...row.skills);
+  if (row && Array.isArray(row.tags)) list.push(...row.tags);
+  const out = [];
+  for (const raw of list.slice(0, 24)) {
+    const s = String(raw ?? "").trim().replace(/ +/g, " ").slice(0, 40);
+    if (!s || /[\n\r\t<>]/.test(s)) continue;
+    if (out.some(x => x.toLowerCase() === s.toLowerCase())) continue;
+    out.push(s);
+    if (out.length >= 12) break;
+  }
+  return out;
+}
+
+function rosterTitle(value) {
+  const title = cleanJobTitle(value);
+  return title || "";
+}
+
+// Stored status is pending / accepted / cancelled. Expiry is computed. "sent" is the email
+// delivery word for an invite that is still open. A stored "expired" is the same as a lapsed pending invite.
+function rosterInviteStatus(invite, now) {
+  if (!invite) return "invalid";
+  if (invite.status === "sent") return displayStatus({ ...invite, status: "pending" }, now);
+  if (invite.status === "expired") return "expired";
+  return displayStatus(invite, now);
+}
+
+function rosterSentAt(invite) {
+  return invite ? (invite.resentAt || invite.createdAt || null) : null;
+}
+
+function betterOpenInvite(a, b, now) {
+  const rank = row => {
+    const view = rosterInviteStatus(row, now);
+    if (view === "pending") return 0;
+    if (view === "expired") return 1;
+    if (view === "accepted") return 2;
+    return 9;
+  };
+  const ra = rank(a);
+  const rb = rank(b);
+  if (ra !== rb) return ra < rb ? a : b;
+  const ta = inviteTime(rosterSentAt(a)) || new Date(0);
+  const tb = inviteTime(rosterSentAt(b)) || new Date(0);
+  return ta >= tb ? a : b;
+}
+
+function findRoot(parent, i) {
+  while (parent[i] !== i) {
+    parent[i] = parent[parent[i]];
+    i = parent[i];
+  }
+  return i;
+}
+
+// One row per person. Logins (users/{uid}, including a login with no invite) and invites
+// (pending, sent, accepted, expired) are merged. The same uid, or the same email ignoring case, is one person.
+// A login wins over an open invite: the row is Active and the invite is not listed again.
+// Cancelled invites with no login are left out. Pass companyId to drop every other company.
+export function mergeStaffRoster(logins, invites, { now = new Date(), companyId = "" } = {}) {
+  const want = String(companyId || "").trim();
+  const inCompany = row => !want || rosterCompanyId(row) === want;
+  const nodes = [];
+
+  for (const row of logins || []) {
+    if (!row || typeof row !== "object" || !inCompany(row)) continue;
+    const uid = String(row.uid || row.id || "").trim();
+    if (!uid) continue;
+    const email = normalizeInviteEmail(row.email);
+    nodes.push({
+      uids: [uid],
+      emails: email ? [email] : [],
+      name: String(row.name || "").trim(),
+      role: String(row.role || ""),
+      jobTitle: rosterTitle(row.jobTitle),
+      tags: rosterTags(row),
+      hasLogin: true,
+      invite: null,
+      loginFirst: true,
+    });
+  }
+
+  for (const row of invites || []) {
+    if (!row || typeof row !== "object" || !inCompany(row)) continue;
+    const view = rosterInviteStatus(row, now);
+    if (view !== "pending" && view !== "expired" && view !== "accepted") continue;
+    const email = normalizeInviteEmail(row.email);
+    const uid = String(row.acceptedUid || "").trim();
+    nodes.push({
+      uids: uid ? [uid] : [],
+      emails: email ? [email] : [],
+      name: String(row.name || "").trim(),
+      role: String(row.role || ""),
+      jobTitle: rosterTitle(row.jobTitle),
+      tags: rosterTags(row),
+      hasLogin: view === "accepted",
+      invite: row,
+      loginFirst: false,
+    });
+  }
+
+  const parent = nodes.map((_, i) => i);
+  const union = (a, b) => {
+    const pa = findRoot(parent, a);
+    const pb = findRoot(parent, b);
+    if (pa !== pb) parent[pb] = pa;
+  };
+  const byUid = new Map();
+  const byEmail = new Map();
+  nodes.forEach((node, i) => {
+    for (const uid of node.uids) {
+      if (byUid.has(uid)) union(i, byUid.get(uid));
+      else byUid.set(uid, i);
+    }
+    for (const email of node.emails) {
+      if (byEmail.has(email)) union(i, byEmail.get(email));
+      else byEmail.set(email, i);
+    }
+  });
+
+  const groups = new Map();
+  nodes.forEach((node, i) => {
+    const root = findRoot(parent, i);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push(node);
+  });
+
+  const rows = [];
+  for (const group of groups.values()) {
+    const loginsIn = group.filter(node => node.loginFirst);
+    const primary = loginsIn[0] || group[0];
+    const pick = (read) => {
+      for (const node of [...loginsIn, ...group]) {
+        const value = read(node);
+        if (value) return value;
+      }
+      return "";
+    };
+    let invite = null;
+    for (const node of group) {
+      if (!node.invite) continue;
+      invite = invite ? betterOpenInvite(invite, node.invite, now) : node.invite;
+    }
+    const hasLogin = group.some(node => node.hasLogin);
+    const view = invite ? rosterInviteStatus(invite, now) : "";
+    let status = "active";
+    if (!hasLogin) {
+      if (view === "pending") status = "pending";
+      else if (view === "expired") status = "expired";
+      else continue;
+    }
+    const tags = (loginsIn.find(node => node.tags.length) || group.find(node => node.tags.length) || { tags: [] }).tags;
+    const open = !hasLogin && (status === "pending" || status === "expired");
+    rows.push({
+      uid: pick(node => node.uids[0]) || primary.uids[0] || "",
+      email: pick(node => node.emails[0]) || "",
+      name: pick(node => node.name) || pick(node => node.emails[0]) || "Staff",
+      role: pick(node => node.role),
+      jobTitle: pick(node => node.jobTitle),
+      tags,
+      status,
+      sentAt: open && invite ? rosterSentAt(invite) : null,
+      expiresAt: open && invite ? invite.expiresAt : null,
+      inviteId: open && invite && invite.id ? String(invite.id) : "",
+      token: open && invite ? String(invite.token || "") : "",
+    });
+  }
+
+  const rank = { pending: 0, expired: 1, active: 2 };
+  rows.sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9)
+    || a.name.localeCompare(b.name, "en")
+    || a.email.localeCompare(b.email, "en"));
+  return rows;
+}
+
+function rosterStatusText(row) {
+  if (!row || row.status === "active") return "Active";
+  const sent = formatWhen(row.sentAt);
+  const exp = formatWhen(row.expiresAt);
+  if (row.status === "pending") {
+    return "Invite pending" + (sent ? " · sent " + sent : "") + (exp ? " · expires " + exp : "");
+  }
+  if (row.status === "expired") {
+    return "Invite expired" + (sent ? " · sent " + sent : "") + (exp ? " · expires " + exp : "");
+  }
+  return statusLabel(row.status);
+}
+
+function rosterDetail(row) {
+  const bits = [];
+  if (row.email) bits.push(row.email);
+  if (row.jobTitle) bits.push(row.jobTitle);
+  const level = roleLabel(row.role) || row.role;
+  if (level) bits.push(level);
+  return bits.join(" · ");
+}
+
 // One line per pending invite saying whether CallUp emailed it, from inviteStatus/{inviteId} (written by inviteEmailWorker).
 // status is { delivery, reason } or null while it is still being checked. Heartwood invites are never emailed from here.
 export function inviteEmailLine(status) {
@@ -261,32 +469,36 @@ export function inviteEmailLine(status) {
   return "The invite email didn't go through. Copy the link and send it to them yourself (text or email).";
 }
 
-export function staffViewHtml(invites, { now = new Date(), error = "", origin = HEARTWOOD_APP_ORIGIN, emailStatus = null, roles = SUPERVISOR_INVITE_ROLES, titles = null } = {}) {
+export function staffViewHtml(invites, { now = new Date(), error = "", origin = HEARTWOOD_APP_ORIGIN, emailStatus = null, roles = SUPERVISOR_INVITE_ROLES, titles = null, logins = null, companyId = "", loginsNote = "" } = {}) {
   const offer = INVITE_ROLES.filter(r => (roles || []).includes(r));
   const titleRows = (Array.isArray(titles) ? titles : []).filter(t => t && offer.includes(t.level) && t.name && t.id);
-  const rows = (invites || []).map(row => ({ ...row, viewStatus: displayStatus(row, now) }));
-  const rank = { pending: 0, expired: 1, accepted: 2, cancelled: 3, invalid: 4 };
-  rows.sort((a, b) => (rank[a.viewStatus] ?? 9) - (rank[b.viewStatus] ?? 9) || String(a.email).localeCompare(String(b.email)));
-  const cards = rows.filter(row => row.viewStatus !== "invalid").map(row => {
-    const actions = row.viewStatus === "pending" || row.viewStatus === "expired";
-    const link = actions ? inviteLink(row.token, origin) : "";
-    return `<article class="inviterow" data-invite-status="${esc(row.viewStatus)}">
+  const rows = mergeStaffRoster(logins || [], invites || [], { now, companyId });
+  const cards = rows.map(row => {
+    const actions = (row.status === "pending" || row.status === "expired") && row.inviteId;
+    const link = actions && row.token ? inviteLink(row.token, origin) : "";
+    const tags = (row.tags || []).map(tag => `<span class="skill-tag">${esc(tag)}</span>`).join("");
+    const mail = emailStatus && row.status === "pending"
+      ? `<div class="sub invite-mail" data-invite-mail="${esc((emailStatus[row.inviteId] && emailStatus[row.inviteId].delivery) || "checking")}">${esc(inviteEmailLine(emailStatus[row.inviteId] || null))}</div>`
+      : "";
+    return `<article class="inviterow" data-staff-status="${esc(row.status)}" data-invite-status="${esc(row.status)}" data-staff-email="${esc(row.email)}" data-staff-uid="${esc(row.uid)}">
       <div>
         <b>${esc(row.name)}</b>
-        <div class="sub">${esc(row.email)} · ${esc(row.jobTitle ? row.jobTitle + " · " : "")}${esc(roleLabel(row.role) || row.role)}</div>
-        <div class="sub">${esc(statusLabel(row.viewStatus))}${row.viewStatus === "pending" || row.viewStatus === "expired" ? " · " + esc(formatWhen(row.expiresAt)) : ""}</div>
-        ${emailStatus && row.viewStatus === "pending" ? `<div class="sub invite-mail" data-invite-mail="${esc((emailStatus[row.id] && emailStatus[row.id].delivery) || "checking")}">${esc(inviteEmailLine(emailStatus[row.id] || null))}</div>` : ""}
+        <div class="sub">${esc(rosterDetail(row))}</div>
+        <div class="sub staff-status">${esc(rosterStatusText(row))}</div>
+        ${tags ? `<div class="skill-tags">${tags}</div>` : ""}
+        ${mail}
         ${link ? `<p class="invite-link">${esc(link)}</p>` : ""}
       </div>
       ${actions ? `<div class="inviteacts">
-        <button type="button" data-invite-copy="${esc(link)}">Copy link</button>
-        <button type="button" data-invite-resend="${esc(row.id)}">Resend</button>
-        <button type="button" data-invite-cancel="${esc(row.id)}">Cancel</button>
+        ${link ? `<button type="button" data-invite-copy="${esc(link)}">Copy link</button>` : ""}
+        <button type="button" data-invite-resend="${esc(row.inviteId)}">Resend</button>
+        <button type="button" data-invite-cancel="${esc(row.inviteId)}">Cancel</button>
       </div>` : ""}
     </article>`;
   }).join("");
+  const note = String(loginsNote || "").trim();
   return `<div class="sm-head"><h1>Staff</h1></div>
-    <p class="sub invite-note">Invite a ${offer.map(r => roleLabel(r).toLowerCase()).join(", ").replace(/, ([^,]*)$/, " or $1")}. Labourers and operators see their own jobs and no dollar amounts. They set their own password from the link. ${origin !== HEARTWOOD_APP_ORIGIN ? "CallUp emails them the link. Each invite below says whether the email went out; you can always copy the link and send it yourself." : "Mail is not sent from this screen."}</p>
+    <p class="sub invite-note">Everyone with a login or an invite is listed once. Invite a ${offer.map(r => roleLabel(r).toLowerCase()).join(", ").replace(/, ([^,]*)$/, " or $1")}. Labourers and operators see their own jobs and no dollar amounts. They set their own password from the link. ${origin !== HEARTWOOD_APP_ORIGIN ? "CallUp emails them the link. Each pending invite says whether the email went out; you can always copy the link and send it yourself." : "Mail is not sent from this screen."}</p>
     <form id="invitef" class="card invitef" autocomplete="off">
       <h2>Invite staff</h2>
       <label>Name<input name="name" required maxlength="80" autocomplete="name"></label>
@@ -299,7 +511,8 @@ export function staffViewHtml(invites, { now = new Date(), error = "", origin = 
       <button class="primary" type="submit">Send invite</button>
       <p id="inviteerr" class="err">${esc(error ? inviteFailureText(error) : "")}</p>
     </form>
-    <div class="invitelist">${cards || `<p class="muted">No invites yet.</p>`}</div>`;
+    ${note ? `<p class="sub">${esc(note)}</p>` : ""}
+    <div class="invitelist">${cards || `<p class="muted">No staff yet.</p>`}</div>`;
 }
 
 export function acceptScreenModel(preview, now = new Date()) {
