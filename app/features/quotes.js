@@ -3,7 +3,7 @@ import { orgSettings, POWERED_BY, PRODUCT_NAME } from "../org-settings.js";
 import { scopeRecord } from "./company.js";
 import { JOB_MONEY_COLLECTION, jobMoneyDoc } from "./job-money.js";
 import { attachAddressSearch, placesEnabled, sanitizePlace } from "./places.js";
-import { LINE_TYPES, measureQty, normalizeLineType, quotePack, quotePackNote, rateSaveChoice, tradeLabel, tradeToolsHtml, typeInfo } from "./trades.js";
+import { LINE_TYPES, measureQty, normalizeLineType, quotePack, quotePackNote, rateSaveChoice, sanitizeTradeList, tradeLabel, tradeToolsHtml, typeInfo } from "./trades.js";
 import { calcLandscaping } from "./packs/landscaping.js";
 import { calcConcreting } from "./packs/concreting.js";
 import { calcFencing } from "./packs/fencing.js";
@@ -12,7 +12,7 @@ import { calcTiling } from "./packs/tiling.js";
 import { calcPlumbing } from "./packs/plumbing.js";
 import { calcElectrical } from "./packs/electrical.js";
 import { calcConcreteCutting } from "./packs/concrete-cutting.js";
-import { defaultMeasures, gstFromEx, roundMoney, sanitizeQuotePrices } from "./packs/money.js";
+import { companyRatesForTrade, defaultMeasures, gstFromEx, packRateInputs, prettyUnit, roundMoney, sanitizeQuotePrices, sanitizeTradeRates, savedTradeRate, splitCalcKey, tradeMapFromLegacy, writeTradeRate } from "./packs/money.js";
 import { measureReviewHtml, measureSetupHtml } from "./packs/form.js";
 import { changeLines, compareHtml, commercialSnapshot, diffRevisions, revisionBody, revisionDocId, revisionNeeded, revisionsPanelHtml } from "./quote-revisions.js";
 // Rates from meta/quoteRates only — never invent business rates.
@@ -313,6 +313,7 @@ function emptyRates() {
     labourerUnit: "hour",
     extraPresets: [],
     packRates: {},
+    tradeRates: {},
     updatedAt: null
   };
 }
@@ -516,6 +517,8 @@ async function ensureRates(force) {
     if (!ui.quoteRates.yardMapsUrl) ui.quoteRates.yardMapsUrl = DEFAULT_DEPOT.yardMapsUrl;
     if (ui.quoteRates.labourerUnit !== "day") ui.quoteRates.labourerUnit = "hour";
     ui.quoteRates.extraPresets = sanitizeSavedPresets(ui.quoteRates.extraPresets);
+    ui.quoteRates.tradeRates = sanitizeTradeRates(ui.quoteRates.tradeRates);
+    if (!ui.quoteRates.packRates || typeof ui.quoteRates.packRates !== "object") ui.quoteRates.packRates = {};
   } catch {
     ui.quoteRates = emptyRates();
   }
@@ -583,8 +586,10 @@ export function quotesViewHtml(ui, esc, $$, helpers = {}) {
   const list = (ui.quotes || []).slice().sort((a, b) => String(b.updatedAtIso || "").localeCompare(String(a.updatedAtIso || "")));
   const drafts = list.filter(q => q.quoteStatus === "Draft");
   const accepted = list.filter(q => q.quoteStatus === "Accepted").slice(0, 30);
-  const plantMissing = FLEET_MACHINES.some(m => (rates.machineRates?.[m.id]?.rate) == null);
-  const rateWarn = DEFAULT_RATE_KEYS.some(([k]) => rates[k] == null) || plantMissing || rates.labourerRate == null;
+  const enabledNow = quoteTrade && Array.isArray(quoteTrade.enabled) && quoteTrade.enabled.length ? quoteTrade.enabled : null;
+  const earthworksOn = !enabledNow || enabledNow.includes("earthworks");
+  const plantMissing = earthworksOn && FLEET_MACHINES.some(m => (rates.machineRates?.[m.id]?.rate) == null);
+  const rateWarn = earthworksOn && (DEFAULT_RATE_KEYS.some(([k]) => rates[k] == null) || plantMissing || rates.labourerRate == null);
   const editRates = helpers.canEditQuoteRates != null ? helpers.canEditQuoteRates() : canEditRates();
   const money = v => (v != null && $$) ? `${esc($$(v))} <span class="sub">ex GST</span>` : `<span class="unal">incomplete</span>`;
   const viewing = activePack();
@@ -608,14 +613,14 @@ export function quotesViewHtml(ui, esc, $$, helpers = {}) {
   return `<div class="sm-head"><h1>Quotes</h1>
     <div class="row gap"><button type="button" class="sm-btn primary" id="newquote">＋ New quote</button>
     ${editRates ? `<button type="button" class="sm-btn" id="editrates">Quote rates &amp; depot</button>` : `<span class="sub pad">Rates are set by an admin or a manager · depot ${esc(rates.yardAddress || DEFAULT_DEPOT.yardAddress)}</span>`}</div></div>
-    <p class="pad sub">${measuredView
+    <p class="pad sub">${measuredView || !earthworksOn
       ? `Three steps: categories, measurements for each section, then review. One quote can cover several categories. Prices are starting-point defaults to review (A$ ex GST). Accepting creates an unscheduled job, or one job per section. Allocated hours are the sum of the sections and do not change timesheets. Admins, managers and supervisors only. Quotes are for ${esc(orgSettings().legalName)}. ${esc(POWERED_BY)}.`
       : `Three steps: categories, plant for each section, then review. One quote can cover several categories and trades. Accepting creates an unscheduled job, or one job per section. Admins, managers and supervisors only. Prices stay ex GST and are never invented. Quotes are for ${esc(orgSettings().legalName)}. ${esc(POWERED_BY)}.`}</p>
     ${quotePackNote(quoteTrade)}
     ${quoteTrade ? tradeToolsHtml(quoteTrade, { canEdit: editRates, focus: activeQuoteTradeId() }) : ""}
     <p class="pad sub">Depot (travel start): <b>${esc(rates.yardAddress || DEFAULT_DEPOT.yardAddress || "not set")}</b>
       · <a href="${esc(rates.yardMapsUrl || DEFAULT_DEPOT.yardMapsUrl)}" target="_blank" rel="noopener">Maps</a></p>
-    ${measuredView
+    ${measuredView || !earthworksOn
       ? `<p class="pad warnt">Prices in this pack are starting-point defaults to review (A$ ex GST). Change a price on the quote, or save it as your company default.</p>`
       : (rateWarn ? `<p class="pad warnt">Set plant (incl. operator), labourer, travel, materials and tip rates before accepting — nothing is invented for you.</p>` : "")}
     <div class="sm-head"><h2>Drafts <span class="cnt">${drafts.length}</span></h2></div>
@@ -654,66 +659,193 @@ function bindAdminExtras(ctx) {
   });
 }
 
-function openRatesEditor() {
-  if (!canEditRates()) return api.toast("Only an admin or a manager can change quote rates");
-  const { $, esc, toast, db, doc, setDoc, serverTimestamp, getUi, renderAdmin, getMe } = api;
-  const me = getMe();
-  ensureRates(false).then(rates => {
-    const mr = mergeMachineRates(rates.machineRates);
-    const d = $("#dlg"); d.className = ""; d.onclose = () => renderAdmin();
-    const plantFields = FLEET_MACHINES.map(m => {
-      const cur = mr[m.id];
-      return `<fieldset class="qw-machrate"><legend>${esc(m.name)}${m.code ? ` (${esc(m.code)})` : ""} — includes operator</legend>
+function rateTrades(setup) {
+  const listed = sanitizeTradeList(setup && setup.enabled);
+  return listed.length ? listed : ["earthworks"];
+}
+
+/** Settings card under Company. Earthworks-only keeps the plant sentence. Other trades do not mention the fleet. */
+export function quoteRatesSettingsBlurb(trades) {
+  const ids = sanitizeTradeList(trades);
+  const earth = !ids.length || ids.includes("earthworks");
+  if (earth && ids.length <= 1) return "Your plant, labour, travel and tip rates for quotes. They start blank and are only used by your company.";
+  if (earth) return "Rates for each trade this company does, plus travel and the depot. Earthworks keeps the plant and labourer rates. They are only used by your company.";
+  return "Rates for each trade this company does, plus travel and the depot. A blank rate keeps that line's starting-point default. They are only used by your company.";
+}
+
+function quoteRatesEditorIntro(trades) {
+  if (trades.includes("earthworks") && trades.length === 1) {
+    return "Saved for your company only. Dollar rates are ex GST — leave blank until you know them (nothing invented). Plant rates include the operator. Labourer is a separate optional add-on. Depot is travel start.";
+  }
+  if (trades.includes("earthworks")) {
+    return "Saved for your company only. Dollar rates are ex GST. Earthworks plant rates include the operator. Other trades use their own lines: leave a line blank to keep its starting-point default. Travel and the depot are shared.";
+  }
+  return "Saved for your company only. Dollar rates are ex GST. Each line starts from the pack default shown in the box; leave it blank to keep that default. Travel and the depot are shared. Turning a trade off hides its rates and does not delete them.";
+}
+
+function earthworksRatesSectionHtml(rates, esc) {
+  const mr = mergeMachineRates(rates.machineRates);
+  const plantFields = FLEET_MACHINES.map(m => {
+    const cur = mr[m.id];
+    return `<fieldset class="qw-machrate"><legend>${esc(m.name)}${m.code ? ` (${esc(m.code)})` : ""} — includes operator</legend>
         <label>$ / ${cur.unit === "day" ? "day" : "hour"} (ex GST)<input name="mr_${m.id}" type="number" step="0.01" min="0" value="${esc(cur.rate ?? "")}"></label>
         <label>Unit<select name="mu_${m.id}"><option value="hour" ${cur.unit !== "day" ? "selected" : ""}>Per hour</option><option value="day" ${cur.unit === "day" ? "selected" : ""}>Per day</option></select></label>
       </fieldset>`;
-    }).join("");
-    d.innerHTML = `<form method="dialog" id="qrf" class="jf"><h2>Quote rates &amp; depot</h2>
-      <p class="sub">Saved for your company only. Dollar rates are ex GST — leave blank until you know them (nothing invented). Plant rates include the operator. Labourer is a separate optional add-on. Depot is travel start.</p>
-      <h3>Plant (operator included)</h3>
+  }).join("");
+  const materialKeys = DEFAULT_RATE_KEYS.filter(([k]) => k !== "travelPerKm");
+  return `<section data-rates-trade="earthworks"><h3>Earthworks</h3>
+      <h4>Plant (operator included)</h4>
       <p class="sub">Presets: Truck + skid · Truck + excavator · Truck + skid + excavator · Excavator only. Selecting a combo charges each machine once (no double truck). The truck rate is used inside the truck packages.</p>
       ${plantFields}
-      <h3>Labourer (optional add-on)</h3>
+      <h4>Labourer (optional add-on)</h4>
       <label>Labourer $ (ex GST)<input name="labourerRate" type="number" step="0.01" min="0" value="${esc(rates.labourerRate ?? "")}"></label>
       <label>Labourer unit<select name="labourerUnit"><option value="hour" ${rates.labourerUnit !== "day" ? "selected" : ""}>Per hour</option><option value="day" ${rates.labourerUnit === "day" ? "selected" : ""}>Per day</option></select></label>
-      <h3>Travel, materials, tip</h3>
-      ${DEFAULT_RATE_KEYS.map(([k, lab]) => `<label>${esc(lab)}<input name="${k}" type="number" step="0.01" min="0" value="${esc(rates[k] ?? "")}"></label>`).join("")}
+      <h4>Materials and tip</h4>
+      <p class="sub">These are the earthworks materials and rubbish lines. Other trades price materials on their own pack lines.</p>
+      ${materialKeys.map(([k, lab]) => `<label>${esc(lab)}<input name="${k}" type="number" step="0.01" min="0" value="${esc(rates[k] ?? "")}"></label>`).join("")}
       <label>Materials unit label<input name="materialUnitLabel" value="${esc(rates.materialUnitLabel || "unit")}"></label>
       <label>Rubbish unit label<input name="tipUnitLabel" value="${esc(rates.tipUnitLabel || "load")}"></label>
+    </section>`;
+}
+
+function measuredRatesSectionHtml(id, rates, esc) {
+  const pack = quotePack(id);
+  if (!pack || !pack.data) return "";
+  const rows = packRateInputs(pack.data).map(row => {
+    const saved = savedTradeRate(rates, id, row.lineId, row.variant, row.calcKey);
+    const unit = prettyUnit(row.unit);
+    return `<label>${esc(row.label)} <span class="sub">$ / ${esc(unit)} ex GST</span><input name="${esc(row.name)}" data-rate-key="${esc(row.calcKey)}" type="number" step="0.01" min="0" inputmode="decimal" placeholder="${esc(row.defaultRate ?? "")}" value="${esc(saved ?? "")}"></label>`;
+  }).join("");
+  const label = pack.label || tradeLabel(id);
+  return `<section data-rates-trade="${esc(id)}"><h3>${esc(label)}</h3>
+      <p class="sub">Ex GST. The number in the box is the starting point. Leave a line blank to keep that default.</p>
+      ${rows}</section>`;
+}
+
+function sharedRatesSectionHtml(rates, esc) {
+  const travel = DEFAULT_RATE_KEYS.find(([k]) => k === "travelPerKm");
+  return `<section data-rates-shared="travel"><h3>Travel and depot</h3>
+      <p class="sub">Shared by every trade. Travel is the per-kilometre rate. The depot is where travel starts.</p>
+      <label>${esc(travel[1])}<input name="travelPerKm" type="number" step="0.01" min="0" value="${esc(rates.travelPerKm ?? "")}"></label>
       ${savedPresetsEditorHtml(rates.extraPresets, esc)}
-      <h3>Depot</h3>
+      <h4>Depot</h4>
       <label>Depot / yard address<input name="yardAddress" value="${esc(rates.yardAddress || DEFAULT_DEPOT.yardAddress)}"></label>
       <label>Depot Maps link (optional)<input name="yardMapsUrl" value="${esc(rates.yardMapsUrl || DEFAULT_DEPOT.yardMapsUrl)}"></label>
+    </section>`;
+}
+
+/** Rates dialog body, one section per selected trade, then the shared travel and depot block. */
+export function ratesEditorHtml(rates, setup, escFn) {
+  const esc = escFn || (s => String(s ?? ""));
+  const stored = rates || {};
+  const trades = rateTrades(setup);
+  const sections = trades.map(id => id === "earthworks" ? earthworksRatesSectionHtml(stored, esc) : measuredRatesSectionHtml(id, stored, esc)).filter(Boolean).join("");
+  return `<h2>Quote rates &amp; depot</h2>
+      <p class="sub">${esc(quoteRatesEditorIntro(trades))}</p>
+      ${sections}
+      ${sharedRatesSectionHtml(stored, esc)}`;
+}
+
+/**
+ * Fields to merge onto the quote-rates doc, plus a full replacement map for each selected
+ * measured trade. Trades that are not selected are absent on purpose: the save must not
+ * delete their stored rates. Earthworks plant stays on machineRates / labourerRate.
+ */
+export function buildQuoteRatesSave(values, previous, setup) {
+  const v = values || {};
+  const prev = previous || {};
+  const trades = rateTrades(setup);
+  const earth = trades.includes("earthworks");
+  const remove = new Set(Array.isArray(v.removePresetIds) ? v.removePresetIds : []);
+  const fields = {
+    travelPerKm: numOrNull(v.travelPerKm),
+    yardAddress: String(v.yardAddress || "").trim() || DEFAULT_DEPOT.yardAddress,
+    yardMapsUrl: String(v.yardMapsUrl || "").trim() || DEFAULT_DEPOT.yardMapsUrl,
+    extraPresets: sanitizeSavedPresets((prev.extraPresets || []).filter(p => !remove.has(p.id))),
+  };
+  if (earth) {
+    const machineRates = {};
+    for (const m of FLEET_MACHINES) {
+      machineRates[m.id] = {
+        rate: numOrNull(v["mr_" + m.id]),
+        unit: v["mu_" + m.id] === "day" ? "day" : "hour",
+      };
+    }
+    Object.assign(fields, {
+      machineRates,
+      labourerRate: numOrNull(v.labourerRate),
+      labourerUnit: v.labourerUnit === "day" ? "day" : "hour",
+      // Clear legacy crew rate from new saves so it cannot double-charge operator.
+      hourlyOnSite: null,
+      materialPerUnit: numOrNull(v.materialPerUnit),
+      tipPerLoad: numOrNull(v.tipPerLoad),
+      materialUnitLabel: String(v.materialUnitLabel || "").trim() || "unit",
+      tipUnitLabel: String(v.tipUnitLabel || "").trim() || "load",
+    });
+  }
+  const tradeRates = {};
+  for (const id of trades) {
+    if (id === "earthworks") continue;
+    const pack = quotePack(id);
+    if (!pack || !pack.data) continue;
+    const map = {};
+    for (const row of packRateInputs(pack.data)) {
+      const n = numOrNull(v[row.name]);
+      if (n == null) continue;
+      if (row.variant) map[row.lineId] = { ...(map[row.lineId] || {}), [row.variant]: n };
+      else map[row.lineId] = n;
+    }
+    tradeRates[id] = map;
+  }
+  return { fields, tradeRates, trades };
+}
+
+function rememberRates(previous, fields, tradeRates) {
+  const next = {
+    ...emptyRates(),
+    ...previous,
+    ...fields,
+    machineRates: mergeMachineRates(fields.machineRates || (previous && previous.machineRates)),
+    extraPresets: fields.extraPresets || [],
+    tradeRates: { ...((previous && previous.tradeRates) || {}) },
+    packRates: (previous && previous.packRates) || {},
+    updatedAt: new Date().toISOString(),
+  };
+  for (const [id, map] of Object.entries(tradeRates || {})) next.tradeRates[id] = map;
+  return next;
+}
+
+function openRatesEditor() {
+  if (!canEditRates()) return api.toast("Only an admin or a manager can change quote rates");
+  const { $, esc, toast, db, doc, setDoc, updateDoc, serverTimestamp, getUi, renderAdmin, getMe } = api;
+  const me = getMe();
+  ensureRates(false).then(rates => {
+    const d = $("#dlg"); d.className = ""; d.onclose = () => renderAdmin();
+    d.innerHTML = `<form method="dialog" id="qrf" class="jf">${ratesEditorHtml(rates, quoteTradeSetup(), esc)}
       <div class="btns"><button value="cancel" formnovalidate class="ghost">Cancel</button><button value="save" class="primary">Save</button></div></form>`;
     d.showModal();
     $("#qrf").onsubmit = async ev => {
       if (ev.submitter?.value !== "save") return;
       ev.preventDefault(); const f = ev.target;
-      const machineRates = {};
-      for (const m of FLEET_MACHINES) {
-        machineRates[m.id] = {
-          rate: numOrNull(f["mr_" + m.id].value),
-          unit: f["mu_" + m.id].value === "day" ? "day" : "hour"
-        };
+      const values = { removePresetIds: [...f.querySelectorAll("[data-rmpreset]:checked")].map(el => el.dataset.rmpreset) };
+      for (const el of f.elements) {
+        if (!el.name || el.type === "checkbox" || el.type === "button") continue;
+        values[el.name] = el.value;
       }
-      const data = {
-        travelPerKm: numOrNull(f.travelPerKm.value),
-        materialPerUnit: numOrNull(f.materialPerUnit.value), tipPerLoad: numOrNull(f.tipPerLoad.value),
-        materialUnitLabel: f.materialUnitLabel.value.trim() || "unit", tipUnitLabel: f.tipUnitLabel.value.trim() || "load",
-        yardAddress: f.yardAddress.value.trim() || DEFAULT_DEPOT.yardAddress,
-        yardMapsUrl: f.yardMapsUrl.value.trim() || DEFAULT_DEPOT.yardMapsUrl,
-        machineRates,
-        labourerRate: numOrNull(f.labourerRate.value),
-        labourerUnit: f.labourerUnit.value === "day" ? "day" : "hour",
-        // Clear legacy crew rate from new saves so it cannot double-charge operator.
-        hourlyOnSite: null,
-        // Saved extra-item presets: keep the ones not ticked for removal.
-        extraPresets: sanitizeSavedPresets((rates.extraPresets || []).filter(p => !f.querySelector(`[data-rmpreset="${p.id}"]`)?.checked)),
-        updatedAt: serverTimestamp(), updatedBy: me.uid
-      };
+      const built = buildQuoteRatesSave(values, rates, quoteTradeSetup());
+      const cid = ratesCompany();
+      const data = { ...built.fields, updatedAt: serverTimestamp(), updatedBy: me.uid };
       try {
-        await setDoc(doc(db, ...quoteRatesPath(ratesCompany())), ratesCompany() === "heartwood" ? data : { ...data, companyId: ratesCompany() }, { merge: true });
-        getUi().quoteRates = { ...emptyRates(), ...data, machineRates: mergeMachineRates(machineRates), updatedAt: new Date().toISOString() };
+        const ref = doc(db, ...quoteRatesPath(cid));
+        await setDoc(ref, cid === "heartwood" ? data : { ...data, companyId: cid }, { merge: true });
+        // Replace the whole tradeRates map so a cleared line drops, and a trade that is
+        // switched off (not in this save) is copied through and kept.
+        if (Object.keys(built.tradeRates).length) {
+          const nextTrade = { ...(rates.tradeRates || {}) };
+          for (const [id, map] of Object.entries(built.tradeRates)) nextTrade[id] = map;
+          await updateDoc(ref, { tradeRates: nextTrade });
+        }
+        getUi().quoteRates = rememberRates(rates, built.fields, built.tradeRates);
         d.close(); toast("Quote rates saved"); renderAdmin();
       } catch (e) { toast("Not saved: " + (e.code || e.message)); }
     };
@@ -795,7 +927,7 @@ function measuredCalc(wizard, data, rates) {
     quotePrices: data.quotePrices,
     hoursOnSite: data.hoursOnSite,
     includeLabour: data.includeLabour,
-  }, (rates && rates.packRates && rates.packRates[wizard.id]) || {});
+  }, companyRatesForTrade(rates, wizard.id));
   return combinePackExtras(packOnly, data, rates);
 }
 
@@ -807,12 +939,18 @@ async function savePackDefault(packId, rateKey, price) {
   if (n == null) return false;
   const packRates = { ...(current.packRates || {}) };
   packRates[packId] = { ...(packRates[packId] || {}), [rateKey]: n };
+  const hadTrade = current.tradeRates && Object.prototype.hasOwnProperty.call(current.tradeRates, packId);
+  const base = hadTrade ? current.tradeRates[packId] : tradeMapFromLegacy(packRates[packId]);
+  const { lineId, variant } = splitCalcKey(rateKey);
+  const trade = writeTradeRate(base, lineId, variant, n);
+  const tradeRates = { ...(current.tradeRates || {}), [packId]: trade };
   const cid = ratesCompany();
-  const data = { packRates, updatedAt: serverTimestamp(), updatedBy: getMe().uid };
+  const data = { packRates, tradeRates, updatedAt: serverTimestamp(), updatedBy: getMe().uid };
   try {
     await setDoc(doc(db, ...quoteRatesPath(cid)), cid === "heartwood" ? data : { ...data, companyId: cid }, { merge: true });
     current.packRates = packRates;
-    getUi().quoteRates = { ...current, packRates };
+    current.tradeRates = tradeRates;
+    getUi().quoteRates = { ...current, packRates, tradeRates };
     api.toast("Saved as the company default");
     return true;
   } catch (e) { api.toast("Not saved: " + (e.code || e.message)); return false; }
@@ -1956,6 +2094,7 @@ function openQuoteWizard(existing, opts = {}) {
           machineRates: mergeMachineRates(rates.machineRates),
           labourerRate: rates.labourerRate, labourerUnit: rates.labourerUnit,
           packRates: rates.packRates || {},
+          ...(rates.tradeRates && Object.keys(rates.tradeRates).length ? { tradeRates: rates.tradeRates } : {}),
         },
         quoteStatus: "Draft", source: "app",
         updatedAt: serverTimestamp(), updatedBy: me.uid, updatedAtIso: new Date().toISOString()

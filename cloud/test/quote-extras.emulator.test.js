@@ -20,6 +20,7 @@ test.before(async () => {
     const d = ctx.firestore();
     await setDoc(doc(d, "users/op1"), { role: "operator", name: "Sam" });
     await setDoc(doc(d, "users/bAdm"), { role: "admin", name: "Bea", companyId: "bravo", tenantId: "bravo" });
+    await setDoc(doc(d, "users/bMgr"), { role: "manager", name: "Mo", companyId: "bravo", tenantId: "bravo" });
     await setDoc(doc(d, "users/bSup"), { role: "supervisor", name: "Sue", companyId: "bravo", tenantId: "bravo" });
     await setDoc(doc(d, "users/bOp"), { role: "operator", name: "Bo", companyId: "bravo", tenantId: "bravo" });
     await setDoc(doc(d, "users/cAdm"), { role: "admin", name: "Cy", companyId: "charlie", tenantId: "charlie" });
@@ -65,6 +66,25 @@ test("permissions unchanged: staff and other companies cannot read or write quot
   await assertFails(updateDoc(doc(db("cAdm"), "quotes/bOld"), { extraItems: [] }));
   await assertFails(setDoc(doc(db("bAdm"), "quotes/hwx"), { companyId: "heartwood", client: "x", extraItems: [] }));
   await assertFails(updateDoc(doc(db("bAdm"), "quotes/bOld"), { companyId: "charlie" }));
+});
+
+test("tradeRates on the quote-rates doc: admin and manager write, supervisor reads, crew cannot", async () => {
+  const tradeRates = {
+    fencing: { labour: 80, run: { "colorbond@1.8": 200 } },
+    "concrete-cutting": { floor: { "100": 30 } },
+    landscaping: { turf: 22 },
+  };
+  await assertSucceeds(setDoc(doc(db("bAdm"), "companyMeta/bravo_quoteRates"), { companyId: "bravo", tradeRates }, { merge: true }));
+  const read = await assertSucceeds(getDoc(doc(db("bSup"), "companyMeta/bravo_quoteRates")));
+  assert.equal(read.data().tradeRates.fencing.run["colorbond@1.8"], 200);
+  assert.equal(read.data().tradeRates.landscaping.turf, 22);
+  await assertSucceeds(setDoc(doc(db("bMgr"), "companyMeta/bravo_quoteRates"), { companyId: "bravo", tradeRates: { fencing: { labour: 90 } } }, { merge: true }));
+  await assertFails(setDoc(doc(db("bSup"), "companyMeta/bravo_quoteRates"), { companyId: "bravo", tradeRates }, { merge: true }));
+  await assertFails(getDoc(doc(db("bOp"), "companyMeta/bravo_quoteRates")));
+  await assertFails(setDoc(doc(db("bOp"), "companyMeta/bravo_quoteRates"), { companyId: "bravo", tradeRates }, { merge: true }));
+  await assertSucceeds(setDoc(doc(db(ALEX), "meta/quoteRates"), { tradeRates: { fencing: { labour: 80 } } }, { merge: true }));
+  const kept = await assertSucceeds(getDoc(doc(db("bSup"), "companyMeta/bravo_quoteRates")));
+  assert.equal(kept.data().tradeRates.landscaping.turf, 22, "a fencing-only merge does not delete another trade");
 });
 
 test("company saved presets live on the quote-rates doc: admin writes, supervisor reads, staff neither", async () => {

@@ -268,6 +268,183 @@ export function placeholderRates(pack) {
   return out;
 }
 
+function rateToken(s) {
+  return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || "x";
+}
+
+/** Form field for one company rate. Variant is only on style/height and option lines. */
+export function rateInputName(tradeId, lineId, variant) {
+  return "tr_" + rateToken(tradeId) + "_" + rateToken(lineId) + (variant ? "__" + rateToken(variant) : "");
+}
+
+/**
+ * Every priced line on a pack, including style/height and finish variants, and crew labour.
+ * calcKey matches calcMeasured. variant is the tradeRates map key under the line id.
+ */
+export function packRateInputs(pack) {
+  const tradeId = pack && pack.id || "";
+  const out = [];
+  for (const line of (pack && pack.lines) || []) {
+    if (line.styles) {
+      for (const style of line.styles) {
+        for (const height of style.heights || []) {
+          const variant = style.id + "@" + height.id;
+          out.push({
+            tradeId, lineId: line.id, variant,
+            calcKey: line.id + ":" + variant,
+            label: line.label + " — " + style.label + ", " + height.label,
+            unit: line.unit || "",
+            defaultRate: height.defaultRate,
+            name: rateInputName(tradeId, line.id, variant),
+          });
+        }
+      }
+    } else if (line.options) {
+      for (const opt of line.options) {
+        out.push({
+          tradeId, lineId: line.id, variant: opt.id,
+          calcKey: line.id + ":" + opt.id,
+          label: line.label + " — " + opt.label,
+          unit: line.unit || "",
+          defaultRate: opt.defaultRate,
+          name: rateInputName(tradeId, line.id, opt.id),
+        });
+      }
+    } else if (line.defaultRate != null) {
+      out.push({
+        tradeId, lineId: line.id, variant: "",
+        calcKey: line.id,
+        label: line.label,
+        unit: line.unit || "",
+        defaultRate: line.defaultRate,
+        name: rateInputName(tradeId, line.id, ""),
+      });
+    }
+  }
+  return out;
+}
+
+export function splitCalcKey(rateKey) {
+  const key = String(rateKey || "");
+  const i = key.indexOf(":");
+  if (i <= 0) return { lineId: key, variant: "" };
+  return { lineId: key.slice(0, i), variant: key.slice(i + 1) };
+}
+
+/** tradeRates.tradeId line map → calcMeasured keys. A variant lives one level under the line id. */
+export function flattenTradeRates(trade) {
+  const out = {};
+  if (!trade || typeof trade !== "object" || Array.isArray(trade)) return out;
+  for (const [lineId, node] of Object.entries(trade)) {
+    if (node != null && typeof node === "object" && !Array.isArray(node)) {
+      for (const [variant, v] of Object.entries(node)) {
+        const n = priceOrNull(v);
+        if (n != null) out[lineId + ":" + variant] = n;
+      }
+    } else {
+      const n = priceOrNull(node);
+      if (n != null) out[lineId] = n;
+    }
+  }
+  return out;
+}
+
+function flattenLegacyPack(legacy) {
+  const out = {};
+  if (!legacy || typeof legacy !== "object" || Array.isArray(legacy)) return out;
+  for (const [k, v] of Object.entries(legacy)) {
+    const n = priceOrNull(v);
+    if (n != null) out[k] = n;
+  }
+  return out;
+}
+
+/**
+ * Company rate card for one trade. tradeRates[tradeId] wins, including an empty map
+ * (every line blank means "use the pack default"). packRates is only the older
+ * "save as company default" store, used until that trade has a tradeRates map.
+ */
+export function companyRatesForTrade(rates, tradeId) {
+  const book = rates && rates.tradeRates;
+  const trade = book && typeof book === "object" ? book[tradeId] : undefined;
+  if (trade && typeof trade === "object" && !Array.isArray(trade)) return flattenTradeRates(trade);
+  const legacy = rates && rates.packRates && typeof rates.packRates === "object" ? rates.packRates[tradeId] : null;
+  return flattenLegacyPack(legacy);
+}
+
+/** Saved company figure for one editor input. Null means the field stays blank (use the default). */
+export function savedTradeRate(rates, tradeId, lineId, variant, calcKey) {
+  const book = rates && rates.tradeRates;
+  const trade = book && typeof book === "object" ? book[tradeId] : undefined;
+  if (trade && typeof trade === "object" && !Array.isArray(trade)) {
+    const node = trade[lineId];
+    if (variant) {
+      if (!node || typeof node !== "object" || Array.isArray(node)) return null;
+      return priceOrNull(node[variant]);
+    }
+    if (node != null && typeof node === "object") return null;
+    return priceOrNull(node);
+  }
+  const legacy = rates && rates.packRates && typeof rates.packRates === "object" ? rates.packRates[tradeId] : null;
+  if (!legacy || typeof legacy !== "object") return null;
+  return priceOrNull(legacy[calcKey]);
+}
+
+export function writeTradeRate(trade, lineId, variant, price) {
+  const next = trade && typeof trade === "object" && !Array.isArray(trade) ? { ...trade } : {};
+  if (variant) {
+    const prev = next[lineId];
+    const map = prev && typeof prev === "object" && !Array.isArray(prev) ? { ...prev } : {};
+    map[variant] = price;
+    next[lineId] = map;
+  } else {
+    next[lineId] = price;
+  }
+  return next;
+}
+
+export function tradeMapFromLegacy(legacy) {
+  let out = {};
+  if (!legacy || typeof legacy !== "object" || Array.isArray(legacy)) return out;
+  for (const [k, v] of Object.entries(legacy)) {
+    const n = priceOrNull(v);
+    if (n == null) continue;
+    const { lineId, variant } = splitCalcKey(k);
+    if (!lineId) continue;
+    out = writeTradeRate(out, lineId, variant, n);
+  }
+  return out;
+}
+
+/** Keep a sane tradeRates map. An empty trade object stays, so "all defaults" is not forgotten. */
+export function sanitizeTradeRates(map) {
+  const out = {};
+  if (!map || typeof map !== "object" || Array.isArray(map)) return out;
+  for (const tradeId of Object.keys(map).slice(0, 12)) {
+    if (!/^[a-z0-9-]{1,40}$/.test(tradeId)) continue;
+    const lines = map[tradeId];
+    if (!lines || typeof lines !== "object" || Array.isArray(lines)) continue;
+    const trade = {};
+    for (const [lineId, node] of Object.entries(lines).slice(0, 80)) {
+      if (!/^[a-z0-9_-]{1,40}$/i.test(lineId)) continue;
+      if (node != null && typeof node === "object" && !Array.isArray(node)) {
+        const variants = {};
+        for (const [variant, v] of Object.entries(node).slice(0, 40)) {
+          if (!/^[a-z0-9@._-]{1,40}$/i.test(variant)) continue;
+          const n = priceOrNull(v);
+          if (n != null) variants[variant] = n;
+        }
+        if (Object.keys(variants).length) trade[lineId] = variants;
+      } else {
+        const n = priceOrNull(node);
+        if (n != null) trade[lineId] = n;
+      }
+    }
+    out[tradeId] = trade;
+  }
+  return out;
+}
+
 export function freezePack(pack) {
   const walk = v => {
     if (v && typeof v === "object" && !Object.isFrozen(v)) {
