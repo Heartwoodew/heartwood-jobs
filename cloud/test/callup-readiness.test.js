@@ -29,7 +29,7 @@ test("app address: Heartwood stays on jobs.heartwoodew.com, others use the CallU
   assert.equal(billingOrigin(CALLUP_APP_ORIGIN, "bravo"), CALLUP_APP_ORIGIN);
   assert.equal(billingOrigin(HEARTWOOD_APP_ORIGIN, "heartwood"), HEARTWOOD_APP_ORIGIN);
   const sw = readFileSync(new URL("../../app/sw.js", import.meta.url), "utf8");
-  assert.match(sw, /callup-shell-v106-multi-category-quotes/);
+  assert.match(sw, /callup-shell-v108-password-reset/);
 });
 
 test("Resend invites: off by default, Heartwood held, test recipients only when allow-listed", async () => {

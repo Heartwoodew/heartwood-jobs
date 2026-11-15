@@ -393,3 +393,7 @@ Order after merge:
 ## Bundle merge of PRs 72–77 (15 Nov 2026)
 
 PRs 72 (crew map), 73 (quote packs), 74 (staff tab), 75 (chat and daily job push), 76 (capacity and quote revisions) and 77 (dispatch times) were merged together. One service worker name covers all of them: `callup-shell-v102-phase3-bundle`. The names in the sections above are superseded.
+
+## Admin password reset (15 Nov 2026)
+
+Do not deploy from this branch. When it is deployed: hosting (service worker `callup-shell-v108-password-reset`) and the function `adminSendPasswordReset` in australia-southeast1. It uses the same `RESEND_API_KEY` and `INVITE_EMAIL_ENABLED` gate as `inviteEmailWorker`. The reset link is emailed to the staff member and is not returned to the browser. Firestore `passwordResetRate/{uid}` is Admin SDK only (client read and write denied). Rebased onto main's `callup-shell-v106-multi-category-quotes`; this branch stays `callup-shell-v108-password-reset`.

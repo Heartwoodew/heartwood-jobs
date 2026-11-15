@@ -30,6 +30,7 @@ import { SWMS, SWMS_VERSION, sigMs, sigExp, latestSig, statusOf, swmsSignatureDa
 import {
   acceptLoadingHtml, acceptScreenModel, acceptViewHtml, buildInviteDraft, inviteFailureText,
   newInviteToken, pendingInviteForEmail, staffViewHtml, appOriginFor, invitableRoles, CREW_ROLES,
+  canSendPasswordReset, forgotPasswordMessage, GOOGLE_ONLY_RESET,
 } from "./features/staff-invites.js";
 import { saveGuard, settleOrQueue } from "./features/pending-write.js";
 import { PRODUCT_NAME, POWERED_BY, orgSettings, saveOrgSettings, setActiveCompany } from "./org-settings.js";
@@ -651,13 +652,14 @@ function signInFailureText(e) {
   if (code === "auth/network-request-failed") return "No connection. Check your signal and try again.";
   return "Sign-in failed: " + (code || (e && e.message) || "unknown error");
 }
-function renderLogin() {
+function renderLogin(prefill) {
   paintBrand();
+  const email = typeof prefill === "string" ? prefill : "";
   $("#app").innerHTML = `<form id="login" class="card login">
     <div class="login-brand"><div class="wordmark" aria-label="${esc(PRODUCT_NAME)}">Call<span>Up</span></div></div>
     <h2>Sign in</h2>
     <p class="sub">Use the email your company gave you.</p>
-    <label>Email<input name="e" type="email" autocomplete="username" required></label>
+    <label>Email<input name="e" type="email" autocomplete="username" inputmode="email" required value="${esc(email)}"></label>
     <label>Password<input name="p" type="password" autocomplete="current-password" required></label>
     <button class="big primary">Sign in</button>
     <button class="ghost" type="button" id="forgotpw">Forgot password?</button>
@@ -669,21 +671,42 @@ function renderLogin() {
     try { await signInWithEmailAndPassword(auth, f.e.value.trim(), f.p.value); }
     catch (e) { $("#lerr").textContent = signInFailureText(e); }
   };
-  $("#forgotpw").onclick = async () => {
-    const f = $("#login"), email = f.e.value.trim(), out = $("#lerr");
-    if (!email) { out.textContent = "Type your email above, then tap Forgot password again."; f.e.focus(); return; }
+  $("#forgotpw").onclick = () => renderForgot($("#login").e.value);
+  $("#opencreate").onclick = () => renderSignup();
+}
+// In-page email step (not window.prompt, which the installed Home Screen app does not show).
+function renderForgot(prefill) {
+  paintBrand();
+  const email = String(prefill || "").trim();
+  $("#app").innerHTML = `<form id="forgot" class="card login" autocomplete="on">
+    <div class="login-brand"><div class="wordmark" aria-label="${esc(PRODUCT_NAME)}">Call<span>Up</span></div></div>
+    <h2>Reset password</h2>
+    <p class="sub">Enter the email you use to sign in.</p>
+    <label>Email<input name="e" type="email" autocomplete="username" inputmode="email" required value="${esc(email)}"></label>
+    <button class="big primary" type="submit">Email reset link</button>
+    <button class="ghost" type="button" id="forgotback">Back to sign in</button>
+    <p id="ferr" class="err"></p>
+    <p class="powered">${esc(POWERED_BY)}</p></form>`;
+  const form = $("#forgot");
+  $("#forgotback").onclick = () => renderLogin(form.e.value);
+  form.onsubmit = async ev => {
+    ev.preventDefault();
+    const address = form.e.value.trim();
+    const out = $("#ferr");
+    if (!address) { out.className = "err"; out.textContent = forgotPasswordMessage("empty"); form.e.focus(); return; }
+    out.textContent = "";
     try {
-      await sendPasswordResetEmail(auth, email);
-      out.textContent = "If " + email + " has a login, a password reset link is on its way. Check your junk folder too.";
+      await sendPasswordResetEmail(auth, address);
+      out.className = "sent";
+      out.textContent = forgotPasswordMessage("sent");
     } catch (e) {
-      const code = (e && e.code) || "";
-      out.textContent = code === "auth/invalid-email" ? "Enter a valid email address."
-        : code === "auth/too-many-requests" ? "Too many tries. Wait a few minutes."
-        : code === "auth/user-not-found" ? "If " + email + " has a login, a password reset link is on its way."
-        : "Couldn't send the reset email (" + (code || "error") + "). Ask your admin, or try again.";
+      const code = (e && e.code) || "sent";
+      const neutral = code === "auth/user-not-found" || code === "sent" || !code;
+      out.className = neutral ? "sent" : "err";
+      out.textContent = forgotPasswordMessage(code);
     }
   };
-  $("#opencreate").onclick = () => renderSignup();
+  if (!email) form.e.focus();
 }
 function renderSignup(friendCode = "") {
   paintBrand();
@@ -3368,6 +3391,7 @@ function staffPageHtml() {
     now: inviteDisplayNow(), error: ui.invitesErr || "", origin: appOriginFor(myCompanyId(), location.origin),
     emailStatus: inviteMailMap(), roles: myInviteRoles(), titles: setup.titles,
     logins: ui.staffLogins || [], companyId: myCompanyId(), loginsNote: ui.staffLoginsErr || "",
+    resetPasswords: canSendPasswordReset(me), viewerUid: (me && me.uid) || "",
   }) + titlesEditorHtml(setup.titles, { canEdit: canEditTitles() })
     + skillsEditorHtml((me && me.cloudProfile && me.cloudProfile.skills) || [], { canEdit: true });
 }
@@ -3460,6 +3484,23 @@ function bindStaff(A) {
     if (!confirm("Cancel this invite? The link will stop working.")) return;
     try { await cancelInvite(b.dataset.inviteCancel); toast("Invite cancelled."); }
     catch (e) { toast("Couldn't cancel (" + txFail(e) + ")."); }
+  });
+  A.querySelectorAll("[data-password-reset]").forEach(b => b.onclick = async () => {
+    if (!canSendPasswordReset(me)) return;
+    const name = b.dataset.passwordResetName || "them";
+    if (!confirm("Email a password reset link to " + name + "? The link goes to their email. You won't see or choose the password.")) return;
+    b.disabled = true;
+    try {
+      const result = await callAuthed("adminSendPasswordReset", { uid: b.dataset.passwordReset });
+      if (result && result.reason === "google-only") toast(GOOGLE_ONLY_RESET);
+      else if (result && result.ok) toast("Reset link emailed to " + name);
+      else toast("Couldn't email that reset link. Try again in a minute.");
+    } catch (e) {
+      const msg = String((e && e.message) || "");
+      toast(msg && msg.length < 180 && !/https?:/i.test(msg) ? msg : "Couldn't email that reset link. Try again in a minute.");
+    } finally {
+      b.disabled = false;
+    }
   });
   bindProfileExtras(A);
 }

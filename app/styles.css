@@ -1055,6 +1055,7 @@ body.admin .mdisp .route-open{display:block;width:calc(100% - 24px);margin:10px 
 .logofield .logopreview[hidden]{display:none}
 .logofield .orglogo-preview{height:64px;width:auto;max-width:min(100%,240px);display:block;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:8px;padding:6px}
 
+.login .sent{color:#142033;font-weight:600}
 .login-brand{display:grid;gap:2px;justify-items:start;margin-bottom:2px}
 .login-brand .wordmark{color:#142033;font-size:36px;font-weight:800;letter-spacing:-0.045em;line-height:1}
 .login-brand .wordmark span{color:#c47a12}

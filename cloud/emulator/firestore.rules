@@ -621,6 +621,11 @@ service cloud.firestore {
     }
 // END INVITE RULES
 
+    // Password-reset rate limit. Written by adminSendPasswordReset only. The link is not stored.
+    match /passwordResetRate/{uid} {
+      allow read, write: if false;
+    }
+
 // BEGIN CHAT RULES
     function chatSignedIn() { return request.auth != null; }
     function chatIsAlex() { return chatSignedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
