@@ -121,14 +121,14 @@ service cloud.firestore {
         && data.billing.stripeSubscriptionId == null;
     }
     function oneTradeId(id) {
-      // One list lookup instead of 8 comparisons: keeps multi-trade writes under the 1000-expression limit.
-      return id is string && id in ["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical"];
+      // One list lookup, not one comparison per trade: keeps multi-trade writes under the 1000-expression limit.
+      return id is string && id in ["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical", "concrete-cutting"];
     }
     function tradeFieldOk(data) {
       return !("trade" in data) || oneTradeId(data.trade);
     }
     function tradesListOk(list) {
-      return list is list && list.size() >= 1 && list.size() <= 8 && list.hasOnly(["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical"]);
+      return list is list && list.size() >= 1 && list.size() <= 9 && list.hasOnly(["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical", "concrete-cutting"]);
     }
     function companyTradesEdit(companyId) {
       return signedIn()
@@ -289,7 +289,7 @@ service cloud.firestore {
       return d.keys().hasOnly(["name", "email", "role", "companyId", "tenantId", "jobTitle", "jobTitleId"])
         && d.role == "admin"
         && d.get("jobTitle", "Admin") == "Admin"
-        && d.get("jobTitleId", "earthworks:admin").matches('^(earthworks|landscaping|concreting|fencing|carpentry|tiling|plumbing|electrical):admin$')
+        && d.get("jobTitleId", "earthworks:admin").matches('^(earthworks|landscaping|concreting|fencing|carpentry|tiling|plumbing|electrical|concrete-cutting):admin$')
         && companyIdOk(d.companyId)
         && d.companyId != "heartwood"
         && d.tenantId == d.companyId
@@ -840,7 +840,7 @@ service cloud.firestore {
       return d.keys().hasOnly(["companyId", "trade", "trades", "extraTrades", "titles", "updatedBy", "updatedAt"])
         && d.companyId == companyId
         && ("trade" in d) && tradeFieldOk(d) && (!("trades" in d) || tradesListOk(d.trades))
-        && d.extraTrades is list && d.extraTrades.size() <= 7 && d.extraTrades.hasOnly(["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical"])
+        && d.extraTrades is list && d.extraTrades.size() <= 8 && d.extraTrades.hasOnly(["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical", "concrete-cutting"])
         && d.titles is list && d.titles.size() <= 80
         && d.updatedBy == request.auth.uid
         && d.updatedAt == request.time;
