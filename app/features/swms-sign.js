@@ -1,3 +1,4 @@
+import { isHeartwoodCompany } from "./company.js";
 import { DEFAULT_ORG, POWERED_BY, PRODUCT_NAME } from "../org-settings.js";
 
 // SWMS sign-off maths and the signature document shape.
@@ -17,6 +18,62 @@ export const SWMS = [
 ];
 
 export const SWMS_IDS = SWMS.map(row => row[0]);
+
+// Shown on the SWMS screen when this company has no documents.
+export const SWMS_EMPTY = "No SWMS set up for your company yet.";
+
+// Heartwood keeps the five documents above. Every other company, including a
+// new sign-up and a test company, starts with none. A missing company id is
+// Heartwood (legacy records). isHeartwoodCompany owns that rule.
+export function companySwms(companyId) {
+  return isHeartwoodCompany(companyId) ? SWMS : [];
+}
+
+// null when there is nothing to nag about: no documents, or every one is signed and current.
+// exp counts missing, expired and old-version rows. due counts rows inside the 30-day window.
+export function swmsReminderModel(companyId, sigs, uid, now = Date.now()) {
+  const list = companySwms(companyId);
+  if (!list.length || !uid) return null;
+  const bad = list
+    .map(([id, title]) => ({ title, k: statusOf(latestSig(sigs, uid, id), now).k }))
+    .filter(row => row.k !== "ok");
+  if (!bad.length) return null;
+  const due = bad.filter(row => row.k === "due").length;
+  return { exp: bad.length - due, due, titles: bad.map(row => row.title) };
+}
+
+// Name and ABN printed on a signed-SWMS cover sheet.
+// Heartwood keeps its own legal name and ABN. Another company uses its own
+// org fields. Heartwood's name, ABN, address and office email are never copied across.
+export function swmsSignoffOrg(org, companyId) {
+  const source = org && typeof org === "object" ? org : {};
+  if (isHeartwoodCompany(companyId)) {
+    return {
+      companyId: source.companyId || "heartwood",
+      name: source.name || DEFAULT_ORG.name,
+      legalName: source.legalName || DEFAULT_ORG.legalName,
+      abn: typeof source.abn === "string" ? source.abn : DEFAULT_ORG.abn,
+      address: source.address || "",
+      phone: source.phone || "",
+      email: source.email || "",
+    };
+  }
+  const rawName = String(source.name || "").trim();
+  const rawLegal = String(source.legalName || "").trim();
+  const heartwoodName = rawName === DEFAULT_ORG.name || rawName === DEFAULT_ORG.legalName;
+  const heartwoodLegal = rawLegal === DEFAULT_ORG.legalName || rawLegal === DEFAULT_ORG.name;
+  const name = heartwoodName ? "" : rawName;
+  const legal = heartwoodLegal ? "" : rawLegal;
+  return {
+    companyId: String(companyId || ""),
+    name: name || legal || "Company",
+    legalName: legal || name || "Company",
+    abn: String(source.abn || "").trim() === DEFAULT_ORG.abn ? "" : String(source.abn || "").trim(),
+    address: source.address === DEFAULT_ORG.address ? "" : String(source.address || "").trim(),
+    phone: String(source.phone || "").trim(),
+    email: source.email === DEFAULT_ORG.email ? "" : String(source.email || "").trim(),
+  };
+}
 
 export function sigMs(s) {
   if (!s) return 0;

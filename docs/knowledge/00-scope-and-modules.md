@@ -35,7 +35,7 @@ Public host named in-repo: `jobs.heartwoodew.com` (`CNAME`, one line). The manif
 | `app/features/chat.js` | Chat payload and path rules |
 | `app/features/chat-ui.js` | Chat screen |
 | `app/features/compliance.js` | Fleet and policies |
-| `app/features/swms-sign.js` | SWMS ids, 12-month validity, placeholder PDF |
+| `app/features/swms-sign.js` | Heartwood-only SWMS list (other companies start with none), 12-month validity, placeholder PDF |
 | `app/vendor/pdf-lib.min.js` | MIT PDF library, loaded on first signed-SWMS download (`app/app.js` `loadPdfLib`, lines 2553–2557) |
 | `app/icons/*` | PWA icons |
 

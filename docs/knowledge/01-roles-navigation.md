@@ -69,7 +69,7 @@ Header search (`gsearch`, lines 2661–2684) is shown whenever someone is signed
 
 | Tab | Screen |
 | --- | --- |
-| Today | Today’s jobs, run-sheet order if one is approved, SWMS reminder, fleet banner |
+| Today | Today’s jobs, run-sheet order if one is approved, SWMS reminder when the company has SWMS (Heartwood only; other companies start with none), fleet banner |
 | Jobs | Upcoming through 7 days ahead (`wkEnd`, line 1866) |
 | Chat | Team chat |
 | Photos | Jobs plus “Add photos” |
@@ -97,8 +97,8 @@ Job detail (`renderOpDetail`, lines 1957–2008) has two tabs: Job and Chat. Act
 | Chat | Yes | Yes | Yes |
 | Photos / receipts upload | Yes | Yes | Yes. Operators are not meant to read a receipt image back; see photos topic. |
 | Safety incidents | All incidents | Own reports | Own reports |
-| SWMS sign | Yes | Yes | Yes |
-| SWMS team register and signed PDF | Admin | No | No |
+| SWMS sign | Heartwood only. Other companies start with none | Heartwood only | Heartwood only |
+| SWMS team register and signed PDF | Heartwood admin | No | No |
 | Compliance edit | Admin, and only if the plan includes fleet | Read-only fleet if the plan includes it | Same |
 | Policies | Admin only | Hidden | Hidden |
 | Inbox | Owner only | “Owner only.” | “Owner only.” |
