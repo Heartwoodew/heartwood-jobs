@@ -86,7 +86,7 @@ test("the app hides reminders, View SWMS and the placeholder for a company with 
   assert.match(app, /swmsSignoffOrg\(orgSettings\(\), myCompanyId\(\)\)/);
   assert.match(app, /Report incident/);
   const sw = readFileSync(new URL("../app/sw.js", import.meta.url), "utf8");
-  assert.match(sw, /callup-shell-v114-company-swms/);
+  assert.match(sw, /callup-shell-v115-quote-accepted/);
 });
 
 test("helper knowledge says SWMS are Heartwood-only and other companies start with none", () => {

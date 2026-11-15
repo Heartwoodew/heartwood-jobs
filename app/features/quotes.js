@@ -604,7 +604,7 @@ export function quotesViewHtml(ui, esc, $$, helpers = {}) {
     <td><b>${esc(q.client || "")}</b><div class="sub">${esc(q.address || "")}</div>${mach(q)}</td>
     <td>${esc(q.description || q.type || "")}</td>
     <td>${q.totalEx != null ? money(q.totalEx) : `<span class="unal">rates needed</span>`}</td>
-    <td>${q.quoteStatus === "Draft" ? `<button type="button" class="sm-btn" data-qaccept="${esc(q.id)}">Accept → job</button>` : `<span class="sub">Job ${esc(q.jobId || "—")}</span>`}</td></tr>`;
+    <td>${q.quoteStatus === "Draft" ? `<button type="button" class="sm-btn primary qaccept" data-qaccept="${esc(q.id)}">Quote accepted</button>` : `<span class="sub">Job ${esc(q.jobId || "—")}</span>`}</td></tr>`;
   return `<div class="sm-head"><h1>Quotes</h1>
     <div class="row gap"><button type="button" class="sm-btn primary" id="newquote">＋ New quote</button>
     ${editRates ? `<button type="button" class="sm-btn" id="editrates">Quote rates &amp; depot</button>` : `<span class="sub pad">Rates are set by an admin or a manager · depot ${esc(rates.yardAddress || DEFAULT_DEPOT.yardAddress)}</span>`}</div></div>
@@ -619,10 +619,10 @@ export function quotesViewHtml(ui, esc, $$, helpers = {}) {
       ? `<p class="pad warnt">Prices in this pack are starting-point defaults to review (A$ ex GST). Change a price on the quote, or save it as your company default.</p>`
       : (rateWarn ? `<p class="pad warnt">Set plant (incl. operator), labourer, travel, materials and tip rates before accepting — nothing is invented for you.</p>` : "")}
     <div class="sm-head"><h2>Drafts <span class="cnt">${drafts.length}</span></h2></div>
-    <div class="tablewrap"><table class="jobs"><thead><tr><th>Status</th><th>Client / site</th><th>Scope</th><th>Total</th><th></th></tr></thead>
+    <div class="tablewrap"><table class="jobs qlist"><thead><tr><th>Status</th><th>Client / site</th><th>Scope</th><th>Total</th><th></th></tr></thead>
     <tbody>${drafts.map(row).join("") || `<tr><td colspan="5" class="muted pad">No draft quotes yet.</td></tr>`}</tbody></table></div>
     <div class="sm-head"><h2>Recently accepted</h2></div>
-    <div class="tablewrap"><table class="jobs"><thead><tr><th>Status</th><th>Client / site</th><th>Scope</th><th>Total</th><th></th></tr></thead>
+    <div class="tablewrap"><table class="jobs qlist"><thead><tr><th>Status</th><th>Client / site</th><th>Scope</th><th>Total</th><th></th></tr></thead>
     <tbody>${accepted.map(row).join("") || `<tr><td colspan="5" class="muted pad">None yet.</td></tr>`}</tbody></table></div>`;
 }
 
@@ -1181,6 +1181,75 @@ function sectionCrew(section) {
   return { items, amounts };
 }
 
+/** Job ids written when this quote was accepted. The first one is the quote's `jobId`. */
+export function acceptedJobIds(quote) {
+  const ids = [];
+  const push = id => {
+    const s = String(id || "").trim();
+    if (s && !ids.includes(s)) ids.push(s);
+  };
+  if (quote && typeof quote === "object") {
+    push(quote.jobId);
+    for (const id of quote.jobIds || []) push(id);
+  }
+  return ids;
+}
+
+/** Top-of-quote banner once the quote is a job. No prices. */
+export function acceptedQuoteBannerHtml(quote, esc) {
+  const e = typeof esc === "function" ? esc : (s => String(s ?? ""));
+  const ids = acceptedJobIds(quote);
+  const primary = ids[0] || "—";
+  const extra = ids.length > 1 ? `<span class="sub">${ids.slice(1).map(id => "Job " + e(id)).join(" · ")}</span>` : "";
+  const buttons = ids.map((id, i) => `<button type="button" class="sm-btn qw-openjob" data-job="${e(id)}">${i === 0 ? "Open job" : "Open job " + e(id)}</button>`).join("");
+  return `<div class="qw-accepted" role="status"><div class="qw-accepted-copy"><b>Accepted · Job ${e(primary)}</b>${extra}</div>${buttons}</div>`;
+}
+
+/** Prominent accept control. Stays tappable when the quote is not ready yet. */
+export function quoteAcceptedButtonHtml(ready) {
+  return `<button type="button" class="qw-accept" id="qwaccept" data-can-accept="${ready ? "1" : "0"}"><span class="qw-accept-label">Quote accepted</span><span class="qw-accept-sub">Turns this quote into a job</span></button>`;
+}
+
+/**
+ * First thing stopping accept, or null when the existing accept path can run.
+ * Address and rates use the phrases the office asked for. The focus selector is a field to jump to.
+ */
+export function acceptGap(state, calc, rates) {
+  const data = state && typeof state === "object" ? state : {};
+  const priced = calc && typeof calc === "object" ? calc : {};
+  const rateBook = rates && typeof rates === "object" ? rates : {};
+  if (!String(data.address || "").trim()) return { message: "Add the site address first", step: 0, focus: "[name=address]" };
+  if (!String(data.client || "").trim()) return { message: "Add the client first", step: 0, focus: "[name=client]" };
+  if (!(data.sections || []).length) return { message: "Tick a category first", step: 0, focus: "[data-type]" };
+  for (const sec of data.sections || []) {
+    const pack = quotePack(sec.packId);
+    const label = sec.label || "Section";
+    if (pack && pack.wizard === "measure") {
+      const one = priceOneSection(sec, rateBook);
+      if (!one.ok) return { message: label + ": " + (one.reason || "Check this section."), step: 1, focus: `[data-sec="${sec.id}"]` };
+      if (!(one.lines || []).some(l => l.qty > 0)) return { message: label + ": enter a measurement so this section has a quantity.", step: 1, focus: `[data-sec="${sec.id}"] [data-m]` };
+    } else {
+      const m = machineSelectionError(sec.machines, { legacyTruck: !!sec.legacyTruck && isTruckOnly(sec.machines) });
+      if (m) return { message: label + ": " + m, step: 1, focus: `[data-sec="${sec.id}"] [data-preset]` };
+    }
+  }
+  if (priced.ok === false && priced.reason) return { message: priced.reason, step: 1, focus: ".qw-sec" };
+  for (const sec of priced.sections || []) {
+    if (sec.kind === "measure" || sec.packId !== "earthworks") continue;
+    const hourly = (sec.machines || []).some(id => machineRateOf(rateBook, id).unit === "hour")
+      || (sec.includeLabourer && rateBook.labourerUnit !== "day");
+    if (hourly && !(+sec.hoursOnSite > 0)) {
+      return { message: (sec.label || "Section") + ": enter hours on site for hourly plant / labourer.", step: 1, focus: `[data-field="hoursOnSite"][data-sec="${sec.id}"]` };
+    }
+  }
+  if (!priced.complete || priced.totalEx == null) return { message: "Add rates first", step: 2, focus: "#qwmissing" };
+  const extras = (priced.sections || []).flatMap(s => s.extraItems || priced.extraItems || []);
+  if (extras.some(it => it.qty > 0 && !it.description && !(it.kind === "material" && it.material))) {
+    return { message: "Give every extra item a description before accepting.", step: 2, focus: "[data-xf=\"description\"]" };
+  }
+  return null;
+}
+
 /** Price-free job plans. `split` is one job per section; otherwise one job whose types are every category. */
 export function jobsFromAcceptedQuote(quote, calc, mode) {
   const q = quote && typeof quote === "object" ? quote : {};
@@ -1293,6 +1362,22 @@ function openQuoteWizard(existing, opts = {}) {
       selA.onchange = draw;
       selB.onchange = draw;
     };
+    const bindOpenJobs = () => {
+      d.querySelectorAll(".qw-openjob").forEach(b => b.addEventListener("click", () => {
+        if (typeof api.openJob === "function") api.openJob(b.dataset.job);
+        else toast("Open that job from the jobs list");
+      }));
+    };
+    const showAcceptGap = gap => {
+      step = gap.step;
+      holdErr = gap.message;
+      paint();
+      toast(gap.message);
+      const target = String(gap.focus || "").split(",").map(s => d.querySelector(s.trim())).find(el => el && !el.hidden);
+      if (!target) return;
+      target.scrollIntoView({ block: "nearest" });
+      if (typeof target.focus === "function") target.focus();
+    };
     const sectionById = id => (state.sections || []).find(s => s.id === id);
     const splitMeasureId = raw => {
       const text = String(raw || "");
@@ -1325,6 +1410,7 @@ function openQuoteWizard(existing, opts = {}) {
         d.innerHTML = `<form method="dialog" id="qwf" class="jc qw"><div class="jc-top q-wo"><div><div class="jc-no">Accepted quote</div>
           <div class="jc-q">Revision ${esc(existing?.acceptedRevision || existing?.revisionCount || "—")} is read-only</div></div>
           <button value="cancel" formnovalidate class="jc-x" aria-label="Close">✕</button></div>
+          <div class="qw-acceptbar">${acceptedQuoteBannerHtml(existing, esc)}</div>
           <div class="jc-body qw-body"><p class="sub">${esc(existing?.client || "")} · ${esc(existing?.address || "")}</p>
           ${sectionsSummaryHtml(calc, esc, canSeeMoney, $$)}
           ${money ? revHtml : ""}
@@ -1332,18 +1418,20 @@ function openQuoteWizard(existing, opts = {}) {
           <div class="btns jc-foot"><button value="cancel" class="primary">Close</button></div></form>`;
         d.showModal();
         bindCompare();
+        bindOpenJobs();
         return;
       }
       const already = !!(existing?.jobId && (existing.quoteStatus === "Accepted" || state.quoteStatus === "Accepted"));
-      const canAccept = !already && calc.complete && calc.totalEx != null && !!(state.client && state.address);
+      const acceptReady = !already && !acceptGap(state, calc, rates);
       const shownErr = holdErr; holdErr = "";
       d.innerHTML = `<form method="dialog" id="qwf" class="jc qw"><div class="jc-top q-quote"><div><div class="jc-no">${existing && step !== 0 ? "Edit quote" : esc(titles[step] || "Quote")}</div>
         <div class="jc-q">${esc(subs[step] || "")}</div></div>
         <button value="cancel" formnovalidate class="jc-x" aria-label="Close">✕</button></div>
+        <div class="qw-acceptbar">${already ? acceptedQuoteBannerHtml(existing, esc) : quoteAcceptedButtonHtml(acceptReady)}</div>
         <div class="jc-body qw-body"><div class="qw-steps" aria-label="Quote steps">${phases.map((s, i) => `<span class="qw-phase ${i === step ? "on" : i < step ? "done" : ""}"><b>${i + 1}</b> ${s}</span>`).join("")}</div>
         <div class="qw-bar" aria-hidden="true"><span style="width:${Math.round(((step + 1) / phases.length) * 100)}%"></span></div>
         ${stepHtml(step, state, calc, rates, esc, CLIENTS, canSeeMoney, $$, canEditRates())}
-        ${step === 2 ? `<p class="warnt pad" id="qwmissing" ${calc.complete ? "hidden" : ""}>${calc.complete ? "" : `Missing rates for: ${esc(calc.missingRates.map(k => missingLabel(k, calc)).join(", "))}. Save as draft, or set the price. Total is not shown as valid until every used line has a price.`}</p>${money ? `<div id="revslot">${revHtml}</div>` : ""}` : ""}
+        ${step === 2 ? `<p class="warnt pad" id="qwmissing" tabindex="-1" ${calc.complete ? "hidden" : ""}>${calc.complete ? "" : `Missing rates for: ${esc(calc.missingRates.map(k => missingLabel(k, calc)).join(", "))}. Save as draft, or set the price. Total is not shown as valid until every used line has a price.`}</p>${money ? `<div id="revslot">${revHtml}</div>` : ""}` : ""}
         ${already ? `<p class="pad sub">Already accepted → job <b>${esc(existing.jobId)}</b>. Accept will not create another job.</p>` : ""}
         </div>
         <p id="qerr" class="err">${esc(shownErr)}</p>
@@ -1351,8 +1439,7 @@ function openQuoteWizard(existing, opts = {}) {
           <button type="button" class="sm-btn" id="qwback" ${step === 0 ? "disabled" : ""}>Back</button>
           ${step < 2 ? `<button type="button" class="sm-btn primary" id="qwnext">${step === 0 ? "Section details" : "Review quote"}</button>
              <button type="button" class="sm-btn qw-later" id="qwsave">Save &amp; finish later</button>` :
-            `<button type="button" class="sm-btn qw-later" id="qwsave">Save draft</button>
-             <button type="button" class="sm-btn primary" id="qwaccept" data-can-accept="${canAccept ? "1" : ""}" ${canAccept ? "" : "disabled"} title="${canAccept ? "" : already ? "Already accepted" : "Complete site + rates first"}">Accept → create job</button>`}
+            `<button type="button" class="sm-btn qw-later" id="qwsave">Save draft</button>`}
         </div></form>`;
       d.showModal();
       $("#qwback").onclick = () => { syncFormToState(); step--; paint(); };
@@ -1364,9 +1451,12 @@ function openQuoteWizard(existing, opts = {}) {
       $("#qwsave")?.addEventListener("click", () => { syncFormToState(); saveQuote(false); });
       $("#qwaccept")?.addEventListener("click", () => {
         syncFormToState();
+        const gap = acceptGap(state, calcSections(state, rates), rates);
+        if (gap) { showAcceptGap(gap); return; }
         if ((state.sections || []).length > 1) {
+          if (step !== 2) { step = 2; paint(); }
           const box = d.querySelector("#qwsplit");
-          if (box) { box.hidden = false; return; }
+          if (box) { box.hidden = false; box.scrollIntoView({ block: "nearest" }); return; }
         }
         saveQuote(true, "one");
       });
@@ -1462,6 +1552,7 @@ function openQuoteWizard(existing, opts = {}) {
       });
       bindExtras();
       bindCompare();
+      bindOpenJobs();
     };
     if (existing?.id && canSeeMoney()) {
       const companyId = orgSettings().companyId || "heartwood";
@@ -1663,7 +1754,7 @@ function openQuoteWizard(existing, opts = {}) {
       if (warn) { warn.hidden = calc.complete; warn.textContent = calc.complete ? "" : `Missing rates for: ${calc.missingRates.map(k => missingLabel(k, calc)).join(", ")}. Save as draft, or set the price. Total is not shown as valid until every used line has a price.`; }
       const acc = d.querySelector("#qwaccept");
       const already = !!(existing?.jobId && (existing.quoteStatus === "Accepted" || state.quoteStatus === "Accepted"));
-      if (acc) { const ok = !already && calc.complete && calc.totalEx != null && !!(state.client && state.address); acc.dataset.canAccept = ok ? "1" : ""; acc.disabled = !ok || saving; }
+      if (acc && !saving) acc.dataset.canAccept = (!already && !acceptGap(state, calc, rates)) ? "1" : "0";
     };
     const openCustomerQuote = () => {
       const calc = calcSections(state, rates);
@@ -1776,7 +1867,7 @@ function openQuoteWizard(existing, opts = {}) {
       saving = true;
       d.querySelectorAll("#qwsave, #qwaccept, #qwone, #qwsplits").forEach(b => { b.disabled = true; });
       try { await saveQuoteOnce(accept, mode || "one"); }
-      finally { saving = false; if (d.open) d.querySelectorAll("#qwsave, #qwaccept").forEach(b => { b.disabled = b.id === "qwaccept" ? b.dataset.canAccept !== "1" : false; }); }
+      finally { saving = false; if (d.open) d.querySelectorAll("#qwsave, #qwaccept, #qwone, #qwsplits").forEach(b => { b.disabled = false; }); }
     };
     const saveQuoteOnce = async (accept, mode) => {
       if (existing?.quoteStatus === "Accepted" || state.quoteStatus === "Accepted") {
@@ -1979,7 +2070,7 @@ function earthworksSetupHtml(sec, rates, esc, canSeeMoney, showDay) {
       <button type="button" class="qw-ynbtn ${sec.includeLabourer ? "" : "on"}" data-lab="no" data-sec="${esc(sec.id)}">No</button>
     </div>
     <input type="checkbox" data-seclab="1" data-sec="${esc(sec.id)}" class="sr" ${sec.includeLabourer ? "checked" : ""}>
-    ${canSeeMoney() ? `<p class="sub">Labourer (separate rate): ${rateTxt(rates.labourerRate, rates.labourerUnit === "day" ? "/day" : "/h")}</p>` : `<p class="sub">A labourer is optional and priced separately from the machine.</p>`}
+    ${canSeeMoney ? `<p class="sub">Labourer (separate rate): ${rateTxt(rates.labourerRate, rates.labourerUnit === "day" ? "/day" : "/h")}</p>` : `<p class="sub">A labourer is optional and priced separately from the machine.</p>`}
   </div>`;
 }
 
@@ -1998,11 +2089,11 @@ function earthworksReviewFields(sec, rates, esc, canSeeMoney) {
     </div>
     <p class="sub" data-travelst="${esc(sec.id)}">${esc(sec.travelNote || "")}</p>
     <label>Kilometres (billable)<input data-field="travelKm" data-sec="${esc(sec.id)}" type="number" min="0" step="0.1" value="${esc(sec.travelKm)}" inputmode="decimal"></label>
-    ${canSeeMoney() ? `<p class="sub">Travel rate: ${rateTxt(rates.travelPerKm, "/km")}</p>` : ""}
+    ${canSeeMoney ? `<p class="sub">Travel rate: ${rateTxt(rates.travelPerKm, "/km")}</p>` : ""}
     <label>Materials (${esc(rates.materialUnitLabel || "unit")})<input data-field="materialQty" data-sec="${esc(sec.id)}" type="number" min="0" step="0.1" value="${esc(sec.materialQty)}" inputmode="decimal"></label>
-    ${canSeeMoney() ? `<p class="sub">Materials rate: ${rateTxt(rates.materialPerUnit, " each")}</p>` : ""}
+    ${canSeeMoney ? `<p class="sub">Materials rate: ${rateTxt(rates.materialPerUnit, " each")}</p>` : ""}
     <label>Rubbish loads<input data-field="tipLoads" data-sec="${esc(sec.id)}" type="number" min="0" step="1" value="${esc(sec.tipLoads)}" inputmode="numeric"></label>
-    ${canSeeMoney() ? `<p class="sub">Tip rate: ${rateTxt(rates.tipPerLoad, " / load")}</p>` : ""}
+    ${canSeeMoney ? `<p class="sub">Tip rate: ${rateTxt(rates.tipPerLoad, " / load")}</p>` : ""}
     ${anyDay ? `<label>Days (day-rate plant or labourer)<input data-field="machineDays" data-sec="${esc(sec.id)}" type="number" min="1" step="1" value="${esc(sec.machineDays || 1)}" inputmode="numeric"></label>
       <p class="sub">Day rates use days, not hours.</p>` : `<input type="hidden" data-field="machineDays" data-sec="${esc(sec.id)}" value="${esc(sec.machineDays || 1)}">`}
   </details>`;
