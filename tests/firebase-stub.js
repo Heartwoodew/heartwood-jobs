@@ -294,6 +294,7 @@ export function onSnapshot(ref, onNext) {
       else if (col === "serviceCosts") onNext(snap((typeof window !== "undefined" && window.HW_SERVICE_COSTS) || []));
       else if (col === "liveLocations") onNext(snap((typeof window !== "undefined" && window.HW_LIVE) || []));
       else if (col === "timesheets" && id) onNext({ id, exists: () => false, data: () => undefined });
+      else if ((col === "take5Settings" || col === "performanceSettings" || col === "take5s") && id) onNext({ id, exists: () => false, data: () => undefined });
       else if (col === "jobMoney" && id) onNext({ id, exists: () => false, data: () => undefined });
       else if (col === "chatSettings") onNext({ id, exists: () => false, data: () => undefined });
       else if (col === "timesheets") onNext(snap((typeof window !== "undefined" && window.HW_TIMESHEETS) || []));

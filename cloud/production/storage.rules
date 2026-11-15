@@ -405,5 +405,33 @@ service firebase.storage {
     match /pauseBackups/{companyId}/{file} {
       allow read, write: if false;
     }
+// BEGIN TAKE 5 PHOTO RULES
+    // One profile read (exists + get). A second lookup would pass the emulator and fail in production.
+    function take5PhotoAccess(companyId, file, writing) {
+      let path = /databases/(default)/documents/users/$(request.auth.uid);
+      let listed = request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"
+        || request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"
+        || request.auth.uid == "38SU5waAy4f9UI9N6JTqDMaYpQg2";
+      let missing = !firestore.exists(path);
+      let p = missing ? {} : firestore.get(path).data;
+      let c = p.get("companyId", "") is string && p.get("companyId", "") != ""
+        ? p.get("companyId", "")
+        : (p.get("tenantId", "") is string && p.get("tenantId", "") != "" ? p.get("tenantId", "") : "heartwood");
+      let role = p.get("role", "");
+      let own = file.matches('^' + request.auth.uid + '_t5[a-z0-9]{16}[.]jpg$');
+      let leader = listed || role in ["supervisor", "manager", "admin"];
+      return signedIn() && c == companyId && (writing ? own : (own || leader));
+    }
+    match /take5Photos/{companyId}/{file} {
+      allow read: if take5PhotoAccess(companyId, file, false);
+      allow create: if take5PhotoAccess(companyId, file, true)
+        && request.resource.size > 0 && request.resource.size <= 5 * 1024 * 1024
+        && request.resource.contentType == "image/jpeg"
+        && request.resource.metadata.purpose == "take5"
+        && request.resource.metadata.uploaderUid == request.auth.uid
+        && request.resource.metadata.companyId == companyId;
+      allow update, delete: if false;
+    }
+// END TAKE 5 PHOTO RULES
   }
 }
