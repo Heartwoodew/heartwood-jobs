@@ -92,39 +92,21 @@ service cloud.firestore {
         && data.billing.stripeSubscriptionId == null;
     }
     function oneTradeId(id) {
-      return id == "earthworks" || id == "landscaping" || id == "concreting" || id == "fencing"
-        || id == "carpentry" || id == "tiling" || id == "plumbing" || id == "electrical";
+      // One list lookup instead of 8 comparisons: keeps multi-trade writes under the 1000-expression limit.
+      return id is string && id in ["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical"];
     }
     function tradeFieldOk(data) {
       return !("trade" in data) || oneTradeId(data.trade);
     }
     function tradesListOk(list) {
-      return list is list && list.size() >= 1 && list.size() <= 8
-        && (list.size() < 1 || oneTradeId(list[0]))
-        && (list.size() < 2 || oneTradeId(list[1]))
-        && (list.size() < 3 || oneTradeId(list[2]))
-        && (list.size() < 4 || oneTradeId(list[3]))
-        && (list.size() < 5 || oneTradeId(list[4]))
-        && (list.size() < 6 || oneTradeId(list[5]))
-        && (list.size() < 7 || oneTradeId(list[6]))
-        && (list.size() < 8 || oneTradeId(list[7]));
+      return list is list && list.size() >= 1 && list.size() <= 8 && list.hasOnly(["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical"]);
     }
     function companyTradesEdit(companyId) {
       return signedIn()
         && companyId == callerCompany()
         && ((isAlex() || isPatrick()) || (hasProfile() && (profile().role == "admin" || profile().role == "manager")))
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["trades"])
-        && request.resource.data.trades is list
-        && request.resource.data.trades.size() >= 1
-        && request.resource.data.trades.size() <= 8
-        && oneTradeId(request.resource.data.trades[0])
-        && (request.resource.data.trades.size() < 2 || oneTradeId(request.resource.data.trades[1]))
-        && (request.resource.data.trades.size() < 3 || oneTradeId(request.resource.data.trades[2]))
-        && (request.resource.data.trades.size() < 4 || oneTradeId(request.resource.data.trades[3]))
-        && (request.resource.data.trades.size() < 5 || oneTradeId(request.resource.data.trades[4]))
-        && (request.resource.data.trades.size() < 6 || oneTradeId(request.resource.data.trades[5]))
-        && (request.resource.data.trades.size() < 7 || oneTradeId(request.resource.data.trades[6]))
-        && (request.resource.data.trades.size() < 8 || oneTradeId(request.resource.data.trades[7]));
+        && tradesListOk(request.resource.data.trades);
     }
     function companyOwnerCreate(companyId) {
       let d = request.resource.data;
@@ -731,19 +713,12 @@ service cloud.firestore {
       allow create, update: if cmWriteOk(docId);
       allow delete: if false;
     }
-    function extraTradeAt(list, i) {
-      return i >= list.size() || (list[i] == "earthworks" || list[i] == "landscaping" || list[i] == "concreting"
-        || list[i] == "fencing" || list[i] == "carpentry" || list[i] == "tiling" || list[i] == "plumbing" || list[i] == "electrical");
-    }
     function tradeDocOk(companyId) {
       let d = request.resource.data;
       return d.keys().hasOnly(["companyId", "trade", "trades", "extraTrades", "titles", "updatedBy", "updatedAt"])
         && d.companyId == companyId
         && ("trade" in d) && tradeFieldOk(d) && (!("trades" in d) || tradesListOk(d.trades))
-        && d.extraTrades is list && d.extraTrades.size() <= 7
-        && extraTradeAt(d.extraTrades, 0) && extraTradeAt(d.extraTrades, 1) && extraTradeAt(d.extraTrades, 2)
-        && extraTradeAt(d.extraTrades, 3) && extraTradeAt(d.extraTrades, 4) && extraTradeAt(d.extraTrades, 5)
-        && extraTradeAt(d.extraTrades, 6)
+        && d.extraTrades is list && d.extraTrades.size() <= 7 && d.extraTrades.hasOnly(["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical"])
         && d.titles is list && d.titles.size() <= 80
         && d.updatedBy == request.auth.uid
         && d.updatedAt == request.time;

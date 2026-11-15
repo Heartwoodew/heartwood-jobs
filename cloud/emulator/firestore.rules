@@ -93,22 +93,14 @@ service cloud.firestore {
         && data.billing.stripeSubscriptionId == null;
     }
     function oneTradeId(id) {
-      return id == "earthworks" || id == "landscaping" || id == "concreting" || id == "fencing"
-        || id == "carpentry" || id == "tiling" || id == "plumbing" || id == "electrical";
+      // One list lookup instead of 8 comparisons: keeps multi-trade writes under the 1000-expression limit.
+      return id is string && id in ["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical"];
     }
     function tradeFieldOk(data) {
       return !("trade" in data) || oneTradeId(data.trade);
     }
     function tradesListOk(list) {
-      return list is list && list.size() >= 1 && list.size() <= 8
-        && (list.size() < 1 || oneTradeId(list[0]))
-        && (list.size() < 2 || oneTradeId(list[1]))
-        && (list.size() < 3 || oneTradeId(list[2]))
-        && (list.size() < 4 || oneTradeId(list[3]))
-        && (list.size() < 5 || oneTradeId(list[4]))
-        && (list.size() < 6 || oneTradeId(list[5]))
-        && (list.size() < 7 || oneTradeId(list[6]))
-        && (list.size() < 8 || oneTradeId(list[7]));
+      return list is list && list.size() >= 1 && list.size() <= 8 && list.hasOnly(["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical"]);
     }
     function companyTradesEdit(companyId) {
       return signedIn()
