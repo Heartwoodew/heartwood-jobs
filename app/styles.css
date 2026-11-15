@@ -1149,3 +1149,23 @@ dialog.comp-alert h2 { margin: 0 0 8px; font-size: 1.1rem; }
 .title-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .title-row input{min-width:160px}
 .trade-list{margin:8px 0;padding-left:18px}
+.cap-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.cap-grid{display:grid;grid-template-columns:140px repeat(7,minmax(108px,1fr));background:#fff;border:1px solid var(--sm-line);min-width:900px}
+.cap-h,.cap-name{padding:8px;font-weight:700;background:#f7f1e8;border-bottom:1px solid var(--sm-line);border-right:1px solid var(--sm-line)}
+.cap-name{position:sticky;left:0}
+.cap-cell{padding:8px;border-bottom:1px solid var(--sm-line);border-right:1px solid var(--sm-line);min-height:64px}
+.cap-cell b{display:block;font-size:14px}
+.cap-cell small{display:block;color:#5c4e42;font-size:12px;margin-top:2px}
+.cap-free b{color:#2f6b3a}
+.cap-booked{background:#f4f7fb}
+.cap-booked b{color:#1d3d66}
+.cap-leave{background:#fff6ea}
+.cap-leave b{color:#6b3a12}
+.cap-unknown{color:#8a7b6c}
+.cap-today{box-shadow:inset 0 -2px 0 #8a5a2b}
+.rev-panel{margin-top:14px;padding-top:10px;border-top:1px solid #eadfd3}
+.rev-panel h3{margin:0 0 6px;font-size:16px}
+.rev-list{margin:0 0 10px;padding-left:18px}
+.rev-cmp{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin:8px 0}
+.rev-cmp select{min-height:40px}
+.rev-diff{margin:0;padding-left:18px}

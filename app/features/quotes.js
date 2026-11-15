@@ -13,6 +13,7 @@ import { calcPlumbing } from "./packs/plumbing.js";
 import { calcElectrical } from "./packs/electrical.js";
 import { defaultMeasures, gstFromEx, roundMoney, sanitizeQuotePrices } from "./packs/money.js";
 import { measureReviewHtml, measureSetupHtml } from "./packs/form.js";
+import { changeLines, compareHtml, commercialSnapshot, diffRevisions, revisionBody, revisionDocId, revisionNeeded, revisionsPanelHtml } from "./quote-revisions.js";
 // Rates from meta/quoteRates only — never invent business rates.
 // Draft/Accepted are explicit quoteStatus fields.
 // Admins, managers and supervisors (canQuote / canSeeMoney). Rate edits: admin or manager (canEditQuoteRates).
@@ -595,7 +596,7 @@ export function quotesViewHtml(ui, esc, $$, helpers = {}) {
       || ids.map(fleetName).join(" + ");
     return `<div class="sub">${esc(lab)}${q.includeLabourer ? " + labourer" : ""}</div>`;
   };
-  const row = q => `<tr class="jr" data-qid="${esc(q.id)}"><td><span class="qpill ${q.quoteStatus === "Draft" ? "q-quote" : "q-wo"}">${esc(q.quoteStatus)}</span></td>
+  const row = q => `<tr class="jr" data-qid="${esc(q.id)}"><td><span class="qpill ${q.quoteStatus === "Draft" ? "q-quote" : "q-wo"}">${esc(q.quoteStatus)}</span>${q.revisionCount ? `<div class="sub">Rev ${esc(q.revisionCount)}${q.acceptedRevision ? ` · accepted ${esc(q.acceptedRevision)}` : ""}</div>` : ""}</td>
     <td><b>${esc(q.client || "")}</b><div class="sub">${esc(q.address || "")}</div>${mach(q)}</td>
     <td>${esc(q.description || q.type || "")}</td>
     <td>${q.totalEx != null ? money(q.totalEx) : `<span class="unal">rates needed</span>`}</td>
@@ -897,14 +898,51 @@ function openQuoteWizard(existing, opts = {}) {
     // Shown as three steps (job / setup / review). The plant path is unchanged.
     // A measured pack prices from its own data and does not call the plant total.
     let step = opts.jumpToPrice ? 2 : 0;
+    const locked = existing?.quoteStatus === "Accepted";
+    let revisions = [];
     const phases = ["Job", "Setup", "Review"];
     const titles = measured ? ["New quote", "Measurements", "Review"] : ["New quote", "Choose equipment", "Review"];
     const subs = ["What needs doing?", "Step 2 of 3", "Step 3 of 3"];
     let holdErr = "";
     const d = $("#dlg"); d.className = "jobcard"; d.onclose = () => renderAdmin();
+    const bindCompare = () => {
+      const box = d.querySelector("#revdiff");
+      const selA = d.querySelector("#reva");
+      const selB = d.querySelector("#revb");
+      if (!box || !selA || !selB) return;
+      const draw = () => {
+        state._cmpA = selA.value;
+        state._cmpB = selB.value;
+        const left = revisions.find(rev => String(rev.revision) === selA.value);
+        const right = revisions.find(rev => String(rev.revision) === selB.value);
+        box.innerHTML = left && right ? compareHtml(left, right, { showMoney: !!canSeeMoney() }) : "";
+      };
+      selA.onchange = draw;
+      selB.onchange = draw;
+    };
     const paint = () => {
       const draft = { ...state, machines: normalizeMachineIds(state.machines) };
       const calc = measured ? measuredCalc(wizard, draft, rates) : calcQuote(draft, rates);
+      const money = !!canSeeMoney();
+      const revHtml = revisionsPanelHtml(revisions, {
+        showMoney: money,
+        acceptedRevision: existing?.acceptedRevision || null,
+        compareA: state._cmpA || "",
+        compareB: state._cmpB || ""
+      });
+      if (locked) {
+        d.innerHTML = `<form method="dialog" id="qwf" class="jc qw"><div class="jc-top q-wo"><div><div class="jc-no">Accepted quote</div>
+          <div class="jc-q">Revision ${esc(existing?.acceptedRevision || existing?.revisionCount || "—")} is read-only</div></div>
+          <button value="cancel" formnovalidate class="jc-x" aria-label="Close">✕</button></div>
+          <div class="jc-body qw-body"><p class="sub">${esc(existing?.client || "")} · ${esc(existing?.address || "")}</p>
+          ${summaryHtml(calc, esc, canSeeMoney, $$)}
+          ${money ? revHtml : ""}
+          <p class="sub">Accepted revisions are kept as they were. Saving a company default rate is a separate action and does not change this revision.</p></div>
+          <div class="btns jc-foot"><button value="cancel" class="primary">Close</button></div></form>`;
+        d.showModal();
+        bindCompare();
+        return;
+      }
       const already = !!(existing?.jobId && (existing.quoteStatus === "Accepted" || state.quoteStatus === "Accepted"));
       const canAccept = !already && calc.complete && calc.totalEx != null && !!(draft.client && draft.address);
       const shownErr = holdErr; holdErr = "";
@@ -914,7 +952,7 @@ function openQuoteWizard(existing, opts = {}) {
         <div class="jc-body qw-body"><div class="qw-steps" aria-label="Quote steps">${phases.map((s, i) => `<span class="qw-phase ${i === step ? "on" : i < step ? "done" : ""}"><b>${i + 1}</b> ${s}</span>`).join("")}</div>
         <div class="qw-bar" aria-hidden="true"><span style="width:${Math.round(((step + 1) / phases.length) * 100)}%"></span></div>
         ${stepHtml(step, draft, calc, rates, esc, TYPES, CLIENTS, canSeeMoney, $$, canEditRates(), legacyTruck, measured ? wizard : null)}
-        ${step === 2 ? `<p class="warnt pad" id="qwmissing" ${calc.complete ? "hidden" : ""}>${calc.complete ? "" : `Missing rates for: ${esc(calc.missingRates.map(k => missingLabel(k, calc)).join(", "))}. Save as draft, or set the price. Total is not shown as valid until every used line has a price.`}</p>` : ""}
+        ${step === 2 ? `<p class="warnt pad" id="qwmissing" ${calc.complete ? "hidden" : ""}>${calc.complete ? "" : `Missing rates for: ${esc(calc.missingRates.map(k => missingLabel(k, calc)).join(", "))}. Save as draft, or set the price. Total is not shown as valid until every used line has a price.`}</p>${money ? `<div id="revslot">${revHtml}</div>` : ""}` : ""}
         ${already ? `<p class="pad sub">Already accepted → job <b>${esc(existing.jobId)}</b>. Accept will not create another job.</p>` : ""}
         </div>
         <p id="qerr" class="err">${esc(shownErr)}</p>
@@ -1012,7 +1050,18 @@ function openQuoteWizard(existing, opts = {}) {
         lab.dispatchEvent(new Event("change"));
       });
       bindExtras();
+      bindCompare();
     };
+    if (existing?.id && canSeeMoney()) {
+      const companyId = orgSettings().companyId || "heartwood";
+      api.getDocs(api.query(api.collection(db, "quotes", existing.id, "revisions"), api.where("companyId", "==", companyId))).then(snap => {
+        revisions = snap.docs.map(row => ({ id: row.id, ...row.data() })).sort((a, b) => (a.revision || 0) - (b.revision || 0));
+        if (d.open) {
+          if (!locked && d.querySelector("#qwf")) syncFormToState();
+          paint();
+        }
+      }).catch(() => {});
+    }
     // ---- Extra items + guided price overrides (review step). Typing updates totals live without a repaint.
     const keepOpen = () => { state._extrasOpen = true; };
     const bindExtras = () => {
@@ -1331,6 +1380,10 @@ function openQuoteWizard(existing, opts = {}) {
       } catch (e) { $("#qerr").textContent = e.code || e.message; }
     };
     const saveQuoteOnce = async (accept) => {
+      if (existing?.quoteStatus === "Accepted" || state.quoteStatus === "Accepted") {
+        toast("Accepted revision " + (existing?.acceptedRevision || existing?.revisionCount || "") + " is read-only.");
+        return;
+      }
       if (measured) { await saveMeasuredOnce(accept); return; }
       const data = { ...state, machines: normalizeMachineIds(state.machines) };
       if (!validateStep(0, data)) return;
@@ -1372,23 +1425,46 @@ function openQuoteWizard(existing, opts = {}) {
           machineRates: mergeMachineRates(rates.machineRates),
           labourerRate: rates.labourerRate, labourerUnit: rates.labourerUnit
         },
-        quoteStatus: accept ? "Accepted" : "Draft", source: "app",
+        quoteStatus: "Draft", source: "app",
         updatedAt: serverTimestamp(), updatedBy: me.uid, updatedAtIso: new Date().toISOString()
       }, orgSettings().companyId || "heartwood");
       try {
         let qid = existing?.id;
-        if (qid) await updateDoc(doc(db, "quotes", qid), payload);
-        else {
-          const ref = await addDoc(api.collection(db, "quotes"), { ...payload, createdAt: serverTimestamp(), createdBy: me.uid, createdByName: me.name });
+        if (!qid) {
+          const ref = await addDoc(api.collection(db, "quotes"), { ...payload, revisionCount: 0, createdAt: serverTimestamp(), createdBy: me.uid, createdByName: me.name });
           qid = ref.id;
-          existing = { id: qid, ...payload };
+          existing = { id: qid, ...payload, revisionCount: 0 };
         }
+        const companyId = payload.companyId || orgSettings().companyId || "heartwood";
+        const rev = await api.runTransaction(db, async tx => {
+          const ref = doc(db, "quotes", qid);
+          const snap = await tx.get(ref);
+          const cur = snap.exists() ? snap.data() : {};
+          if (cur.quoteStatus === "Accepted") throw new Error("accepted");
+          const make = revisionNeeded(cur, payload);
+          const n = make ? (Number(cur.revisionCount) || 0) + 1 : (Number(cur.revisionCount) || 0);
+          if (make) {
+            const diff = diffRevisions(cur.revisionCount ? cur : commercialSnapshot({}), payload);
+            const changes = cur.revisionCount ? changeLines(diff, { showMoney: true }) : ["First saved version"];
+            tx.set(doc(db, "quotes", qid, "revisions", revisionDocId(n)), {
+              ...revisionBody({
+                revision: n, quoteId: qid, companyId, uid: me.uid, name: me.name,
+                atIso: new Date().toISOString(), snapshot: payload, changes
+              }),
+              createdAt: serverTimestamp()
+            });
+          }
+          tx.set(ref, { ...payload, revisionCount: n }, { merge: true });
+          return { n, created: make };
+        });
         if (accept) {
           if (existing?.jobId) { toast("Already accepted"); d.close(); renderAdmin(); return; }
           const jobId = await createJobFromQuote(qid, payload);
-          await updateDoc(doc(db, "quotes", qid), { jobId, quoteStatus: "Accepted", acceptedAt: serverTimestamp() });
-          toast("Quote accepted — unscheduled job created");
-        } else toast("Draft quote saved");
+          await updateDoc(doc(db, "quotes", qid), {
+            jobId, quoteStatus: "Accepted", acceptedRevision: rev.n, acceptedBy: me.uid, acceptedAt: serverTimestamp()
+          });
+          toast("Quote accepted — revision " + rev.n + " — unscheduled job created");
+        } else toast(rev.created ? "Draft saved · revision " + rev.n : "Draft saved — no change, so no new revision");
         d.close();
         api.getUi()._quotesFetched = false;
         await refreshQuotes();

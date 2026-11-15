@@ -1,0 +1,1 @@
+import "../../tests/quote-revisions.test.mjs";
