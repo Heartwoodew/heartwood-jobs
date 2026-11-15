@@ -470,9 +470,10 @@ function dispatchChip(j, slot) {
   const away = assignmentWarning(ui.leave || [], j.date, leavePeople(namesOf(j)));
   const time = slot ? slot.time : (j.time || "");
   const est = slot ? formatEstimate(slot.estHours) : "";
+  const late = slot && slot.pastFinish;
   const why = slot && slot.estSource === "quote" ? "Hours from the quote" : slot && slot.estSource === "history" ? "Median clocked time for this kind of job" : "Default for this kind of job";
-  return `<div class="dchip ${QCLS[queueOf(j)]} t-${j.type} ${j.status === "In progress" ? "inprog" : ""} ${away ? "on-leave" : ""}" draggable="true" data-id="${j.id}" title="${esc(j.client)} – ${esc(j.description)}${est ? " · " + esc(est) : ""}${away ? " · " + away : ""}">${ipTop(j, "sm")}
-      <b>${esc(time)}</b> ${esc((j.address || "").split(",")[0])}<div class="sub"><span class="est" title="${esc(why)}">${esc(est)}</span>${esc(TYPES[j.type] || "")} · #${esc(jobNo(j))}</div></div>`;
+  return `<div class="dchip ${QCLS[queueOf(j)]} t-${j.type} ${j.status === "In progress" ? "inprog" : ""} ${away ? "on-leave" : ""} ${late ? "past-finish" : ""}" draggable="true" data-id="${j.id}" title="${esc(j.client)} – ${esc(j.description)}${est ? " · " + esc(est) : ""}${late ? " · Runs past finish time" : ""}${away ? " · " + away : ""}">${ipTop(j, "sm")}
+      <b>${esc(time)}</b> ${esc((j.address || "").split(",")[0])}<div class="sub"><span class="est" title="${esc(why)}">${esc(est)}</span>${esc(TYPES[j.type] || "")} · #${esc(jobNo(j))}</div>${late ? `<div class="sub past-finish">Runs past finish time</div>` : ""}</div>`;
 }
 function inviteDisplayNow() {
   return window.HW_TODAY ? new Date(window.HW_TODAY + "T12:00:00+10:00") : new Date();
@@ -773,13 +774,13 @@ async function saveDispatchForm(form) {
     const input = form.querySelector(`[name="dur_${cat.id}"]`);
     durations[cat.id] = input ? input.value : "";
   }
-  const settings = sanitizeDispatchSettings({ dayStart: form.dayStart.value, travelGapMin: form.travelGapMin.value, durations });
+  const settings = sanitizeDispatchSettings({ dayStart: form.dayStart.value, dayEnd: form.dayEnd.value, travelGapMin: form.travelGapMin.value, durations });
   ui.dispatchSettings = settings;
   ui.persistHold = false;
   writeDispatchLocal(myCompanyId(), settings);
   const id = myCompanyId();
   const payload = {
-    companyId: id, dayStart: settings.dayStart, travelGapMin: settings.travelGapMin, durations: settings.durations,
+    companyId: id, dayStart: settings.dayStart, dayEnd: settings.dayEnd, travelGapMin: settings.travelGapMin, durations: settings.durations,
     updatedBy: me.uid, updatedAt: serverTimestamp(),
   };
   const ref = id === "heartwood" ? doc(db, "meta", "dispatchTimes") : doc(db, "companyMeta", id + "_dispatch");
@@ -5203,12 +5204,14 @@ function mobileDispatch(all) {
     const away = assignmentWarning(ui.leave || [], j.date, leavePeople(namesOf(j)));
     const time = slot ? slot.time : (j.time || "--:--");
     const est = slot ? formatEstimate(slot.estHours) : "";
-    return `<div class="mdc ${QCLS[queueOf(j)]} ${away ? "on-leave" : ""}" data-id="${j.id}">
+    const late = slot && slot.pastFinish;
+    return `<div class="mdc ${QCLS[queueOf(j)]} ${away ? "on-leave" : ""} ${late ? "past-finish" : ""}" data-id="${j.id}">
       <div class="mdc-top"><b class="mdc-time">${esc(time)}</b><span class="mdc-no">#${esc(jobNo(j))}</span><span class="pstack">${ipPill(j, "sm")}<span class="qpill ${QCLS[queueOf(j)]}">${esc(queueOf(j))}</span></span></div>
       <div class="mdc-cl">${esc(j.client || "")}</div>
       <a class="mdc-addr" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener">📍 ${esc(j.address || "-")}</a>
       <div class="mdc-desc">${esc(firstLine(crewText(j.description)))}</div>
       ${est ? `<div class="sub est">${esc(est)}</div>` : ""}
+      ${late ? `<p class="sub past-finish">Runs past finish time</p>` : ""}
       ${away ? `<p class="leave-chip">${esc(away)}</p>` : ""}
       <div class="mdc-foot"><span class="sub">${j.po ? "PO " + esc(j.po) : "No PO"}${est ? " · " + esc(est) : ""}</span>
         <span><button type="button" class="sm-btn mdc-unsch" data-unsch="${j.id}" title="Remove from dispatch board (back to Unscheduled)">✕ Off board</button> <button type="button" class="sm-btn mdc-move" data-move="${j.id}">⇄ Move</button></span></div></div>`;
