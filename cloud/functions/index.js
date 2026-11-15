@@ -18,6 +18,9 @@
  * helperAsk stays deployed and refuses every request. HELPER_ENABLED defaults
  * to "false", and HELPER_HARD_OFF returns before Auth, Firestore, or Vertex.
  * An environment change cannot turn it back on. See helper/DEPLOY.md.
+ *
+ * Phone notifications live in push-schedule.js: chatMessagePush, dailyJobPush
+ * (06:00 Australia/Brisbane) and dailyJobChangePush. Retention is not scheduled.
  */
 import { onDocumentCreated, onDocumentWritten } from "firebase-functions/v2/firestore";
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
@@ -127,6 +130,7 @@ export const helperAsk = onCall(
 );
 
 export { retentionSweepHandler } from "./lib/retention-run.js";
+export { chatMessagePush, dailyJobPush, dailyJobChangePush } from "./push-schedule.js";
 
 const INVITE_REGION = "australia-southeast1";
 

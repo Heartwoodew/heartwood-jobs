@@ -8,7 +8,7 @@ import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { getStorage, ref as storageRef, uploadBytes, connectStorageEmulator, listAll, getMetadata, getBlob }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
-import { firebaseConfig, useEmulator } from "./firebase-config.js";
+import { firebaseConfig, useEmulator, vapidKey } from "./firebase-config.js";
 import { installQuotes, adminViewRouter, setDefaultDepot, noDollars, setQuoteTradeSetup, setQuoteFocus } from "./features/quotes.js";
 import { JOB_MONEY_COLLECTION, jobMoneyDoc, mergeJobMoney, splitJobMoney } from "./features/job-money.js";
 import { OPEN_STATUSES, staleOpenJobs, mergeJobLists, parseHoursInput } from "./features/job-window.js";
@@ -18,6 +18,7 @@ import { buildOperationalExport, retentionAdminText, retentionView } from "./fea
 import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, lightboxHtml, photoFailureText } from "./features/photo-gallery.js";
 import { decidePhotoEmail } from "./features/photo-capture.js";
 import { installChatApp } from "./features/chat-ui.js";
+import { installPush } from "./features/push.js";
 import { installCompliance } from "./features/compliance.js";
 import { SWMS, SWMS_VERSION, sigMs, sigExp, latestSig, statusOf, swmsSignatureData, buildPlaceholderPdf } from "./features/swms-sign.js";
 import {
@@ -108,6 +109,7 @@ function guessType(text) {
 let me = null, staff = [], jobs = [], unsub = null;
 let signingUp = false;
 let CHAT = { badge() { return ""; }, teamHtml() { return ""; }, jobHtml() { return ""; }, mount() {}, openJob() {}, start() {}, stop() {}, watch() {}, refresh() {} };
+let PUSH = { start() {}, stop() {}, mount() {}, settle() {}, panelHtml() { return ""; }, bannerHtml() { return ""; } };
 let COMP = { start() {}, stop() {}, bind() {}, abandon() {}, adminHtml() { return ""; }, staffHtml() { return ""; }, adminBannerHtml() { return ""; }, staffBannerHtml() { return ""; }, canSee() { return false; }, canEdit() { return false; }, canPrestart() { return false; }, canEditService() { return false; } };
 let QG = { bindAdmin() {} }; // Quotes module; filled after helpers load
 let ROUTE = { open() {} };
@@ -120,6 +122,7 @@ onAuthStateChanged(auth, async user => {
   if (signingUp) return;
   if (unsub) { unsub(); unsub = null; }
   CHAT.stop();
+  PUSH.stop();
   COMP.stop();
   const inviteToken = new URLSearchParams(location.search).get("invite") || "";
   if (!user) {
@@ -168,6 +171,7 @@ onAuthStateChanged(auth, async user => {
   if (myCompanyId() !== "heartwood" && (me.role === "admin" || me.role === "manager" || me.role === "supervisor")) loadClients().catch(() => {});
   $("#who").textContent = `${me.name} · ${me.role}`; $("#logout").classList.remove("hidden");
   CHAT.start();
+  PUSH.start();
   if (me.role === "admin") {
     if (window.HW_PREVIEW_VIEW === "staff") ui.view = "staff";
     if (window.HW_PREVIEW_VIEW === "settings" || window.HW_PREVIEW_VIEW === "company") ui.view = "settings";
@@ -200,7 +204,7 @@ onAuthStateChanged(auth, async user => {
       watchInviteMail();
     }, e => { ui.invites = []; ui.invitesErr = e.code || "permission-denied"; if (ui.view === "staff") renderAdmin(); });
     moneyStart(renderAdmin);
-    unsub = () => { u1(); u2(); u3(); u4(); u5(); moneyStop(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; }; swmsSub(); COMP.start(); leaveStart(); claimsStart(); if (me.platformOwner) watchMaster();
+    unsub = () => { u1(); u2(); u3(); u4(); u5(); moneyStop(); CHAT.stop(); PUSH.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; }; swmsSub(); COMP.start(); leaveStart(); claimsStart(); if (me.platformOwner) watchMaster();
     getDocs(companyJobs([where("date", "==", "")])).then(s => { ui.undated = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); addNameOnlyStaff(ui.undated); renderAdmin(); }).catch(e => console.warn("undated", e.code, e.message));
   } else {
     // Operators may only list jobs assigned to them (enforced by firestore.rules).
@@ -217,7 +221,7 @@ onAuthStateChanged(auth, async user => {
       }, e => { ui.invites = []; ui.invitesErr = e.code || "permission-denied"; if ((ui.opTab || "today") === "staff") renderOperator(); })
       : () => {};
     if (canInvite() && window.HW_PREVIEW_VIEW === "staff") ui.opTab = "staff";
-    unsub = () => { u1(); u3(); u4(); moneyStop(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start(); leaveStart(); claimsStart();
+    unsub = () => { u1(); u3(); u4(); moneyStop(); CHAT.stop(); PUSH.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start(); leaveStart(); claimsStart();
   }
 });
 
@@ -605,7 +609,7 @@ function settingsView() {
     ? `<section class="pad setrates"><h3>Quote rates</h3><p class="sub">Your plant, labour, travel and tip rates for quotes. They start blank and are only used by your company.</p><button type="button" id="setrates" class="sm-btn">Edit quote rates</button></section>`
     : "";
   const trades = (ui.tradeSetup && ui.tradeSetup.enabled) || readTradeList(org, null);
-  return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin"), trades, canEditTrades: canEditTitles() }) + rates;
+  return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin"), trades, canEditTrades: canEditTitles() }) + rates + PUSH.panelHtml();
 }
 function bindTradeList(A) {
   const root = A || document;
@@ -919,7 +923,7 @@ function shell(inner) {
       <div class="sm-gi">${ks.map(item).join("")}</div></div>`; };
   return `<div class="sm-layout ${ui.navOpen ? "navopen" : ""}"><div class="sm-burgerbar"><button class="sm-burger" id="burger" aria-label="Menu">☰</button><b>${esc(cur ? (NAV_LBL[cur[0]] || cur[2]) : "")}</b></div>
     <nav class="sm-side">${NAV_TOP.map(item).join("")}${NAV_GROUPS.map(grp).join("")}${NAV_FOOT.map(item).join("")}</nav>
-    <section class="sm-main">${inner}</section></div>`;
+    <section class="sm-main">${PUSH.bannerHtml()}${inner}</section></div>`;
 }
 // ---- Mixed work: a job whose description lines are different task types (spoil vs backslab vs waterproofing vs clean)
 const TASK_RX = [["waterproof", /water ?proof/i], ["spoil", /spoil|soil removal/i], ["backslab", /back ?slab|back ?blade|slab clean|level site/i], ["clean", /\b(site |final )?clean\b/i]];
@@ -2947,6 +2951,7 @@ function renderAdmin() {
   donePill(); reimbPill(); inboxSub();
   if (!me || me.role !== "admin") return;
   if (ui.view === "invoices" && me.role !== "admin") ui.view = "home";
+  PUSH.settle();
   if (ui.myJobs) return renderOperator();
   if ($("#dlg").open) return;          // don't redraw under an open job card
   const force = ui.forceRender; ui.forceRender = false;
@@ -2978,6 +2983,7 @@ function renderAdmin() {
   if (ui.view === "staff") bindStaff(A);
   if (ui.view === "compliance" || ui.view === "prestart") COMP.bind(A);
   if (ui.view === "settings") bindSettings(A);
+  PUSH.mount(A);
   if (ui.view === "master") bindMaster(A);
   A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.navOpen = false;
     if (b.dataset.view === "myjobs") { ui.myJobs = true; ui.opSel = null; window.scrollTo(0, 0); return renderAdmin(); }
@@ -3277,7 +3283,9 @@ function jobTabs(d, j) {
     f.insertBefore(sc, f.querySelector(".jc-facts")); sc.append(f.querySelector(".jc-facts"), f.querySelector(".jc-tabs"), body); }
   f.querySelectorAll("[data-jt]").forEach(b => b.onclick = () => show(b.dataset.jt));
   if (canXero()) bindXc(f, [j]);
-  show("details");
+  const openChat = ui.openJobChat && !n;
+  ui.openJobChat = false;
+  show(openChat ? "chat" : "details");
 }
 // ------------------------------------------------------------------ invoicing (admin only)
 // Invoice fields live on the job doc: invoiceNo (text), invoiceDescription, invoiceContact,
@@ -4093,6 +4101,7 @@ function opCard(j) {
     <div class="chev" aria-hidden="true"></div></div>`;
 }
 function bindOp(mine) {
+  PUSH.mount($("#app"));
   if ($("#toadmin")) $("#toadmin").onclick = () => { ui.myJobs = false; ui.opSel = null; renderAdmin(); };
   // A tab tap is a deliberate move: force the redraw, or an open Prestart/Compliance form keeps the screen (stuck until reload).
   $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; ui.forceRender = true; renderOperator(); window.scrollTo(0, 0); });
@@ -4144,6 +4153,7 @@ function withRunOrder(list) {
 }
 function renderOperator() {
   paintBrand();
+  PUSH.settle();
   if (canImport()) inboxSub();
   if (!ui.forceRender && document.querySelector("#compform, #prestartform")) return;
   ui.forceRender = false;
@@ -4240,6 +4250,7 @@ function renderOperator() {
         ${staffBtn}
         ${canEditTitles() ? `<button type="button" class="mob-more" data-go="settings"><b>Company</b><small>Add or remove trades. Details and billing stay with an admin.</small></button>` : ""}
         ${inboxBtn}
+        ${PUSH.panelHtml()}
         ${skillsEditorHtml((me.cloudProfile && me.cloudProfile.skills) || [], { canEdit: true })}
         <p class="powered pad">${esc(orgSettings().name)} · ${esc(POWERED_BY)}</p>
       </div>
@@ -4271,7 +4282,7 @@ function renderOperator() {
     const todayJobs = withRunOrder(open.filter(j => j.date === t0 || (j.date < t0 && j.status === "In progress")));
     const todaySheet = readRunSheet(me.uid, t0);
     const n = todayJobs.length;
-    $("#app").innerHTML = `<div class="mob">${adminBack()}
+    $("#app").innerHTML = `<div class="mob">${adminBack()}${PUSH.bannerHtml()}
       <div class="mob-intro"><div class="mob-kicker">Today · ${esc(orgSettings().name)}</div><div class="mob-date">${esc(longDate(t0))}</div>
         <h1 class="mob-hello">${esc(greet())}, ${first}</h1><p class="mob-count">${n} job${n === 1 ? "" : "s"} today</p>${todaySheet ? `<p class="run-note">Approved driving order${todaySheet.returnToDepot ? " · back to the depot" : ""}</p>` : ""}${opSeg("today")}</div>
       ${COMP.staffBannerHtml()}
@@ -5076,6 +5087,76 @@ document.addEventListener("click", e => {
 })();
 
 CHAT = installChatApp({ db, storage, getMe: () => me, toast });
+function openPushTarget(target) {
+  if (!me || !target) return false;
+  const strip = () => {
+    try {
+      const url = new URL(location.href);
+      url.searchParams.delete("chat");
+      url.searchParams.delete("thread");
+      if (url.searchParams.get("jobs") === "today") url.searchParams.delete("jobs");
+      if (url.searchParams.get("open") === "today" || url.searchParams.get("open") === "chat") url.searchParams.delete("open");
+      history.replaceState(null, "", url.pathname + url.search + url.hash);
+    } catch { /* keep the current address */ }
+  };
+  if (target.kind === "today") {
+    ui.myJobs = me.role === "admin";
+    ui.opTab = "today";
+    ui.opSel = null;
+    ui.jobPane = "job";
+    strip();
+    return true;
+  }
+  if (target.kind !== "chat") return false;
+  if (target.thread === "staff") {
+    ui.opSel = null;
+    if (me.role === "admin" && !ui.myJobs) ui.view = "chat";
+    else ui.opTab = "chat";
+    strip();
+    return true;
+  }
+  const jobId = String(target.thread || "").slice(4);
+  const pool = [...(jobs || []), ...(ui.undated || []), ...(ui.done || [])];
+  const job = pool.find(j => j.id === jobId);
+  if (!job) {
+    if (target.missing) { strip(); return true; }
+    if (!target.loading) {
+      target.loading = true;
+      getDoc(doc(db, "jobs", jobId)).then(snap => {
+        target.loading = false;
+        if (!snapExists(snap)) { target.missing = true; }
+        else {
+          const row = { id: jobId, ...snap.data() };
+          if (docCompanyId(row) === myCompanyId()) jobs.push(row);
+          else target.missing = true;
+        }
+        if (me && me.role === "admin" && !ui.myJobs) renderAdmin(); else renderOperator();
+      }).catch(() => { target.loading = false; });
+    }
+    return false;
+  }
+  if (docCompanyId(job) !== myCompanyId()) { strip(); return true; }
+  strip();
+  if (me.role === "admin" && !ui.myJobs) {
+    ui.openJobChat = true;
+    queueMicrotask(() => editJob(job));
+    return true;
+  }
+  ui.opSel = job.id;
+  ui.jobPane = "chat";
+  return true;
+}
+PUSH = installPush({
+  app: fb, db, vapidKey, emulator: useEmulator,
+  getUid: () => me && me.uid,
+  getCompanyId: () => myCompanyId(),
+  toast,
+  rerender() {
+    if (!me) return;
+    if (me.role === "admin" && !ui.myJobs) renderAdmin(); else renderOperator();
+  },
+  open: openPushTarget,
+});
 COMP = installCompliance({
   db, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp,
   getJobs: () => [...(jobs || []), ...(ui.undated || []), ...(ui.done || [])],
