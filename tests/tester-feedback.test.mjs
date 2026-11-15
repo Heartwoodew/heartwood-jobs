@@ -24,7 +24,7 @@ test("hours: 7.6 and other decimals are accepted and saved as typed", () => {
 test("hours inputs use step any (7.6 is not rejected by the browser)", () => {
   assert.match(app, /<label>Hours<input type="number" step="any" min="0" max="999" inputmode="decimal" name="durationHrs"/);
   assert.match(app, /durationHrs: parseHoursInput\(f\.durationHrs\.value\)/);
-  assert.match(quotes, /name="hoursOnSite" type="number" min="0" step="any"/);
+  assert.match(quotes, /data-field="hoursOnSite"[^>]*type="number" min="0" step="any"/);
   assert.doesNotMatch(app, /name="durationHrs"[^>]*step="0\.5"/);
   assert.doesNotMatch(quotes, /name="hoursOnSite"[^>]*step="0\.25"/);
 });
