@@ -363,6 +363,19 @@ export function packForType(typeId, setup) {
   return null;
 }
 
+/** Category id → its trade pack, searching every trade. Null when the id is unknown. */
+export function typeInfo(typeId) {
+  const key = String(typeId || "");
+  if (!key) return null;
+  for (const id of TRADE_IDS) {
+    const row = QUOTE_PACKS[id];
+    if (!row) continue;
+    const hit = row.jobTypes.find(([k]) => k === key);
+    if (hit) return { type: key, label: hit[1], packId: row.id, packLabel: row.label, wizard: row.wizard || "" };
+  }
+  return null;
+}
+
 export function soonTradeLabels(setup) {
   return (setup && setup.enabled || []).filter(id => {
     const row = quotePack(id);
