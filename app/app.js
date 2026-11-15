@@ -109,6 +109,11 @@ function undoToast(msg, undo, ms = 7000) {
   clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.add("hidden"), ms);
 }
 function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.remove("hidden"); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.add("hidden"), 2500); }
+// Firestore retries a transaction, then fails with failed-precondition when someone else wrote first.
+function txFail(e) {
+  const code = String((e && (e.code || e.message)) || "");
+  return code.includes("failed-precondition") ? "Someone else just changed this, try again" : (code || "Not saved");
+}
 function guessType(text) {
   const t = (text || "").toLowerCase();
   const keys = [["slab back blade", "backslab"], ["slab clean", "backslab"], ["back slab", "backslab"], ["backslab", "backslab"], ["spoil", "spoil"], ["clean", "clean"]];
@@ -3434,12 +3439,12 @@ function bindStaff(A) {
   });
   A.querySelectorAll("[data-invite-resend]").forEach(b => b.onclick = async () => {
     try { await resendInvite(b.dataset.inviteResend); toast(inviteMailShown() ? "Invite resent with a new link. The list shows whether it was emailed." : "Invite resent. Copy the new link. Mail was not sent."); }
-    catch (e) { toast("Couldn't resend (" + (e.code || "error") + ")."); }
+    catch (e) { toast("Couldn't resend (" + txFail(e) + ")."); }
   });
   A.querySelectorAll("[data-invite-cancel]").forEach(b => b.onclick = async () => {
     if (!confirm("Cancel this invite? The link will stop working.")) return;
     try { await cancelInvite(b.dataset.inviteCancel); toast("Invite cancelled."); }
-    catch (e) { toast("Couldn't cancel (" + (e.code || "error") + ")."); }
+    catch (e) { toast("Couldn't cancel (" + txFail(e) + ")."); }
   });
   bindProfileExtras(A);
 }
@@ -4609,7 +4614,7 @@ async function assignNumbers(list) {
       tx.set(mRef, { lastNo: n, updatedAt: serverTimestamp(), updatedBy: me.uid, ...(myCompanyId() === "heartwood" ? {} : { companyId: myCompanyId() }) }, { merge: true });
       return res;
     });
-  } catch (e) { return alert("Numbers NOT assigned: " + (e.code || e.message)); }
+  } catch (e) { return alert("Numbers NOT assigned: " + txFail(e)); }
   ui.invMeta = null; ui.invSel.clear();
   if (canXero()) { ui.inv = "numbered"; await sendToXero(out, { skipConfirm: true }); }  // queues xeroQueue + xeroStatus queued; no CSV
   else { downloadCsv(out); ui.inv = "numbered"; renderAdmin(); }
@@ -5328,7 +5333,7 @@ function incidentForm(j) {
       });
       toast(`${no.reportNo} saved`); v.remove();
       incidentDetail({ id: no.id, reportNo: no.reportNo, seq: 0, ...data });
-    } catch (e) { btn.disabled = false; toast("Not saved: " + (e.code || e.message)); }
+    } catch (e) { btn.disabled = false; toast("Not saved: " + txFail(e)); }
   };
 }
 function incRefresh() {   // keep an open detail view in sync with Firestore

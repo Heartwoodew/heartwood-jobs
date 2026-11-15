@@ -105,12 +105,13 @@ test("auto jobs are spaced from the day start, rounded to 15 minutes, and a pinn
     job("b", { time: "07:08", timeSource: "manual" }),
     job("c"),
   ], { ordered: true, settings: { ...settings, durations: { ...defaultDurations(), spoil: 1 } } });
-  assert.equal(plan[0].time, "07:00");
+  // 07:08 is only eight minutes after the day start, so the 1 h job cannot sit in front of it.
+  assert.equal(plan[0].time, "08:45");
   assert.equal(plan[0].fixed, false);
   assert.equal(plan[0].estLabel, "~1 h, est.");
   assert.equal(plan[1].time, "07:08");
   assert.equal(plan[1].fixed, true);
-  assert.equal(plan[2].time, "08:45");
+  assert.equal(plan[2].time, "10:15");
 
   const early = spaceDay([job("a")], { settings: { ...settings, dayStart: "07:10" } });
   assert.equal(early[0].time, "07:15");
@@ -131,7 +132,7 @@ test("an approved run sheet sets the order, and a drag hint only moves auto jobs
   const plan = spaceDay(rows, { settings: { ...settings, durations: { ...defaultDurations(), spoil: 1 } }, sheet });
   assert.deepEqual(plan.map(p => p.id), ["c", "b", "a"]);
   assert.equal(plan[0].time, "07:00");
-  assert.equal(plan[1].time, "08:30");
+  assert.equal(plan[1].time, "10:30");
   assert.equal(plan[2].time, "09:00");
   assert.equal(plan[2].fixed, true);
 
@@ -189,7 +190,7 @@ test("only auto times are written, finished and manual jobs are kept, and timesh
   const writes = planAutoTimes(rows, { settings });
   assert.deepEqual(writes.map(w => w.id), ["auto", "otherday"]);
   assert.equal(writes[0].timeSource, "auto");
-  assert.equal(writes[0].time, "07:00");
+  assert.equal(writes[0].time, "12:15");
   assert.ok(writes[0].estHours >= 1);
   assert.equal(writes[0].durationHrs, undefined);
   assert.equal(JSON.stringify(writes).includes("timesheet"), false);
@@ -209,6 +210,40 @@ test("only auto times are written, finished and manual jobs are kept, and timesh
   assert.equal(ordered.find(w => w.id === "a").time, "08:30");
 });
 
+test("hand-set jobs reserve their window and a second pass does not move anyone", () => {
+  const manual = job("m", { time: "10:00", timeSource: "manual", quote: { hoursOnSite: 2 } });
+  const short = job("short", { time: "09:30", timeSource: "auto", quote: { hoursOnSite: 1 } });
+  const long = job("long", { time: "11:00", timeSource: "auto", quote: { hoursOnSite: 3 } });
+  const first = spaceDay([short, manual, long], { ordered: true, settings });
+  const byId = Object.fromEntries(first.map(row => [row.id, row]));
+  assert.equal(byId.m.time, "10:00");
+  assert.equal(byId.m.fixed, true);
+  assert.equal(byId.short.time, "07:00");
+  assert.equal(byId.long.time, "12:30");
+  const overlaps = (start, hours, blockStart, blockHours) => {
+    const a = start.split(":").map(Number);
+    const b = blockStart.split(":").map(Number);
+    const a0 = a[0] * 60 + a[1];
+    const b0 = b[0] * 60 + b[1];
+    return a0 < b0 + blockHours * 60 && b0 < a0 + hours * 60;
+  };
+  assert.equal(overlaps(byId.short.time, 1, "10:00", 2), false);
+  assert.equal(overlaps(byId.long.time, 3, "10:00", 2), false);
+  const saved = [short, manual, long].map(row => {
+    const hit = byId[row.id];
+    return { ...row, time: hit.time, timeSource: hit.fixed ? "manual" : "auto", estHours: hit.estHours, estSource: hit.estSource };
+  });
+  const again = spaceDay(saved, { settings });
+  const third = spaceDay(saved.map(row => {
+    const hit = again.find(item => item.id === row.id);
+    return { ...row, time: hit.time, timeSource: hit.fixed ? row.timeSource : "auto" };
+  }), { settings });
+  assert.deepEqual(third.map(row => row.time), again.map(row => row.time));
+  assert.equal(again.find(row => row.id === "m").time, "10:00");
+  assert.equal(again.find(row => row.id === "short").time, "07:00");
+  assert.equal(again.find(row => row.id === "long").time, "12:30");
+});
+
 test("dispatch settings rules keep a 1 hour minimum and do not touch timesheets", () => {
   const rules = readFileSync(new URL("../cloud/firestore.production.rules", import.meta.url), "utf8");
   assert.match(rules, /_dispatch/);
@@ -221,7 +256,7 @@ test("the board, service worker and timesheet module stay in their lanes", () =>
   const app = readFileSync(new URL("../app/app.js", import.meta.url), "utf8");
   const sw = readFileSync(new URL("../app/sw.js", import.meta.url), "utf8");
   const src = readFileSync(new URL("../app/features/dispatch-times.js", import.meta.url), "utf8");
-  assert.match(sw, /callup-shell-v103-push-key/);
+  assert.match(sw, /callup-shell-v104-quote-dispatch-fix/);
   assert.match(sw, /features\/dispatch-times\.js/);
   assert.match(app, /formatEstimate\(/);
   assert.match(app, /timeSource/);

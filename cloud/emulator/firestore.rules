@@ -1887,5 +1887,70 @@ service cloud.firestore {
       allow read, write: if false;
     }
 // END DAILY JOB RULES
+
+// BEGIN QUOTE WRITE RULES
+    // Same quote create/update as cloud/firestore.production.rules: one profile read,
+    // so a verified email does not blow the 1000-expression limit. Crew cannot write.
+    function quoteFieldsOk(d) {
+      return d.get("extraItems", []) is list && d.get("extraItems", []).size() <= 40
+        && d.get("priceOverrides", {}) is map && d.get("priceOverrides", {}).size() <= 20
+        && (d.get("addressPlace", null) == null || (d.addressPlace is map
+          && d.addressPlace.keys().hasOnly(["formattedAddress", "lat", "lng", "placeId", "source"])
+          && d.addressPlace.lat is number && d.addressPlace.lng is number));
+    }
+    function quoteActor() {
+      let user = /databases/$(database)/documents/users/$(request.auth.uid);
+      let has = signedIn() && exists(user);
+      let data = has ? get(user).data : null;
+      let role = data != null ? data.get("role", "") : "";
+      let companyId = data != null ? data.get("companyId", "") : "";
+      let tenantId = data != null ? data.get("tenantId", "") : "";
+      let bootstrap = signedIn() && request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "38SU5waAy4f9UI9N6JTqDMaYpQg2", "R7t41e54Ykcdk9WPdVZnDd697iI2"];
+      let company = bootstrap ? "heartwood"
+        : (companyId is string && companyId.size() > 0 ? companyId
+          : (tenantId is string && tenantId.size() > 0 ? tenantId : (has ? "heartwood" : "")));
+      let grant = /databases/$(database)/documents/heartwoodAdmins/$(request.auth.uid);
+      let granted = !bootstrap && has && exists(grant) && get(grant).data.get("role", "") == "admin" && role == "admin" && company == "heartwood";
+      return { "listed": bootstrap || granted, "role": role, "company": company, "ok": signedIn() };
+    }
+    function quoteCompanyOf(data) {
+      let id = data.get("companyId", "");
+      let tenant = data.get("tenantId", "");
+      return (id is string && id.size() > 0) ? id : ((tenant is string && tenant.size() > 0) ? tenant : "heartwood");
+    }
+    function quoteOffice(actor, company) {
+      return actor.ok && company is string && (
+        (actor.listed && company == "heartwood")
+        || (actor.company == company && company == "heartwood" && actor.role in ["manager", "supervisor"])
+        || (actor.company == company && company != "heartwood" && company != "" && actor.role in ["admin", "manager", "supervisor"])
+      );
+    }
+    function quotePricesOk(actor, next, before) {
+      return actor.listed || actor.role == "admin" || actor.role == "manager" || next.get("priceOverrides", {}) == before;
+    }
+    function quoteCreateOk() {
+      let actor = quoteActor();
+      let data = request.resource.data;
+      let company = quoteCompanyOf(data);
+      return quoteFieldsOk(data) && quoteOffice(actor, company) && quotePricesOk(actor, data, {});
+    }
+    function quoteUpdateOk() {
+      let actor = quoteActor();
+      let next = request.resource.data;
+      let company = quoteCompanyOf(resource.data);
+      return resource.data.get("quoteStatus", "") != "Accepted"
+        && quoteFieldsOk(next)
+        && quoteOffice(actor, company)
+        && quoteCompanyOf(next) == company
+        && quotePricesOk(actor, next, resource.data.get("priceOverrides", {}));
+    }
+    match /quotes/{id} {
+      allow get: if quoteOffice(quoteActor(), quoteCompanyOf(resource.data));
+      allow list: if resource.data.companyId is string && quoteOffice(quoteActor(), resource.data.companyId);
+      allow create: if quoteCreateOk();
+      allow update: if quoteUpdateOk();
+      allow delete: if false;
+    }
+// END QUOTE WRITE RULES
   }
 }

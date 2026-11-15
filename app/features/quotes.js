@@ -1469,7 +1469,10 @@ function openQuoteWizard(existing, opts = {}) {
         api.getUi()._quotesFetched = false;
         await refreshQuotes();
         renderAdmin();
-      } catch (e) { $("#qerr").textContent = e.code || e.message; }
+      } catch (e) {
+        const code = String((e && (e.code || e.message)) || "");
+        $("#qerr").textContent = code.includes("failed-precondition") ? "Someone else just changed this, try again" : (e.code || e.message);
+      }
     };
     paint();
   });

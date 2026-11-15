@@ -3,7 +3,8 @@
 //
 // Duration: quote hours on the job, else the median clocked time for that job type,
 // else the company default table. Anything under 1 hour is treated as 1 hour.
-// Spacing: first auto job at the company day start, then previous start + duration + travel gap.
+// Spacing: auto jobs fill the free gaps in a stable order, from the company day start.
+// A hand-set or finished job keeps its start and reserves its estimate plus the travel gap.
 // A start someone typed (or any saved time other than the old 07:00 default) stays put.
 
 import { orderJobsForRun, runSheetId } from "./route-order.js";
@@ -317,41 +318,83 @@ function anchorTime(job, settings) {
   return normaliseTime(job && job.time) || settings.dayStart;
 }
 
+function ceil15(mins) {
+  if (!Number.isFinite(mins)) return 0;
+  return Math.max(0, Math.min(23 * 60 + 45, Math.ceil(mins / 15) * 15));
+}
+
+function hitsBlock(start, estMin, gap, block) {
+  const end = start + estMin;
+  const release = block.end + gap;
+  if (start < block.end && end > block.start) return true;
+  if (start < block.start && end + gap > block.start) return true;
+  if (start >= block.end && start < release) return true;
+  return false;
+}
+
+function placeAuto(earliest, estMin, job, blocks, gapDefault) {
+  let start = roundTo15(earliest);
+  if (start < earliest) start = ceil15(earliest);
+  const limit = 23 * 60 + 45;
+  for (let n = 0; n < 96 && start < limit; n++) {
+    let jump = null;
+    for (const block of blocks) {
+      const gap = travelGapMinutes(block.job, job, gapDefault);
+      if (!hitsBlock(start, estMin, gap, block)) continue;
+      const rel = ceil15(block.end + gap);
+      if (jump == null || rel > jump) jump = rel;
+    }
+    if (jump == null) return start;
+    start = jump > start ? jump : start + 15;
+  }
+  return Math.min(start, limit);
+}
+
 /**
  * Space one person's jobs for one day.
- * `ordered: true` keeps the array order (a drag, or a run sheet already applied).
- * Otherwise an approved run sheet leads, then the current start time.
+ * Hand-set and finished jobs stay put and reserve their duration plus the travel gap.
+ * Auto jobs fill the free gaps in a stable order (run sheet, or the order given).
+ * Spacing the result again does not move them.
  */
 export function spaceDay(jobs, options = {}) {
   const settings = sanitizeDispatchSettings(options.settings);
   const history = options.history || {};
+  const reuse = !!options.reuseStored;
   const list = (jobs || []).filter(Boolean);
   const ordered = options.ordered ? list.slice() : orderJobsForRun(list, options.sheet || null);
-  const out = [];
-  let prev = null;
-  for (const job of ordered) {
-    const est = durationFor(job, settings, history, !!options.reuseStored);
+  const gapDefault = settings.travelGapMin;
+  const details = ordered.map(job => {
+    const est = durationFor(job, settings, history, reuse);
     const estMin = Math.round(est.hours * 60);
     const fixed = keepsStart(job);
-    let time;
-    if (fixed) time = anchorTime(job, settings);
-    else if (!prev) time = formatMinutes(roundTo15(parseMinutes(settings.dayStart)));
-    else {
-      const gap = travelGapMinutes(prev.job, job, settings.travelGapMin);
-      time = formatMinutes(roundTo15(parseMinutes(prev.time) + prev.estMin + gap));
-    }
-    const row = {
-      id: job.id,
-      time,
-      fixed,
-      estHours: est.hours,
-      estSource: est.source,
-      estLabel: formatEstimate(est.hours),
-    };
-    out.push(row);
-    prev = { ...row, estMin, job };
+    const start = fixed ? parseMinutes(anchorTime(job, settings)) : null;
+    return { job, est, estMin, fixed, start };
+  });
+  const blocks = details.filter(row => row.fixed && row.start != null).map(row => ({
+    start: row.start,
+    end: row.start + row.estMin,
+    job: row.job,
+    id: row.job.id,
+  }));
+  const placed = new Map();
+  let prev = null;
+  const dayStart = parseMinutes(settings.dayStart);
+  for (const row of details) {
+    if (row.fixed) continue;
+    const gap = prev ? travelGapMinutes(prev.job, row.job, gapDefault) : 0;
+    const earliest = prev ? prev.start + prev.estMin + gap : dayStart;
+    const start = placeAuto(earliest, row.estMin, row.job, blocks, gapDefault);
+    placed.set(row.job.id, start);
+    prev = { job: row.job, start, estMin: row.estMin };
   }
-  return out;
+  return details.map(row => ({
+    id: row.job.id,
+    time: formatMinutes(row.fixed ? row.start : placed.get(row.job.id)),
+    fixed: row.fixed,
+    estHours: row.est.hours,
+    estSource: row.est.source,
+    estLabel: formatEstimate(row.est.hours),
+  }));
 }
 
 export function primaryKey(job) {

@@ -402,40 +402,72 @@ service cloud.firestore {
           && d.addressPlace.keys().hasOnly(["formattedAddress", "lat", "lng", "placeId", "source"])
           && d.addressPlace.lat is number && d.addressPlace.lng is number));
     }
-    // Guided price overrides are admin only (Nov 2026 round 3): a supervisor may save a quote but must leave them as they were.
-    function quoteOverridesKept(before) {
-      return isAdmin() || profile().role == "admin" || profile().role == "manager" || request.resource.data.get("priceOverrides", {}) == before;
+    // One profile read for a quote write. Calling isAdmin / callerCompany / companyOffice
+    // on every branch re-ran the platform-owner email check and blew the 1000-expression limit,
+    // including for a verified admin. Crew (operator / labourer) are not office.
+    function quoteActor() {
+      let user = /databases/$(database)/documents/users/$(request.auth.uid);
+      let has = signedIn() && exists(user);
+      let data = has ? get(user).data : null;
+      let role = data != null ? data.get("role", "") : "";
+      let companyId = data != null ? data.get("companyId", "") : "";
+      let tenantId = data != null ? data.get("tenantId", "") : "";
+      let bootstrap = signedIn() && request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "38SU5waAy4f9UI9N6JTqDMaYpQg2", "R7t41e54Ykcdk9WPdVZnDd697iI2"];
+      let company = bootstrap ? "heartwood"
+        : (companyId is string && companyId.size() > 0 ? companyId
+          : (tenantId is string && tenantId.size() > 0 ? tenantId : (has ? "heartwood" : "")));
+      let grant = /databases/$(database)/documents/heartwoodAdmins/$(request.auth.uid);
+      let granted = !bootstrap && has && exists(grant) && get(grant).data.get("role", "") == "admin" && role == "admin" && company == "heartwood";
+      return { "listed": bootstrap || granted, "role": role, "company": company, "ok": signedIn() };
+    }
+    function quoteCompanyOf(data) {
+      let id = data.get("companyId", "");
+      let tenant = data.get("tenantId", "");
+      return (id is string && id.size() > 0) ? id : ((tenant is string && tenant.size() > 0) ? tenant : "heartwood");
+    }
+    function quoteOffice(actor, company) {
+      return actor.ok && company is string && (
+        (actor.listed && company == "heartwood")
+        || (actor.company == company && company == "heartwood" && actor.role in ["manager", "supervisor"])
+        || (actor.company == company && company != "heartwood" && company != "" && actor.role in ["admin", "manager", "supervisor"])
+      );
+    }
+    // Admin and manager may change guided prices. A supervisor must leave priceOverrides as they were.
+    function quotePricesOk(actor, next, before) {
+      return actor.listed || actor.role == "admin" || actor.role == "manager" || next.get("priceOverrides", {}) == before;
+    }
+    function quoteGetOk() {
+      let actor = quoteActor();
+      return quoteOffice(actor, quoteCompanyOf(resource.data));
+    }
+    function quoteListOk() {
+      let actor = quoteActor();
+      let company = resource.data.companyId;
+      return company is string && quoteOffice(actor, company);
+    }
+    function quoteCreateOk() {
+      let actor = quoteActor();
+      let data = request.resource.data;
+      let company = quoteCompanyOf(data);
+      return quoteFieldsOk(data) && quoteOffice(actor, company) && quotePricesOk(actor, data, {});
+    }
+    function quoteUpdateOk() {
+      let actor = quoteActor();
+      let next = request.resource.data;
+      let company = quoteCompanyOf(resource.data);
+      return resource.data.get("quoteStatus", "") != "Accepted"
+        && quoteFieldsOk(next)
+        && quoteOffice(actor, company)
+        && quoteCompanyOf(next) == company
+        && quotePricesOk(actor, next, resource.data.get("priceOverrides", {}));
     }
     match /quotes/{id} {
-      allow get: if (isAdmin() && docCompany(resource.data) == "heartwood")
-        || (heartwoodManager() && docCompany(resource.data) == "heartwood")
-        || (heartwoodSupervisor() && docCompany(resource.data) == "heartwood")
-        || (companyOffice() && docCompany(resource.data) == callerCompany());
-      allow list: if isAdmin() && resource.data.companyId == "heartwood";
-      allow list: if heartwoodManager() && resource.data.companyId == "heartwood";
-      allow list: if heartwoodSupervisor() && resource.data.companyId == "heartwood";
-      allow list: if companyOffice() && resource.data.companyId == callerCompany();
-      allow create: if quoteFieldsOk(request.resource.data) && ((isAdmin() && request.resource.data.get("companyId", "heartwood") == "heartwood")
-        || (heartwoodManager() && request.resource.data.get("companyId", "heartwood") == "heartwood" && quoteOverridesKept({}))
-        || (companyOffice() && request.resource.data.companyId == callerCompany() && quoteOverridesKept({})));
-      // Accepted quotes stay as they were. The check is only a field compare so this rule stays under the expression limit.
-      allow update: if resource.data.get("quoteStatus", "") != "Accepted"
-        && quoteFieldsOk(request.resource.data) && ((isAdmin() && docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood")
-        || (heartwoodManager() && docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood"
-          && quoteOverridesKept(resource.data.get("priceOverrides", {})))
-        || (companyOffice() && docCompany(resource.data) == callerCompany() && docCompany(request.resource.data) == callerCompany()
-          && quoteOverridesKept(resource.data.get("priceOverrides", {}))));
+      allow get: if quoteGetOk();
+      allow list: if quoteListOk();
+      allow create: if quoteCreateOk();
+      // Accepted quotes stay as they were. Accepting is this update, while the quote is still a draft.
+      allow update: if quoteUpdateOk();
       allow delete: if false;
-      // Separate from the office rule above so a Heartwood supervisor is not folded into that expression.
-      allow create: if heartwoodSupervisor() && quoteFieldsOk(request.resource.data)
-        && request.resource.data.get("companyId", "heartwood") == "heartwood"
-        && quoteOverridesKept({});
-      allow update: if heartwoodSupervisor()
-        && resource.data.get("quoteStatus", "") != "Accepted"
-        && quoteFieldsOk(request.resource.data)
-        && docCompany(resource.data) == "heartwood"
-        && docCompany(request.resource.data) == "heartwood"
-        && quoteOverridesKept(resource.data.get("priceOverrides", {}));
 
       // Numbered quote revisions. Same company, supervisor and above. Create only.
       match /revisions/{revId} {
