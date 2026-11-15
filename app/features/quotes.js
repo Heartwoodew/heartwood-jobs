@@ -3,7 +3,7 @@ import { orgSettings, POWERED_BY, PRODUCT_NAME } from "../org-settings.js";
 import { scopeRecord } from "./company.js";
 import { JOB_MONEY_COLLECTION, jobMoneyDoc } from "./job-money.js";
 import { attachAddressSearch, placesEnabled, sanitizePlace } from "./places.js";
-import { LINE_TYPES, measureQty, normalizeLineType, quotePackNote, rateSaveChoice, readyJobTypeMap, tradeToolsHtml } from "./trades.js";
+import { LINE_TYPES, measureQty, normalizeLineType, quotePack, quotePackNote, rateSaveChoice, tradeLabel, tradeToolsHtml } from "./trades.js";
 // Rates from meta/quoteRates only — never invent business rates.
 // Draft/Accepted are explicit quoteStatus fields.
 // Admins, managers and supervisors (canQuote / canSeeMoney). Rate edits: admin or manager (canEditQuoteRates).
@@ -103,8 +103,19 @@ function cleanPrice(v) {
   return n == null || !Number.isFinite(n) ? null : Math.min(MAX_ITEM_PRICE, Math.max(0, Math.round(n * 100) / 100));
 }
 let quoteTrade = null;
-export function setQuoteTradeSetup(setup) { quoteTrade = setup || null; }
+let quoteFocus = "";
+export function setQuoteTradeSetup(setup) {
+  quoteTrade = setup || null;
+  const enabled = (quoteTrade && quoteTrade.enabled) || [];
+  if (quoteFocus && !enabled.includes(quoteFocus)) quoteFocus = "";
+}
 export function quoteTradeSetup() { return quoteTrade; }
+export function setQuoteFocus(id) { quoteFocus = String(id || ""); }
+export function activeQuoteTradeId() {
+  const enabled = (quoteTrade && quoteTrade.enabled) || [];
+  if (quoteFocus && enabled.includes(quoteFocus)) return quoteFocus;
+  return enabled[0] || "earthworks";
+}
 
 let xSeq = 0;
 function newItemId() {
@@ -575,7 +586,7 @@ export function quotesViewHtml(ui, esc, $$, helpers = {}) {
     ${editRates ? `<button type="button" class="sm-btn" id="editrates">Quote rates &amp; depot</button>` : `<span class="sub pad">Rates are set by an admin or a manager · depot ${esc(rates.yardAddress || DEFAULT_DEPOT.yardAddress)}</span>`}</div></div>
     <p class="pad sub">Three steps: job details, setup (machine and optional labourer), then review. Travel, materials and rubbish sit on the review. Accepting creates an unscheduled job. Admins, managers and supervisors only. Prices stay ex GST and are never invented. Quotes are for ${esc(orgSettings().legalName)}. ${esc(POWERED_BY)}.</p>
     ${quotePackNote(quoteTrade)}
-    ${quoteTrade ? tradeToolsHtml(quoteTrade, { canEdit: editRates }) : ""}
+    ${quoteTrade ? tradeToolsHtml(quoteTrade, { canEdit: editRates, focus: activeQuoteTradeId() }) : ""}
     <p class="pad sub">Depot (travel start): <b>${esc(rates.yardAddress || DEFAULT_DEPOT.yardAddress || "not set")}</b>
       · <a href="${esc(rates.yardMapsUrl || DEFAULT_DEPOT.yardMapsUrl)}" target="_blank" rel="noopener">Maps</a></p>
     ${rateWarn ? `<p class="pad warnt">Set plant (incl. operator), labourer, travel, materials and tip rates before accepting — nothing is invented for you.</p>` : ""}
@@ -593,6 +604,10 @@ function bindAdminExtras(ctx) {
   ensureRates(false);
   A.querySelector("#newquote")?.addEventListener("click", () => openQuoteWizard(null));
   A.querySelector("#editrates")?.addEventListener("click", () => openRatesEditor());
+  A.querySelector("#quotetrade")?.addEventListener("change", ev => {
+    setQuoteFocus(ev.target.value);
+    if (typeof api.renderAdmin === "function") api.renderAdmin();
+  });
   A.querySelector("#tradeadd")?.addEventListener("submit", async ev => {
     ev.preventDefault();
     const id = ev.target.trade && ev.target.trade.value;
@@ -1101,14 +1116,23 @@ function openQuoteWizard(existing, opts = {}) {
   });
 }
 
+function activePack() {
+  if (!quoteTrade) return null;
+  return quotePack(activeQuoteTradeId());
+}
+
 function quoteTypes(TYPES) {
   if (!quoteTrade) return TYPES;
-  const ready = readyJobTypeMap(quoteTrade);
-  if (ready && Object.keys(ready).length) return ready;
-  return {};
+  const pack = activePack();
+  if (!pack || !pack.ready) return {};
+  return Object.fromEntries(pack.jobTypes);
 }
 
 function stepHtml(step, d, calc, rates, esc, TYPES, CLIENTS, canSeeMoney, $$, isAdmin = false, legacyTruck = false) {
+  const pack = activePack();
+  if (step > 0 && pack && !pack.ready) {
+    return `<p class="sub">Quote pack coming soon for ${esc(tradeLabel(pack.id))}. Switch the quote trade to one with a ready pack. Job types for this trade still show on the job.</p>`;
+  }
   const depot = rates.yardAddress || DEFAULT_DEPOT.yardAddress;
   const maps = rates.yardMapsUrl || DEFAULT_DEPOT.yardMapsUrl;
   const rateTxt = (v, suffix) => (v != null && canSeeMoney()) ? `${$$(v)}${suffix} ex GST` : "not set yet";

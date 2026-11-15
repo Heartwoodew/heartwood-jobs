@@ -154,4 +154,33 @@ test("manager edits rates, leave is already open to supervisors, and a manager c
   await assertSucceeds(updateDoc(doc(mgr, "users/bOp"), { jobTitle: "Leading hand", jobTitleId: "earthworks:leading-hand" }));
   await assertFails(updateDoc(doc(mgr, "users/bOp"), { role: "supervisor", jobTitle: "Leading hand", jobTitleId: "earthworks:leading-hand" }));
   await assertFails(updateDoc(doc(mgr, "users/bAdmin"), { jobTitle: "Operator", jobTitleId: "earthworks:operator" }));
+  await assertSucceeds(updateDoc(doc(mgr, "companies/bravo"), { trades: ["earthworks", "plumbing"] }));
+  await assertFails(updateDoc(doc(db("bSup"), "companies/bravo"), { trades: ["fencing"] }));
+  await assertFails(updateDoc(doc(mgr, "companies/bravo"), { trades: ["earthworks"], plan: "paid" }));
+});
+
+test("only a manager or an admin can approve a reimbursement claim", async () => {
+  const id = "rcbravo00000000009";
+  const claim = {
+    uid: "bLab", name: "Bix", date: "2026-11-13", amountCents: 1500, supplier: "Ampol", category: "fuel",
+    notes: "", paidWith: "cash", jobId: "", jobLabel: "", receiptPath: "", receiptName: "", status: "submitted",
+    decisionNote: "", decidedBy: "", decidedByName: "", decidedAt: null, paidAt: null,
+  };
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), "companies/bravo/reimbursementClaims/" + id), claim);
+  });
+  const decide = (uid, name) => updateDoc(doc(db(uid), "companies/bravo/reimbursementClaims/" + id), {
+    status: "approved", decisionNote: "ok", decidedBy: uid, decidedByName: name,
+    decidedAt: serverTimestamp(), paidAt: null, updatedAt: serverTimestamp(),
+  });
+  await assertFails(decide("bLab", "Bix"));
+  await assertFails(decide("bSup", "Sid"));
+  await assertSucceeds(decide("bMgr", "Mo"));
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), "companies/bravo/reimbursementClaims/rcbravo00000000008"), claim);
+  });
+  await assertSucceeds(updateDoc(doc(db("bAdmin"), "companies/bravo/reimbursementClaims/rcbravo00000000008"), {
+    status: "approved", decisionNote: "ok", decidedBy: "bAdmin", decidedByName: "Bea",
+    decidedAt: serverTimestamp(), paidAt: null, updatedAt: serverTimestamp(),
+  }));
 });

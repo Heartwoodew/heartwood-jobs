@@ -1,6 +1,7 @@
 // CallUp trades, job titles and quote packs.
-// A company picks one main trade at sign-up. Missing trade (Heartwood, callup-test-h2vx, any older company)
-// reads as earthworks. Nothing here writes to Firestore.
+// Sign-up stores a list of trades. An older company with only `trade` still reads that one trade.
+// A company with neither reads as ["earthworks"] (Heartwood, callup-test-h2vx, anyone else). Nothing here writes.
+
 // Earthworks is the only quote pack with the plant wizard. Other trades contribute job titles and job types
 // and are marked quote-pack coming soon. No mix design, no assignment filtering, no sign-off flag.
 
@@ -21,6 +22,7 @@ export const TRADES = Object.freeze([
 export const TRADE_IDS = Object.freeze(TRADES.map(t => t.id));
 
 export const PERMISSION_LEVELS = Object.freeze(["labourer", "operator", "supervisor", "manager", "admin"]);
+const LEVEL_RANK = Object.freeze({ labourer: 0, operator: 1, supervisor: 2, manager: 3, admin: 4 });
 
 export const LINE_TYPES = Object.freeze([
   ["labour", "Labour"],
@@ -116,20 +118,63 @@ function slug(name) {
   return String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
 }
 
-export function defaultTitles(tradeIds) {
+export function sanitizeTradeList(list) {
   const out = [];
-  const seen = new Set();
-  for (const id of tradeIds || []) {
+  for (const id of Array.isArray(list) ? list : []) {
     const trade = normalizeTrade(id);
-    if (!trade) continue;
-    for (const name of TITLE_NAMES[trade] || []) {
-      const key = trade + ":" + slug(name);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({ id: key, name, level: levelForTitleName(name), trade, custom: false });
-    }
+    if (!trade || out.includes(trade)) continue;
+    out.push(trade);
+    if (out.length >= 8) break;
   }
   return out;
+}
+
+/**
+ * Same job title from more than one trade.
+ * The first trade in the company list is the higher-trust mapping.
+ * Use it only when it does not outrank the others. Otherwise use the lower level and say so.
+ */
+export function chooseTitleLevel(name, options) {
+  const rows = (options || []).filter(row => row && PERMISSION_LEVELS.includes(row.level));
+  if (!rows.length) return { level: levelForTitleName(name) || "labourer", levelNote: "" };
+  const trusted = rows[0];
+  const lowest = rows.reduce((a, b) => LEVEL_RANK[a.level] <= LEVEL_RANK[b.level] ? a : b);
+  const distinct = [...new Set(rows.map(row => row.level))];
+  if (distinct.length === 1) return { level: trusted.level, levelNote: "" };
+  const listed = rows.map(row => `${tradeLabel(row.trade) || row.trade} ${row.level}`).join(", ");
+  if (LEVEL_RANK[trusted.level] <= LEVEL_RANK[lowest.level]) {
+    return { level: trusted.level, levelNote: `Kept ${trusted.level} from the primary trade. Also listed as ${listed}.` };
+  }
+  return { level: lowest.level, levelNote: `Using ${lowest.level}. A higher level (${listed}) was not applied.` };
+}
+
+export function defaultTitles(tradeIds) {
+  const ids = sanitizeTradeList(tradeIds);
+  const grouped = new Map();
+  for (const trade of ids) {
+    for (const name of TITLE_NAMES[trade] || []) {
+      const key = name.toLowerCase();
+      if (!grouped.has(key)) grouped.set(key, { name, options: [] });
+      grouped.get(key).options.push({ trade, level: levelForTitleName(name) });
+    }
+  }
+  const out = [];
+  for (const group of grouped.values()) {
+    const chosen = chooseTitleLevel(group.name, group.options);
+    const trade = group.options[0].trade;
+    const row = { id: trade + ":" + slug(group.name), name: group.name, level: chosen.level, trade, custom: false };
+    if (chosen.levelNote) row.levelNote = chosen.levelNote;
+    out.push(row);
+  }
+  return out;
+}
+
+export function titlesAfterTradeChange(previousTitles, saved, tradeIds) {
+  const base = defaultTitles(tradeIds);
+  if (!saved) return base;
+  const custom = sanitizeTitles(previousTitles).filter(row => row.custom);
+  const names = new Set(custom.map(row => row.name.toLowerCase()));
+  return [...base.filter(row => !names.has(row.name.toLowerCase())), ...custom];
 }
 
 function cleanName(name) {
@@ -150,11 +195,15 @@ export function sanitizeTitles(list) {
     const level = PERMISSION_LEVELS.includes(row.level) ? row.level : "";
     const trade = normalizeTrade(row.trade) || DEFAULT_TRADE;
     if (!name || !level) continue;
+    const levelNote = typeof row.levelNote === "string" && row.levelNote.trim() && row.levelNote.length <= 200 && !/[\n\r\t<>]/.test(row.levelNote)
+      ? row.levelNote.trim() : "";
     let id = String(row.id || "").replace(/[^a-z0-9:_-]/gi, "").slice(0, 60);
     if (!id) id = (row.custom ? "custom:" : trade + ":") + slug(name);
     if (seen.has(id)) continue;
     seen.add(id);
-    out.push({ id, name, level, trade, custom: row.custom === true });
+    const item = { id, name, level, trade, custom: row.custom === true };
+    if (levelNote) item.levelNote = levelNote;
+    out.push(item);
   }
   return out;
 }
@@ -234,13 +283,23 @@ export function sanitizeExtraTrades(list, main) {
   return out;
 }
 
-/** Lazy read. No trade stored -> earthworks. Does not write. */
+/** List of trades. `trades` wins, then the old single `trade`, then earthworks. Does not write. */
+export function readTradeList(company, stored) {
+  const listed = sanitizeTradeList(company && company.trades);
+  if (listed.length) return listed;
+  const storedList = sanitizeTradeList(stored && stored.trades);
+  if (storedList.length) return storedList;
+  const primary = normalizeTrade(company && company.trade) || normalizeTrade(stored && stored.trade);
+  const extras = sanitizeExtraTrades((stored && stored.extraTrades) || (company && company.extraTrades), primary || DEFAULT_TRADE);
+  if (primary) return [primary, ...extras];
+  return [DEFAULT_TRADE];
+}
+
+/** Lazy read. No trade stored -> ['earthworks']. Does not write. */
 export function resolveCompanySetup(company, stored) {
-  const fromCompany = normalizeTrade(company && company.trade);
-  const fromStored = normalizeTrade(stored && stored.trade);
-  const trade = fromCompany || fromStored || DEFAULT_TRADE;
-  const extraTrades = sanitizeExtraTrades(stored && stored.extraTrades, trade);
-  const enabled = [trade, ...extraTrades];
+  const enabled = readTradeList(company, stored);
+  const trade = enabled[0];
+  const extraTrades = enabled.slice(1);
   const saved = !!(stored && Array.isArray(stored.titles) && stored.titles.length);
   const titles = saved ? sanitizeTitles(stored.titles) : defaultTitles(enabled);
   return { trade, extraTrades, enabled, titles, saved, companyId: (company && company.companyId) || (stored && stored.companyId) || "" };
@@ -346,15 +405,25 @@ export function sanitizeSkills(list) {
   return out;
 }
 
-export function companyTradesDoc(companyId, trade, uid) {
-  const main = normalizeTrade(trade) || DEFAULT_TRADE;
+export function companyTradesDoc(companyId, tradeOrList, uid) {
+  const list = sanitizeTradeList(Array.isArray(tradeOrList) ? tradeOrList : [tradeOrList]);
+  const trades = list.length ? list : [DEFAULT_TRADE];
   return {
     companyId,
-    trade: main,
-    extraTrades: [],
-    titles: defaultTitles([main]),
+    trade: trades[0],
+    trades,
+    extraTrades: trades.slice(1),
+    titles: defaultTitles(trades),
     updatedBy: uid || "",
   };
+}
+
+export function signupTradesHtml(selected = [DEFAULT_TRADE]) {
+  const on = new Set(sanitizeTradeList(selected).length ? sanitizeTradeList(selected) : [DEFAULT_TRADE]);
+  return `<fieldset class="tradepick"><legend>Trades</legend>
+    <p class="sub">Choose every trade this company does. At least one. Earthworks includes the plant quote wizard. The first ticked trade is the one quotes open on.</p>
+    ${TRADES.map(t => `<label class="ck"><input type="checkbox" name="trades" value="${esc(t.id)}"${on.has(t.id) ? " checked" : ""}> ${esc(t.label)}${quotePack(t.id) && quotePack(t.id).ready ? "" : " <span class=\"sub\">quote pack coming soon</span>"}</label>`).join("")}
+  </fieldset>`;
 }
 
 export function tradeSelectHtml(selected = DEFAULT_TRADE) {
@@ -372,6 +441,7 @@ export function titlesEditorHtml(titles, { canEdit = false } = {}) {
            <button type="button" class="sm-btn" data-title-rename="${esc(t.id)}">Rename</button>
            <button type="button" class="sm-btn" data-title-remove="${esc(t.id)}">Remove</button>`
         : `<b>${esc(t.name)}</b> <span class="sub">${esc(t.level)}</span>`}
+      ${t.levelNote ? `<p class="sub">${esc(t.levelNote)}</p>` : ""}
     </li>`).join("");
   const form = canEdit ? `<form id="titleadd" class="jf title-add">
       <label>New job title<input name="name" maxlength="80" required placeholder="e.g. Site clerk"></label>
@@ -387,29 +457,59 @@ export function titlesEditorHtml(titles, { canEdit = false } = {}) {
   </section>`;
 }
 
-export function tradeToolsHtml(setup, { canEdit = false } = {}) {
-  const main = tradeLabel(setup && setup.trade) || "Earthworks";
-  const extra = (setup && setup.extraTrades || []).map(tradeLabel).filter(Boolean);
-  const options = TRADES.filter(t => t.id !== (setup && setup.trade) && !(setup && setup.extraTrades || []).includes(t.id))
-    .map(t => {
-      const row = quotePack(t.id);
-      const soon = row && row.ready ? "" : " — quote pack coming soon";
-      return `<option value="${esc(t.id)}">${esc(t.label)}${esc(soon)}</option>`;
-    }).join("");
-  const used = (setup && setup.enabled || []).map(id => {
+function unselectedTradeOptions(selected) {
+  const on = new Set(sanitizeTradeList(selected));
+  return TRADES.filter(t => !on.has(t.id)).map(t => {
+    const row = quotePack(t.id);
+    const soon = row && row.ready ? "" : " — quote pack coming soon";
+    return `<option value="${esc(t.id)}">${esc(t.label)}${esc(soon)}</option>`;
+  }).join("");
+}
+
+export function quoteTradeSwitchHtml(setup, focus) {
+  const ids = (setup && setup.enabled) || [DEFAULT_TRADE];
+  const cur = ids.includes(focus) ? focus : ids[0];
+  return `<label class="pad">Quote trade<select id="quotetrade" aria-label="Quote trade">${ids.map(id => {
+    const row = quotePack(id);
+    const soon = row && row.ready ? "" : " — quote pack coming soon";
+    return `<option value="${esc(id)}"${id === cur ? " selected" : ""}>${esc(tradeLabel(id))}${esc(soon)}</option>`;
+  }).join("")}</select></label>
+    <p class="sub pad">Quotes open on ${esc(tradeLabel(ids[0]))}. This switch only changes the quote. Job types on a job include every selected trade.</p>`;
+}
+
+export function tradeSettingsHtml(trades, { canEdit = false } = {}) {
+  const selected = sanitizeTradeList(trades);
+  const list = selected.length ? selected : [DEFAULT_TRADE];
+  const rows = list.map((id, i) => {
     const row = quotePack(id);
     const flag = row && row.ready ? "Quote pack ready" : "Quote pack coming soon";
-    return `<li><b>${esc(tradeLabel(id))}</b> <span class="sub">${esc(flag)}</span></li>`;
+    return `<li><b>${esc(tradeLabel(id))}</b> ${i === 0 ? `<span class="sub">Primary</span>` : ""} <span class="sub">${esc(flag)}</span>
+      ${canEdit && list.length > 1 ? `<button type="button" class="sm-btn" data-trade-remove="${esc(id)}">Remove</button>` : ""}</li>`;
   }).join("");
-  const add = canEdit ? `<form id="tradeadd" class="jf">
+  const options = unselectedTradeOptions(list);
+  const add = canEdit && options ? `<form id="tradeset" class="jf">
+      <label>Add a trade<select name="trade"><option value="">Choose a trade</option>${options}</select></label>
+      <button type="submit" class="sm-btn">Add trade</button>
+    </form>` : (canEdit ? `<p class="sub">Every trade is already on this company.</p>` : `<p class="sub">An admin or a manager can add or remove trades. Company details and billing stay with an admin.</p>`);
+  return `<section class="card trade-settings" id="tradesettings">
+    <h2>Trades</h2>
+    <p class="sub">Job titles, job types and quote packs are the combination of these trades. Quotes start on the primary trade.</p>
+    <ul class="trade-list">${rows}</ul>
+    ${add}
+  </section>`;
+}
+
+export function tradeToolsHtml(setup, { canEdit = false, focus = "" } = {}) {
+  const selected = (setup && setup.enabled) || [DEFAULT_TRADE];
+  const options = unselectedTradeOptions(selected);
+  const add = canEdit && options ? `<form id="tradeadd" class="jf">
       <label>Use another trade<select name="trade"><option value="">Choose a trade</option>${options}</select></label>
-      <button type="submit" class="sm-btn">Add titles and job types</button>
-      <p class="sub">Adding a trade puts its job titles and job types next to ${esc(main)}. Only a ready quote pack can be priced. Earthworks is the ready pack in this version.</p>
+      <button type="submit" class="sm-btn">Add trade</button>
+      <p class="sub">Only trades that are not already on this company are listed.</p>
     </form>` : "";
   return `<section class="card trade-tools" id="tradetools">
-    <h2>Trades</h2>
-    <p class="sub">Main trade: <b>${esc(main)}</b>${extra.length ? `. Also using ${esc(extra.join(", "))}.` : "."}</p>
-    <ul class="trade-list">${used}</ul>
+    <h2>Trades on quotes</h2>
+    ${quoteTradeSwitchHtml(setup, focus)}
     ${add}
   </section>`;
 }

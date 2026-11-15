@@ -21,9 +21,11 @@ Existing profiles keep their current `users.role`. A job title sets the level on
 
 ## Trade
 
-Sign-up (`signupFormHtml`) asks for a main trade: earthworks, landscaping, concreting, fencing, carpentry, tiling, plumbing, electrical. It is stored on `companies/{id}.trade` and the starting catalogue is `companyTrades/{id}`.
+Sign-up (`signupFormHtml`) asks for one or more trades: earthworks, landscaping, concreting, fencing, carpentry, tiling, plumbing, electrical. At least one is required. The company stores `trades` (a list). The first one is also written as `trade` so older reads still see a primary. `readTradeList` prefers `trades`, then the old single `trade`, then `["earthworks"]`. Heartwood and `callup-test-h2vx` are not rewritten.
 
-`resolveCompanySetup` in `app/features/trades.js` reads a missing trade as earthworks. That covers Heartwood and `callup-test-h2vx` without a write.
+Admins and managers add or remove trades from Company settings. The quotes “other trade” list only shows trades that are not already selected. Quotes open on the first trade and can switch among the selected ones. Job titles and job types are the union. A title that two trades map to different levels uses the lower level unless the primary trade’s level is already that low, and the title says so.
+
+Reimbursement claims (approve, decline, mark paid) are manager and admin only. Supervisors keep the amount on their own claims and do not get the decision buttons.
 
 ## Job titles and other trades
 

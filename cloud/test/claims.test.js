@@ -79,6 +79,8 @@ test("staff see only their own claims; admins see everyone, totals and actions",
   assert.match(admin, /value="paid"/);
   assert.match(admin, /data-rc-receipt="rc1"/);
   assert.match(admin, /HW-1 · Smith/);
+  assert.match(readFileSync(new URL("../../app/app.js", import.meta.url), "utf8"), /me\.role === "admin" \|\| me\.role === "manager" \|\| me\.staffRole === "manager"/);
+  assert.doesNotMatch(staff, /value="approved"|Approve/);
 });
 
 test("claim rules match the emulator, are additive, and never delete", () => {

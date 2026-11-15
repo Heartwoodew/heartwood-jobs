@@ -9,7 +9,7 @@ import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager
 import { getStorage, ref as storageRef, uploadBytes, connectStorageEmulator, listAll, getMetadata, getBlob }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
 import { firebaseConfig, useEmulator } from "./firebase-config.js";
-import { installQuotes, adminViewRouter, setDefaultDepot, noDollars, setQuoteTradeSetup } from "./features/quotes.js";
+import { installQuotes, adminViewRouter, setDefaultDepot, noDollars, setQuoteTradeSetup, setQuoteFocus } from "./features/quotes.js";
 import { JOB_MONEY_COLLECTION, jobMoneyDoc, mergeJobMoney, splitJobMoney } from "./features/job-money.js";
 import { OPEN_STATUSES, staleOpenJobs, mergeJobLists, parseHoursInput } from "./features/job-window.js";
 import { installRouteOrder, orderJobsForRun, runSheetId, geoPatch, setRouteDepot } from "./features/route-order.js";
@@ -35,9 +35,9 @@ import {
 } from "./features/company.js";
 import { companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, signupFormHtml } from "./features/company-ui.js";
 import {
-  addTitle, companyTradesDoc, defaultTitles, jobTypeMap, normalizeTrade, removeTitle, renameTitle, resolveCompanySetup,
-  sanitizeExtraTrades, sanitizeSkills, sanitizeTitles, setTitleLevel, skillsEditorHtml,
-  titlesEditorHtml, tradeLabel,
+  addTitle, companyTradesDoc, jobTypeMap, normalizeTrade, readTradeList, removeTitle, renameTitle, resolveCompanySetup,
+  sanitizeSkills, sanitizeTitles, sanitizeTradeList, setTitleLevel, skillsEditorHtml,
+  titlesAfterTradeChange, titlesEditorHtml, tradeLabel,
 } from "./features/trades.js";
 import { acceptLogoValue, compressLogo, isLogoStoragePath, logoFailureText, logoFileOk, logoUploadPlan } from "./features/company-logo.js";
 import { exportAllowed, hoursCsv, invoiceCsv, jobsCsv, reimbursementsCsv } from "./features/company-exports.js";
@@ -134,7 +134,7 @@ onAuthStateChanged(auth, async user => {
   // rules don't (yet) make someone admin they simply fall back to the operator view.
   // users/{uid}.role: "labourer" / "operator" (crew, no $, same access) | "supervisor" (staff shell + canSeeMoney)
   // | "manager" (supervisor, plus company rates, leave decisions and staff up to manager) | "admin".
-  // A manager cannot change billing, the plan, company settings, or an admin. Patrick is rules-admin with an operator profile (bookable).
+  // A manager cannot change billing, the plan, company details, or an admin. A manager can change the trade list. Patrick is rules-admin with an operator profile (bookable).
   const snap = await getDoc(doc(db, "users", user.uid)).catch(() => null);
   const prof = snap && snap.exists() ? snap.data() : null;
   // Heartwood admins list only Heartwood profiles (rules deny every other company's staff).
@@ -273,19 +273,36 @@ async function loadTradeSetup(company) {
   const stored = snap && snap.exists() ? snap.data() : null;
   applyJobTypes(resolveCompanySetup(company || { companyId: id }, stored));
 }
+async function persistTrades(nextList) {
+  const trades = sanitizeTradeList(nextList);
+  if (!trades.length) throw Object.assign(new Error("trade"), { code: "trade" });
+  const id = myCompanyId();
+  const prev = ui.tradeSetup || resolveCompanySetup({ companyId: id }, null);
+  const titles = titlesAfterTradeChange(prev.titles, prev.saved, trades);
+  const catalog = {
+    companyId: id, trade: trades[0], trades, extraTrades: trades.slice(1),
+    titles: sanitizeTitles(titles), updatedBy: me.uid, updatedAt: serverTimestamp(),
+  };
+  await setDoc(doc(db, "companyTrades", id), catalog);
+  try { await updateDoc(doc(db, "companies", id), { trades, trade: trades[0] }); }
+  catch (e) { console.warn("company trades", e && (e.code || e.message)); }
+  applyJobTypes(resolveCompanySetup({ companyId: id, trades, trade: trades[0] }, catalog));
+}
 async function saveTradeSetup(next) {
   const id = myCompanyId();
   const setup = next || ui.tradeSetup || resolveCompanySetup({ companyId: id }, null);
+  const trades = sanitizeTradeList(setup.enabled || [setup.trade]);
   const data = {
     companyId: id,
-    trade: setup.trade,
-    extraTrades: sanitizeExtraTrades(setup.extraTrades, setup.trade),
+    trade: trades[0] || setup.trade,
+    trades,
+    extraTrades: trades.slice(1),
     titles: sanitizeTitles(setup.titles),
     updatedBy: me.uid,
     updatedAt: serverTimestamp(),
   };
   await setDoc(doc(db, "companyTrades", id), data);
-  applyJobTypes(resolveCompanySetup({ companyId: id, trade: data.trade }, data));
+  applyJobTypes(resolveCompanySetup({ companyId: id, trades, trade: data.trade }, data));
 }
 async function loadCompanyBrand() {
   const id = myCompanyId();
@@ -521,13 +538,13 @@ function renderSignup(friendCode = "") {
     ev.preventDefault();
     const f = ev.target;
     const err = $("#signuperr");
-    const trade = normalizeTrade(f.trade && f.trade.value);
+    const trades = sanitizeTradeList([...(f.querySelectorAll("input[name=trades]:checked") || [])].map(el => el.value));
     const checked = validateCompanyInput({
       name: f.name.value, legalName: f.legalName.value, abn: f.abn.value, address: f.address.value,
       phone: f.phone.value, email: f.email.value, accountsEmail: f.accountsEmail.value,
       hubdocAddress: f.hubdocAddress.value, logoUrl: "", signoff: f.name.value,
     });
-    if (!trade) { err.textContent = "Choose the main trade."; return; }
+    if (!trades.length) { err.textContent = "Choose at least one trade."; return; }
     if (!checked.ok) { err.textContent = companyFailure(checked.reason); return; }
     if (!f.ownerName.value.trim()) { err.textContent = "Enter your name."; return; }
     if (f.password.value.length < 8) { err.textContent = companyFailure("weak-password"); return; }
@@ -544,17 +561,17 @@ function renderSignup(friendCode = "") {
           if (!inv.exists() || inv.data().status !== "pending") throw Object.assign(new Error("invite"), { code: "invite" });
           tx.set(doc(db, "companies", companyId), { ...buildFriendCompany(checked.value, {
             companyId, ownerUid: cred.user.uid, signedUpAt, friendInvite: friendCode,
-          }), trade });
+          }), trades, trade: trades[0] });
           tx.update(invRef, { status: "used", usedBy: cred.user.uid, companyId, usedAt: serverTimestamp() });
         });
       } else {
         await setDoc(doc(db, "companies", companyId), { ...buildCompanyCreate(checked.value, {
           companyId, ownerUid: cred.user.uid, signedUpAt, trialEndsAt: Timestamp.fromDate(trialEnd(new Date())), lastActivityAt: signedUpAt,
-        }), trade });
+        }), trades, trade: trades[0] });
       }
-      await setDoc(doc(db, "users", cred.user.uid), { ...ownerProfile(checked.value, companyId, f.ownerName.value.trim()), email: f.ownerEmail.value.trim().toLowerCase(), jobTitle: "Admin", jobTitleId: trade + ":admin" });
+      await setDoc(doc(db, "users", cred.user.uid), { ...ownerProfile(checked.value, companyId, f.ownerName.value.trim()), email: f.ownerEmail.value.trim().toLowerCase(), jobTitle: "Admin", jobTitleId: trades[0] + ":admin" });
       try {
-        await setDoc(doc(db, "companyTrades", companyId), { ...companyTradesDoc(companyId, trade, cred.user.uid), updatedAt: serverTimestamp() });
+        await setDoc(doc(db, "companyTrades", companyId), { ...companyTradesDoc(companyId, trades, cred.user.uid), updatedAt: serverTimestamp() });
       } catch (err) { console.warn("trade catalog", err && (err.code || err.message)); }
       const logoFile = f.logoFile && f.logoFile.files && f.logoFile.files[0];
       if (logoFile && logoFileOk(logoFile).ok) {
@@ -587,9 +604,35 @@ function settingsView() {
   const rates = me && me.role === "admin" && myCompanyId() !== "heartwood"
     ? `<section class="pad setrates"><h3>Quote rates</h3><p class="sub">Your plant, labour, travel and tip rates for quotes. They start blank and are only used by your company.</p><button type="button" id="setrates" class="sm-btn">Edit quote rates</button></section>`
     : "";
-  return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin"), tradeName: tradeLabel(ui.tradeSetup && ui.tradeSetup.trade) || "Earthworks" }) + rates;
+  const trades = (ui.tradeSetup && ui.tradeSetup.enabled) || readTradeList(org, null);
+  return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin"), trades, canEditTrades: canEditTitles() }) + rates;
+}
+function bindTradeList(A) {
+  const root = A || document;
+  root.querySelectorAll("[data-trade-remove]").forEach(b => b.onclick = async () => {
+    const cur = (ui.tradeSetup && ui.tradeSetup.enabled) || [];
+    const next = cur.filter(id => id !== b.dataset.tradeRemove);
+    if (next.length < 1) { toast("Keep at least one trade."); return; }
+    try { await persistTrades(next); toast(tradeLabel(b.dataset.tradeRemove) + " removed."); redrawAfterSave(); }
+    catch { toast("Couldn't update trades."); }
+  });
+  root.querySelectorAll("#tradeset, #tradeadd").forEach(form => form.onsubmit = async ev => {
+    ev.preventDefault();
+    const id = normalizeTrade(form.trade && form.trade.value);
+    if (!id || !canEditTitles()) { toast("Only an admin or a manager can change trades."); return; }
+    const cur = (ui.tradeSetup && ui.tradeSetup.enabled) || [];
+    if (cur.includes(id)) { toast(tradeLabel(id) + " is already on."); return; }
+    try {
+      await persistTrades([...cur, id]);
+      toast(tradeLabel(id) + (id === "earthworks" ? " added. Quote pack ready." : " added. Quote pack coming soon."));
+      redrawAfterSave();
+    } catch { toast("Couldn't update trades."); }
+  });
+  const sw = root.querySelector("#quotetrade");
+  if (sw) sw.onchange = () => { setQuoteFocus(sw.value); redrawAfterSave(); };
 }
 function bindSettings(A) {
+  bindTradeList(A);
   const rb = A.querySelector("#setrates");
   if (rb) rb.onclick = () => QG && QG.openRatesEditor();
   const sub = A.querySelector("#billsub");
@@ -2170,7 +2213,8 @@ function bindLeave(A) {
   A.querySelectorAll(".lv-cert-dl").forEach(btn => { btn.onclick = () => downloadLeaveCert(btn.dataset.cert); });
 }
 function claimsIsAdmin() {
-  return !!(me && me.role === "admin");
+  // Approve, decline and mark paid: manager and admin only. Supervisors see their own claim amount and cannot decide.
+  return !!(me && (me.role === "admin" || me.role === "manager" || me.staffRole === "manager"));
 }
 function claimsStop() {
   ui.claimsUnsub?.();
@@ -2208,7 +2252,7 @@ function claimsView() {
 async function downloadClaimReceipt(id) {
   const row = (ui.claims || []).find(item => item.id === id);
   if (!row || !row.receiptPath) return;
-  if (row.uid !== me.uid && !claimsIsAdmin()) { toast("Only that person and an admin can open the receipt."); return; }
+  if (row.uid !== me.uid && !claimsIsAdmin()) { toast("Only that person, a manager or an admin can open the receipt."); return; }
   const fileRef = storageRef(storage, row.receiptPath);
   try {
     const blob = await getBlob(fileRef);
@@ -4170,6 +4214,12 @@ function renderOperator() {
     bindInbox($("#app")); bindOp(mine); return;
   }
   if (ui.opTab === "inbox") ui.opTab = "more";
+  if (ui.opTab === "settings" && canEditTitles()) {
+    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Company</div><div class="mob-sub">Trades</div></div>
+      <div class="pad">${settingsView()}</div>${opTabs("more")}</div>`;
+    bindOp(mine); bindSettings($("#app")); return;
+  }
+  if (ui.opTab === "settings") ui.opTab = "more";
   if (ui.opTab === "more") {
     const quoteBtn = canQuote() && me.role !== "admin" ? `<button type="button" class="mob-more" data-go="quotes"><b>Quotes</b><small>Guided pricing for supervisors</small></button>` : "";
     const fleetBtn = COMP.canSee() ? `<button type="button" class="mob-more" data-go="fleet"><b>Compliance</b><small>Registration and COI status</small></button>` : "";
@@ -4188,6 +4238,7 @@ function renderOperator() {
         <button type="button" class="mob-more incbtn" data-inc=""><b>Report incident</b><small>Safety report</small></button>
         ${quoteBtn}
         ${staffBtn}
+        ${canEditTitles() ? `<button type="button" class="mob-more" data-go="settings"><b>Company</b><small>Add or remove trades. Details and billing stay with an admin.</small></button>` : ""}
         ${inboxBtn}
         ${skillsEditorHtml((me.cloudProfile && me.cloudProfile.skills) || [], { canEdit: true })}
         <p class="powered pad">${esc(orgSettings().name)} · ${esc(POWERED_BY)}</p>
@@ -5071,13 +5122,14 @@ QG = installQuotes({
   isAdmin: () => !!(me && me.role === "admin"),
   saveExtraTrade: async (tradeId) => {
     const id = normalizeTrade(tradeId);
-    if (!id || !canEditQuoteRates()) { toast("Only an admin or a manager can add a trade."); return; }
-    const cur = ui.tradeSetup || resolveCompanySetup({ companyId: myCompanyId() }, null);
-    if ((cur.enabled || []).includes(id)) { toast(tradeLabel(id) + " is already on."); return; }
-    const extra = defaultTitles([id]).filter(t => !(cur.titles || []).some(x => x.name.toLowerCase() === t.name.toLowerCase()));
-    await saveTradeSetup({ ...cur, extraTrades: [...(cur.extraTrades || []), id], titles: [...(cur.titles || []), ...extra] });
-    toast(tradeLabel(id) + (id === "earthworks" ? " added. Quote pack ready." : " added. Quote pack coming soon."));
-    redrawAfterSave();
+    if (!id || !canEditTitles()) { toast("Only an admin or a manager can change trades."); return; }
+    const cur = (ui.tradeSetup && ui.tradeSetup.enabled) || [];
+    if (cur.includes(id)) { toast(tradeLabel(id) + " is already on."); return; }
+    try {
+      await persistTrades([...cur, id]);
+      toast(tradeLabel(id) + (id === "earthworks" ? " added. Quote pack ready." : " added. Quote pack coming soon."));
+      redrawAfterSave();
+    } catch { toast("Couldn't update trades."); }
   },
   renderAdmin: () => (me && me.role === "admin" ? renderAdmin() : renderOperator()),
   get staff() { return staff; }

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_TRADE, LAZY_EARTHWORKS_IDS, TRADES, QUOTE_PACKS,
   addTitle, defaultTitles, levelForTitleName, measureQty, normalizeTrade, quotePack,
-  readyJobTypeMap, removeTitle, renameTitle, resolveCompanySetup, sanitizeSkills, setTitleLevel,
+  chooseTitleLevel, readTradeList, readyJobTypeMap, removeTitle, renameTitle, resolveCompanySetup, sanitizeSkills, setTitleLevel,
 } from "../app/features/trades.js";
 import {
   COMPANY_SETTINGS_ROLES, CREW_ROLES, INVITE_ROLES, MONEY_ROLES, RATE_ROLES,
@@ -42,14 +42,45 @@ test("a manager sees money and is not a rules admin; crew still do not", () => {
 test("missing trade, including Heartwood and the test company, reads as earthworks", () => {
   for (const companyId of ["", ...LAZY_EARTHWORKS_IDS, "someone-else"]) {
     const setup = resolveCompanySetup({ companyId }, null);
+    assert.deepEqual(setup.enabled, [DEFAULT_TRADE], companyId);
     assert.equal(setup.trade, DEFAULT_TRADE, companyId);
     assert.deepEqual(Object.keys(readyJobTypeMap(setup)), ["spoil", "backslab", "waterproof", "clean", "other"]);
   }
   const tiling = resolveCompanySetup({ companyId: "tile-co", trade: "tiling" }, null);
-  assert.equal(tiling.trade, "tiling");
+  assert.deepEqual(tiling.enabled, ["tiling"]);
   assert.equal(readyJobTypeMap(tiling) && Object.keys(readyJobTypeMap(tiling)).length, 0);
   assert.equal(quotePack("tiling").ready, false);
   assert.equal(quotePack("tiling").soon, "Quote pack coming soon");
+});
+
+test("a company can store several trades, and the old single trade field still reads", () => {
+  const many = resolveCompanySetup({ trades: ["plumbing", "tiling", "plumbing"], trade: "earthworks" }, null);
+  assert.deepEqual(many.enabled, ["plumbing", "tiling"]);
+  assert.equal(many.trade, "plumbing");
+  const legacy = resolveCompanySetup({ trade: "fencing" }, { extraTrades: ["carpentry", "fencing", "nope"] });
+  assert.deepEqual(legacy.enabled, ["fencing", "carpentry"]);
+  assert.deepEqual(readTradeList({}, {}), ["earthworks"]);
+  const names = defaultTitles(["earthworks", "landscaping"]).map(row => row.name);
+  assert.equal(names.filter(name => name === "Labourer").length, 1);
+  assert.equal(names.filter(name => name === "Operations manager").length, 1);
+  assert.ok(names.includes("Landscaper"));
+  assert.ok(names.includes("Excavator operator"));
+});
+
+test("a shared title keeps the lower level unless the primary mapping is already that low", () => {
+  const lower = chooseTitleLevel("Leading hand", [
+    { trade: "earthworks", level: "manager" },
+    { trade: "landscaping", level: "supervisor" },
+  ]);
+  assert.equal(lower.level, "supervisor");
+  assert.match(lower.levelNote, /not applied/);
+  const safe = chooseTitleLevel("Labourer", [
+    { trade: "fencing", level: "labourer" },
+    { trade: "carpentry", level: "operator" },
+  ]);
+  assert.equal(safe.level, "labourer");
+  assert.match(safe.levelNote, /primary/);
+  assert.equal(chooseTitleLevel("Fencer", [{ trade: "fencing", level: "operator" }]).levelNote, "");
 });
 
 test("every preloaded title maps to the permission level named in the sprint", () => {

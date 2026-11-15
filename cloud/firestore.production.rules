@@ -91,9 +91,40 @@ service cloud.firestore {
         && data.billing.stripeCustomerId == null
         && data.billing.stripeSubscriptionId == null;
     }
+    function oneTradeId(id) {
+      return id == "earthworks" || id == "landscaping" || id == "concreting" || id == "fencing"
+        || id == "carpentry" || id == "tiling" || id == "plumbing" || id == "electrical";
+    }
     function tradeFieldOk(data) {
-      return !("trade" in data) || data.trade == "earthworks" || data.trade == "landscaping" || data.trade == "concreting"
-        || data.trade == "fencing" || data.trade == "carpentry" || data.trade == "tiling" || data.trade == "plumbing" || data.trade == "electrical";
+      return !("trade" in data) || oneTradeId(data.trade);
+    }
+    function tradesListOk(list) {
+      return list is list && list.size() >= 1 && list.size() <= 8
+        && (list.size() < 1 || oneTradeId(list[0]))
+        && (list.size() < 2 || oneTradeId(list[1]))
+        && (list.size() < 3 || oneTradeId(list[2]))
+        && (list.size() < 4 || oneTradeId(list[3]))
+        && (list.size() < 5 || oneTradeId(list[4]))
+        && (list.size() < 6 || oneTradeId(list[5]))
+        && (list.size() < 7 || oneTradeId(list[6]))
+        && (list.size() < 8 || oneTradeId(list[7]));
+    }
+    function companyTradesEdit(companyId) {
+      return signedIn()
+        && companyId == callerCompany()
+        && ((isAlex() || isPatrick()) || (hasProfile() && (profile().role == "admin" || profile().role == "manager")))
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["trades"])
+        && request.resource.data.trades is list
+        && request.resource.data.trades.size() >= 1
+        && request.resource.data.trades.size() <= 8
+        && oneTradeId(request.resource.data.trades[0])
+        && (request.resource.data.trades.size() < 2 || oneTradeId(request.resource.data.trades[1]))
+        && (request.resource.data.trades.size() < 3 || oneTradeId(request.resource.data.trades[2]))
+        && (request.resource.data.trades.size() < 4 || oneTradeId(request.resource.data.trades[3]))
+        && (request.resource.data.trades.size() < 5 || oneTradeId(request.resource.data.trades[4]))
+        && (request.resource.data.trades.size() < 6 || oneTradeId(request.resource.data.trades[5]))
+        && (request.resource.data.trades.size() < 7 || oneTradeId(request.resource.data.trades[6]))
+        && (request.resource.data.trades.size() < 8 || oneTradeId(request.resource.data.trades[7]));
     }
     function companyOwnerCreate(companyId) {
       let d = request.resource.data;
@@ -102,8 +133,8 @@ service cloud.firestore {
         && !hasProfile()
         && companyIdOk(companyId)
         && companyId != "heartwood"
-        && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing", "trade"])
-        && companyDetailText(d) && tradeFieldOk(d)
+        && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing", "trade", "trades"])
+        && companyDetailText(d) && tradeFieldOk(d) && (!("trades" in d) || tradesListOk(d.trades))
         && d.ownerUid == request.auth.uid
         && d.createdBy == request.auth.uid
         && d.status == "active"
@@ -145,8 +176,8 @@ service cloud.firestore {
       return platformOwner()
         && companyIdOk(companyId)
         && companyId != "heartwood"
-        && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "demoData", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing", "trade"])
-        && companyDetailText(d) && tradeFieldOk(d)
+        && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "demoData", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing", "trade", "trades"])
+        && companyDetailText(d) && tradeFieldOk(d) && (!("trades" in d) || tradesListOk(d.trades))
         && d.isTest == true
         && d.plan == "trial"
         && d.origin == "test"
@@ -168,8 +199,8 @@ service cloud.firestore {
         && !hasProfile()
         && companyIdOk(companyId)
         && companyId != "heartwood"
-        && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "demoData", "friendInvite", "friendEndsAt", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing", "trade"])
-        && companyDetailText(d) && tradeFieldOk(d)
+        && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "demoData", "friendInvite", "friendEndsAt", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing", "trade", "trades"])
+        && companyDetailText(d) && tradeFieldOk(d) && (!("trades" in d) || tradesListOk(d.trades))
         && d.plan == "friend"
         && d.isTest == false
         && d.demoData == false
@@ -262,7 +293,7 @@ service cloud.firestore {
       // Box sync account (Hubdoc filer, receipts worker) reads each company's Hubdoc address and test flag.
       allow read: if isSync();
       allow create: if companyOwnerCreate(companyId) || testCompanyCreate(companyId) || friendCompanyCreate(companyId);
-      allow update: if ownerPlanEdit(companyId) || testArchive(companyId) || testDemoCounts(companyId) || companyAdminEdit(companyId) || companyStatsBump(companyId);
+      allow update: if companyTradesEdit(companyId) || ownerPlanEdit(companyId) || testArchive(companyId) || testDemoCounts(companyId) || companyAdminEdit(companyId) || companyStatsBump(companyId);
       allow delete: if false;
     }
 // END COMPANY RULES
@@ -581,9 +612,9 @@ service cloud.firestore {
     }
     function tradeDocOk(companyId) {
       let d = request.resource.data;
-      return d.keys().hasOnly(["companyId", "trade", "extraTrades", "titles", "updatedBy", "updatedAt"])
+      return d.keys().hasOnly(["companyId", "trade", "trades", "extraTrades", "titles", "updatedBy", "updatedAt"])
         && d.companyId == companyId
-        && ("trade" in d) && tradeFieldOk(d)
+        && ("trade" in d) && tradeFieldOk(d) && (!("trades" in d) || tradesListOk(d.trades))
         && d.extraTrades is list && d.extraTrades.size() <= 7
         && extraTradeAt(d.extraTrades, 0) && extraTradeAt(d.extraTrades, 1) && extraTradeAt(d.extraTrades, 2)
         && extraTradeAt(d.extraTrades, 3) && extraTradeAt(d.extraTrades, 4) && extraTradeAt(d.extraTrades, 5)
@@ -1969,7 +2000,10 @@ service cloud.firestore {
       );
     }
     function rcAdmin() {
-      return rcStaff() && (isAlex() || isPatrick() || (hasProfile() && profile().role == "admin"));
+      return rcStaff() && (isAlex() || isPatrick() || (hasProfile() && (profile().role == "admin" || profile().role == "manager")));
+    }
+    function rcCompanyDecider(c) {
+      return incStaffOf(c) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("role", "") in ["admin", "manager"];
     }
     function rcReceiptPath(uid, id) {
       return request.resource.data.receiptPath == ""
@@ -2070,12 +2104,12 @@ service cloud.firestore {
     // company's admins read and decide. The box filer reads paid ones and records Hubdoc state only.
     match /companies/{c}/reimbursementClaims/{id} {
       allow read: if (rcSync() && resource != null && resource.data.status == "paid") || incStaffOf(c) && (
-        incAdminOf(c)
+        rcCompanyDecider(c)
         || (resource != null && resource.data.uid == request.auth.uid)
         || (resource == null && id.matches('^rc[a-z0-9]{16}$'))
       );
       allow create: if incStaffOf(c) && rcCreateBody(id);
-      allow update: if (incAdminOf(c) && rcDecisionBody()) || rcHubdoc();
+      allow update: if (rcCompanyDecider(c) && rcDecisionBody()) || rcHubdoc();
       allow delete: if false;
     }
 // END REIMBURSEMENT CLAIM RULES

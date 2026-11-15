@@ -4,7 +4,7 @@
 import { POWERED_BY, PRODUCT_NAME } from "../org-settings.js";
 import { derivedJobPrefix, filterMaster, friendInviteLink, masterTotals } from "./company.js";
 import { LOGO_ACCEPT, acceptLogoValue, isLogoStoragePath } from "./company-logo.js";
-import { tradeLabel, tradeSelectHtml } from "./trades.js";
+import { signupTradesHtml, tradeSettingsHtml } from "./trades.js";
 
 const jobPrefixHint = org => derivedJobPrefix(org && org.name);
 
@@ -50,8 +50,7 @@ export function signupFormHtml({ friend = false } = {}) {
     <label>Email<input name="ownerEmail" type="email" required maxlength="120" autocomplete="username"></label>
     <label>Password<input name="password" type="password" required minlength="8" maxlength="128" autocomplete="new-password"></label>
     <h3>Company</h3>
-    <label>Main trade<select name="trade" required>${tradeSelectHtml("earthworks")}</select></label>
-    <p class="sub">Sets the starting job titles, job types and quote pack. Earthworks includes the plant quote wizard. Other trades start with titles and job types. You can add another trade later.</p>
+    ${signupTradesHtml(["earthworks"])}
     <label>Company name<input name="name" required maxlength="80"></label>
     <label>Legal name<input name="legalName" required maxlength="120"></label>
     <label>ABN<input name="abn" required maxlength="20" inputmode="numeric" placeholder="00 000 000 000"></label>
@@ -68,11 +67,11 @@ export function signupFormHtml({ friend = false } = {}) {
   </form>`;
 }
 
-export function companySettingsHtml(org, { canEdit = false, tradeName = "" } = {}) {
+export function companySettingsHtml(org, { canEdit = false, trades = [], canEditTrades = false } = {}) {
   const lock = canEdit ? "" : " disabled";
   return `<div class="sm-head"><h1>Company</h1></div>
-    <p class="sub">These details replace the company name on the header, hours spreadsheet, quotes, SWMS, PDFs and emails for everyone in this company.</p>
-    <p class="sub">Main trade: <b>${esc(tradeName || tradeLabel(org && org.trade) || "Earthworks")}</b>. Job titles and other trades are on Staff and Quotes. Billing and these company details stay with an admin.</p>
+    <p class="sub">These details replace the company name on the header, hours spreadsheet, quotes, SWMS, PDFs and emails for everyone in this company. Billing and these details stay with an admin. Admins and managers can change the trade list.</p>
+    ${tradeSettingsHtml(trades, { canEdit: canEditTrades })}
     <form id="orgform" class="card jf">
       <label>Company name<input name="name" required maxlength="80" value="${esc(org.name)}"${lock}></label>
       <label>Legal name<input name="legalName" required maxlength="120" value="${esc(org.legalName)}"${lock}></label>

@@ -10,7 +10,7 @@
       );
     }
     function rcAdmin() {
-      return rcStaff() && (isAlex() || isPatrick() || (hasProfile() && profile().role == "admin"));
+      return rcStaff() && (isAlex() || isPatrick() || (hasProfile() && (profile().role == "admin" || profile().role == "manager")));
     }
     function rcReceiptPath(uid, id) {
       return request.resource.data.receiptPath == ""
@@ -105,12 +105,12 @@
           || (resource != null && docCompany(resource.data) == "heartwood" && (rcAdmin() || resource.data.uid == request.auth.uid))
         ))
         || (callerCompany() != "heartwood" && resource != null && resource.data.companyId == callerCompany()
-          && (resource.data.uid == request.auth.uid || (hasProfile() && profile().role == "admin")));
+          && (resource.data.uid == request.auth.uid || (hasProfile() && (profile().role == "admin" || profile().role == "manager"))));
       allow list: if rcStaff() && callerCompany() == "heartwood" && resource.data.uid == request.auth.uid;
       allow list: if rcAdmin() && callerCompany() == "heartwood" && resource.data.companyId == "heartwood";
       allow list: if rcSync() && resource.data.status == "paid";
       allow list: if callerCompany() != "heartwood" && resource.data.companyId == callerCompany()
-        && (resource.data.uid == request.auth.uid || (hasProfile() && profile().role == "admin"));
+        && (resource.data.uid == request.auth.uid || (hasProfile() && (profile().role == "admin" || profile().role == "manager")));
       allow create: if rcCreate(id) && (
         callerCompany() == "heartwood" || request.resource.data.companyId == callerCompany()
       );
