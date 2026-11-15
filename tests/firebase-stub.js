@@ -124,7 +124,11 @@ export function getAuth() { return {}; }
 export function connectAuthEmulator() {}
 export function signOut() { return Promise.resolve(); }
 export function createUserWithEmailAndPassword() { return Promise.resolve({ user: { uid: uidFor(role()) } }); }
-export function sendPasswordResetEmail() { return Promise.resolve(); }
+export function sendPasswordResetEmail() {
+  const code = typeof window !== "undefined" && window.HW_RESET_CODE;
+  if (code) return Promise.reject(Object.assign(new Error(code), { code }));
+  return Promise.resolve();
+}
 export function signInWithEmailAndPassword() { return Promise.resolve({ user: { uid: uidFor(role()) } }); }
 export class Timestamp {
   constructor(seconds, nanoseconds = 0) {

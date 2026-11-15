@@ -15,6 +15,9 @@
  * INVITE_EMAIL_ENABLED must be the string "true" or the message is held in
  * inviteMail and nothing is sent. This file does not open an SMTP connection.
  *
+ * adminSendPasswordReset emails a password reset link to a staff login in the
+ * caller's own company. The link is never returned to the browser.
+ *
  * helperAsk stays deployed and refuses every request. HELPER_ENABLED defaults
  * to "false", and HELPER_HARD_OFF returns before Auth, Firestore, or Vertex.
  * An environment change cannot turn it back on. See helper/DEPLOY.md.
@@ -38,6 +41,7 @@ import {
   displayStatus,
   profileFromInvite,
 } from "./shared/staff-invites.js";
+import { adminSendPasswordReset as sendPasswordReset, rateDecision, resetFailureText } from "./password-reset.js";
 import { authorizeCallable, handleHelperAsk } from "./helper/ask.js";
 import { adminReader } from "./helper/reader.js";
 import { createModelProvider, helperLiveEnabled } from "./helper/provider.js";
@@ -226,6 +230,90 @@ export const previewStaffInvite = onCall({ region: INVITE_REGION, invoker: "publ
 export const acceptStaffInvite = onCall({ region: INVITE_REGION, invoker: "public", cors: true }, request => {
   return runInviteCall(acceptInvite, request.data);
 });
+
+export const adminSendPasswordReset = onCall(
+  { region: INVITE_REGION, secrets: [RESEND_API_KEY] },
+  async request => {
+    if (!request.auth || !request.auth.uid) throw new HttpsError("unauthenticated", resetFailureText("unauthenticated"));
+    if (process.env.NODE_TEST_CONTEXT) throw new HttpsError("failed-precondition", resetFailureText("not-sent"));
+    ensureAdmin();
+    const db = getFirestore();
+    const auth = getAuth();
+    const result = await sendPasswordReset({
+      callerUid: request.auth.uid,
+      targetUid: request.data && request.data.uid,
+    }, {
+      now: () => new Date(),
+      env: process.env,
+      allowLiveMail: process.env.INVITE_EMAIL_ENABLED === "true",
+      async getUser(uid) {
+        const [snap, grant] = await Promise.all([
+          db.collection("users").doc(uid).get(),
+          db.collection("heartwoodAdmins").doc(uid).get(),
+        ]);
+        return {
+          profile: snap.exists ? (snap.data() || null) : null,
+          heartwoodGrant: grant.exists && (grant.data() || {}).role === "admin",
+        };
+      },
+      async getAuthUser(uid) {
+        try {
+          const user = await auth.getUser(uid);
+          return {
+            email: user.email || "",
+            displayName: user.displayName || "",
+            providerData: (user.providerData || []).map(p => ({ providerId: p.providerId })),
+          };
+        } catch (err) {
+          if (err && err.code === "auth/user-not-found") return null;
+          throw err;
+        }
+      },
+      async getCompany(companyId) {
+        const snap = await db.collection("companies").doc(companyId).get();
+        if (!snap.exists) return null;
+        const c = snap.data() || {};
+        return { name: c.name || "", email: c.email || "" };
+      },
+      generateLink: (email, settings) => auth.generatePasswordResetLink(email, settings),
+      async claimRate({ uid, companyId, now }) {
+        const ref = db.collection("passwordResetRate").doc(uid);
+        return db.runTransaction(async tx => {
+          const snap = await tx.get(ref);
+          const prev = snap.exists ? (snap.data() || {}).stamps : [];
+          const decision = rateDecision(prev, now);
+          if (!decision.ok) return { ok: false };
+          tx.set(ref, {
+            companyId,
+            stamps: decision.stamps,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+          return { ok: true };
+        });
+      },
+      sendResend: (payload, idempotencyKey) => sendViaResend({
+        apiKey: INVITE_MAIL_ON ? RESEND_API_KEY.value() : "",
+        payload,
+        fetchImpl: globalThis.fetch,
+        idempotencyKey,
+      }),
+      writeMail: (collectionName, body) => db.collection(collectionName).add({
+        ...body,
+        createdAt: FieldValue.serverTimestamp(),
+      }),
+    });
+    if (!result || !result.ok) {
+      if (result && result.reason === "google-only") return { ok: false, reason: "google-only" };
+      const reason = result && result.reason;
+      const code = reason === "rate-limited" ? "resource-exhausted"
+        : reason === "unauthenticated" ? "unauthenticated"
+        : reason === "not-sent" ? "failed-precondition"
+        : "permission-denied";
+      throw new HttpsError(code, resetFailureText(reason));
+    }
+    return { ok: true };
+  },
+);
 
 export const inviteEmailWorker = onDocumentWritten(
   { document: "invites/{inviteId}", region: INVITE_REGION, secrets: [RESEND_API_KEY] },

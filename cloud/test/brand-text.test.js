@@ -51,6 +51,7 @@ const HEARTWOOD_OK = new Set([
   "-Quotes/1.0 (alex@heartwoodew.com)",
   "Heartwood", "Heartwood Earthworx", "Heartwood Earthworx Pty Ltd", "Heartwood Jobs",
   "Heartwood Jobs <jobs@heartwoodew.com>", "Heartwood Jobs <noreply@callupapp.com.au>", "You're invited to Heartwood Jobs",
+  "Reset your Heartwood Jobs password",
   "Optional. Heartwood receipts still use the address on the Receipts page.",
 ]);
 test("every shipped string that mentions Heartwood is on the reviewed list", () => {

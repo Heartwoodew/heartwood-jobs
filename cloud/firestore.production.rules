@@ -1587,6 +1587,10 @@ service cloud.firestore {
       allow read, write: if false;
     }
 // END INVITE RULES
+    // Password-reset rate limit. Written by adminSendPasswordReset only. The link is not stored.
+    match /passwordResetRate/{uid} {
+      allow read, write: if false;
+    }
     // Written by inviteEmailWorker only: whether the invite email went out. Readable by that company's office.
     match /inviteStatus/{id} {
       allow get: if (isAdmin() && docCompany(resource.data) == "heartwood")

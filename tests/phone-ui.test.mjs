@@ -66,8 +66,9 @@ test("phone shell, quote gate and handlers", async () => {
         assert.match(text.result.value, /Supervisor/, name);
         assert.match(text.result.value, /Labourer/, name);
         const options = await page.send("Runtime.evaluate", { expression: "[...document.querySelectorAll('#invitef select[name=role] option')].map(o => o.value).join(',')", returnByValue: true });
-        // Heartwood admin (fixed list or a heartwoodAdmins grant): every permission level. A manager is not an admin.
-        assert.equal(options.result.value, "labourer,operator,supervisor,manager,admin", name);
+        // Heartwood admin (fixed list or a heartwoodAdmins grant): every permission level. A supervisor is not an admin.
+        if (query.includes("role=supervisor")) assert.equal(options.result.value, "labourer,operator,supervisor", name);
+        else assert.equal(options.result.value, "labourer,operator,supervisor,manager,admin", name);
         const list = await page.send("Runtime.evaluate", { expression: "document.querySelector('.invitelist')?.innerText || ''", returnByValue: true });
         assert.match(list.result.value, /Casey Nguyen/, name);
         assert.match(list.result.value, /Invite pending/, name);
@@ -85,6 +86,35 @@ test("phone shell, quote gate and handlers", async () => {
         assert.doesNotMatch(list.result.value, /hourlyRate|\$65/, name);
         const sams = await page.send("Runtime.evaluate", { expression: "document.querySelectorAll('[data-staff-email=\"sam.lee@example.com\"]').length", returnByValue: true });
         assert.equal(sams.result.value, 1, name);
+        if (query.includes("role=admin")) {
+          const resets = await page.send("Runtime.evaluate", { expression: "document.querySelectorAll('[data-password-reset]').length", returnByValue: true });
+          assert.equal(resets.result.value, 3, name + " reset buttons");
+          const pending = await page.send("Runtime.evaluate", { expression: "document.querySelector('[data-staff-status=\"pending\"]')?.innerHTML.includes('data-password-reset')", returnByValue: true });
+          assert.equal(pending.result.value, false, name + " pending has no reset");
+        }
+        if (query.includes("role=supervisor")) {
+          const resets = await page.send("Runtime.evaluate", { expression: "document.querySelectorAll('[data-password-reset]').length", returnByValue: true });
+          assert.equal(resets.result.value, 0, name + " supervisor reset");
+        }
+      }
+      if (query.includes("open=login")) {
+        const label = await page.send("Runtime.evaluate", { expression: "document.querySelector('#forgotpw')?.textContent || ''", returnByValue: true });
+        assert.match(label.result.value, /Forgot password/, name);
+        await page.send("Runtime.evaluate", { expression: "(() => { const f = document.querySelector('#login'); f.e.value = 'casey.nguyen@example.com'; document.querySelector('#forgotpw').click(); })()" });
+        await sleep(40);
+        const prefill = await page.send("Runtime.evaluate", { expression: "document.querySelector('#forgot input[name=e]')?.value || ''", returnByValue: true });
+        assert.equal(prefill.result.value, "casey.nguyen@example.com", name);
+        await page.send("Runtime.evaluate", { expression: "document.querySelector('#forgot')?.requestSubmit()" });
+        await sleep(80);
+        const msg = await page.send("Runtime.evaluate", { expression: "document.querySelector('#ferr')?.textContent || ''", returnByValue: true });
+        const expected = query.includes("reset=invalid")
+          ? "Enter a valid email address."
+          : query.includes("reset=busy")
+            ? "Too many tries. Wait a few minutes and try again."
+            : "If that email has a CallUp login, a reset link is on its way.";
+        assert.equal(msg.result.value, expected, name);
+        const calls = await page.send("Runtime.evaluate", { expression: "JSON.stringify((performance.getEntriesByType('resource')||[]).map(r => r.name))", returnByValue: true });
+        assert.doesNotMatch(calls.result.value, /cloudfunctions|generatePasswordResetLink|oobCode/i, name);
       }
       if (query.includes("open=accept")) {
         const text = await page.send("Runtime.evaluate", { expression: "document.querySelector('#acceptf')?.innerText || ''", returnByValue: true });
@@ -179,6 +209,11 @@ test("phone shell, quote gate and handlers", async () => {
     await run("after-phone-photos-meta", "?role=operator&open=detail&photos=meta", 390, 844);
     await run("after-phone-more", "?role=operator&open=more", 390, 844);
     await run("staff-invites-phone", "?role=admin&open=staff", 390, 844);
+    await run("staff-supervisor-phone", "?role=supervisor&open=staff", 390, 844);
+    await run("forgot-password-phone", "?open=login", 390, 844);
+    await run("forgot-password-missing", "?open=login&reset=missing", 390, 844);
+    await run("forgot-password-invalid", "?open=login&reset=invalid", 390, 844);
+    await run("forgot-password-busy", "?open=login&reset=busy", 390, 844);
     await run("staff-accept-phone", "?open=accept&invite=pendingpreviewtoken00000000000000000000000", 390, 844);
     await run("chat-phone", "?role=operator&open=chat", 390, 844);
     await run("chat-job-phone", "?role=operator&open=jobchat", 390, 844);

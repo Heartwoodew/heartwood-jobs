@@ -59,6 +59,10 @@
   if (q.get("amounts") === "1") {
     window.HW_JOB_AMOUNTS = { j3: ["Rubbish removal — Green waste: 6 m³", "Concrete removal: 3 t (reinforced slab, break-up needed)", "Supply and deliver material — Road base: 10 t"] };
   }
+  if (q.get("open") === "login") window.HW_PREVIEW_SIGNED_OUT = true;
+  if (q.get("reset") === "missing") window.HW_RESET_CODE = "auth/user-not-found";
+  if (q.get("reset") === "invalid") window.HW_RESET_CODE = "auth/invalid-email";
+  if (q.get("reset") === "busy") window.HW_RESET_CODE = "auth/too-many-requests";
   if (q.get("open") === "accept") {
     window.HW_PREVIEW_SIGNED_OUT = true;
     window.HW_INVITE_PREVIEW = {

@@ -119,6 +119,28 @@ export function canManageInvites(membership) {
   return !!(membership && membership.ok && (membership.rulesAdmin || membership.role === "supervisor" || membership.role === "manager"));
 }
 
+// Send password reset on the Staff tab is the admin shell only.
+// A Heartwood manager is given that shell because they can list staff; their profile role stays manager, so they do not see it.
+// A supervisor never does. Patrick's profile role is operator, and he is still an admin of Heartwood.
+export function canSendPasswordReset(person) {
+  if (!person || person.role !== "admin") return false;
+  const profileRole = (person.cloudProfile && person.cloudProfile.role) || person.staffRole || "";
+  return profileRole !== "manager" && profileRole !== "supervisor";
+}
+
+export const GOOGLE_ONLY_RESET = "This person signs in with Google, so there's no password to reset.";
+export const PASSWORD_RESET_NEUTRAL = "If that email has a CallUp login, a reset link is on its way.";
+
+// Success and an unknown address share one sentence, so the screen does not reveal whether the login exists.
+export function forgotPasswordMessage(code) {
+  if (code === "empty") return "Enter the email you sign in with.";
+  if (code === "auth/invalid-email") return "Enter a valid email address.";
+  if (code === "auth/too-many-requests") return "Too many tries. Wait a few minutes and try again.";
+  if (code === "auth/network-request-failed") return "No connection. Check your signal and try again.";
+  if (code === "auth/user-not-found" || code === "sent" || !code) return PASSWORD_RESET_NEUTRAL;
+  return "Couldn't send that just now. Try again in a minute.";
+}
+
 // Admins invite every level. Managers invite up to manager. Supervisors invite labourer/operator/supervisor. Crew nobody.
 // Heartwood admin = Alex, Patrick, or an accepted Heartwood admin (heartwoodAdmin: grant in heartwoodAdmins/{uid}).
 // CallUp company admin = profile role admin. A manager never invites or changes an admin.
@@ -469,13 +491,14 @@ export function inviteEmailLine(status) {
   return "The invite email didn't go through. Copy the link and send it to them yourself (text or email).";
 }
 
-export function staffViewHtml(invites, { now = new Date(), error = "", origin = HEARTWOOD_APP_ORIGIN, emailStatus = null, roles = SUPERVISOR_INVITE_ROLES, titles = null, logins = null, companyId = "", loginsNote = "" } = {}) {
+export function staffViewHtml(invites, { now = new Date(), error = "", origin = HEARTWOOD_APP_ORIGIN, emailStatus = null, roles = SUPERVISOR_INVITE_ROLES, titles = null, logins = null, companyId = "", loginsNote = "", resetPasswords = false, viewerUid = "" } = {}) {
   const offer = INVITE_ROLES.filter(r => (roles || []).includes(r));
   const titleRows = (Array.isArray(titles) ? titles : []).filter(t => t && offer.includes(t.level) && t.name && t.id);
   const rows = mergeStaffRoster(logins || [], invites || [], { now, companyId });
   const cards = rows.map(row => {
     const actions = (row.status === "pending" || row.status === "expired") && row.inviteId;
     const link = actions && row.token ? inviteLink(row.token, origin) : "";
+    const reset = resetPasswords === true && row.status === "active" && row.uid && row.uid !== String(viewerUid || "");
     const tags = (row.tags || []).map(tag => `<span class="skill-tag">${esc(tag)}</span>`).join("");
     const mail = emailStatus && row.status === "pending"
       ? `<div class="sub invite-mail" data-invite-mail="${esc((emailStatus[row.inviteId] && emailStatus[row.inviteId].delivery) || "checking")}">${esc(inviteEmailLine(emailStatus[row.inviteId] || null))}</div>`
@@ -489,10 +512,11 @@ export function staffViewHtml(invites, { now = new Date(), error = "", origin = 
         ${mail}
         ${link ? `<p class="invite-link">${esc(link)}</p>` : ""}
       </div>
-      ${actions ? `<div class="inviteacts">
-        ${link ? `<button type="button" data-invite-copy="${esc(link)}">Copy link</button>` : ""}
-        <button type="button" data-invite-resend="${esc(row.inviteId)}">Resend</button>
-        <button type="button" data-invite-cancel="${esc(row.inviteId)}">Cancel</button>
+      ${actions || reset ? `<div class="inviteacts">
+        ${actions && link ? `<button type="button" data-invite-copy="${esc(link)}">Copy link</button>` : ""}
+        ${actions ? `<button type="button" data-invite-resend="${esc(row.inviteId)}">Resend</button>
+        <button type="button" data-invite-cancel="${esc(row.inviteId)}">Cancel</button>` : ""}
+        ${reset ? `<button type="button" data-password-reset="${esc(row.uid)}" data-password-reset-name="${esc(row.name)}">Send password reset</button>` : ""}
       </div>` : ""}
     </article>`;
   }).join("");
