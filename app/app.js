@@ -6,7 +6,7 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator,
   collection, doc, getDoc, getDocFromCache, getDocs, query, where, orderBy, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, deleteField, serverTimestamp, arrayUnion, runTransaction, Timestamp }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { getStorage, ref as storageRef, uploadBytes, connectStorageEmulator, listAll, getMetadata, getBlob }
+import { getStorage, ref as storageRef, uploadBytes, uploadBytesResumable, deleteObject, connectStorageEmulator, listAll, getMetadata, getBlob }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
 import { firebaseConfig, useEmulator, vapidKey } from "./firebase-config.js";
 import { installQuotes, adminViewRouter, setDefaultDepot, noDollars, setQuoteTradeSetup, setQuoteFocus } from "./features/quotes.js";
@@ -23,6 +23,7 @@ import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPla
 import { buildOperationalExport, retentionAdminText, retentionView } from "./features/cloud-retention.js";
 import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, lightboxHtml, photoFailureText } from "./features/photo-gallery.js";
 import { decidePhotoEmail } from "./features/photo-capture.js";
+import { mountDocuments, unmountDocuments, openDocumentBlob } from "./features/job-documents.js";
 import { installChatApp } from "./features/chat-ui.js";
 import { installPush } from "./features/push.js";
 import { installCompliance } from "./features/compliance.js";
@@ -3837,6 +3838,59 @@ async function undoSplit(j) {
   if ($("#dlg").open) $("#dlg").close();
   toast("Split undone");
 }
+function documentActorRole() {
+  if (!me) return "";
+  if (me.role === "admin" || me.role === "manager" || me.role === "supervisor") return me.role;
+  return (me.cloudProfile && me.cloudProfile.role) || me.role || "";
+}
+function wireJobDocuments(el, job) {
+  if (!el || !job || !job.id || !me) return;
+  mountDocuments(el, {
+    job,
+    role: documentActorRole(),
+    companyId: myCompanyId(),
+    uid: me.uid,
+    uploaderName: me.name || "Staff",
+    online: () => typeof navigator === "undefined" || navigator.onLine !== false,
+    listen(crewOnly, onData, onError) {
+      const col = collection(db, "jobs", job.id, "documents");
+      const q = crewOnly ? query(col, where("visibility", "==", "crew")) : col;
+      return onSnapshot(q, snap => onData(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError);
+    },
+    upload(planned, file, onProgress) {
+      return new Promise((resolve, reject) => {
+        const task = uploadBytesResumable(storageRef(storage, planned.path), file, {
+          contentType: planned.contentType,
+          customMetadata: planned.metadata,
+        });
+        task.on("state_changed", snap => {
+          const pct = snap.totalBytes ? Math.round(100 * snap.bytesTransferred / snap.totalBytes) : 0;
+          if (onProgress) onProgress(pct);
+        }, reject, () => resolve());
+      });
+    },
+    writeDoc(planned) {
+      return setDoc(doc(db, "jobs", planned.firestore.jobId, "documents", planned.id), {
+        ...planned.firestore,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    },
+    rename(id, name) {
+      return updateDoc(doc(db, "jobs", job.id, "documents", id), { name, updatedAt: serverTimestamp() });
+    },
+    async remove(row) {
+      try { await deleteObject(storageRef(storage, row.storagePath)); }
+      catch (e) { if (!e || e.code !== "storage/object-not-found") throw e; }
+      await deleteDoc(doc(db, "jobs", row.jobId || job.id, "documents", row.id));
+    },
+    async open(row) {
+      const blob = await getBlob(storageRef(storage, row.storagePath));
+      openDocumentBlob(blob, row.name || row.fileName);
+    },
+    toast,
+  });
+}
 function editJob(j) {
   const importing = !!(j && j._import);
   const n = !j || !j.id;
@@ -3850,7 +3904,7 @@ function editJob(j) {
   if (j.inboxId) hist.push(["Inbox", "Linked to a builder email"]);
   if (j.completedByName) hist.push([j.completedByName, `Completed${j.loads ? ` · ${j.loads} loads` : ""}`]);
   const SL = { "Scheduled": "Work Order – scheduled", "In progress": "Work Order – in progress", "Done": "Completed", "Cancelled": "Unsuccessful" };
-  d.className = "jobcard"; d.onclose = () => refreshAfterImport();
+  d.className = "jobcard"; d.onclose = () => { unmountDocuments(); refreshAfterImport(); };
   d.innerHTML = `<form method="dialog" id="jf" class="jc">
     <div class="jc-top ${QCLS[qq]}"><div><div class="jc-no">${n ? "New Job" : "Job #" + esc(jobNo(j))}</div>${n ? "" : ipTop(j, "onbar")}<div class="jc-q">${qq}${j.sm8Status === "Quote" && usesSm8Sync() ? " (quote)" : ""}</div></div>
       <label class="jc-st">Job Status<select name="status">${STATUSES.map(s => `<option value="${s}" ${j.status === s ? "selected" : ""}>${SL[s]}</option>`).join("")}</select></label>
@@ -3890,6 +3944,7 @@ function editJob(j) {
       <p id="leavewarn" class="leave-warn" hidden></p>
       <h4>Notes</h4>
       <textarea name="notes" rows="2" placeholder="Office notes">${esc(j.notes)}</textarea>
+      ${!n ? `<div class="job-docs" data-job-docs="${esc(j.id)}"></div>` : ""}
       <h4>Diary</h4>
       <div class="diary">${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("")}
         ${hist.map(([w, t]) => `<div class="de sys"><span class="av">i</span><div><small>${esc(w)}</small><div>${esc(t)}</div></div></div>`).join("")}
@@ -3900,7 +3955,7 @@ function editJob(j) {
     <div class="btns jc-foot"><button value="cancel" formnovalidate class="sm-btn">Close</button><button value="save" class="sm-btn primary">Save Job</button></div></form>`;
   d.showModal();
   if (!n) jobTabs(d, j);
-  if (!n) { rememberJob(j); $("#emailph").onclick = () => emailPhotos(j); watchJobPhotos(j); paintPhotoSlots(); }
+  if (!n) { rememberJob(j); $("#emailph").onclick = () => emailPhotos(j); watchJobPhotos(j); paintPhotoSlots(); wireJobDocuments(d.querySelector("[data-job-docs]"), j); }
   if (!n && $("#cloudexport")) $("#cloudexport").onclick = () => downloadGalleryCopy(j).catch(e => toast(e.message || "Download failed"));
   if (!n) { wireFindPo(j); supervisors(); wireJobReceipts(j); fillSupCard(j); }
   if (!n && $("#unschbtn")) $("#unschbtn").onclick = ev => { if (!armBtn(ev.currentTarget, "✕ Remove from dispatch board", "Tap again to remove from the board")) return;
@@ -4910,6 +4965,7 @@ function renderOperator() {
   prepareOperatorPlan(mine);
   const sel = ui.opSel && mine.find(j => j.id === ui.opSel);
   if (sel) return renderOpDetail(sel);
+  unmountDocuments();
   if (ui.opTab === "chat" && document.activeElement?.closest?.(".chat-compose")) return;
   if (!ui.opTab || ui.opTab === "home") ui.opTab = "today";
   if (ui.opTab === "quotes" && !(canQuote() && me.role !== "admin")) ui.opTab = "more";
@@ -5096,6 +5152,7 @@ function renderOpDetail(j) {
       <div class="mcard"><div class="mlbl">Diary</div>${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("") || `<div class="muted sub">No notes yet</div>`}
         <button class="mnote" type="button" data-act="note">Add note</button></div>
       <div class="mcard"><div class="mlbl">Photos</div><div data-photoslot="${esc(j.id)}" data-photorole="cloud"></div>${emailedPhotosNote(j)}<div class="muted sub">Cloud photos are the private copies stored for this job.</div></div>
+      <div class="mcard job-docs" data-job-docs="${esc(j.id)}"></div>
       <div class="mcard safecard"><div class="mlbl">Safety</div><button type="button" class="mnote" data-swms="${j.id}">View SWMS</button><button type="button" class="mnote incbtn" data-inc="${j.id}">Report incident</button></div>
       <div class="mcard">${jobReceiptsHtml(j)}</div>
     </div>
@@ -5106,6 +5163,7 @@ function renderOpDetail(j) {
       <a class="mcard link mbtn outline" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener">${ICO.pin}<span>Get directions</span></a>
     </div></div>`;
   rememberJob(j); $("#emailph").onclick = () => emailPhotos(j); wireJobReceipts(j); fillSupCard(j); watchJobPhotos(j); paintPhotoSlots();
+  wireJobDocuments(document.querySelector("[data-job-docs]"), j);
   const showJobPane = which => {
     ui.jobPane = which === "chat" ? "chat" : "job";
     $("#app").querySelectorAll("[data-jtab]").forEach(b => { b.classList.toggle("on", b.dataset.jtab === ui.jobPane); b.setAttribute("aria-selected", b.dataset.jtab === ui.jobPane ? "true" : "false"); });

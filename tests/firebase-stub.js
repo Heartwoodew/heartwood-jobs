@@ -359,6 +359,17 @@ export function uploadBytes(r, _body, meta) {
   record("uploadBytes", { path: r && (r.fullPath || r.path), contentType: meta && meta.contentType, metadata: meta && meta.customMetadata });
   return Promise.resolve({ ref: r });
 }
+export function uploadBytesResumable(r, body, meta) {
+  record("uploadBytesResumable", { path: r && (r.fullPath || r.path), contentType: meta && meta.contentType, metadata: meta && meta.customMetadata, size: body && body.size });
+  const size = body && body.size || 1;
+  return {
+    on(_event, progress, _error, complete) {
+      if (progress) progress({ bytesTransferred: size, totalBytes: size });
+      if (complete) complete();
+      return () => {};
+    },
+  };
+}
 export function listAll(r) {
   if (typeof window !== "undefined" && window.HW_STORAGE_LIST_ERROR) {
     return Promise.reject(Object.assign(new Error("unauthorized"), { code: "storage/unauthorized" }));
