@@ -588,10 +588,31 @@ service cloud.firestore {
     function cmRole() {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("role", "");
     }
+    // Dispatch day start, travel gap and per-type hours. Each default is at least 1 hour.
+    // Heartwood keeps this on meta/dispatchTimes (admins already write meta). Other companies use companyMeta.
+    function dispatchDurOk(m, k) {
+      return !m.keys().hasAny([k]) || (m[k] is number && m[k] >= 1 && m[k] <= 24);
+    }
+    function dispatchDurationsOk(m) {
+      return m is map && m.size() <= 8
+        && m.keys().hasOnly(["spoil", "backslab", "roof-clean", "scaffold-clean", "final-clean", "site-clean", "waterproof", "other"])
+        && dispatchDurOk(m, "spoil") && dispatchDurOk(m, "backslab") && dispatchDurOk(m, "roof-clean")
+        && dispatchDurOk(m, "scaffold-clean") && dispatchDurOk(m, "final-clean") && dispatchDurOk(m, "site-clean")
+        && dispatchDurOk(m, "waterproof") && dispatchDurOk(m, "other");
+    }
+    function dispatchMetaOk(d) {
+      return d.keys().hasOnly(["companyId", "dayStart", "travelGapMin", "durations", "updatedAt", "updatedBy"])
+        && d.dayStart is string
+        && d.dayStart.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$')
+        && d.travelGapMin is number && d.travelGapMin >= 0 && d.travelGapMin <= 180
+        && dispatchDurationsOk(d.durations)
+        && d.updatedBy == request.auth.uid
+        && d.updatedAt == request.time;
+    }
     function cmGetOk(docId) {
       let c = incProfileCompany();
       return signedIn() && c != "heartwood" && cmRole() in ["admin", "supervisor", "manager"]
-        && docId in [c + "_quoteRates", c + "_supervisors", c + "_invoicing"];
+        && docId in [c + "_quoteRates", c + "_supervisors", c + "_invoicing", c + "_dispatch"];
     }
     function cmWriteOk(docId) {
       let c = incProfileCompany();
@@ -599,7 +620,8 @@ service cloud.firestore {
       return signedIn() && c != "heartwood" && request.resource.data.get("companyId", "") == c
         && ((docId == c + "_supervisors" && role in ["admin", "supervisor", "manager"])
           || (docId == c + "_quoteRates" && role in ["admin", "manager"])
-          || (docId == c + "_invoicing" && role == "admin"));
+          || (docId == c + "_invoicing" && role == "admin")
+          || (docId == c + "_dispatch" && role in ["admin", "manager"] && dispatchMetaOk(request.resource.data)));
     }
     match /companyMeta/{docId} {
       allow get: if cmGetOk(docId);

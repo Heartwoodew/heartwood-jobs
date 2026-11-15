@@ -104,7 +104,9 @@ table.jt{width:100%;border-collapse:collapse;background:#fff;border:1px solid va
 .dname{padding:8px;font-weight:600;font-size:13px;border-bottom:1px solid var(--sm-line);background:#fafbfc}
 .dcell{min-height:64px;border-left:1px solid var(--sm-line);border-bottom:1px solid var(--sm-line);padding:3px}.dcell.today{background:#f4faff}
 .dcell.over{background:#d8ecfa;outline:2px dashed var(--sm-blue);outline-offset:-2px}
-.dchip{background:#e8f3fc;border-left:4px solid var(--q-wo);border-radius:3px;padding:3px 5px;font-size:12px;margin-bottom:3px;cursor:grab;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.dchip{background:#e8f3fc;border-left:4px solid var(--q-wo);border-radius:3px;padding:3px 5px;font-size:12px;margin-bottom:3px;cursor:grab;overflow:hidden}
+.dchip .est{display:block;font-size:11px;color:var(--sm-mut)}
+.dispatch-durs{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px 12px;margin:8px 0}
 .dchip.q-comp{border-left-color:var(--q-comp);background:#e9f7ef}.dchip.q-quote{border-left-color:var(--q-quote);background:#fdf3e3}.dchip.inprog{background:#fff0e0}
 .dchip .sub{font-size:11px}.dragging{opacity:.4}
 .dside{background:#fff;border:1px solid var(--sm-line);padding:8px;align-self:start}.dside h3{font-size:14px;margin:2px 0 8px}

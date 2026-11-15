@@ -12,6 +12,11 @@ import { firebaseConfig, useEmulator } from "./firebase-config.js";
 import { installQuotes, adminViewRouter, setDefaultDepot, noDollars, setQuoteTradeSetup, setQuoteFocus } from "./features/quotes.js";
 import { JOB_MONEY_COLLECTION, jobMoneyDoc, mergeJobMoney, splitJobMoney } from "./features/job-money.js";
 import { OPEN_STATUSES, staleOpenJobs, mergeJobLists, parseHoursInput } from "./features/job-window.js";
+import {
+  DISPATCH_CATEGORIES, approvedSheet, dispatchSettingsHtml, estimateDuration, formatEstimate,
+  historyMedians, isManualStart, keepsStart, normaliseTime, planAutoTimes, primaryKey, readDispatchLocal,
+  sanitizeDispatchSettings, spaceDay, withSortHint, writeDispatchLocal,
+} from "./features/dispatch-times.js";
 import { installRouteOrder, orderJobsForRun, runSheetId, geoPatch, setRouteDepot } from "./features/route-order.js";
 import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPlanned, jobPhotoPrefix, storageErrorCode, summarizePhotoListing } from "./features/cloud-storage.js";
 import { buildOperationalExport, retentionAdminText, retentionView } from "./features/cloud-retention.js";
@@ -187,9 +192,9 @@ onAuthStateChanged(auth, async user => {
     // Older jobs still open (Scheduled / In progress, dated before the window) stay in the office list and search.
     let windowJobs = [], staleJobs = [];
     const setJobs = () => { jobs = mergeJobLists(windowJobs, staleJobs).map(withMoney); addNameOnlyStaff(jobs); };
-    const u1 = onSnapshot(q, s => { windowJobs = s.docs.map(d => ({ id: d.id, ...d.data() })); setJobs(); renderAdmin(); }, e => { console.warn("jobs", e.code, e.message); windowJobs = []; setJobs(); renderAdmin(); });
+    const u1 = onSnapshot(q, s => { windowJobs = s.docs.map(d => ({ id: d.id, ...d.data() })); setJobs(); renderAdmin(); queueDispatchPersist(jobs); }, e => { console.warn("jobs", e.code, e.message); windowJobs = []; setJobs(); renderAdmin(); });
     const u5 = onSnapshot(companyJobs([where("status", "in", [...OPEN_STATUSES])]), s => {
-      staleJobs = staleOpenJobs(s.docs.map(d => ({ id: d.id, ...d.data() })), todayStr()); setJobs(); renderAdmin();
+      staleJobs = staleOpenJobs(s.docs.map(d => ({ id: d.id, ...d.data() })), todayStr()); setJobs(); renderAdmin(); queueDispatchPersist(jobs);
     }, e => console.warn("older open jobs", e.code, e.message));
     // Invoicing: every Done job (any date), admin only.
     const u2 = onSnapshot(companyJobs([where("status", "==", "Done")]), s => { ui.done = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); donePill(); if (ui.view === "invoices" || ui.view === "completed" || ui.view === "home") renderAdmin(); }, e => console.warn("done jobs", e.code || e.message));
@@ -315,6 +320,132 @@ async function loadCompanyBrand() {
   const depot = orgSettings().address;
   setRouteDepot(depot, { heartwood: id === "heartwood" }); setDefaultDepot(depot, { heartwood: id === "heartwood" });
   paintBrand();
+  loadDispatchSettings().catch(() => {});
+}
+function dispatchSettingsNow() {
+  if (!ui.dispatchSettings) {
+    const local = readDispatchLocal(myCompanyId());
+    if (local) ui.dispatchSettings = local;
+  }
+  return sanitizeDispatchSettings(ui.dispatchSettings || {});
+}
+function dispatchHistory(list) {
+  const seen = new Set(), rows = [];
+  for (const j of [...(list || []), ...(jobs || []), ...(ui.done || [])]) {
+    if (!j || !j.id || seen.has(j.id)) continue;
+    seen.add(j.id);
+    rows.push(j);
+  }
+  const entries = [];
+  for (const sheet of ui.tsAll || []) if (sheet && sheet.entries) entries.push(...entryList(sheet.entries));
+  if (ui.tsMine && ui.tsMine.entries) entries.push(...entryList(ui.tsMine.entries));
+  return historyMedians(rows, entries);
+}
+async function loadDispatchSettings() {
+  const id = myCompanyId();
+  const local = readDispatchLocal(id);
+  if (local) ui.dispatchSettings = local;
+  const ref = id === "heartwood" ? doc(db, "meta", "dispatchTimes") : doc(db, "companyMeta", id + "_dispatch");
+  try {
+    let snap = null;
+    try { snap = await getDocFromCache(ref); } catch { snap = null; }
+    if (!snap || !snapExists(snap)) snap = await getDoc(ref);
+    if (snap && snapExists(snap)) {
+      ui.dispatchSettings = sanitizeDispatchSettings(snap.data());
+      writeDispatchLocal(id, ui.dispatchSettings);
+    }
+  } catch { /* offline, or this login cannot read the company table: defaults still space the day */ }
+}
+let dispatchSpacing = false;
+function queueDispatchPersist(list, dates) {
+  if (!me || me.role !== "admin" || ui.persistHold) return;
+  ui.persistList = list || jobs;
+  if (!dates) ui.persistAll = true;
+  else {
+    ui.persistDates = ui.persistDates || new Set();
+    for (const d of dates) if (d) ui.persistDates.add(d);
+  }
+  clearTimeout(ui.persistTimer);
+  ui.persistTimer = setTimeout(() => { flushDispatchPersist().catch(e => console.warn("dispatch times", e && (e.code || e.message))); }, 80);
+}
+// BEGIN DISPATCH PERSIST
+async function flushDispatchPersist() {
+  if (!me || me.role !== "admin" || ui.persistHold) return;
+  if (dispatchSpacing) { ui.persistAgain = true; return; }
+  const list = ui.persistList || jobs;
+  const dates = ui.persistAll ? null : [...(ui.persistDates || [])];
+  ui.persistDates = new Set();
+  ui.persistAll = false;
+  const writes = planAutoTimes(list, {
+    settings: dispatchSettingsNow(),
+    history: dispatchHistory(list),
+    sheets: ui.runSheets || {},
+    dates: dates && dates.length ? dates : null,
+  });
+  if (!writes.length) return;
+  dispatchSpacing = true;
+  let denied = 0;
+  try {
+    await Promise.all(writes.map(async w => {
+      const hit = (jobs || []).find(j => j.id === w.id) || (ui.undated || []).find(j => j.id === w.id);
+      if (hit) Object.assign(hit, { time: w.time, timeSource: "auto", estHours: w.estHours, estSource: w.estSource });
+      try {
+        await settleOrQueue(updateDoc(doc(db, "jobs", w.id), {
+          time: w.time, timeSource: "auto", estHours: w.estHours, estSource: w.estSource,
+          updatedAt: serverTimestamp(), updatedBy: me.uid,
+        }));
+      } catch (e) {
+        const code = String(e && (e.code || e.message) || "");
+        if (code.includes("permission-denied")) denied++;
+        console.warn("dispatch times", code);
+      }
+    }));
+  } finally {
+    dispatchSpacing = false;
+    if (denied && denied === writes.length) ui.persistHold = true;
+    if (ui.persistAgain) { ui.persistAgain = false; queueDispatchPersist(jobs); }
+  }
+}
+// END DISPATCH PERSIST
+function ensureDispatchSheets(days) {
+  const key = myCompanyId() + "|" + (days || []).join(",");
+  if (!days || !days.length || ui.sheetKey === key) return;
+  ui.sheetKey = key;
+  Promise.all(days.map(d => loadRunSheets(d))).then(() => { if (ui.view === "dispatch") renderAdmin(); }).catch(() => {});
+}
+function noteDispatch(all, days) {
+  ui.dispatchHist = dispatchHistory([...(all || []), ...(ui.done || [])]);
+  ensureDispatchSheets(days);
+  queueDispatchPersist(all, days);
+}
+function personUid(row) {
+  if (!row || !row.raw) return "_none";
+  const person = staff.find(s => skey(s) === row.key);
+  return person && person.uid ? person.uid : row.key;
+}
+function rowPlan(row, day, sched) {
+  const rows = sched.filter(j => j.date === day && row.has(j));
+  const uid = personUid(row);
+  const id = runSheetId(uid, day);
+  const saved = id && ui.runSheets ? ui.runSheets[id] : null;
+  const sheet = saved && saved.status === "approved" ? saved : null;
+  return spaceDay(rows, { settings: dispatchSettingsNow(), history: ui.dispatchHist || dispatchHistory(sched), sheet });
+}
+function boardHour(slot, job) {
+  const t = (slot && slot.time) || (job && job.time) || "07:00";
+  const h = parseInt(t, 10);
+  if (!Number.isFinite(h)) return 7;
+  if (h < 6) return 6;
+  if (h > 18) return 18;
+  return h;
+}
+function dispatchChip(j, slot) {
+  const away = assignmentWarning(ui.leave || [], j.date, leavePeople(namesOf(j)));
+  const time = slot ? slot.time : (j.time || "");
+  const est = slot ? formatEstimate(slot.estHours) : "";
+  const why = slot && slot.estSource === "quote" ? "Hours from the quote" : slot && slot.estSource === "history" ? "Median clocked time for this kind of job" : "Default for this kind of job";
+  return `<div class="dchip ${QCLS[queueOf(j)]} t-${j.type} ${j.status === "In progress" ? "inprog" : ""} ${away ? "on-leave" : ""}" draggable="true" data-id="${j.id}" title="${esc(j.client)} – ${esc(j.description)}${est ? " · " + esc(est) : ""}${away ? " · " + away : ""}">${ipTop(j, "sm")}
+      <b>${esc(time)}</b> ${esc((j.address || "").split(",")[0])}<div class="sub"><span class="est" title="${esc(why)}">${esc(est)}</span>${esc(TYPES[j.type] || "")} · #${esc(jobNo(j))}</div></div>`;
 }
 function inviteDisplayNow() {
   return window.HW_TODAY ? new Date(window.HW_TODAY + "T12:00:00+10:00") : new Date();
@@ -605,7 +736,37 @@ function settingsView() {
     ? `<section class="pad setrates"><h3>Quote rates</h3><p class="sub">Your plant, labour, travel and tip rates for quotes. They start blank and are only used by your company.</p><button type="button" id="setrates" class="sm-btn">Edit quote rates</button></section>`
     : "";
   const trades = (ui.tradeSetup && ui.tradeSetup.enabled) || readTradeList(org, null);
-  return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin"), trades, canEditTrades: canEditTitles() }) + rates;
+  return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin"), trades, canEditTrades: canEditTitles() }) + rates
+    + dispatchSettingsHtml(dispatchSettingsNow(), { canEdit: canEditTitles() });
+}
+async function saveDispatchForm(form) {
+  if (!canEditTitles()) { toast("An admin or a manager can change dispatch times."); return; }
+  const durations = {};
+  for (const cat of DISPATCH_CATEGORIES) {
+    const input = form.querySelector(`[name="dur_${cat.id}"]`);
+    durations[cat.id] = input ? input.value : "";
+  }
+  const settings = sanitizeDispatchSettings({ dayStart: form.dayStart.value, travelGapMin: form.travelGapMin.value, durations });
+  ui.dispatchSettings = settings;
+  ui.persistHold = false;
+  writeDispatchLocal(myCompanyId(), settings);
+  const id = myCompanyId();
+  const payload = {
+    companyId: id, dayStart: settings.dayStart, travelGapMin: settings.travelGapMin, durations: settings.durations,
+    updatedBy: me.uid, updatedAt: serverTimestamp(),
+  };
+  const ref = id === "heartwood" ? doc(db, "meta", "dispatchTimes") : doc(db, "companyMeta", id + "_dispatch");
+  try {
+    await setDoc(ref, payload);
+    toast("Dispatch times saved");
+  } catch (e) {
+    const code = e && (e.code || e.message) || "";
+    toast(String(code).includes("permission-denied")
+      ? "Saved on this phone. Other phones pick this up once the dispatch settings rules are deployed."
+      : "Saved on this phone. " + code);
+  }
+  queueDispatchPersist(jobs);
+  if (me && me.role === "admin") renderAdmin();
 }
 function bindTradeList(A) {
   const root = A || document;
@@ -633,6 +794,8 @@ function bindTradeList(A) {
 }
 function bindSettings(A) {
   bindTradeList(A);
+  const dispatchForm = A.querySelector("#dispatchform");
+  if (dispatchForm) dispatchForm.onsubmit = ev => { ev.preventDefault(); saveDispatchForm(dispatchForm); };
   const rb = A.querySelector("#setrates");
   if (rb) rb.onclick = () => QG && QG.openRatesEditor();
   const sub = A.querySelector("#billsub");
@@ -1046,28 +1209,29 @@ function dispatchView(all) {
   const t0 = todayStr(), wk0 = addDays(addDays(t0, -dowMon(t0)), 7 * ui.wk);
   const dayD = addDays(t0, ui.wk);
   const days = ui.dview === "week" ? [...Array(7)].map((_, i) => addDays(wk0, i)) : [dayD];
+  noteDispatch(all, days);
   const sched = all.filter(j => j.date && queueOf(j) !== "Unsuccessful");
   const rows = rowsFor(all);
-  const chip = j => {
-    const away = assignmentWarning(ui.leave || [], j.date, leavePeople(namesOf(j)));
-    return `<div class="dchip ${QCLS[queueOf(j)]} t-${j.type} ${j.status === "In progress" ? "inprog" : ""} ${away ? "on-leave" : ""}" draggable="true" data-id="${j.id}" title="${esc(j.client)} – ${esc(j.description)}${away ? " · " + away : ""}">${ipTop(j, "sm")}
-      <b>${esc(j.time || "")}</b> ${esc((j.address || "").split(",")[0])}<div class="sub">${esc(TYPES[j.type] || "")} · #${esc(jobNo(j))}</div></div>`;
-  };
   const cellAway = (row, day) => {
     if (!row.raw) return "";
     const person = staff.find(s => skey(s) === row.key);
     return cellLeaveText(ui.leave || [], { uid: person && person.uid || "", name: row.raw }, day);
   };
+  const orderedChips = (row, day) => rowPlan(row, day, sched).map(slot => {
+    const j = sched.find(x => x.id === slot.id);
+    return j ? dispatchChip(j, slot) : "";
+  }).join("");
   let grid;
   if (ui.dview === "week") {
     grid = `<div class="dgrid" style="grid-template-columns:150px repeat(7,minmax(0,1fr))"><div class="dh"></div>${days.map(d => `<div class="dh ${d === t0 ? "today" : ""}">${shortDate(d)}</div>`).join("")}
       ${rows.map(r => `<div class="dname">${esc(r.name)}</div>${days.map(d => { const away = cellAway(r, d); return `<div class="dcell drop ${d === t0 ? "today" : ""}" data-date="${d}" data-staff="${esc(r.key)}">
-        ${away ? `<div class="leave-chip">${esc(away)}</div>` : ""}${sched.filter(j => j.date === d && r.has(j)).sort((a, b) => (a.time || "").localeCompare(b.time || "")).map(chip).join("")}</div>`; }).join("")}`).join("")}</div>`;
+        ${away ? `<div class="leave-chip">${esc(away)}</div>` : ""}${orderedChips(r, d)}</div>`; }).join("")}`).join("")}</div>`;
   } else {
     const hrs = [...Array(13)].map((_, i) => 6 + i);
+    const plans = new Map(rows.map(r => [r.key, rowPlan(r, dayD, sched)]));
     grid = `<div class="dgrid" style="grid-template-columns:150px repeat(13,minmax(0,1fr))"><div class="dh"></div>${hrs.map(h => `<div class="dh">${h > 12 ? h - 12 + "pm" : h + (h === 12 ? "pm" : "am")}</div>`).join("")}
       ${rows.map(r => `<div class="dname">${esc(r.name)}</div>${hrs.map(h => `<div class="dcell drop" data-date="${dayD}" data-hour="${h}" data-staff="${esc(r.key)}">
-        ${h === 6 && cellAway(r, dayD) ? `<div class="leave-chip">${esc(cellAway(r, dayD))}</div>` : ""}${sched.filter(j => j.date === dayD && r.has(j) && parseInt(j.time || "7") === h).map(chip).join("")}</div>`).join("")}`).join("")}</div>`;
+        ${h === 6 && cellAway(r, dayD) ? `<div class="leave-chip">${esc(cellAway(r, dayD))}</div>` : ""}${(plans.get(r.key) || []).filter(slot => boardHour(slot) === h).map(slot => { const j = sched.find(x => x.id === slot.id); return j ? dispatchChip(j, slot) : ""; }).join("")}</div>`).join("")}`).join("")}</div>`;
   }
   const leaveBanner = plannerLeaveHtml(ui.leave || [], days, staff.map(s => ({ uid: s.uid || "", name: s.name })));
   return `<div class="sm-head"><h1>Dispatch Board</h1>
@@ -2644,7 +2808,10 @@ const emailedPhotosNote = () => "";
 const greet = () => { const h = +new Intl.DateTimeFormat("en-AU", { hour: "numeric", hourCycle: "h23", timeZone: TZ }).format(new Date()); return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening"; };
 function homeRow(j) {
   const q = queueOf(j), names = namesOf(j);
-  return `<div class="hrow" data-id="${j.id}"><div class="htime"><b>${esc(j.time || "--")}</b><small>${j.durationHrs ? esc(j.durationHrs) + "h" : ""}</small></div>
+  const slot = ui.homePlan && ui.homePlan.get(j.id);
+  const time = slot ? slot.time : (j.time || "--");
+  const est = slot ? formatEstimate(slot.estHours) : "";
+  return `<div class="hrow" data-id="${j.id}"><div class="htime"><b>${esc(time || "--")}</b>${est ? `<small class="est">${esc(est)}</small>` : ""}</div>
     <div class="hbody"><div class="hcl"><span class="qdot ${QCLS[q]}"></span>${esc(j.client || "")} <span class="jn">#${esc(jobNo(j))}</span>${jobPhotosIcon(j)}</div>
     <div class="sub">${esc(j.address || "-")}</div><div class="sub">${esc(firstLine(crewText(j.description)))}</div>
     <div class="sub">${names.length ? esc(names.map(label).join(", ")) : `<span class="unal">Unallocated</span>`}</div></div>
@@ -2726,8 +2893,32 @@ function attentionHtml(all) {
     row(owed.length, `receipt${owed.length === 1 ? "" : "s"} to check / reimburse${dups.length ? ` · <span class="dupw">${dups.length} possible duplicate${dups.length === 1 ? "" : "s"}</span>` : ""}`, dups.length ? "amber" : "", "", "reimb")].join("");
   return `<div class="hsec attn"><div class="hsec-h">Needs attention</div>${rows || `<p class="muted pad">All clear. Nothing needs you right now.</p>`}</div>`;
 }
+function homePlanFor(list) {
+  const map = new Map(), groups = new Map();
+  for (const j of list || []) {
+    if (!j || !j.date) continue;
+    const key = primaryKey(j) + "|" + j.date;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(j);
+  }
+  const history = dispatchHistory(list);
+  const settings = dispatchSettingsNow();
+  for (const [key, rows] of groups) {
+    const bar = key.lastIndexOf("|");
+    const sheet = approvedSheet(ui.runSheets || {}, key.slice(0, bar), key.slice(bar + 1));
+    for (const slot of spaceDay(rows, { settings, history, sheet })) map.set(slot.id, slot);
+  }
+  return map;
+}
 function homeBody(all, admin, btns) {
   const { live, today, tomorrow, t0, t1 } = homeLists(all, admin);
+  const plan = homePlanFor([...today, ...tomorrow]);
+  ui.homePlan = plan;
+  const byPlan = js => js.slice().sort((a, b) => {
+    const ta = (plan.get(a.id) || {}).time || a.time || "";
+    const tb = (plan.get(b.id) || {}).time || b.time || "";
+    return ta.localeCompare(tb) || String(a.id).localeCompare(String(b.id));
+  });
   const ip = live.filter(j => j.status === "In progress").length;
   const unal = live.filter(j => j.date >= t0 && j.status !== "Done" && !namesOf(j).length).length;
   const ready = (ui.done || []).filter(j => !j.invoiceNo && j.invoiceExcluded !== true && !j.doNotInvoice).length;
@@ -2739,7 +2930,7 @@ function homeBody(all, admin, btns) {
     ${swmsReminderHtml()}${admin ? attentionHtml(all) + (canXero() ? profitChartHtml() : "") : `<div class="hbtns opbtns"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button><button class="hbtn" data-go="swms"><span class="ic">📋</span>SWMS</button></div>`}
     <div class="hstats hidden">${stat(today.length, "Today", "q-wo")}${stat(ip, "In progress", "ip", admin ? "q-ip" : "")}${admin ? stat(ready, "Ready to invoice", "q-comp", "invoices") + stat(unal, "Unallocated", "q-uns", "dispatch") + (canImport() && ui.inbox ? stat(inboxUnread(), "Unread builder emails", "q-inbox", "inbox") : "") : stat(tomorrow.length, "Tomorrow", "q-quote")}</div>
     <div class="hbtns hidden"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button>${btns.map(([go, ic, n]) => `<button class="hbtn" data-go="${go}"><span class="ic">${ic}</span>${n}</button>`).join("")}</div>
-    ${sec("Today", t0, today)}${sec("Tomorrow", t1, tomorrow)}${admin ? "" : myIncidentsHtml()}</div>`;
+    ${sec("Today", t0, byPlan(today))}${sec("Tomorrow", t1, byPlan(tomorrow))}${admin ? "" : myIncidentsHtml()}</div>`;
 }
 function homeView(all) {
   return homeBody(all, true, NAV.filter(x => x[0] !== "home" && !x[3] && (x[0] === "inbox" ? canImport() : (!x[4] || isOwner()))).map(([k, ic, n]) => [k, ic, n]));
@@ -3045,7 +3236,6 @@ function renderAdmin() {
 // 30-min ServiceM8 import keeps the change. Nothing is written to ServiceM8.
 async function dispatchMove(j, date, fromKey, toKey, hour) {
   const u = { date, editedInApp: true, updatedAt: serverTimestamp(), updatedBy: me.uid };
-  if (hour) u.time = String(hour).padStart(2, "0") + ":" + ((j.time || "00:00").slice(3) || "00");
   if (toKey && fromKey !== toKey) {
     const find = k => staff.find(s => skey(s) === k);
     let names = namesOf(j).slice(); const from = find(fromKey), to = find(toKey);
@@ -3054,18 +3244,41 @@ async function dispatchMove(j, date, fromKey, toKey, hour) {
     u.assignedNames = names;
     u.assigned = names.map(n => (staff.find(s => s.name.toLowerCase() === n.toLowerCase()) || {}).uid).filter(Boolean);
   }
-  if (j.date === date && !u.assignedNames && !u.time) return;
+  // A pinned start dropped on an hour stays at that hour. An auto job uses the hour only to choose its place in the day.
+  if (hour && keepsStart(j)) {
+    const mm = (normaliseTime(j.time) || "00:00").slice(3);
+    u.time = String(hour).padStart(2, "0") + ":" + mm;
+    u.timeSource = "manual";
+  }
+  if (j.date === date && !u.assignedNames && !u.time && !hour) return;
   const names = u.assignedNames || namesOf(j);
   if (!confirmIfOnLeave(date, names)) return;
+  const draft = {
+    ...j, date,
+    assigned: u.assigned || j.assigned, assignedNames: u.assignedNames || j.assignedNames,
+    time: u.time || j.time, timeSource: u.timeSource || j.timeSource,
+  };
+  let pool = [...jobs, ...(ui.undated || [])].map(x => x.id === j.id ? draft : x);
+  if (hour && !u.timeSource) pool = withSortHint(pool, j.id, hour);
+  const dates = [...new Set([j.date, date].filter(Boolean))];
+  const writes = planAutoTimes(pool, {
+    settings: dispatchSettingsNow(), history: dispatchHistory(pool), sheets: ui.runSheets || {},
+    dates,
+  });
+  const mine = writes.find(w => w.id === j.id);
+  if (mine && !u.timeSource) Object.assign(u, { time: mine.time, timeSource: "auto", estHours: mine.estHours, estSource: mine.estSource });
   try { await updateDoc(doc(db, "jobs", j.id), u); } catch (e) { return toast("Not saved: " + (e.code || e.message)); }
   if (ui.undated) ui.undated = ui.undated.filter(x => x.id !== j.id);
+  Object.assign(j, { date, ...(u.time ? { time: u.time } : {}), ...(u.timeSource ? { timeSource: u.timeSource } : {}), ...(u.estHours != null ? { estHours: u.estHours, estSource: u.estSource } : {}), ...(u.assigned ? { assigned: u.assigned, assignedNames: u.assignedNames } : {}) });
+  const rest = writes.filter(w => w.id !== j.id);
+  if (rest.length) queueDispatchPersist(pool.map(x => x.id === j.id ? { ...x, ...u } : x), dates);
   toast(`Rescheduled to ${shortDate(date)}${u.time ? " " + u.time : ""}${u.assignedNames ? " · " + (u.assignedNames.join(", ") || "Unallocated") : ""}`);
 }
 // "Remove from dispatch board": clears date/time (job goes back to Unscheduled; nothing is deleted). The next sync deletes
 // this visit's staff bookings in ServiceM8 (sm8_push), not the job. Undo puts the date/time back.
 async function unscheduleJob(j) {
-  const prev = { date: j.date || "", time: j.time || "" };
-  const u = { date: "", time: "", editedInApp: true, unscheduledFrom: prev, unscheduledAt: new Date().toISOString(), unscheduledByName: me.name, updatedAt: serverTimestamp(), updatedBy: me.uid };
+  const prev = { date: j.date || "", time: j.time || "", timeSource: j.timeSource || "auto" };
+  const u = { date: "", time: "", timeSource: "auto", editedInApp: true, unscheduledFrom: prev, unscheduledAt: new Date().toISOString(), unscheduledByName: me.name, updatedAt: serverTimestamp(), updatedBy: me.uid };
   await updateDoc(doc(db, "jobs", j.id), u);
   Object.assign(j, { date: "", time: "" }); if (ui.undated && !ui.undated.some(x => x.id === j.id)) ui.undated.push(j);
   undoToast(`#${jobNo(j)} removed from the dispatch board (now Unscheduled)`, async () => {
@@ -3167,6 +3380,7 @@ function editJob(j) {
       <div class="row"><label>Date<input type="date" name="date" value="${esc(j.date)}"></label>
         <label>Start<input type="time" name="time" value="${esc(j.time)}"></label>
         <label>Hours<input type="number" step="any" min="0" max="999" inputmode="decimal" name="durationHrs" value="${esc(j.durationHrs)}"></label></div>
+      <p class="sub">Change the start time to pin it. Leave it and the board spaces this job. Hours on the job do not change timesheets.</p>
       ${!n && j.date && !["Done", "Cancelled"].includes(j.status) ? `<div class="row"><button type="button" id="unschbtn" class="btn">✕ Remove from dispatch board</button><span class="sub">Back to Unscheduled${usesSm8Sync() ? "; the booking is removed at the next sync" : ""} (the job stays).</span></div>` : ""}
       <fieldset class="staffs">${staff.map(s => `<label class="ck"><input type="checkbox" name="assigned" value="${esc(skey(s))}" ${namesOf(j).map(x => x.toLowerCase()).includes(s.name.toLowerCase()) ? "checked" : ""}> <span class="av">${esc(s.name[0])}</span>${esc(label(s.name))}</label>`).join("")}</fieldset>
       <p id="leavewarn" class="leave-warn" hidden></p>
@@ -3196,6 +3410,7 @@ function editJob(j) {
     splitJob(j, pick).catch(e => toast("Not split: " + (e.code || e.message))); };
   if (!n && $("#splitundo")) $("#splitundo").onclick = () => undoSplit(j).catch(e => toast("Undo failed: " + (e.code || e.message)));
   const f = $("#jf");
+  if (f.time) f.time.addEventListener("input", () => { f.time.dataset.touched = "1"; });
   f.description.oninput = () => { if (n && !importing) f.type.value = guessType(f.description.value); };
   if (importing) wireImportForm(j, f);
   f.addEventListener("change", () => refreshJobLeaveWarn(f));
@@ -3208,8 +3423,10 @@ function editJob(j) {
     if (typ === "spoil" && /back ?slab|slab clean|back blade/.test(ds)) { $("#ferr").textContent = "Backslab work must be a separate job from spoil removal."; return; }
     const picked = [...f.querySelectorAll("[name=assigned]:checked")].map(x => staff.find(s => skey(s) === x.value)).filter(Boolean);
     const assigned = picked.filter(s => s.uid).map(s => s.uid);
+    const timeTouched = f.time.dataset.touched === "1";
     const data = { client: f.client.value.trim(), address: f.address.value.trim(), type: typ, po: f.po.value.trim().toUpperCase().replace(/\s+/g, ""),
       description: f.description.value.trim(), date: f.date.value, time: f.time.value, durationHrs: parseHoursInput(f.durationHrs.value),
+      timeSource: timeTouched || isManualStart(j) ? "manual" : "auto",
       assigned, assignedNames: picked.map(s => s.name), status: f.status.value, notes: f.notes.value.trim(),
       loads: f.loads.value === "" ? null : +f.loads.value, editedInApp: true,
       ...(String(j.poAmount ?? "") !== f.poAmount.value ? { poAmount: f.poAmount.value === "" ? null : Math.round(+f.poAmount.value * 100) / 100, poAmountBasis: f.poAmount.value === "" ? null : "entered in app (ex GST)", poAmountSource: "app" } : {}), updatedAt: serverTimestamp(), updatedBy: me.uid };
@@ -3236,6 +3453,8 @@ function editJob(j) {
       const r = await settleOrQueue(write);
       if (r.queued) write.catch(e => toast("Job not saved: " + (e.code || e.message)));
       d.close(); toast(r.queued ? "Saved on this phone. It uploads when you have signal." : "Saved"); refreshAfterImport();
+      const savedId = (j && j.id) || (newRef && newRef.id);
+      queueDispatchPersist([...(jobs || []).filter(x => x.id !== savedId), { ...j, ...data, id: savedId }], [data.date, j && j.date].filter(Boolean));
       if (!data.date && !r.queued) location.reload();
     } catch (e) { $("#ferr").textContent = e.message; }
     finally { guard.end(); if (saveBtn) saveBtn.disabled = false; }
@@ -4076,15 +4295,38 @@ function workAmountsHtml(j, cls) {
   const list = Array.isArray(j && j.workAmounts) ? j.workAmounts.filter(a => typeof a === "string" && a).map(noDollars).slice(0, 8) : [];
   return list.length ? `<ul class="${cls}">${list.map(a => `<li>${esc(a)}</li>`).join("")}</ul>` : "";
 }
+function prepareOperatorPlan(list) {
+  ui.opPlan = new Map();
+  const settings = dispatchSettingsNow();
+  const history = dispatchHistory(list);
+  const byDate = new Map();
+  for (const j of list || []) {
+    if (!j || !j.date) continue;
+    if (!byDate.has(j.date)) byDate.set(j.date, []);
+    byDate.get(j.date).push(j);
+  }
+  for (const [date, rows] of byDate) {
+    const sheet = me ? readRunSheet(me.uid, date) : null;
+    const ordered = orderJobsForRun(rows, sheet);
+    for (const slot of spaceDay(ordered, { settings, history, ordered: true, reuseStored: true })) ui.opPlan.set(slot.id, slot);
+  }
+}
+function slotFor(j) {
+  const hit = (ui.opPlan && ui.opPlan.get(j.id)) || (ui.homePlan && ui.homePlan.get(j.id));
+  if (hit) return hit;
+  const est = estimateDuration(j, { durations: dispatchSettingsNow().durations, history: ui.dispatchHist || dispatchHistory([j]) });
+  return { time: normaliseTime(j && j.time) || "", estHours: est.hours, estSource: est.source, fixed: keepsStart(j) };
+}
 function opCard(j) {
   const p = phonePlace(j.address);
   const crew = namesOf(j);
   const type = TYPES[j.type] || j.client || "Job";
   const st = j.status === "In progress" ? "inprog" : j.status === "Done" ? "done" : "";
   const stop = ui.runStops && ui.runStops[j.id];
-  return `<div class="mrow opj t-${esc(j.type || "other")}" data-id="${esc(j.id)}" role="button" tabindex="0" aria-label="${esc(type + " " + (p.line || p.full) + " " + phoneTime(j.time))}">
+  const slot = slotFor(j);
+  return `<div class="mrow opj t-${esc(j.type || "other")}" data-id="${esc(j.id)}" role="button" tabindex="0" aria-label="${esc(type + " " + (p.line || p.full) + " " + phoneTime(slot.time || j.time))}">
     ${stop ? `<div class="run-stop">Stop ${stop}</div>` : ""}
-    <div class="mtime"><b>${esc(phoneTime(j.time))}</b>${j.durationHrs ? `<small>${esc(j.durationHrs)}h</small>` : ""}</div>
+    <div class="mtime"><b>${esc(phoneTime(slot.time || j.time))}</b><small class="est" title="${esc(slot.estSource === "quote" ? "Hours from the quote" : slot.estSource === "history" ? "Median clocked time for this kind of job" : "Default for this kind of job")}">${esc(formatEstimate(slot.estHours))}</small></div>
     <div class="mbody">${ipTop(j, "sm")}<div class="mcl"><span class="qdot ${QCLS[queueOf(j)]}"></span>${esc(type)}${jobPhotosIcon(j)}</div>
       <div class="maddr">${esc(p.line || p.full || "-")}</div>
       <div class="mdesc">${esc(p.locality || j.client || "")}</div>
@@ -4152,6 +4394,7 @@ function renderOperator() {
   CHAT.watch(jobs);
   const t0 = todayStr(), t1 = addDays(t0, 1), wkEnd = addDays(t0, 7);
   const mine = jobs.filter(j => j.status !== "Cancelled" && (me.role !== "admin" || (j.assigned || []).includes(me.uid))).sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
+  prepareOperatorPlan(mine);
   const sel = ui.opSel && mine.find(j => j.id === ui.opSel);
   if (sel) return renderOpDetail(sel);
   if (ui.opTab === "chat" && document.activeElement?.closest?.(".chat-compose")) return;
@@ -4314,7 +4557,7 @@ function renderOpDetail(j) {
       <p class="det-addr">${esc(addrLine || "-")}</p>
       <div class="mcard"><div class="mlbl">Client</div><div class="mval">${esc(j.client || "—")}</div><div class="supcard" data-sup="${esc(j.id)}"></div></div>
       <dl class="det-facts">
-        <div><dt>Scheduled</dt><dd>${esc(j.date ? longDate(j.date) : "Unscheduled")}${j.time ? " · " + esc(phoneTime(j.time)) : ""}${j.durationHrs ? " · " + esc(j.durationHrs) + "h" : ""}</dd></div>
+        <div><dt>Scheduled</dt><dd>${esc(j.date ? longDate(j.date) : "Unscheduled")}${slotFor(j).time ? " · " + esc(phoneTime(slotFor(j).time)) : ""} · ${esc(formatEstimate(slotFor(j).estHours))}</dd></div>
         <div><dt>Crew</dt><dd>${esc(crew.length ? crew.join(", ") : "—")}</dd></div>
         <div><dt>Purchase order</dt><dd><b>${esc(j.po || "—")}</b></dd></div>
         <div class="scope"><dt>Scope</dt><dd>${esc(crewText(j.description) || "—")}</dd></div>
@@ -4546,20 +4789,28 @@ function emailDialog(j, files, infos, o = {}) {
 function mobileDispatch(all) {
   const t0 = todayStr(); ui.mday = ui.mday || t0; const d = ui.mday;
   const sched = all.filter(j => j.date && queueOf(j) !== "Unsuccessful");
+  noteDispatch(all, [d]);
   const wk0 = addDays(d, -dowMon(d)), strip = [...Array(7)].map((_, i) => addDays(wk0, i));
-  const dayJobs = sched.filter(j => j.date === d).sort((a, b) => (a.time || "").localeCompare(b.time || ""));
-  const card = j => {
+  const dayJobs = sched.filter(j => j.date === d);
+  const card = (j, slot) => {
     const away = assignmentWarning(ui.leave || [], j.date, leavePeople(namesOf(j)));
+    const time = slot ? slot.time : (j.time || "--:--");
+    const est = slot ? formatEstimate(slot.estHours) : "";
     return `<div class="mdc ${QCLS[queueOf(j)]} ${away ? "on-leave" : ""}" data-id="${j.id}">
-      <div class="mdc-top"><b class="mdc-time">${esc(j.time || "--:--")}</b><span class="mdc-no">#${esc(jobNo(j))}</span><span class="pstack">${ipPill(j, "sm")}<span class="qpill ${QCLS[queueOf(j)]}">${esc(queueOf(j))}</span></span></div>
+      <div class="mdc-top"><b class="mdc-time">${esc(time)}</b><span class="mdc-no">#${esc(jobNo(j))}</span><span class="pstack">${ipPill(j, "sm")}<span class="qpill ${QCLS[queueOf(j)]}">${esc(queueOf(j))}</span></span></div>
       <div class="mdc-cl">${esc(j.client || "")}</div>
       <a class="mdc-addr" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener">📍 ${esc(j.address || "-")}</a>
       <div class="mdc-desc">${esc(firstLine(crewText(j.description)))}</div>
+      ${est ? `<div class="sub est">${esc(est)}</div>` : ""}
       ${away ? `<p class="leave-chip">${esc(away)}</p>` : ""}
-      <div class="mdc-foot"><span class="sub">${j.po ? "PO " + esc(j.po) : "No PO"}${j.durationHrs ? " · " + esc(j.durationHrs) + "h" : ""}</span>
+      <div class="mdc-foot"><span class="sub">${j.po ? "PO " + esc(j.po) : "No PO"}${est ? " · " + esc(est) : ""}</span>
         <span><button type="button" class="sm-btn mdc-unsch" data-unsch="${j.id}" title="Remove from dispatch board (back to Unscheduled)">✕ Off board</button> <button type="button" class="sm-btn mdc-move" data-move="${j.id}">⇄ Move</button></span></div></div>`;
   };
-  const groups = rowsFor(all).map(r => [r, dayJobs.filter(r.has)]);
+  const groups = rowsFor(all).map(r => {
+    const plan = rowPlan(r, d, dayJobs);
+    const cards = plan.map(slot => { const j = dayJobs.find(x => x.id === slot.id); return j ? card(j, slot) : ""; }).join("");
+    return [r, cards, plan.length];
+  });
   return `<div class="mdisp" id="mdisp"><div class="mdh">
       <div class="mdh-row"><button class="sm-btn" data-md="-1" aria-label="Previous day">‹</button>
         <div class="mdh-date"><b>${esc(dayLabel(d))}</b>${d === t0 ? '<span class="sub">Today</span>' : ""}</div>
@@ -4568,7 +4819,7 @@ function mobileDispatch(all) {
         return `<button class="${x === d ? "on" : ""} ${x === t0 ? "today" : ""}" data-mday="${x}"><small>${new Date(x + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", timeZone: "UTC" })}</small><b>${+x.slice(8)}</b><span class="${n ? "" : "zero"}">${n}</span></button>`; }).join("")}</div></div>
     <button type="button" class="route-open" id="optorder">Optimise order</button>
     ${plannerLeaveHtml(ui.leave || [], [d], staff.map(s => ({ uid: s.uid || "", name: s.name })))}
-    ${groups.map(([r, js]) => `<div class="mgrp">${esc(r.name)} <span class="cnt">${js.length}</span></div>${js.map(card).join("") || `<p class="muted sub pad">Nothing booked for ${esc(orgSettings().name)}.</p>`}`).join("")}
+    ${groups.map(([r, html, n]) => `<div class="mgrp">${esc(r.name)} <span class="cnt">${n}</span></div>${html || `<p class="muted sub pad">Nothing booked for ${esc(orgSettings().name)}.</p>`}`).join("")}
     <p class="sub muted pad">Swipe left / right to change day. Tap a card to open the job.</p></div>`;
 }
 function bindMobileDispatch(A, pool) {
@@ -4591,20 +4842,28 @@ function moveSheet(j) {
   const v = document.createElement("div"); v.className = "emdlg"; const cur = namesOf(j).map(n => n.toLowerCase());
   v.innerHTML = `<form class="embox msheet"><h3>Move #${esc(jobNo(j))}</h3><p class="sub muted">${esc(j.address || "")}</p>
     <div class="row"><label>Date<input type="date" name="date" value="${esc(j.date || todayStr())}" required></label><label>Time<input type="time" name="time" value="${esc(j.time || "07:00")}"></label></div>
+    <p class="sub">Change the time to pin it. Leave it and the board spaces this job.</p>
     <fieldset class="staffs">${staff.map(s => `<label class="ck"><input type="checkbox" name="st" value="${esc(skey(s))}" ${cur.includes(s.name.toLowerCase()) ? "checked" : ""}> ${esc(s.name)}</label>`).join("")}</fieldset>
     <p class="sub muted">No one ticked = Unallocated. ${esc(syncNote("Saved to the app, then synced at the next sync.", "Saved straight away."))}</p>
     <button class="mbtn complete">Save</button><button type="button" class="mbtn" data-x>Cancel</button></form>`;
   document.body.appendChild(v);
   v.querySelector("[data-x]").onclick = () => v.remove();
   v.onclick = e => { if (e.target === v) v.remove(); };
+  const timeInput = v.querySelector("[name=time]");
+  if (timeInput) timeInput.addEventListener("input", () => { timeInput.dataset.touched = "1"; });
   v.querySelector("form").onsubmit = async e => {
     e.preventDefault(); const f = e.target;
     const picked = [...f.querySelectorAll("[name=st]:checked")].map(x => staff.find(s => skey(s) === x.value)).filter(Boolean);
-    const u = { date: f.date.value, time: f.time.value, assignedNames: picked.map(s => s.name), assigned: picked.filter(s => s.uid).map(s => s.uid),
-      editedInApp: true, updatedAt: serverTimestamp(), updatedBy: me.uid };
+    const touched = f.time.dataset.touched === "1";
+    const u = { date: f.date.value, assignedNames: picked.map(s => s.name), assigned: picked.filter(s => s.uid).map(s => s.uid),
+      editedInApp: true, updatedAt: serverTimestamp(), updatedBy: me.uid,
+      ...(touched ? { time: f.time.value, timeSource: "manual" } : {}) };
     if (!confirmIfOnLeave(u.date, u.assignedNames)) return;
     try { await updateDoc(doc(db, "jobs", j.id), u); } catch (err) { return toast("Not saved: " + (err.code || err.message)); }
-    v.remove(); ui.mday = u.date; toast(`Moved to ${shortDate(u.date)} ${u.time} · ${u.assignedNames.join(", ") || "Unallocated"}`); renderAdmin();
+    const prevDate = j.date;
+    Object.assign(j, u);
+    queueDispatchPersist([...(jobs || []).filter(x => x.id !== j.id), { ...j, ...u }], [prevDate, u.date].filter(Boolean));
+    v.remove(); ui.mday = u.date; toast(`Moved to ${shortDate(u.date)} ${u.time || j.time || ""} · ${u.assignedNames.join(", ") || "Unallocated"}`); renderAdmin();
   };
 }
 
@@ -5112,6 +5371,8 @@ ROUTE = installRouteOrder({
   rememberSheet: (id, data) => {
     ui.runSheets = ui.runSheets || {};
     ui.runSheets[id] = { id, ...data, status: "approved" };
+    queueDispatchPersist(jobs, [data && data.date].filter(Boolean));
+    if (ui.view === "dispatch") renderAdmin();
   },
   cacheGeo: (job, hit) => updateDoc(doc(db, "jobs", job.id), geoPatch(job.address, hit)),
 });
