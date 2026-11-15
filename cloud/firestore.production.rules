@@ -687,7 +687,7 @@ service cloud.firestore {
     function cmRole() {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("role", "");
     }
-    // Dispatch day start, travel gap and per-type hours. Each default is at least 1 hour.
+    // Dispatch day start, day finish, travel gap and per-type hours. Each default is at least 1 hour.
     // Heartwood keeps this on meta/dispatchTimes (admins already write meta). Other companies use companyMeta.
     function dispatchDurOk(m, k) {
       return !m.keys().hasAny([k]) || (m[k] is number && m[k] >= 1 && m[k] <= 24);
@@ -700,9 +700,10 @@ service cloud.firestore {
         && dispatchDurOk(m, "waterproof") && dispatchDurOk(m, "other");
     }
     function dispatchMetaOk(d) {
-      return d.keys().hasOnly(["companyId", "dayStart", "travelGapMin", "durations", "updatedAt", "updatedBy"])
+      return d.keys().hasOnly(["companyId", "dayStart", "dayEnd", "travelGapMin", "durations", "updatedAt", "updatedBy"])
         && d.dayStart is string
         && d.dayStart.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$')
+        && (!("dayEnd" in d) || (d.dayEnd is string && d.dayEnd.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$')))
         && d.travelGapMin is number && d.travelGapMin >= 0 && d.travelGapMin <= 180
         && dispatchDurationsOk(d.durations)
         && d.updatedBy == request.auth.uid

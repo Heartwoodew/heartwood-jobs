@@ -126,6 +126,8 @@ table.jt{width:100%;border-collapse:collapse;background:#fff;border:1px solid va
 .dcell.over{background:#d8ecfa;outline:2px dashed var(--sm-blue);outline-offset:-2px}
 .dchip{background:#e8f3fc;border-left:4px solid var(--q-wo);border-radius:3px;padding:3px 5px;font-size:12px;margin-bottom:3px;cursor:grab;overflow:hidden}
 .dchip .est{display:block;font-size:11px;color:var(--sm-mut)}
+.dchip.past-finish,.mdc.past-finish{box-shadow:inset 0 0 0 2px #8a4b08}
+.past-finish{color:#8a4b08;font-weight:600}
 .dispatch-durs{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px 12px;margin:8px 0}
 .dchip.q-comp{border-left-color:var(--q-comp);background:#e9f7ef}.dchip.q-quote{border-left-color:var(--q-quote);background:#fdf3e3}.dchip.inprog{background:#fff0e0}
 .dchip .sub{font-size:11px}.dragging{opacity:.4}
