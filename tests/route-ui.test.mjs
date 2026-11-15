@@ -71,7 +71,9 @@ test("optimise order on a phone", async () => {
     assert.match(tweaked.text, /Saved for Patrick/);
     const saved = tweaked.calls.find(c => c.op === "setDoc" && c.col === "runSheets");
     assert.ok(saved, "approve writes a run sheet");
-    assert.deepEqual(saved.jobIds, ["j1", "j3", "j2"]);
+    // j1 is the 07:00 auto job. j2 at 08:30 is hand-set, so j1 is placed after that block
+    // and the driving order starts j2, j1, j3. One nudge of the first stop then saves this.
+    assert.deepEqual(saved.jobIds, ["j2", "j3", "j1"]);
     assert.equal(saved.workerUid, "patrick");
     assert.equal(saved.status, "approved");
     assert.equal(saved.keys.includes("approvedAt"), true);

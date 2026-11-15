@@ -193,7 +193,7 @@ test("opt-in stays a button press, and iPhone Safari shows the Home Screen hint"
   assert.match(config, /REPLACE_WITH_WEB_PUSH_CERTIFICATE/);
   assert.match(config, /Web Push certificates/);
   assert.doesNotMatch(config, /BEGIN PRIVATE|-----BEGIN/);
-  assert.match(sw, /callup-shell-v102-phase3-bundle/);
+  assert.match(sw, /callup-shell-v104-quote-dispatch-fix/);
   assert.match(sw, /notificationclick/);
   assert.match(sw, /visibilityState === "visible"/);
   assert.match(sw, /features\/push\.js/);
