@@ -282,6 +282,7 @@ export function onSnapshot(ref, onNext) {
       else if (col === "servicing") onNext(snap((typeof window !== "undefined" && window.HW_SERVICING) || []));
       else if (col === "servicePlans") onNext(snap((typeof window !== "undefined" && window.HW_SERVICE_PLANS) || []));
       else if (col === "serviceCosts") onNext(snap((typeof window !== "undefined" && window.HW_SERVICE_COSTS) || []));
+      else if (col === "liveLocations") onNext(snap((typeof window !== "undefined" && window.HW_LIVE) || []));
       else if (col === "timesheets" && id) onNext({ id, exists: () => false, data: () => undefined });
       else if (col === "jobMoney" && id) onNext({ id, exists: () => false, data: () => undefined });
       else if (col === "timesheets") onNext(snap((typeof window !== "undefined" && window.HW_TIMESHEETS) || []));

@@ -1765,5 +1765,67 @@ service cloud.firestore {
       allow delete: if false;
     }
 // END INBOX IMPORT RULES
+
+// BEGIN LIVE LOCATION RULES
+    // One live doc per person (latest position only). Heartwood: liveLocations/{uid}.
+    // Every other company: companies/{id}/liveLocations/{uid}. Written only while that
+    // person's timesheet shift is clocked on (open or on a break). Clock off deletes it.
+    // Manager and admin of the same company read. Supervisor and below do not. No other company does.
+    function llRole() {
+      return hasProfile() ? profile().get("role", "") : "";
+    }
+    function llOffice() {
+      return signedIn() && callerCompany() != "" && (
+        isAlex()
+        || (isPatrick() && callerCompany() == "heartwood")
+        || (hasProfile() && (llRole() == "admin" || llRole() == "manager"))
+      );
+    }
+    function llGps(d) {
+      return d.sharing == "gps"
+        && d.keys().hasOnly(["uid", "name", "companyId", "clockedOn", "sharing", "lat", "lng", "accuracy", "updatedAt", "weekStart", "entryId"])
+        && d.lat is number && d.lat >= -90 && d.lat <= 90
+        && d.lng is number && d.lng >= -180 && d.lng <= 180
+        && d.accuracy is number && d.accuracy >= 0 && d.accuracy <= 100000;
+    }
+    function llOff(d) {
+      return d.sharing == "off"
+        && d.keys().hasOnly(["uid", "name", "companyId", "clockedOn", "sharing", "updatedAt", "weekStart", "entryId"]);
+    }
+    function llOpenEntry(sheet) {
+      let entry = sheet.entries[request.resource.data.entryId];
+      return sheet.uid == request.auth.uid
+        && docCompany(sheet) == request.resource.data.companyId
+        && entry.source == "clock"
+        && (entry.status == "open" || entry.status == "break");
+    }
+    function llClocked() {
+      let path = /databases/$(database)/documents/timesheets/$(request.auth.uid + "_" + request.resource.data.weekStart);
+      return exists(path) && llOpenEntry(get(path).data);
+    }
+    function llBody(d, id) {
+      return d.uid == id
+        && d.uid == request.auth.uid
+        && d.name is string && d.name.size() > 0 && d.name.size() <= 80
+        && d.clockedOn == true
+        && d.updatedAt == request.time
+        && d.weekStart is string && d.weekStart.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && d.entryId is string && d.entryId.matches('^[a-z0-9]{8,24}$')
+        && (llGps(d) || llOff(d))
+        && llClocked();
+    }
+    match /liveLocations/{id} {
+      allow get: if llOffice() && callerCompany() == "heartwood" && docCompany(resource.data) == "heartwood";
+      allow list: if llOffice() && callerCompany() == "heartwood" && resource.data.companyId == "heartwood";
+      allow create, update: if callerCompany() == "heartwood" && request.resource.data.companyId == "heartwood" && llBody(request.resource.data, id);
+      allow delete: if signedIn() && request.auth.uid == id && callerCompany() == "heartwood" && docCompany(resource.data) == "heartwood";
+    }
+    match /companies/{c}/liveLocations/{id} {
+      allow get: if llOffice() && c != "heartwood" && callerCompany() == c && docCompany(resource.data) == c;
+      allow list: if llOffice() && c != "heartwood" && callerCompany() == c && resource.data.companyId == c;
+      allow create, update: if c != "heartwood" && callerCompany() == c && request.resource.data.companyId == c && llBody(request.resource.data, id);
+      allow delete: if signedIn() && request.auth.uid == id && c != "heartwood" && callerCompany() == c && docCompany(resource.data) == c;
+    }
+// END LIVE LOCATION RULES
   }
 }

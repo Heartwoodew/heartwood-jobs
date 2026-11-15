@@ -57,6 +57,10 @@ import {
   paidShift, prestartStatus, sheetHours, shiftHours, sortedEntries, stampText,
 } from "./features/timesheet.js";
 import {
+  LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, canSeeCrewMap, crewListHtml, crewMapModel,
+  liveCollectionPath, liveLocationBody, shareIndicator, shouldSendPosition,
+} from "./features/live-location.js";
+import {
   assignmentWarning, cellLeaveText, certificateContentType, certificateObjectName, certificateStoragePath,
   leaveCreateBody, leaveDecisionBody, leaveScreenHtml, newLeaveId, plannerLeaveHtml, saveCertificate, certificateDownloadName, weekLeaveHtml,
 } from "./features/leave.js";
@@ -123,6 +127,7 @@ const ui = { view: "list", staffF: "", typeF: "", photoLists: {}, photoUrls: {},
 $("#logout").onclick = () => signOut(auth);
 onAuthStateChanged(auth, async user => {
   if (signingUp) return;
+  if (!user || (me && user && me.uid !== user.uid)) liveShareStop(false);
   if (unsub) { unsub(); unsub = null; }
   CHAT.stop();
   COMP.stop();
@@ -172,6 +177,7 @@ onAuthStateChanged(auth, async user => {
   CLI = null; refreshClientLists();
   if (myCompanyId() !== "heartwood" && (me.role === "admin" || me.role === "manager" || me.role === "supervisor")) loadClients().catch(() => {});
   $("#who").textContent = `${me.name} · ${me.role}`; $("#logout").classList.remove("hidden");
+  watchOwnClock();
   CHAT.start();
   if (me.role === "admin") {
     if (window.HW_PREVIEW_VIEW === "staff") ui.view = "staff";
@@ -205,7 +211,7 @@ onAuthStateChanged(auth, async user => {
       watchInviteMail();
     }, e => { ui.invites = []; ui.invitesErr = e.code || "permission-denied"; if (ui.view === "staff") renderAdmin(); });
     moneyStart(renderAdmin);
-    unsub = () => { u1(); u2(); u3(); u4(); u5(); moneyStop(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; }; swmsSub(); COMP.start(); leaveStart(); claimsStart(); if (me.platformOwner) watchMaster();
+    unsub = () => { u1(); u2(); u3(); u4(); u5(); moneyStop(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; }; swmsSub(); COMP.start(); leaveStart(); claimsStart(); if (me.platformOwner) watchMaster();
     getDocs(companyJobs([where("date", "==", "")])).then(s => { ui.undated = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); addNameOnlyStaff(ui.undated); renderAdmin(); }).catch(e => console.warn("undated", e.code, e.message));
   } else {
     // Operators may only list jobs assigned to them (enforced by firestore.rules).
@@ -222,7 +228,7 @@ onAuthStateChanged(auth, async user => {
       }, e => { ui.invites = []; ui.invitesErr = e.code || "permission-denied"; if ((ui.opTab || "today") === "staff") renderOperator(); })
       : () => {};
     if (canInvite() && window.HW_PREVIEW_VIEW === "staff") ui.opTab = "staff";
-    unsub = () => { u1(); u3(); u4(); moneyStop(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start(); leaveStart(); claimsStart();
+    unsub = () => { u1(); u3(); u4(); moneyStop(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start(); leaveStart(); claimsStart();
   }
 });
 
@@ -1059,7 +1065,7 @@ function queueOf(j) {
 const jobNo = j => j.sm8JobNo ? j.sm8JobNo : companyJobPrefix(orgSettings()) + "-" + String(j.id || "").slice(-4).toUpperCase();
 const firstLine = s => String(s || "").split(/\n|\. /)[0];
 const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Unscheduled";
-const NAV = [["home", "⌂", "Home"], ["compliance", "🚐", "Compliance"], ["prestart", "☑", "Prestart"], ["chat", "💬", "Chat"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["staff", "👥", "Staff"], ["inbox", "✉", "Inbox", 0, 1],
+const NAV = [["home", "⌂", "Home"], ["compliance", "🚐", "Compliance"], ["prestart", "☑", "Prestart"], ["chat", "💬", "Chat"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["crew", "⌖", "Crew map"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["staff", "👥", "Staff"], ["inbox", "✉", "Inbox", 0, 1],
   ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["leave", "🌴", "Leave"], ["claims", "🧾", "Reimbursements"], ["reimb", "💵", "Receipt ledger", 0, 1], ["settings", "⚙", "Company"], ["master", "▣", "Master"]];
 ui.view = "home"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
 const PHONE = matchMedia("(max-width:760px)");
@@ -1068,12 +1074,12 @@ PHONE.addEventListener?.("change", () => { if (me && me.role === "admin") render
 // Grouped side menu: top items, then collapsible groups (open/closed remembered on this device; the group holding the current screen is always open).
 const NAV_TOP = ["home", "chat", "inbox", "clients", "staff", "master"];
 const NAV_FOOT = ["settings"];
-const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "jobs", "unscheduled", "quotes", "completed", "myjobs"]], ["money", "$", "Money", ["invoices", "claims", "reimb", "timesheet", "leave"]], ["safety", "⚠", "Safety", ["safety", "swms", "prestart", "compliance"]]];
+const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "jobs", "unscheduled", "quotes", "completed", "myjobs", "crew"]], ["money", "$", "Money", ["invoices", "claims", "reimb", "timesheet", "leave"]], ["safety", "⚠", "Safety", ["safety", "swms", "prestart", "compliance"]]];
 const NAV_LBL = { safety: "Incidents" };
 ui.navCol = (() => { try { return JSON.parse(localStorage.getItem("hwNavCol") || "{}"); } catch { return {}; } })();
 function shell(inner) {
   const cur = NAV.find(n => n[0] === ui.view);
-  const item = k => { const x = NAV.find(n => n[0] === k); if (!x || x[3] || (k === "inbox" ? !canImport() : (x[4] && !isOwner())) || (k === "invoices" && (!me || me.role !== "admin")) || (k === "staff" && !canInvite()) || (k === "quotes" && !canQuote()) || (k === "compliance" && !COMP.canSee()) || (k === "prestart" && !COMP.canPrestart())) return "";
+  const item = k => { const x = NAV.find(n => n[0] === k); if (!x || x[3] || (k === "inbox" ? !canImport() : (x[4] && !isOwner())) || (k === "invoices" && (!me || me.role !== "admin")) || (k === "staff" && !canInvite()) || (k === "quotes" && !canQuote()) || (k === "compliance" && !COMP.canSee()) || (k === "prestart" && !COMP.canPrestart()) || (k === "crew" && !canSeeCrewMap(me))) return "";
     const badge = k === "chat" ? CHAT.badge("staff") : "";
     if (k === "master" && !(me && me.platformOwner)) return "";
     return `<button class="sm-nav ${ui.view === k ? "on" : ""}" data-view="${k}" title="${esc(NAV_LBL[k] || x[2])}"><span class="ic">${x[1]}</span><span class="lbl">${esc(NAV_LBL[k] || x[2])}</span>${badge}</button>`; };
@@ -1743,6 +1749,7 @@ function donePill() {
 }
 // ---- Timesheets: timesheets/{uid}_{weekStart}. The week document is unchanged for accounts.
 // Clock on / clock off adds one entry per shift, with a server timestamp and one GPS fix at that tap.
+// While that shift is open, the latest position is shared with managers. Clock off deletes it. No trail is kept.
 // Manual shifts are labelled Manual and keep an edit trail. Alex still emails accounts; he alone marks Sent.
 const ACCOUNTS_EMAIL = "accounts@heartwoodew.com";
 const TS_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -1883,6 +1890,7 @@ function tsClockHtml() {
   if (ui.tsAsk) {
     const label = { on: "Agree and clock on", off: "Agree and clock off", "break-start": "Agree and start break", "break-end": "Agree and end break" }[ui.tsAsk] || "Agree and continue";
     return `<div class="ts-consent" role="dialog" aria-label="Location at clock on and clock off"><p>${esc(locationConsent(orgSettings().name))}</p>
+      <p>${esc(LIVE_SHARE_TEXT)} If you say no to the browser, you still clock on and the map shows location off.</p>
       <button type="button" class="ts-go on" id="tsagree">${label}</button>
       <button type="button" class="sm-btn" id="tsno">Not now</button></div>`;
   }
@@ -1896,7 +1904,7 @@ function tsClockHtml() {
         <button type="button" class="ts-go off" id="tsclockoff">Clock off</button>
         <div class="ts-break">${active.entry.status === "break" ? `<button type="button" class="ts-mini" id="tsbrkend">Break end</button>` : `<button type="button" class="ts-mini" id="tsbrk">Break start</button>`}</div>`
       : `<p class="ts-live">Not clocked on</p><button type="button" class="ts-go on" id="tsclockon">Clock on</button>`;
-  return `<div class="ts-clock">${main}<p class="ts-privacy">Location is captured only when you tap Clock on, Clock off, Break start, or Break end.</p></div>`;
+  return `<div class="ts-clock">${main}${shareLine()}<p class="ts-privacy">${esc(LIVE_SHARE_TEXT)} It updates about once a minute while CallUp is open. Clocking off stops it. A browser can't keep sharing after the phone locks.</p><p class="ts-privacy">One location is also saved on the timesheet when you tap Clock on, Clock off, Break start, or Break end.</p></div>`;
 }
 function tsTenant() {
   const m = cloudMembership();
@@ -2552,6 +2560,272 @@ function tsDiffSummary(prev, next) {
   }
   return bits.join(". ").slice(0, 200);
 }
+function shareLine() {
+  const ind = shareIndicator(ui.liveShare || {});
+  if (!ind.visible || ind.mode === "ask") return "";
+  return `<p class="loc-share ${ind.mode}" role="status">${esc(ind.text)}</p>`;
+}
+let shareRun = null;
+let liveCleared = false;
+function paintShareStatus() {
+  const ind = shareIndicator(ui.liveShare || {});
+  const el = document.getElementById("locshare");
+  if (!el) return;
+  el.hidden = !ind.visible;
+  el.textContent = ind.text || "";
+  el.className = "loc-share " + (ind.mode || "off");
+}
+function liveDocRef(companyId) {
+  return doc(db, ...liveCollectionPath(companyId || myCompanyId()), me.uid);
+}
+function disarmShareWatch() {
+  if (!shareRun) return;
+  if (shareRun.watch != null && navigator.geolocation && typeof navigator.geolocation.clearWatch === "function") {
+    navigator.geolocation.clearWatch(shareRun.watch);
+  }
+  shareRun.watch = null;
+  if (shareRun.timer) clearInterval(shareRun.timer);
+  shareRun.timer = null;
+}
+function positionFix(pos) {
+  const c = pos && pos.coords;
+  if (!c || typeof c.latitude !== "number" || typeof c.longitude !== "number") return { fix: "no location" };
+  return { fix: "gps", lat: c.latitude, lng: c.longitude, accuracy: typeof c.accuracy === "number" ? c.accuracy : null };
+}
+function considerShareFix(fix) {
+  if (!shareRun || !me || document.hidden) return;
+  const gps = fix && fix.fix === "gps" && Number.isFinite(fix.lat) && Number.isFinite(fix.lng);
+  if (!gps) { sendShareOff(); return; }
+  const next = { sharing: "gps", lat: fix.lat, lng: fix.lng, accuracy: fix.accuracy, at: Date.now() };
+  if (!shouldSendPosition(shareRun.last, next, next.at)) return;
+  const body = liveLocationBody({
+    uid: me.uid, name: me.name, companyId: shareRun.companyId,
+    weekStart: shareRun.weekStart, entryId: shareRun.entryId, fix,
+  });
+  setDoc(liveDocRef(shareRun.companyId), { ...body, updatedAt: serverTimestamp() }).then(() => {
+    if (!shareRun || shareRun.entryId !== body.entryId) return;
+    shareRun.last = next;
+    shareRun.offSent = false;
+    ui.liveShare = { clockedOn: true, sharing: "gps" };
+    paintShareStatus();
+  }).catch(() => {});
+}
+function sendShareOff() {
+  if (!shareRun || !me || shareRun.offSent || shareRun.offSending) return;
+  shareRun.offSending = true;
+  const body = liveLocationBody({
+    uid: me.uid, name: me.name, companyId: shareRun.companyId,
+    weekStart: shareRun.weekStart, entryId: shareRun.entryId, fix: { fix: "no location" },
+  });
+  setDoc(liveDocRef(shareRun.companyId), { ...body, updatedAt: serverTimestamp() }).then(() => {
+    if (!shareRun) return;
+    shareRun.offSent = true;
+    shareRun.offSending = false;
+    ui.liveShare = { clockedOn: true, sharing: "off" };
+    paintShareStatus();
+  }).catch(() => { if (shareRun) shareRun.offSending = false; });
+}
+function armShareWatch() {
+  if (!shareRun || document.hidden) return;
+  const geo = navigator.geolocation;
+  if (!geo || typeof geo.watchPosition !== "function") { sendShareOff(); return; }
+  if (shareRun.watch == null) {
+    shareRun.watch = geo.watchPosition(
+      pos => considerShareFix(positionFix(pos)),
+      () => sendShareOff(),
+      { enableHighAccuracy: true, maximumAge: 15000, timeout: 20000 },
+    );
+  }
+  if (!shareRun.timer) {
+    shareRun.timer = setInterval(() => {
+      if (!shareRun || document.hidden || !navigator.geolocation || typeof navigator.geolocation.getCurrentPosition !== "function") return;
+      navigator.geolocation.getCurrentPosition(
+        pos => considerShareFix(positionFix(pos)),
+        () => {},
+        { enableHighAccuracy: true, maximumAge: 15000, timeout: 20000 },
+      );
+    }, 60000);
+  }
+}
+function liveShareStart(entryId, weekStart, firstFix) {
+  if (!me || !entryId || !weekStart) return;
+  if (shareRun && shareRun.entryId === entryId && shareRun.weekStart === weekStart) {
+    if (firstFix && !document.hidden) considerShareFix(firstFix);
+    return;
+  }
+  disarmShareWatch();
+  liveCleared = false;
+  shareRun = { entryId, weekStart, companyId: myCompanyId(), last: null, watch: null, timer: null, offSent: false };
+  ui.liveShare = { clockedOn: true, sharing: "ask" };
+  paintShareStatus();
+  if (firstFix) considerShareFix(firstFix);
+  armShareWatch();
+}
+function liveShareStop(clearDoc) {
+  const run = shareRun;
+  disarmShareWatch();
+  shareRun = null;
+  ui.liveShare = { clockedOn: false, sharing: "off" };
+  paintShareStatus();
+  if (clearDoc && run && me && !liveCleared) {
+    liveCleared = true;
+    deleteDoc(doc(db, ...liveCollectionPath(run.companyId), me.uid)).catch(() => {});
+  }
+}
+function clearStaleLive() {
+  if (!me || shareRun || liveCleared) return;
+  liveCleared = true;
+  deleteDoc(doc(db, ...liveCollectionPath(myCompanyId()), me.uid)).catch(() => {});
+}
+document.addEventListener("visibilitychange", () => {
+  if (!shareRun) return;
+  if (document.hidden) disarmShareWatch();
+  else armShareWatch();
+});
+window.addEventListener("pagehide", () => { if (shareRun) disarmShareWatch(); });
+function clockWatchStop() {
+  ui.clockUnsub?.(); ui.clockPrevUnsub?.();
+  ui.clockUnsub = ui.clockPrevUnsub = null;
+}
+function watchOwnClock() {
+  clockWatchStop();
+  if (!me) return;
+  const ws = weekStartOf(todayStr());
+  const prevWs = addDays(ws, -7);
+  let curKnown = false, prevKnown = false, curServer = false, prevServer = false;
+  const sync = () => {
+    if (!curKnown || !prevKnown || !me) return;
+    const here = openClock(ui.clockSheet && ui.clockSheet.entries);
+    const back = openClock(ui.clockPrev && ui.clockPrev.entries);
+    if (here) liveShareStart(here.id, (ui.clockSheet && ui.clockSheet.weekStart) || ws);
+    else if (back) liveShareStart(back.id, (ui.clockPrev && ui.clockPrev.weekStart) || prevWs);
+    else if (curServer && prevServer) { liveShareStop(true); clearStaleLive(); }
+  };
+  ui.clockUnsub = onSnapshot(doc(db, "timesheets", `${me.uid}_${ws}`), s => {
+    ui.clockSheet = s.exists() ? s.data() : null;
+    curKnown = true; curServer = !(s.metadata && s.metadata.fromCache); sync();
+  }, () => { curKnown = true; curServer = true; ui.clockSheet = null; sync(); });
+  ui.clockPrevUnsub = onSnapshot(doc(db, "timesheets", `${me.uid}_${prevWs}`), s => {
+    ui.clockPrev = s.exists() ? s.data() : null;
+    prevKnown = true; prevServer = !(s.metadata && s.metadata.fromCache); sync();
+  }, () => { prevKnown = true; prevServer = true; ui.clockPrev = null; sync(); });
+}
+function destroyCrewMap() {
+  if (ui.crewMap) { ui.crewMap.remove(); ui.crewMap = null; }
+  ui.crewLayer = null;
+  ui.crewFitKey = "";
+}
+function leaveCrewScreen() {
+  destroyCrewMap();
+  ui.crewUnsub?.(); ui.crewJobUnsub?.();
+  ui.crewUnsub = ui.crewJobUnsub = null;
+  ui.crewSubsOn = false;
+}
+function crewMapScreen() {
+  return `<div class="crew-map-wrap">
+    <p class="crew-note">${esc(LIVE_LIMIT_NOTE)} Clocking off removes someone straight away.</p>
+    <div id="crewmap" class="crew-map" role="region" aria-label="Live crew map"></div>
+    <p id="crewmapstatus" class="crew-note"></p>
+    <p class="crew-legend"><span class="crew-dot crew"></span> Clocked on <span class="crew-dot job"></span> Today's job</p>
+    <div id="crewlist"><p class="crew-note">Loading crew…</p></div>
+  </div>`;
+}
+function openCrewScreen() {
+  if (!canSeeCrewMap(me)) return;
+  if (!ui.crewSubsOn) {
+    ui.crewSubsOn = true;
+    ui.crewErr = "";
+    const companyId = myCompanyId();
+    const path = liveCollectionPath(companyId);
+    ui.crewUnsub = onSnapshot(query(collection(db, ...path), where("companyId", "==", companyId)), s => {
+      ui.crewLive = s.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => x.clockedOn === true && (x.companyId || "heartwood") === companyId);
+      ui.crewErr = "";
+      paintCrew();
+    }, e => { ui.crewErr = e.code || "permission-denied"; paintCrew(); });
+    ui.crewJobUnsub = onSnapshot(query(collection(db, "jobs"), where("companyId", "==", companyId), where("date", "==", todayStr())), s => {
+      ui.crewJobs = s.docs.map(d => ({ id: d.id, ...d.data() }));
+      paintCrew();
+    }, () => { paintCrew(); });
+  }
+  paintCrew();
+}
+function paintCrew() {
+  const list = document.getElementById("crewlist");
+  if (!list || !canSeeCrewMap(me)) return;
+  const model = crewMapModel({ locations: ui.crewLive || [], jobs: ui.crewJobs || [], today: todayStr(), now: new Date() });
+  list.innerHTML = crewListHtml(model, esc);
+  const status = document.getElementById("crewmapstatus");
+  if (status) status.textContent = ui.crewErr ? "The crew list isn't available on this sign-in." : "Blue dots are people clocked on. Amber dots are today's jobs that already have a map pin.";
+  ensureCrewMap(model);
+}
+function crewIcon(L, color) {
+  return L.divIcon({ className: "crew-pin", html: `<span style="background:${color}"></span>`, iconSize: [18, 18], iconAnchor: [9, 9] });
+}
+let leafletPromise = null;
+function loadLeaflet() {
+  if (window.L) return Promise.resolve(window.L);
+  if (leafletPromise) return leafletPromise;
+  leafletPromise = new Promise((resolve, reject) => {
+    const css = document.createElement("link");
+    css.rel = "stylesheet";
+    css.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+    document.head.appendChild(css);
+    const script = document.createElement("script");
+    script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+    script.async = true;
+    script.onload = () => (window.L ? resolve(window.L) : reject(new Error("map-unavailable")));
+    script.onerror = () => reject(new Error("map-unavailable"));
+    document.head.appendChild(script);
+  });
+  return leafletPromise;
+}
+async function ensureCrewMap(model) {
+  const el = document.getElementById("crewmap");
+  if (!el) return;
+  const token = (ui.crewMapToken = (ui.crewMapToken || 0) + 1);
+  let L;
+  try { L = await loadLeaflet(); }
+  catch {
+    const status = document.getElementById("crewmapstatus");
+    if (status) status.textContent = "The map needs a connection. The list below still shows who is clocked on.";
+    return;
+  }
+  if (token !== ui.crewMapToken || !document.getElementById("crewmap") || !canSeeCrewMap(me)) return;
+  if (!ui.crewMap) {
+    ui.crewMap = L.map(el);
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    }).addTo(ui.crewMap);
+    ui.crewLayer = L.layerGroup().addTo(ui.crewMap);
+  }
+  ui.crewLayer.clearLayers();
+  const bounds = [];
+  const seenJobs = new Set();
+  for (const p of model.people) {
+    if (p.sharing !== "gps" || p.lat == null) continue;
+    const jobs = p.jobs.map(j => esc(j.label)).filter(Boolean).join(", ");
+    L.marker([p.lat, p.lng], { icon: crewIcon(L, "#1d4ed8"), title: p.name })
+      .bindPopup(`<b>${esc(p.name)}</b><br>${esc(p.lastSeen)}${p.accuracy != null ? `<br>±${p.accuracy} m` : ""}${jobs ? `<br>${jobs}` : ""}`)
+      .addTo(ui.crewLayer);
+    bounds.push([p.lat, p.lng]);
+  }
+  for (const p of model.people) {
+    for (const j of p.jobs) {
+      if (j.lat == null || seenJobs.has(j.id)) continue;
+      seenJobs.add(j.id);
+      L.marker([j.lat, j.lng], { icon: crewIcon(L, "#b45309"), title: j.label })
+        .bindPopup(`<b>${esc(j.label)}</b>${j.jobNo ? `<br>#${esc(j.jobNo)}` : ""}${j.client ? `<br>${esc(j.client)}` : ""}${j.time ? `<br>${esc(j.time)}` : ""}${j.address ? `<br>${esc(j.address)}` : ""}`)
+        .addTo(ui.crewLayer);
+      bounds.push([j.lat, j.lng]);
+    }
+  }
+  const key = bounds.map(b => b.map(n => Number(n).toFixed(5)).join(",")).sort().join("|");
+  if (!bounds.length) ui.crewMap.setView([-27.47, 153.03], 10);
+  else if (key !== ui.crewFitKey) ui.crewMap.fitBounds(bounds, { padding: [28, 28], maxZoom: 15 });
+  ui.crewFitKey = key;
+  setTimeout(() => { if (ui.crewMap) ui.crewMap.invalidateSize(); }, 50);
+}
 async function tsPunch(kind) {
   const active = tsSheets();
   if (kind === "on" && active.entry) return;
@@ -2579,6 +2853,7 @@ async function tsPunch(kind) {
         edits: {}, lastEditId: "",
       };
       const r = await tsWrite(ws, sheet, entries, id, { consent: !(sheet && sheet.locationConsentAt) });
+      liveShareStart(id, ws, fix);
       ui.tsMachineShift = id;
       ui.tsMachineWs = ws;
       toast((fix.fix === "gps" ? "Clocked on" : "Clocked on · no location") + tsQueuedNote(r));
@@ -2599,6 +2874,7 @@ async function tsPunch(kind) {
       entries[e.id] = next;
       const fields = Object.keys(next).filter(k => next[k] !== e[k]);
       const r = await tsWrite(ws, sheet, entries, e.id, { consent: !(sheet && sheet.locationConsentAt), fields });
+      if (kind === "off") liveShareStop(true);
       toast((kind === "off" ? (fix.fix === "gps" ? "Clocked off" : "Clocked off · no location") : "Break saved") + tsQueuedNote(r));
       ui.tsPrevFor = "";
     }
@@ -3141,6 +3417,10 @@ function renderAdmin() {
   if (ui.myJobs) return renderOperator();
   if ($("#dlg").open) return;          // don't redraw under an open job card
   const force = ui.forceRender; ui.forceRender = false;
+  if (ui.view === "crew" && !canSeeCrewMap(me)) ui.view = "home";
+  if (ui.view === "crew" && !force && document.getElementById("crewmap")) { paintCrew(); return; }
+  if (ui.view !== "crew") leaveCrewScreen();
+  else destroyCrewMap();
   if (!force && (ui.view === "compliance" || ui.view === "prestart") && document.querySelector("#compform, #prestartform")) return;
   if (!ui.tsForce && ui.view === "timesheet" && (ui.tsBusy || ui.tsAsk || (ui.tsMachineShift && document.getElementById("tsmachine")))) return;
   if (!ui.tsForce && ui.view === "timesheet" && (ui.tsDirty || ui.tsEdit) && ($("#tsman") || $("#tsf"))) return;
@@ -3154,7 +3434,7 @@ function renderAdmin() {
   const quotesHtml = ui.view === "quotes" ? adminViewRouter(ui.view, ui, { esc, $$, staff, jobs: all, todayStr, rerender: () => renderAdmin(), canEditQuoteRates }) : null;
   const staffHtml = ui.view === "staff" ? staffPageHtml() : null;
   paintBrand();
-  $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "master" ? masterView() : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : quotesHtml != null ? quotesHtml : jobsView(all));
+  $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "master" ? masterView() : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : ui.view === "crew" ? crewMapScreen() : quotesHtml != null ? quotesHtml : jobsView(all));
   const A = $("#app"); inboxBadge();
   CHAT.watch([...(jobs || []), ...(ui.undated || [])]);
   if (ui.view === "chat") CHAT.mount(A);
@@ -3170,6 +3450,7 @@ function renderAdmin() {
   if (ui.view === "compliance" || ui.view === "prestart") COMP.bind(A);
   if (ui.view === "settings") bindSettings(A);
   if (ui.view === "master") bindMaster(A);
+  if (ui.view === "crew") openCrewScreen();
   A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.navOpen = false;
     if (b.dataset.view === "myjobs") { ui.myJobs = true; ui.opSel = null; window.scrollTo(0, 0); return renderAdmin(); }
     if (b.dataset.view !== "compliance") COMP.abandon();
@@ -3177,7 +3458,7 @@ function renderAdmin() {
   // The menu is a deliberate tap: force the redraw, or an open Prestart/Compliance form swallows it and the admin is stuck there.
   if ($("#burger")) $("#burger").onclick = () => { ui.navOpen = !ui.navOpen; ui.forceRender = true; renderAdmin(); };
   A.querySelectorAll("[data-grp]").forEach(b => b.onclick = () => { const g = b.dataset.grp; if (NAV_GROUPS.find(x => x[0] === g)[3].includes(ui.view)) return;
-    ui.navCol[g] = !ui.navCol[g]; try { localStorage.setItem("hwNavCol", JSON.stringify(ui.navCol)); } catch {} renderAdmin(); });
+    ui.navCol[g] = !ui.navCol[g]; try { localStorage.setItem("hwNavCol", JSON.stringify(ui.navCol)); } catch {} ui.forceRender = true; renderAdmin(); });
   if (ui.view === "dispatch" && PHONE.matches) bindMobileDispatch(A, [...jobs, ...(ui.undated || [])]);
   if ($("#optorder")) $("#optorder").onclick = () => ROUTE.open({ date: (PHONE.matches && ui.mday) || todayStr() });
   A.querySelectorAll("[data-cq]").forEach(b => b.onclick = () => { ui.cq = b.dataset.cq; renderAdmin(); });
@@ -4387,8 +4668,13 @@ function withRunOrder(list) {
 function renderOperator() {
   paintBrand();
   if (canImport()) inboxSub();
-  if (!ui.forceRender && document.querySelector("#compform, #prestartform")) return;
+  const forceOp = ui.forceRender;
+  if (!forceOp && document.querySelector("#compform, #prestartform")) return;
   ui.forceRender = false;
+  if (ui.opTab === "crew" && !canSeeCrewMap(me)) ui.opTab = "more";
+  if (ui.opTab === "crew" && !forceOp && document.getElementById("crewmap")) { paintCrew(); return; }
+  if (ui.opTab !== "crew") leaveCrewScreen();
+  else destroyCrewMap();
   document.body.className = "operator";
   ui.runStops = {};
   CHAT.watch(jobs);
@@ -4463,13 +4749,20 @@ function renderOperator() {
     bindOp(mine); bindSettings($("#app")); return;
   }
   if (ui.opTab === "settings") ui.opTab = "more";
+  if (ui.opTab === "crew" && canSeeCrewMap(me) && !ui.opSel) {
+    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Crew map</div><div class="mob-sub">Who is clocked on</div></div>
+      <div class="pad">${crewMapScreen()}</div>${opTabs("more")}</div>`;
+    bindOp(mine); openCrewScreen(); return;
+  }
   if (ui.opTab === "more") {
     const quoteBtn = canQuote() && me.role !== "admin" ? `<button type="button" class="mob-more" data-go="quotes"><b>Quotes</b><small>Guided pricing for supervisors</small></button>` : "";
+    const crewBtn = canSeeCrewMap(me) ? `<button type="button" class="mob-more" data-go="crew"><b>Crew map</b><small>Who is clocked on right now</small></button>` : "";
     const fleetBtn = COMP.canSee() ? `<button type="button" class="mob-more" data-go="fleet"><b>Compliance</b><small>Registration and COI status</small></button>` : "";
     const staffBtn = canInvite() ? `<button type="button" class="mob-more" data-go="staff"><b>Staff</b><small>Invite labourers, operators, supervisors and admins</small></button>` : "";
     const inboxBtn = canImport() ? `<button type="button" class="mob-more" data-go="inbox"><b>Inbox</b><small>Import builder emails as jobs</small></button>` : "";
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">More</div><div class="mob-sub">${esc(me.name || "")} · ${esc(orgSettings().name)}</div></div>
       <div class="mob-menu">
+        ${crewBtn}
         <button type="button" class="mob-more" data-go="hours"><b>Hours</b><small>Clock on, or add hours manually</small></button>
         <button type="button" class="mob-more" data-go="leave"><b>Leave</b><small>Annual, sick, or other</small></button>
         <button type="button" class="mob-more" data-go="claims"><b>Reimbursements</b><small>Claim back fuel, parts, tip fees…</small></button>

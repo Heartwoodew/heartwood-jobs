@@ -21,6 +21,7 @@
 <header class="top">
   <div class="brand"><span class="wordmark" aria-label="CallUp">Call<span>Up</span></span><span class="orgline">Heartwood Earthworx</span></div>
   <div class="gsearch hidden" id="gsw"><input id="gq" type="search" placeholder="Search lot, street, PO or job #" autocomplete="off" aria-label="Search jobs"><div id="gres" class="gres hidden"></div></div>
+  <p id="locshare" class="loc-share" hidden></p>
   <div id="who" class="who"></div>
   <button id="logout" class="ghost hidden">Sign out</button>
 </header>
@@ -32,6 +33,16 @@
   window.HW_TODAY = "2026-11-06";
   window.HW_NOW = Date.parse("2026-11-06T10:00:00+10:00");
   window.HW_PREVIEW_ROLE = q.get("role") || "operator";
+  if (q.get("live") === "1") {
+    const seen = Math.floor(Date.parse("2026-11-06T09:40:00+10:00") / 1000);
+    window.HW_LIVE = [
+      { id: "patrick", uid: "patrick", name: "Patrick", companyId: "heartwood", clockedOn: true, sharing: "gps", lat: -27.604, lng: 152.86, accuracy: 12, updatedAt: { seconds: seen } },
+      { id: "sam", uid: "sam", name: "Sam", companyId: "heartwood", clockedOn: true, sharing: "off", updatedAt: { seconds: seen - 180 } },
+    ];
+    window.HW_GEO_BY_ID = {
+      j1: { lat: -27.608, lng: 152.868, query: "Lot 95 · 21 Lumen Street, Redbank Plains QLD 4301" },
+    };
+  }
   if (q.get("open") === "staff") {
     window.HW_PREVIEW_VIEW = "staff";
     window.HW_INVITES = [
