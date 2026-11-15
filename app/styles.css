@@ -883,13 +883,31 @@ dialog.jobcard:has(.qw){max-width:520px;background:#f6f1ea}
 .qw-extra{margin:8px 0;background:#fffdf9;border:1px solid #eadfd3;border-radius:12px;padding:8px 12px}
 .qw-extra summary{min-height:44px;display:flex;align-items:center;font-weight:700;cursor:pointer}
 .qw .jc-foot{display:flex;flex-wrap:wrap;gap:8px;background:#f6f1ea;border:none}
-.qw .jc-foot #qwnext,.qw .jc-foot #qwaccept{order:1;flex:1 1 100%;min-height:52px;border-radius:12px;background:#8a5a2b;border-color:#8a5a2b;color:#fff;font-size:17px}
+.qw .jc-foot #qwnext{order:1;flex:1 1 100%;min-height:52px;border-radius:12px;background:#8a5a2b;border-color:#8a5a2b;color:#fff;font-size:17px}
+.qw-acceptbar{flex:0 0 auto;padding:10px 12px 0;background:#f6f1ea}
+.qw-accept{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;width:100%;min-height:58px;padding:8px 14px;border:0;border-radius:14px;background:#8a5a2b;color:#fff;cursor:pointer;text-align:center}
+.qw-accept-label{font-size:18px;font-weight:800;line-height:1.15}
+.qw-accept-sub{font-size:13px;font-weight:650;line-height:1.2;opacity:.95}
+.qw-accept:disabled{opacity:.55}
+.qw-accepted{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;margin:0;padding:12px 14px;border-radius:14px;background:#e7f6ee;border:1px solid #b7e0c6;color:#14532d}
+.qw-accepted-copy{min-width:0}
+.qw-accepted b{display:block;font-size:17px;line-height:1.25}
+.qw-accepted .sub{display:block;color:#166534}
+.qw-accepted .qw-openjob{min-height:44px;background:#fff;border-color:#166534;color:#14532d;font-weight:700}
+table.qlist [data-qaccept]{min-height:44px;font-weight:700}
 .qw .jc-foot #qwsave{order:2;flex:1 1 100%;min-height:44px;background:transparent;border:none;color:#7a6a5a}
 .qw .jc-foot #qwback{order:3;min-height:44px}
 .qw input,.qw select,.qw textarea{border-color:#eadfd3;border-radius:12px;background:#fff}
 @media (max-width:760px){
   .qw .jc-foot{position:sticky;bottom:0}
   dialog.jobcard:has(.qw){width:100vw;max-width:100vw;height:100dvh;max-height:100dvh;margin:0;border-radius:0}
+  .qw-accepted{flex-direction:column;align-items:stretch}
+  .qw-accepted .qw-openjob{width:100%;min-height:48px}
+  table.qlist,table.qlist tbody{display:block;width:100%}
+  table.qlist thead{display:none}
+  table.qlist tr.jr{display:flex;flex-direction:column;gap:6px;background:#fffdf9;border:1px solid #eadfd3;border-radius:14px;padding:12px;margin:0 0 10px}
+  table.qlist tr.jr td{display:block;border:0;padding:0}
+  table.qlist [data-qaccept]{width:100%;min-height:52px;font-size:17px}
 }
 
 

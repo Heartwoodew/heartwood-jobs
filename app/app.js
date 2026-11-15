@@ -6386,9 +6386,31 @@ ROUTE = installRouteOrder({
   },
   cacheGeo: (job, hit) => updateDoc(doc(db, "jobs", job.id), geoPatch(job.address, hit)),
 });
+async function openAcceptedJob(jobId) {
+  const id = String(jobId || "").trim();
+  if (!id) { toast("That job has no id yet"); return; }
+  let job = [...(jobs || []), ...(ui.undated || []), ...(ui.done || [])].find(j => j.id === id);
+  if (!job) {
+    try {
+      const snap = await getDoc(doc(db, "jobs", id));
+      if (!snapExists(snap)) { toast("That job isn't on this phone yet"); return; }
+      job = withMoney({ id, ...snap.data() });
+    } catch (e) {
+      toast("Couldn't open that job");
+      return;
+    }
+  }
+  const d = $("#dlg");
+  if (d) d.onclose = null;
+  if (d && d.open) d.close();
+  if (me && me.role === "admin" && !ui.myJobs) editJob(job);
+  else if ((jobs || []).some(j => j.id === job.id)) { ui.opSel = job.id; ui.jobPane = "job"; renderOperator(); window.scrollTo(0, 0); }
+  else editJob(job);
+}
 QG = installQuotes({
   db, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, collection, query, where, onSnapshot, serverTimestamp, arrayUnion, runTransaction,
   $, esc, toast, $$, CLIENTS, TYPES, canSeeMoney, canQuote, canEditQuoteRates, todayStr, jobNo,
+  openJob: openAcceptedJob,
   getMe: () => me, getUi: () => ui, getCompanyId: () => myCompanyId(),
   isAdmin: () => !!(me && me.role === "admin"),
   saveExtraTrade: async (tradeId) => {
