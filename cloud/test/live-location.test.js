@@ -116,7 +116,7 @@ test("live location rules match in the emulator model and the production rules",
   assert.match(prod, /function llPaused\(id\)/);
   assert.match(prod, /get\(path\)\.data\.get\("status", ""\) == "paused"/);
   assert.match(prod, /!llPaused\("heartwood"\)/);
-  assert.match(prod, /!llPaused\(c\)/);
+  assert.match(prod, /companyNotPaused\(c\)/);
 });
 
 test("home shows the crew card for managers and admins, and never the profit chart", () => {

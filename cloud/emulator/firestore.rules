@@ -48,6 +48,35 @@ service cloud.firestore {
           ? data.tenantId
           : "heartwood");
     }
+    // Paused: the trial has ended and the company is not paying. One company lookup.
+    // Heartwood returns before the lookup, so Heartwood rules stay under the expression limit.
+    // A missing company document is not paused (legacy Heartwood data and tests). isTest is
+    // checked before the other fields so a test company does not pay for the rest.
+    // Billing writes from the webhook use the Admin SDK and bypass these rules.
+    function companyRecordOpen(data) {
+      return data.get("isTest", false) == true || companyBillingOpen(data);
+    }
+    function companyBillingOpen(data) {
+      let raw = data.get("billing", null);
+      let status = raw is map ? raw.get("status", "") : "";
+      let plan = data.get("plan", "");
+      let trialEnd = data.get("trialEndsAt", null);
+      let friendEnd = data.get("friendEndsAt", null);
+      let trialOver = trialEnd is timestamp && !(trialEnd > request.time);
+      let friendOver = friendEnd is timestamp && !(friendEnd > request.time);
+      // Pause only when a trial or friend end is actually in the past. A missing end (older docs) stays open.
+      return status == "active" || status == "trialing"
+        || (plan == "paid" && status != "past_due" && status != "canceled")
+        || (plan == "friend" && !friendOver)
+        || (plan != "friend" && plan != "paid" && !trialOver && data.get("status", "active") == "active");
+    }
+    function companyNotPaused(companyId) {
+      let path = /databases/$(database)/documents/companies/$(companyId);
+      return !exists(path) || companyRecordOpen(get(path).data);
+    }
+    function companyOpen(companyId) {
+      return companyId == "heartwood" || companyNotPaused(companyId);
+    }
     function sessionPath() { return /databases/$(database)/documents/platformSessions/$(request.auth.uid); }
     function sessionCompany() {
       let id = platformOwner() && exists(sessionPath()) ? get(sessionPath()).data.get("companyId", "") : "";
@@ -93,14 +122,14 @@ service cloud.firestore {
         && data.billing.stripeSubscriptionId == null;
     }
     function oneTradeId(id) {
-      // One list lookup instead of 8 comparisons: keeps multi-trade writes under the 1000-expression limit.
-      return id is string && id in ["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical"];
+      // One list lookup, not one comparison per trade: keeps multi-trade writes under the 1000-expression limit.
+      return id is string && id in ["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical", "concrete-cutting"];
     }
     function tradeFieldOk(data) {
       return !("trade" in data) || oneTradeId(data.trade);
     }
     function tradesListOk(list) {
-      return list is list && list.size() >= 1 && list.size() <= 8 && list.hasOnly(["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical"]);
+      return list is list && list.size() >= 1 && list.size() <= 9 && list.hasOnly(["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical", "concrete-cutting"]);
     }
     function companyTradesEdit(companyId) {
       return signedIn()
@@ -259,7 +288,7 @@ service cloud.firestore {
       return d.keys().hasOnly(["name", "email", "role", "companyId", "tenantId", "jobTitle", "jobTitleId"])
         && d.role == "admin"
         && d.get("jobTitle", "Admin") == "Admin"
-        && d.get("jobTitleId", "earthworks:admin").matches('^(earthworks|landscaping|concreting|fencing|carpentry|tiling|plumbing|electrical):admin$')
+        && d.get("jobTitleId", "earthworks:admin").matches('^(earthworks|landscaping|concreting|fencing|carpentry|tiling|plumbing|electrical|concrete-cutting):admin$')
         && companyIdOk(d.companyId)
         && d.companyId != "heartwood"
         && d.tenantId == d.companyId
@@ -343,6 +372,7 @@ service cloud.firestore {
     // Read model only here: Heartwood finance, company admins and supervisors of the same company. Crew never.
     function jobMoneyReader(data) {
       return signedIn() && callerCompany() != "" && docCompany(data) == callerCompany()
+        && companyOpen(docCompany(data))
         && (isAlex() || isPatrick() || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor" || profile().role == "manager")));
     }
     match /jobMoney/{id} {
@@ -351,14 +381,14 @@ service cloud.firestore {
       allow write: if false;
     }
     match /jobs/{id} {
-      allow get: if signedIn() && callerCompany() != "" && docCompany(resource.data) == callerCompany();
-      allow list: if signedIn() && callerCompany() != "" && resource.data.companyId == callerCompany();
+      allow get: if signedIn() && callerCompany() != "" && docCompany(resource.data) == callerCompany() && companyOpen(docCompany(resource.data));
+      allow list: if signedIn() && callerCompany() != "" && resource.data.companyId == callerCompany() && companyOpen(resource.data.companyId);
       allow write: if false;
       allow create, update: if demoJobWrite(id);
     }
     match /receipts/{id} {
-      allow get: if signedIn() && callerCompany() != "" && docCompany(resource.data) == callerCompany();
-      allow list: if signedIn() && callerCompany() != "" && resource.data.companyId == callerCompany();
+      allow get: if signedIn() && callerCompany() != "" && docCompany(resource.data) == callerCompany() && companyOpen(docCompany(resource.data));
+      allow list: if signedIn() && callerCompany() != "" && resource.data.companyId == callerCompany() && companyOpen(resource.data.companyId);
       allow write: if false;
     }
 
@@ -1825,7 +1855,8 @@ service cloud.firestore {
     // Every other company: companies/{id}/liveLocations/{uid}. Written only while that
     // person's timesheet shift is clocked on (open or on a break). Clock off deletes it.
     // Manager and admin of the same company read. Supervisor and below do not. No other company does.
-    // A company document with status "paused" cannot read or write. No document means not paused.
+    // Heartwood: status "paused" blocks locations (llPaused). Other companies use companyNotPaused,
+    // the same trial and billing pause as the rest of the app. No company document means not paused.
     function llRole() {
       return hasProfile() ? profile().get("role", "") : "";
     }
@@ -1880,10 +1911,10 @@ service cloud.firestore {
       allow delete: if signedIn() && request.auth.uid == id && callerCompany() == "heartwood" && docCompany(resource.data) == "heartwood" && !llPaused("heartwood");
     }
     match /companies/{c}/liveLocations/{id} {
-      allow get: if llOffice() && !llPaused(c) && c != "heartwood" && callerCompany() == c && docCompany(resource.data) == c;
-      allow list: if llOffice() && !llPaused(c) && c != "heartwood" && callerCompany() == c && resource.data.companyId == c;
-      allow create, update: if c != "heartwood" && callerCompany() == c && request.resource.data.companyId == c && !llPaused(c) && llBody(request.resource.data, id);
-      allow delete: if signedIn() && request.auth.uid == id && c != "heartwood" && callerCompany() == c && docCompany(resource.data) == c && !llPaused(c);
+      allow get: if llOffice() && c != "heartwood" && callerCompany() == c && docCompany(resource.data) == c && companyNotPaused(c);
+      allow list: if llOffice() && c != "heartwood" && callerCompany() == c && resource.data.companyId == c && companyNotPaused(c);
+      allow create, update: if c != "heartwood" && callerCompany() == c && request.resource.data.companyId == c && companyNotPaused(c) && llBody(request.resource.data, id);
+      allow delete: if signedIn() && request.auth.uid == id && c != "heartwood" && callerCompany() == c && docCompany(resource.data) == c && companyNotPaused(c);
     }
 // END LIVE LOCATION RULES
 
@@ -1927,7 +1958,7 @@ service cloud.firestore {
       return actor.ok && company is string && (
         (actor.listed && company == "heartwood")
         || (actor.company == company && company == "heartwood" && actor.role in ["manager", "supervisor"])
-        || (actor.company == company && company != "heartwood" && company != "" && actor.role in ["admin", "manager", "supervisor"])
+        || (actor.company == company && company != "heartwood" && company != "" && actor.role in ["admin", "manager", "supervisor"] && companyNotPaused(company))
       );
     }
     function quotePricesOk(actor, next, before) {
@@ -1957,5 +1988,94 @@ service cloud.firestore {
       allow delete: if false;
     }
 // END QUOTE WRITE RULES
+
+// BEGIN JOB DOCUMENT RULES
+    // Job files (plans, quotes, invoices, drawings). Metadata only; the bytes live in Storage.
+    // One profile read (none for Alex or Patrick) and one job read. companyNotPaused runs once,
+    // and never for Heartwood, so a verified email stays under the 1000-expression limit.
+    // Office is admin, manager and supervisor (same people who read quotes). Crew is operator
+    // or labourer, and only when they are on the job's assigned list. Office-only files are
+    // hidden from crew. A paused company cannot read or write. A missing company is not paused.
+    function documentActor() {
+      let bootstrap = signedIn() && request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "R7t41e54Ykcdk9WPdVZnDd697iI2"];
+      let user = /databases/$(database)/documents/users/$(request.auth.uid);
+      let has = signedIn() && !bootstrap && exists(user);
+      let data = has ? get(user).data : null;
+      let role = data != null ? data.get("role", "") : "";
+      let companyId = data != null ? data.get("companyId", "") : "";
+      let tenantId = data != null ? data.get("tenantId", "") : "";
+      let company = bootstrap ? "heartwood"
+        : (companyId is string && companyId.size() > 0 ? companyId
+          : (tenantId is string && tenantId.size() > 0 ? tenantId : (has ? "heartwood" : "")));
+      return { "role": role, "company": company, "ok": signedIn() && (bootstrap || has) };
+    }
+    function documentGate(jobId) {
+      let actor = documentActor();
+      let job = get(/databases/$(database)/documents/jobs/$(jobId)).data;
+      let companyId = job.get("companyId", "");
+      let tenantId = job.get("tenantId", "");
+      let company = (companyId is string && companyId.size() > 0) ? companyId
+        : ((tenantId is string && tenantId.size() > 0) ? tenantId : "heartwood");
+      let assigned = job.get("assigned", []) is list && request.auth.uid in job.get("assigned", []);
+      let open = company == "heartwood" || companyNotPaused(company);
+      let same = actor.ok && actor.company == company && open;
+      let office = same && (
+        actor.role in ["admin", "manager", "supervisor"]
+        || (company == "heartwood" && request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "R7t41e54Ykcdk9WPdVZnDd697iI2"])
+      );
+      let crew = same && assigned && actor.role in ["operator", "labourer"];
+      return { "office": office, "crew": crew, "company": company };
+    }
+    function documentShape(d, jobId, docId) {
+      return docId.matches('^d[A-Za-z0-9]{8,40}$')
+        && d.keys().hasOnly(["companyId", "tenantId", "jobId", "name", "fileName", "contentType", "size", "visibility", "storagePath", "uploaderUid", "uploaderName", "createdAt", "updatedAt"])
+        && d.companyId is string && d.tenantId == d.companyId && d.jobId == jobId
+        && d.name is string && d.name.size() > 0 && d.name.size() <= 160
+        && d.fileName is string && d.fileName.size() > 0 && d.fileName.size() <= 200
+        && d.contentType is string && d.contentType.size() > 0 && d.contentType.size() <= 160
+        && d.size is number && d.size > 0 && d.size <= 25 * 1024 * 1024
+        && d.visibility in ["crew", "office"]
+        && d.storagePath == "tenants/" + d.companyId + "/jobs/" + jobId + "/documents/" + docId
+        && d.uploaderUid == request.auth.uid
+        && d.uploaderName is string && d.uploaderName.size() > 0 && d.uploaderName.size() <= 80
+        && d.createdAt == request.time
+        && d.updatedAt == request.time;
+    }
+    function documentCreate(jobId, docId) {
+      let gate = documentGate(jobId);
+      let d = request.resource.data;
+      return gate.office && d.companyId == gate.company && documentShape(d, jobId, docId);
+    }
+    function documentOffice(jobId) {
+      return documentGate(jobId).office;
+    }
+    function documentCrew(jobId) {
+      let gate = documentGate(jobId);
+      return gate.crew && resource.data.visibility == "crew";
+    }
+    function documentRename(jobId) {
+      let gate = documentGate(jobId);
+      let next = request.resource.data;
+      let prev = resource.data;
+      return gate.office
+        && prev.get("companyId", "") == gate.company
+        && next.diff(prev).affectedKeys().hasOnly(["name", "updatedAt"])
+        && next.name is string && next.name.size() > 0 && next.name.size() <= 160
+        && next.updatedAt == request.time;
+    }
+    function documentRemove(jobId) {
+      let gate = documentGate(jobId);
+      return gate.office && resource.data.get("companyId", "") == gate.company;
+    }
+    match /jobs/{jobId}/documents/{docId} {
+      allow get: if documentOffice(jobId);
+      allow list: if documentOffice(jobId);
+      allow get: if documentCrew(jobId);
+      allow list: if documentCrew(jobId);
+      allow create: if documentCreate(jobId, docId);
+      allow update: if documentRename(jobId);
+      allow delete: if documentRemove(jobId);
+    }
+// END JOB DOCUMENT RULES
   }
 }

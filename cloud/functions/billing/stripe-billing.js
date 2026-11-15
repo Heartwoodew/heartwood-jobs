@@ -92,11 +92,30 @@ export function authorizeCompanyAdmin({ uid, profile, company, companyId }) {
   return { ok: true };
 }
 
-export function checkoutParams({ companyId, company, staffCount, successUrl, cancelUrl, prices = stripePrices() }) {
+function millisOf(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value.toDate === "function") return value.toDate().getTime();
+  if (typeof value.seconds === "number") return value.seconds * 1000;
+  const n = new Date(value).getTime();
+  return Number.isNaN(n) ? null : n;
+}
+
+// Keep the company's remaining trial on the Stripe subscription so the first charge is at trialEndsAt.
+// trial_end must be at least 48 hours ahead; a shorter remainder uses trial_period_days (minimum 2).
+export function trialCheckoutFields(trialEndsAt, now = Date.now()) {
+  const end = millisOf(trialEndsAt);
+  const at = now instanceof Date ? now.getTime() : Number(now);
+  if (end == null || !(end > at)) return null;
+  if (end >= at + 48 * 60 * 60 * 1000) return { trial_end: Math.floor(end / 1000) };
+  return { trial_period_days: Math.max(2, Math.ceil((end - at) / 86400000)) };
+}
+
+export function checkoutParams({ companyId, company, staffCount, successUrl, cancelUrl, prices = stripePrices(), preserveTrial = false, now = Date.now() }) {
   const skip = billingSkipped(company, companyId);
   if (skip) return { ok: false, reason: skip };
   const billing = company.billing || {};
-  if (billing.stripeSubscriptionId && billing.status === "active") return { ok: false, reason: "already-subscribed" };
+  if (billing.stripeSubscriptionId && (billing.status === "active" || billing.status === "trialing")) return { ok: false, reason: "already-subscribed" };
   const extra = extraStaffQuantity(staffCount);
   const lineItems = [{ price: prices.base, quantity: 1 }];
   if (extra > 0) lineItems.push({ price: prices.extra, quantity: extra });
@@ -112,6 +131,15 @@ export function checkoutParams({ companyId, company, staffCount, successUrl, can
     metadata: { companyId },
     subscription_data: { metadata: { companyId } },
   };
+  if (preserveTrial) {
+    const trial = trialCheckoutFields(company && company.trialEndsAt, now);
+    if (trial) {
+      Object.assign(params.subscription_data, trial);
+      params.subscription_data.metadata = { companyId, preserveTrial: "1" };
+      params.metadata = { companyId, preserveTrial: "1" };
+      params.payment_method_collection = "always";
+    }
+  }
   if (billing.stripeCustomerId) {
     params.customer = billing.stripeCustomerId;
     params.customer_update = { name: "auto", address: "auto" };
@@ -146,7 +174,8 @@ function invoiceSubscription(object) {
 }
 
 function mapStatus(stripeStatus) {
-  if (stripeStatus === "active" || stripeStatus === "trialing") return "active";
+  if (stripeStatus === "trialing") return "trialing";
+  if (stripeStatus === "active") return "active";
   if (stripeStatus === "past_due" || stripeStatus === "unpaid") return "past_due";
   if (stripeStatus === "canceled" || stripeStatus === "incomplete_expired") return "canceled";
   return "";
@@ -168,10 +197,14 @@ export function applyStripeEvent(event, mode = "test") {
   if (!companyId) return { ok: false, reason: "no-company" };
   if (event.type === "checkout.session.completed") {
     if (object.mode !== "subscription") return { ok: false, reason: "not-subscription" };
+    const preserve = !!(object.metadata && object.metadata.preserveTrial === "1");
     return {
       ok: true,
       companyId,
-      patch: { plan: "paid", billing: billingPatch("active", { customer: object.customer, subscription: object.subscription }) },
+      patch: {
+        ...(preserve ? {} : { plan: "paid" }),
+        billing: billingPatch(preserve ? "trialing" : "active", { customer: object.customer, subscription: object.subscription }),
+      },
     };
   }
   if (event.type === "invoice.paid") {
@@ -187,7 +220,7 @@ export function applyStripeEvent(event, mode = "test") {
   if (event.type === "customer.subscription.updated") {
     const status = mapStatus(object.status);
     if (!status) return { ok: false, reason: "ignored-status" };
-    const plan = status === "canceled" ? undefined : "paid";
+    const plan = status === "active" || status === "past_due" ? "paid" : undefined;
     return { ok: true, companyId, patch: { ...(plan ? { plan } : {}), billing: billingPatch(status, { customer: object.customer, subscription: object.id }) } };
   }
   if (event.type === "customer.subscription.deleted") {
@@ -222,7 +255,7 @@ export async function syncStaffQuantity({ companyId, company, staffCount, stripe
   if (skip) return { ok: true, skipped: skip };
   const billing = company.billing || {};
   if (billing.provider !== "stripe" || !billing.stripeSubscriptionId) return { ok: true, skipped: "no-subscription" };
-  if (billing.status !== "active" && billing.status !== "past_due") return { ok: true, skipped: "not-billable" };
+  if (billing.status !== "active" && billing.status !== "past_due" && billing.status !== "trialing") return { ok: true, skipped: "not-billable" };
   const subscription = await stripe.subscriptions.retrieve(billing.stripeSubscriptionId);
   const change = staffItemChange({ subscription, staffCount, prices });
   if (change.action === "create") {
@@ -243,11 +276,14 @@ export async function syncStaffQuantity({ companyId, company, staffCount, stripe
   return { ok: true, change };
 }
 
-export async function handleCheckoutCall({ uid, companyId, origin, getContext, stripe, prices = stripePrices() }) {
+export async function handleCheckoutCall({ uid, companyId, origin, getContext, stripe, prices = stripePrices(), preserveTrial = false, now = Date.now() }) {
   origin = billingOrigin(origin, companyId);
   const ctx = await getContext(uid, companyId);
   const authz = authorizeCompanyAdmin({ uid, profile: ctx.profile, company: ctx.company, companyId });
   if (!authz.ok) return authz;
+  if (!stripe || !stripe.checkout || !stripe.checkout.sessions || typeof stripe.checkout.sessions.create !== "function") {
+    return { ok: false, code: "failed-precondition", reason: "stripe-not-configured" };
+  }
   const built = checkoutParams({
     companyId,
     company: ctx.company,
@@ -255,6 +291,8 @@ export async function handleCheckoutCall({ uid, companyId, origin, getContext, s
     successUrl: `${origin}/app/?billing=success`,
     cancelUrl: `${origin}/app/?billing=cancel`,
     prices,
+    preserveTrial: preserveTrial === true,
+    now,
   });
   if (!built.ok) return built;
   const session = await stripe.checkout.sessions.create(built.params);

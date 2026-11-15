@@ -5,11 +5,11 @@ import { fileURLToPath } from "node:url";
 import { DEFAULT_ORG, orgSettings, setActiveCompany } from "../../app/org-settings.js";
 import { parseMigrateArgs, LIVE_PROJECT } from "../scripts/migrate-company-id.mjs";
 import {
-  HEARTWOOD_ACCOUNTS_EMAIL, HEARTWOOD_COMPANY_ID, TRIAL_DAYS, billingHook, buildCompanyCreate,
-  companyDetailPatch, docCompanyId, filterMaster, friendCodeOk, friendInviteLink, heartwoodSeed, hoursBrand, isPlatformOwner,
+  HEARTWOOD_ACCOUNTS_EMAIL, HEARTWOOD_COMPANY_ID, PAUSE_GRACE_DAYS, TRIAL_DAYS, TRIAL_REMINDER_DAYS, billingHook, buildCompanyCreate,
+  companyAccess, companyDetailPatch, docCompanyId, filterMaster, friendCodeOk, friendInviteLink, heartwoodSeed, hoursBrand, isPlatformOwner,
   masterRow, masterTotals, planCompanyField, scopeRecord, trialEnd, validateCompanyInput,
 } from "../../app/features/company.js";
-import { masterPageHtml } from "../../app/features/company-ui.js";
+import { masterPageHtml, pausedAdminHtml, pausedStaffHtml, signupFormHtml, trialBannerHtml } from "../../app/features/company-ui.js";
 import { locationConsent, TS_CONSENT } from "../../app/features/timesheet.js";
 import { CALLUP_APP_ORIGIN, CALLUP_FALLBACK_ORIGIN, HEARTWOOD_APP_ORIGIN, profileFromInvite } from "../../app/features/staff-invites.js";
 import { ACCOUNTS_TO, exportFileName, reportSheets, buildHoursReport } from "../../app/features/hours-export.js";
@@ -167,4 +167,75 @@ print("ok")
 `;
   const out = execFileSync("python3", ["-c", script], { cwd: fileURLToPath(new URL("../..", import.meta.url)), encoding: "utf8" });
   assert.match(out, /ok/);
+});
+
+test("plan view: trial end pauses the company, paying and trialing do not, last 3 days remind", () => {
+  const now = new Date("2026-11-15T00:00:00Z");
+  const base = { name: "Acme", plan: "trial", status: "active", isTest: false, billing: { status: "not-configured", stripeCustomerId: null } };
+  const inTrial = companyAccess({ ...base, trialEndsAt: "2026-11-20T00:00:00Z" }, "acme", now);
+  assert.equal(inTrial.trialActive, true);
+  assert.equal(inTrial.paused, false);
+  assert.equal(inTrial.daysLeft, 5);
+  assert.equal(inTrial.remind, false);
+  const soon = companyAccess({ ...base, trialEndsAt: "2026-11-17T00:00:00Z" }, "acme", now);
+  assert.equal(soon.daysLeft, 2);
+  assert.equal(soon.remind, true);
+  assert.equal(soon.paused, false);
+  const ended = companyAccess({ ...base, trialEndsAt: "2026-11-01T00:00:00Z" }, "acme", now);
+  assert.equal(ended.trialEnded, true);
+  assert.equal(ended.paused, true);
+  assert.equal(ended.deleteAt, new Date("2026-11-01T00:00:00Z").getTime() + PAUSE_GRACE_DAYS * 86400000);
+  assert.equal(PAUSE_GRACE_DAYS, 30);
+  assert.equal(TRIAL_REMINDER_DAYS, 3);
+  const active = companyAccess({ ...base, trialEndsAt: "2026-11-01T00:00:00Z", billing: { status: "active", stripeCustomerId: "cus_1" } }, "acme", now);
+  assert.equal(active.paused, false);
+  assert.equal(active.paying, true);
+  const trialing = companyAccess({ ...base, trialEndsAt: "2026-11-01T00:00:00Z", billing: { status: "trialing", stripeCustomerId: "cus_1" } }, "acme", now);
+  assert.equal(trialing.paused, false);
+  assert.equal(trialing.paying, true);
+  const pastDue = companyAccess({ ...base, trialEndsAt: "2026-11-01T00:00:00Z", billing: { status: "past_due", stripeCustomerId: "cus_1" } }, "acme", now);
+  assert.equal(pastDue.paused, true);
+  assert.equal(pastDue.manageBilling, true);
+  const canceled = companyAccess({ ...base, plan: "paid", trialEndsAt: "2026-11-01T00:00:00Z", billing: { status: "canceled", stripeCustomerId: "cus_1" } }, "acme", now);
+  assert.equal(canceled.paused, true);
+  assert.equal(canceled.manageBilling, true);
+  assert.equal(canceled.deleteAt, null);
+  const friend = companyAccess({ ...base, plan: "friend", friendEndsAt: null }, "mate", now);
+  assert.equal(friend.paused, false);
+  const friendEnded = companyAccess({ ...base, plan: "friend", friendEndsAt: "2026-11-01T00:00:00Z" }, "mate", now);
+  assert.equal(friendEnded.paused, true);
+  assert.equal(friendEnded.deleteAt, null);
+  const testCo = companyAccess({ ...base, isTest: true, trialEndsAt: "2026-11-01T00:00:00Z" }, "yard", now);
+  assert.equal(testCo.paused, false);
+  const heartwood = companyAccess({ ...base, plan: "paid", trialEndsAt: "2026-11-01T00:00:00Z", billing: { status: "not-configured" } }, "heartwood", now);
+  assert.equal(heartwood.paused, false);
+  assert.equal(companyAccess(null, "acme", now).paused, false);
+  const early = trialBannerHtml(inTrial);
+  assert.match(early, /5 days left in your free trial/);
+  assert.match(early, />Subscribe now</);
+  assert.match(early, /id="trialdismiss"/);
+  const late = trialBannerHtml(soon);
+  assert.match(late, /Trial ends in 2 days:/);
+  assert.match(late, />Subscribe</);
+  const admin = pausedAdminHtml(ended);
+  assert.match(admin, /Your free trial has ended/);
+  assert.match(admin, /A\$20 a month including 1 person, plus A\$5 a month for each extra staff member/);
+  assert.match(admin, /GST is added at checkout/);
+  assert.match(admin, /Your data is kept until /);
+  assert.match(admin, /id="billsub"/);
+  assert.match(admin, /Sign out/);
+  const manage = pausedAdminHtml(pastDue);
+  assert.match(manage, /id="billportal"/);
+  assert.match(manage, /Manage billing/);
+  const staff = pausedStaffHtml();
+  assert.match(staff, /This company's account is paused\. Ask your admin to subscribe\./);
+  assert.doesNotMatch(staff, /id="billsub"/);
+  const signup = signupFormHtml();
+  assert.match(signup, /name="addCard"/);
+  assert.match(signup, /Add a card now/);
+  assert.match(signup, /14-day trial/);
+  assert.doesNotMatch(signupFormHtml({ friend: true }), /name="addCard"/);
+  setActiveCompany({ companyId: "acme", name: "Acme", plan: "trial", billing: { provider: "stripe", status: "trialing", stripeCustomerId: "cus_1", stripeSubscriptionId: "sub_1" } });
+  assert.equal(orgSettings().billing.status, "trialing");
+  setActiveCompany(null);
 });

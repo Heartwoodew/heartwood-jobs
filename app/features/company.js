@@ -14,6 +14,9 @@ export const HEARTWOOD_ACCOUNTS_EMAIL = "accounts@heartwoodew.com";
 export const HEARTWOOD_OFFICE_EMAIL = "alex@heartwoodew.com";
 export const HEARTWOOD_ADDRESS = "208-220 Holdsworth Rd, Chuwar QLD 4306";
 export const TRIAL_DAYS = 14;
+export const PAUSE_GRACE_DAYS = 30;
+export const TRIAL_REMINDER_DAYS = 3;
+export const CARD_SETUP_LATER = "Card setup isn't available yet, you can add it later in Settings";
 export const COMPANY_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
 // The browser always creates billing as not-configured. A webhook (Admin SDK) may later
@@ -306,6 +309,37 @@ export function companyPlanView(company, now = new Date()) {
   return { plan, status, trialActive, trialEnded, friendEnded, planLabel, trialEndsAt: end, friendEndsAt: friendEnd };
 }
 
+// A company may use CallUp when it is Heartwood, a test company, a friend trial that has not ended,
+// still inside its 14-day trial, or paying (billing status active or trialing). past_due and canceled
+// after the trial are paused. A missing company document is not paused: the screen needs a loaded doc.
+// Keep this in step with companyOpen() in the Firestore rules and pauseRetentionPlan() in the functions.
+export function companyAccess(company, companyId, now = new Date()) {
+  const id = (typeof companyId === "string" && companyId) || (company && company.companyId) || "";
+  const view = companyPlanView(company, now);
+  const at = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  const billingStatus = (company && company.billing && company.billing.status) || "";
+  const paying = billingStatus === "active" || billingStatus === "trialing";
+  const heartwood = id === HEARTWOOD_COMPANY_ID;
+  const known = !!(company && typeof company === "object" && !heartwood);
+  const friendOpen = view.plan === "friend" && !view.friendEnded;
+  // A trial with no end date has not ended. Signup always sets trialEndsAt; older docs without one stay open.
+  const trialStillOpen = view.plan === "trial" && view.status === "active" && !(company && company.isTest === true)
+    && (view.trialEndsAt == null || view.trialEndsAt > at);
+  const open = heartwood || !known || (company && company.isTest === true) || paying || friendOpen || trialStillOpen;
+  const paused = known && !open;
+  const msLeft = view.trialEndsAt != null ? view.trialEndsAt - at : 0;
+  const daysLeft = view.trialActive && msLeft > 0 ? Math.max(1, Math.ceil(msLeft / 86400000)) : 0;
+  const remind = !!(view.trialActive && msLeft > 0 && msLeft <= TRIAL_REMINDER_DAYS * 86400000);
+  const customer = !!(company && company.billing && company.billing.stripeCustomerId);
+  const manageBilling = customer && (billingStatus === "past_due" || billingStatus === "canceled");
+  const deleteEligible = known && company.isTest !== true && view.plan !== "friend" && view.plan !== "paid" && !paying && view.trialEndsAt != null;
+  const deleteAt = deleteEligible ? view.trialEndsAt + PAUSE_GRACE_DAYS * 86400000 : null;
+  return {
+    ...view, open, paused, paying, daysLeft, remind, manageBilling, deleteAt,
+    billingStatus: billingStatus || "not-configured",
+  };
+}
+
 // Account-level row only. Job text, photos and money are not copied onto it.
 export function masterRow(id, company, now = new Date()) {
   const view = companyPlanView(company, now);
@@ -343,6 +377,7 @@ export function billingStatusLabel(company, view = companyPlanView(company)) {
   if (!company || company.isTest === true || view.plan === "friend") return "Not billed";
   const status = company.billing && company.billing.status;
   if (status === "active") return "Active";
+  if (status === "trialing") return "Trialing";
   if (status === "past_due") return "Past due";
   if (status === "canceled") return "Canceled";
   return "Not set up";

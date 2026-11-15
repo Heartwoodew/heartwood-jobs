@@ -4,7 +4,7 @@ import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
   BASE_PRICE_ID, EXTRA_PRICE_ID, WEBHOOK_URL, applyStripeEvent, assertTestKey, authorizeCompanyAdmin,
-  checkoutParams, companiesTouchedByUser, constructStripeEvent, extraStaffQuantity, handleCheckoutCall,
+  checkoutParams, companiesTouchedByUser, constructStripeEvent, extraStaffQuantity, handleCheckoutCall, trialCheckoutFields,
   handlePortalCall, handleStripeWebhook, portalParams, staffItemChange, syncStaffQuantity,
 } from "../functions/billing/stripe-billing.js";
 
@@ -69,6 +69,12 @@ test("webhook signature, plan and billing status, and staff prorations", async (
   assert.equal(removed.patch.plan, undefined);
   const updated = applyStripeEvent({ type: "customer.subscription.updated", livemode: false, data: { object: { id: "sub_test", customer: "cus_test", status: "past_due", metadata: { companyId: "acme" } } } });
   assert.equal(updated.patch.billing.status, "past_due");
+  const trialing = applyStripeEvent({ type: "customer.subscription.updated", livemode: false, data: { object: { id: "sub_trial", customer: "cus_test", status: "trialing", metadata: { companyId: "acme" } } } });
+  assert.equal(trialing.patch.billing.status, "trialing");
+  assert.equal(trialing.patch.plan, undefined);
+  const preserved = applyStripeEvent({ type: "checkout.session.completed", livemode: false, data: { object: { mode: "subscription", client_reference_id: "acme", customer: "cus_test", subscription: "sub_trial", metadata: { companyId: "acme", preserveTrial: "1" } } } });
+  assert.equal(preserved.patch.billing.status, "trialing");
+  assert.equal(preserved.patch.plan, undefined);
 
   let saved = null;
   const webhook = await handleStripeWebhook({
@@ -155,4 +161,54 @@ test("billing callables say nothing about a company to someone who is not its ad
   }
   assert.equal(authorizeCompanyAdmin({ uid: "u1", profile: outsider, company: { name: "H" }, companyId: "heartwood" }).reason, "company-admin");
   assert.equal(authorizeCompanyAdmin({ uid: "u1", profile: { role: "admin", companyId: "t1" }, company: { isTest: true }, companyId: "t1" }).reason, "test-company");
+});
+
+test("signup checkout keeps the company trial and still works when Stripe is not configured", async () => {
+  const end = new Date("2026-12-01T00:00:00Z");
+  const now = new Date("2026-11-17T00:00:00Z").getTime();
+  const withTrial = { ...company, trialEndsAt: end.toISOString() };
+  const kept = checkoutParams({
+    companyId: "acme", company: withTrial, staffCount: 2,
+    successUrl: "https://app.callupapp.com.au/app/?billing=success",
+    cancelUrl: "https://app.callupapp.com.au/app/?billing=cancel",
+    preserveTrial: true, now,
+  });
+  assert.equal(kept.ok, true);
+  assert.equal(kept.params.mode, "subscription");
+  assert.equal(kept.params.payment_method_collection, "always");
+  assert.equal(kept.params.subscription_data.trial_end, Math.floor(end.getTime() / 1000));
+  assert.equal(kept.params.metadata.preserveTrial, "1");
+  assert.deepEqual(trialCheckoutFields(end, now), { trial_end: Math.floor(end.getTime() / 1000) });
+  const short = trialCheckoutFields(new Date(now + 20 * 60 * 60 * 1000), now);
+  assert.equal(short.trial_period_days >= 2, true);
+  assert.equal(trialCheckoutFields(new Date(now - 1000), now), null);
+  const plain = checkoutParams({ companyId: "acme", company: withTrial, staffCount: 1, successUrl: "x", cancelUrl: "y", now });
+  assert.equal(plain.params.subscription_data.trial_end, undefined);
+  assert.equal(plain.params.payment_method_collection, undefined);
+  const calls = [];
+  const stripe = { checkout: { sessions: { async create(params) { calls.push(params); return { url: "https://checkout.stripe.test/trial" }; } } } };
+  const opened = await handleCheckoutCall({
+    uid: "adm", companyId: "acme", origin: "https://app.callupapp.com.au",
+    getContext: async () => ({ company: withTrial, profile: admin, staffCount: 2 }),
+    stripe, preserveTrial: true, now,
+  });
+  assert.equal(opened.ok, true);
+  assert.equal(calls[0].subscription_data.trial_end, Math.floor(end.getTime() / 1000));
+  assert.equal(calls[0].payment_method_collection, "always");
+  const missing = await handleCheckoutCall({
+    uid: "adm", companyId: "acme", origin: "https://app.callupapp.com.au",
+    getContext: async () => ({ company: withTrial, profile: admin, staffCount: 1 }),
+    stripe: null, preserveTrial: true,
+  });
+  assert.equal(missing.ok, false);
+  assert.equal(missing.reason, "stripe-not-configured");
+  const index = readFileSync(new URL("../functions/index.js", import.meta.url), "utf8");
+  assert.match(index, /preserveTrial: request\.data\?\.preserveTrial === true/);
+  assert.match(index, /Card setup isn't available yet, you can add it later in Settings/);
+  const already = checkoutParams({
+    companyId: "acme",
+    company: { ...withTrial, billing: { status: "trialing", stripeSubscriptionId: "sub_1", stripeCustomerId: "cus_1" } },
+    staffCount: 1, successUrl: "x", cancelUrl: "y",
+  });
+  assert.equal(already.reason, "already-subscribed");
 });

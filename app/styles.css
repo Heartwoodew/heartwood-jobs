@@ -27,6 +27,9 @@ button.primary{background:var(--acc);border-color:var(--acc);color:#fff;font-wei
 main{max-width:1150px;margin:0 auto;padding:12px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px}
 .login{max-width:360px;margin:40px auto;display:grid;gap:12px}
+.cardopt{border:1px solid #e6d3a1;border-radius:10px;padding:10px 12px;display:grid;gap:6px}
+.cardopt legend{font-weight:700;padding:0 4px}
+.trial-banner{display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:#fff7e8;border:1px solid #e6d3a1;border-radius:10px;padding:8px 12px;margin:0 0 12px;font-size:14px}
 .signup{max-width:460px}
 .signup h3{margin:8px 0 0;font-size:15px}
 .master-totals{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:8px 0 12px}
@@ -1176,4 +1179,24 @@ dialog.comp-alert h2 { margin: 0 0 8px; font-size: 1.1rem; }
 .rev-list{margin:0 0 10px;padding-left:18px}
 .rev-cmp{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin:8px 0}
 .rev-cmp select{min-height:40px}
+.job-docs{margin:8px 0 14px}
+.job-docs h4{margin:0 0 6px}
+.doc-hint,.doc-wait{font-size:12px;color:#6b3a12;margin:0 0 8px}
+.doc-add{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin:0 0 8px}
+.doc-add label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--mut);flex:1 1 140px}
+.doc-add input,.doc-add select{min-height:44px;font:inherit;padding:8px;border:1px solid var(--line);border-radius:8px;background:#fff}
+.doc-list{display:flex;flex-direction:column;gap:8px}
+.doc-row{display:flex;gap:8px;align-items:center;background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px}
+.doc-ico{width:44px;height:44px;border-radius:8px;display:flex;align-items:center;justify-content:center;background:#f3ece3;font-size:11px;font-weight:800;letter-spacing:.02em;flex:none;padding:0}
+.doc-copy{flex:1;min-width:0}
+.doc-open{display:flex;flex-direction:column;align-items:flex-start;width:100%;text-align:left;background:transparent;border:0;padding:0;min-height:44px}
+.doc-name{font-weight:700;word-break:break-word}
+.doc-meta{display:block;color:var(--mut);font-size:12px}
+.doc-badge{font-size:11px;font-weight:700;color:#6b3a12;background:#fff6ea;border-radius:999px;padding:4px 8px;flex:none}
+.doc-actions{display:flex;gap:6px;flex:none}
+.doc-btn{min-height:44px;padding:8px 10px}
+.doc-progress{display:grid;grid-template-columns:1fr auto;gap:4px 8px;align-items:center;font-size:13px;margin:0 0 8px}
+.doc-progress progress{grid-column:1/-1;width:100%;height:8px}
+.doc-copy input{width:100%;min-height:44px;font:inherit;padding:8px;border:1px solid var(--line);border-radius:8px}
+.mcard.job-docs{display:block}
 .rev-diff{margin:0;padding-left:18px}

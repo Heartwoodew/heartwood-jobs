@@ -6,7 +6,7 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator,
   collection, doc, getDoc, getDocFromCache, getDocs, query, where, orderBy, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, deleteField, serverTimestamp, arrayUnion, runTransaction, Timestamp }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { getStorage, ref as storageRef, uploadBytes, connectStorageEmulator, listAll, getMetadata, getBlob }
+import { getStorage, ref as storageRef, uploadBytes, uploadBytesResumable, deleteObject, connectStorageEmulator, listAll, getMetadata, getBlob }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
 import { firebaseConfig, useEmulator, vapidKey } from "./firebase-config.js";
 import { installQuotes, adminViewRouter, setDefaultDepot, noDollars, setQuoteTradeSetup, setQuoteFocus } from "./features/quotes.js";
@@ -23,6 +23,7 @@ import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPla
 import { buildOperationalExport, retentionAdminText, retentionView } from "./features/cloud-retention.js";
 import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, lightboxHtml, photoFailureText } from "./features/photo-gallery.js";
 import { decidePhotoEmail } from "./features/photo-capture.js";
+import { mountDocuments, unmountDocuments, openDocumentBlob } from "./features/job-documents.js";
 import { installChatApp } from "./features/chat-ui.js";
 import { installPush } from "./features/push.js";
 import { installCompliance } from "./features/compliance.js";
@@ -35,13 +36,13 @@ import {
 import { saveGuard, settleOrQueue } from "./features/pending-write.js";
 import { PRODUCT_NAME, POWERED_BY, orgSettings, saveOrgSettings, setActiveCompany } from "./org-settings.js";
 import {
-  buildCompanyCreate, buildFriendCompany, buildTestCompany, companyDetailPatch, companyIdFromName, demoBundle,
+  buildCompanyCreate, buildFriendCompany, buildTestCompany, companyAccess, companyDetailPatch, companyIdFromName, demoBundle,
   friendCodeOk, friendInviteLink, hoursBrand, isPlatformOwner, newFriendCode,
-  ownerProfile, scopeRecord, trialEnd, validateCompanyInput, masterRow,
+  ownerProfile, scopeRecord, trialEnd, validateCompanyInput, masterRow, CARD_SETUP_LATER,
   builderSignoff, clientDocId, companyClientNames, companyJobPrefix, companyMailbox, companyStdClients, timesheetMailParts,
   supervisorsPath, docCompanyId,
 } from "./features/company.js";
-import { companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, signupFormHtml } from "./features/company-ui.js";
+import { companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, pausedAdminHtml, pausedStaffHtml, signupFormHtml, trialBannerHtml } from "./features/company-ui.js";
 import {
   addTitle, companyTradesDoc, jobTypeMap, normalizeTrade, readTradeList, removeTitle, renameTitle, resolveCompanySetup,
   sanitizeSkills, sanitizeTitles, sanitizeTradeList, setTitleLevel, skillsEditorHtml,
@@ -184,11 +185,16 @@ onAuthStateChanged(auth, async user => {
     if (cid) me.testCompanyId = cid;
   }
   await loadCompanyBrand();
+  $("#who").textContent = `${me.name} · ${me.role}`; $("#logout").classList.remove("hidden");
+  if (ui.companyAccess && ui.companyAccess.paused) {
+    renderAccountPaused();
+    return;
+  }
+  showBillingNote();
   ui.staffLogins = [];
   ui.staffLoginsErr = "";
   CLI = null; refreshClientLists();
   if (myCompanyId() !== "heartwood" && (me.role === "admin" || me.role === "manager" || me.role === "supervisor")) loadClients().catch(() => {});
-  $("#who").textContent = `${me.name} · ${me.role}`; $("#logout").classList.remove("hidden");
   watchOwnClock();
   CHAT.start();
   PUSH.start();
@@ -340,11 +346,18 @@ async function saveTradeSetup(next) {
 async function loadCompanyBrand() {
   const id = myCompanyId();
   const snap = await getDoc(doc(db, "companies", id)).catch(() => null);
-  const company = snap && snap.exists() ? { ...snap.data(), companyId: id } : { companyId: id, name: id === "heartwood" ? "" : "Your company" };
-  ui.companyStatus = snap && snap.exists() ? String((snap.data() && snap.data().status) || "") : "";
-  if (snap && snap.exists()) setActiveCompany(company);
-  else setActiveCompany(id === "heartwood" ? null : company);
-  await loadTradeSetup(snap && snap.exists() ? company : { companyId: id });
+  const loaded = snap && snap.exists() ? { ...snap.data(), companyId: id } : null;
+  ui.companyRecord = loaded;
+  ui.companyStatus = loaded ? String(loaded.status || "") : "";
+  const fallback = { companyId: id, name: id === "heartwood" ? "" : "Your company" };
+  if (loaded) setActiveCompany(loaded);
+  else setActiveCompany(id === "heartwood" ? null : fallback);
+  ui.companyAccess = companyAccess(loaded, id);
+  if (ui.companyAccess.paused) {
+    paintBrand();
+    return;
+  }
+  await loadTradeSetup(loaded || { companyId: id });
   // Depot for quotes and run sheets: the company's address from settings (Heartwood: Chuwar unless changed there).
   const depot = orgSettings().address;
   setRouteDepot(depot, { heartwood: id === "heartwood" }); setDefaultDepot(depot, { heartwood: id === "heartwood" });
@@ -491,14 +504,57 @@ function renderInviteSignedIn() {
   </form>`;
   $("#invitesignout").onclick = () => signOut(auth);
 }
-async function openBilling(name) {
+async function openBilling(name, extra = {}) {
   try {
-    const result = await callAuthed(name, { companyId: myCompanyId(), origin: location.origin });
+    const result = await callAuthed(name, { companyId: myCompanyId(), origin: location.origin, ...extra });
     if (result.url) location.assign(result.url);
     else toast("Billing did not return a page.");
   } catch (e) {
-    toast(e.message || "Billing is not available.");
+    toast((e && e.message) || "Billing is not available.");
   }
+}
+function billingExtra() {
+  return ui.companyAccess && ui.companyAccess.trialActive ? { preserveTrial: true } : {};
+}
+function renderAccountPaused() {
+  paintBrand();
+  $("#who").textContent = `${me.name} · ${me.role}`;
+  $("#logout").classList.remove("hidden");
+  $("#app").innerHTML = me.role === "admin" ? pausedAdminHtml(ui.companyAccess || {}) : pausedStaffHtml();
+  const out = $("#pausedout");
+  if (out) out.onclick = () => signOut(auth);
+  const sub = $("#billsub");
+  if (sub) sub.onclick = () => openBilling("createBillingCheckout");
+  const portal = $("#billportal");
+  if (portal) portal.onclick = () => openBilling("createBillingPortal");
+}
+function trialBannerNow() {
+  const access = ui.companyAccess;
+  if (!me || me.role !== "admin" || !access || access.paused || !access.trialActive || access.paying) return "";
+  const key = access.remind ? `callup.trialRemind.${myCompanyId()}` : `callup.trialBanner.${myCompanyId()}`;
+  try { if (sessionStorage.getItem(key) === "1") return ""; } catch { /* private mode: the banner stays */ }
+  return trialBannerHtml(access);
+}
+function bindTrialBanner(root) {
+  const bar = root && root.querySelector && root.querySelector("#trialbanner");
+  if (!bar) return;
+  const dismiss = root.querySelector("#trialdismiss");
+  if (dismiss) dismiss.onclick = () => {
+    const access = ui.companyAccess || {};
+    const key = access.remind ? `callup.trialRemind.${myCompanyId()}` : `callup.trialBanner.${myCompanyId()}`;
+    try { sessionStorage.setItem(key, "1"); } catch { /* the banner is gone for this paint either way */ }
+    bar.remove();
+  };
+  const sub = root.querySelector("#trialsub");
+  if (sub) sub.onclick = () => openBilling("createBillingCheckout", { preserveTrial: true });
+}
+function showBillingNote() {
+  let note = "";
+  try {
+    note = sessionStorage.getItem("callup.billingNote") || "";
+    sessionStorage.removeItem("callup.billingNote");
+  } catch { note = ""; }
+  if (note) toast(note);
 }
 async function callAuthed(name, data) {
   const projectId = useEmulator ? "demo-heartwood" : firebaseConfig.projectId;
@@ -768,6 +824,17 @@ function renderSignup(friendCode = "") {
         } catch { /* company is already created; they can add the logo in settings */ }
       }
       signingUp = false;
+      const addCard = !friendCodeOk(friendCode) && f.addCard && f.addCard.checked;
+      if (addCard) {
+        try {
+          const result = await callAuthed("createBillingCheckout", { companyId, origin: location.origin, preserveTrial: true });
+          if (result && result.url) { location.assign(result.url); return; }
+          try { sessionStorage.setItem("callup.billingNote", CARD_SETUP_LATER); } catch { /* continue into the app */ }
+        } catch (err) {
+          const msg = (err && err.message) || "";
+          try { sessionStorage.setItem("callup.billingNote", /Card setup isn't available yet/.test(msg) ? msg : CARD_SETUP_LATER); } catch { /* continue into the app */ }
+        }
+      }
       location.reload();
     } catch (e) {
       // Keep signingUp set while the half-made login is removed, so the auth listener does not
@@ -852,7 +919,7 @@ function bindSettings(A) {
   if (rb) rb.onclick = () => QG && QG.openRatesEditor();
   const sub = A.querySelector("#billsub");
   const portal = A.querySelector("#billportal");
-  if (sub) sub.onclick = () => openBilling("createBillingCheckout");
+  if (sub) sub.onclick = () => openBilling("createBillingCheckout", billingExtra());
   if (portal) portal.onclick = () => openBilling("createBillingPortal");
   const form = A.querySelector("#orgform");
   if (!form || form.querySelector("[disabled]")) { loadOrgLogos(A); return; }
@@ -1134,7 +1201,7 @@ function shell(inner) {
       <div class="sm-gi">${ks.map(item).join("")}</div></div>`; };
   return `<div class="sm-layout ${ui.navOpen ? "navopen" : ""}"><div class="sm-burgerbar"><button class="sm-burger" id="burger" aria-label="Menu">☰</button><b>${esc(cur ? (NAV_LBL[cur[0]] || cur[2]) : "")}</b></div>
     <nav class="sm-side">${NAV_TOP.map(item).join("")}${NAV_GROUPS.map(grp).join("")}${NAV_FOOT.map(item).join("")}</nav>
-    <section class="sm-main">${PUSH.bannerHtml()}${inner}</section></div>`;
+    <section class="sm-main">${trialBannerNow()}${PUSH.bannerHtml()}${inner}</section></div>`;
 }
 // ---- Mixed work: a job whose description lines are different task types (spoil vs backslab vs waterproofing vs clean)
 const TASK_RX = [["waterproof", /water ?proof/i], ["spoil", /spoil|soil removal/i], ["backslab", /back ?slab|back ?blade|slab clean|level site/i], ["clean", /\b(site |final )?clean\b/i]];
@@ -3610,7 +3677,7 @@ function renderAdmin() {
   const staffHtml = ui.view === "staff" ? staffPageHtml() : null;
   paintBrand();
   $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "master" ? masterView() : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "capacity" ? capacityScreen() : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : ui.view === "crew" ? crewMapScreen() : quotesHtml != null ? quotesHtml : jobsView(all));
-  const A = $("#app"); inboxBadge();
+  const A = $("#app"); inboxBadge(); bindTrialBanner(A);
   CHAT.watch([...(jobs || []), ...(ui.undated || [])]);
   if (ui.view === "chat") CHAT.mount(A);
   if (ui.view === "invoices") bindInvoices(A);
@@ -3792,6 +3859,59 @@ async function undoSplit(j) {
   if ($("#dlg").open) $("#dlg").close();
   toast("Split undone");
 }
+function documentActorRole() {
+  if (!me) return "";
+  if (me.role === "admin" || me.role === "manager" || me.role === "supervisor") return me.role;
+  return (me.cloudProfile && me.cloudProfile.role) || me.role || "";
+}
+function wireJobDocuments(el, job) {
+  if (!el || !job || !job.id || !me) return;
+  mountDocuments(el, {
+    job,
+    role: documentActorRole(),
+    companyId: myCompanyId(),
+    uid: me.uid,
+    uploaderName: me.name || "Staff",
+    online: () => typeof navigator === "undefined" || navigator.onLine !== false,
+    listen(crewOnly, onData, onError) {
+      const col = collection(db, "jobs", job.id, "documents");
+      const q = crewOnly ? query(col, where("visibility", "==", "crew")) : col;
+      return onSnapshot(q, snap => onData(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError);
+    },
+    upload(planned, file, onProgress) {
+      return new Promise((resolve, reject) => {
+        const task = uploadBytesResumable(storageRef(storage, planned.path), file, {
+          contentType: planned.contentType,
+          customMetadata: planned.metadata,
+        });
+        task.on("state_changed", snap => {
+          const pct = snap.totalBytes ? Math.round(100 * snap.bytesTransferred / snap.totalBytes) : 0;
+          if (onProgress) onProgress(pct);
+        }, reject, () => resolve());
+      });
+    },
+    writeDoc(planned) {
+      return setDoc(doc(db, "jobs", planned.firestore.jobId, "documents", planned.id), {
+        ...planned.firestore,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    },
+    rename(id, name) {
+      return updateDoc(doc(db, "jobs", job.id, "documents", id), { name, updatedAt: serverTimestamp() });
+    },
+    async remove(row) {
+      try { await deleteObject(storageRef(storage, row.storagePath)); }
+      catch (e) { if (!e || e.code !== "storage/object-not-found") throw e; }
+      await deleteDoc(doc(db, "jobs", row.jobId || job.id, "documents", row.id));
+    },
+    async open(row) {
+      const blob = await getBlob(storageRef(storage, row.storagePath));
+      openDocumentBlob(blob, row.name || row.fileName);
+    },
+    toast,
+  });
+}
 function editJob(j) {
   const importing = !!(j && j._import);
   const n = !j || !j.id;
@@ -3805,7 +3925,7 @@ function editJob(j) {
   if (j.inboxId) hist.push(["Inbox", "Linked to a builder email"]);
   if (j.completedByName) hist.push([j.completedByName, `Completed${j.loads ? ` · ${j.loads} loads` : ""}`]);
   const SL = { "Scheduled": "Work Order – scheduled", "In progress": "Work Order – in progress", "Done": "Completed", "Cancelled": "Unsuccessful" };
-  d.className = "jobcard"; d.onclose = () => refreshAfterImport();
+  d.className = "jobcard"; d.onclose = () => { unmountDocuments(); refreshAfterImport(); };
   d.innerHTML = `<form method="dialog" id="jf" class="jc">
     <div class="jc-top ${QCLS[qq]}"><div><div class="jc-no">${n ? "New Job" : "Job #" + esc(jobNo(j))}</div>${n ? "" : ipTop(j, "onbar")}<div class="jc-q">${qq}${j.sm8Status === "Quote" && usesSm8Sync() ? " (quote)" : ""}</div></div>
       <label class="jc-st">Job Status<select name="status">${STATUSES.map(s => `<option value="${s}" ${j.status === s ? "selected" : ""}>${SL[s]}</option>`).join("")}</select></label>
@@ -3845,6 +3965,7 @@ function editJob(j) {
       <p id="leavewarn" class="leave-warn" hidden></p>
       <h4>Notes</h4>
       <textarea name="notes" rows="2" placeholder="Office notes">${esc(j.notes)}</textarea>
+      ${!n ? `<div class="job-docs" data-job-docs="${esc(j.id)}"></div>` : ""}
       <h4>Diary</h4>
       <div class="diary">${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("")}
         ${hist.map(([w, t]) => `<div class="de sys"><span class="av">i</span><div><small>${esc(w)}</small><div>${esc(t)}</div></div></div>`).join("")}
@@ -3855,7 +3976,7 @@ function editJob(j) {
     <div class="btns jc-foot"><button value="cancel" formnovalidate class="sm-btn">Close</button><button value="save" class="sm-btn primary">Save Job</button></div></form>`;
   d.showModal();
   if (!n) jobTabs(d, j);
-  if (!n) { rememberJob(j); $("#emailph").onclick = () => emailPhotos(j); watchJobPhotos(j); paintPhotoSlots(); }
+  if (!n) { rememberJob(j); $("#emailph").onclick = () => emailPhotos(j); watchJobPhotos(j); paintPhotoSlots(); wireJobDocuments(d.querySelector("[data-job-docs]"), j); }
   if (!n && $("#cloudexport")) $("#cloudexport").onclick = () => downloadGalleryCopy(j).catch(e => toast(e.message || "Download failed"));
   if (!n) { wireFindPo(j); supervisors(); wireJobReceipts(j); fillSupCard(j); }
   if (!n && $("#unschbtn")) $("#unschbtn").onclick = ev => { if (!armBtn(ev.currentTarget, "✕ Remove from dispatch board", "Tap again to remove from the board")) return;
@@ -4867,6 +4988,7 @@ function renderOperator() {
   prepareOperatorPlan(mine);
   const sel = ui.opSel && mine.find(j => j.id === ui.opSel);
   if (sel) return renderOpDetail(sel);
+  unmountDocuments();
   if (ui.opTab === "chat" && document.activeElement?.closest?.(".chat-compose")) return;
   if (ui.opTab === "quotes" && !(canQuote() && me.role !== "admin")) ui.opTab = "more";
   if (ui.opTab === "capacity" && !canSeeCapacity()) ui.opTab = "more";
@@ -5055,6 +5177,7 @@ function renderOpDetail(j) {
       <div class="mcard"><div class="mlbl">Diary</div>${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("") || `<div class="muted sub">No notes yet</div>`}
         <button class="mnote" type="button" data-act="note">Add note</button></div>
       <div class="mcard"><div class="mlbl">Photos</div><div data-photoslot="${esc(j.id)}" data-photorole="cloud"></div>${emailedPhotosNote(j)}<div class="muted sub">Cloud photos are the private copies stored for this job.</div></div>
+      <div class="mcard job-docs" data-job-docs="${esc(j.id)}"></div>
       <div class="mcard safecard"><div class="mlbl">Safety</div><button type="button" class="mnote" data-swms="${j.id}">View SWMS</button><button type="button" class="mnote incbtn" data-inc="${j.id}">Report incident</button></div>
       <div class="mcard">${jobReceiptsHtml(j)}</div>
     </div>
@@ -5065,6 +5188,7 @@ function renderOpDetail(j) {
       <a class="mcard link mbtn outline" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener">${ICO.pin}<span>Get directions</span></a>
     </div></div>`;
   rememberJob(j); $("#emailph").onclick = () => emailPhotos(j); wireJobReceipts(j); fillSupCard(j); watchJobPhotos(j); paintPhotoSlots();
+  wireJobDocuments(document.querySelector("[data-job-docs]"), j);
   const showJobPane = which => {
     ui.jobPane = which === "chat" ? "chat" : "job";
     $("#app").querySelectorAll("[data-jtab]").forEach(b => { b.classList.toggle("on", b.dataset.jtab === ui.jobPane); b.setAttribute("aria-selected", b.dataset.jtab === ui.jobPane ? "true" : "false"); });

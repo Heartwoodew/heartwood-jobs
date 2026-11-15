@@ -48,7 +48,11 @@ test("storage rules add chat photos without opening receipts, finance, or job-ph
   const logic = readFileSync(new URL("../../app/features/chat.js", import.meta.url), "utf8");
   assert.doesNotMatch(ui + logic, /getDownloadURL/);
   assert.doesNotMatch(app.slice(0, app.indexOf("async function downloadLeaveCert")), /getDownloadURL/);
-  assert.doesNotMatch(app, /deleteObject/);
+  const withoutDocs = app
+    .replace("deleteObject, ", "")
+    .replace(/function wireJobDocuments[\s\S]*?\nfunction editJob/, "function editJob");
+  assert.doesNotMatch(withoutDocs, /deleteObject/);
+  assert.match(app.slice(app.indexOf("function wireJobDocuments"), app.indexOf("function editJob")), /deleteObject/);
   assert.match(ui, /getBlob/);
 });
 

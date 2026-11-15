@@ -400,5 +400,129 @@ service firebase.storage {
       allow delete: if signedIn() && callerTenant() == companyId
         && hasProfile() && profile().get("role", "") == "admin";
     }
+    // Job documents. Private blobs next to job photos. Office (admin, manager, supervisor)
+    // of that company can read, upload and delete. Crew can read a file only when its
+    // metadata says crew, and only if they are on the job. Each allow uses at most two
+    // Firestore reads. Heartwood skips the company read (it is never paused). Another
+    // company's read checks the company document, so a paused trial cannot get the bytes.
+    // A missing companies/{id} document fails closed here (get cannot also exists()).
+    function docUser() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
+    }
+    function docAccountCompany(user) {
+      return "companyId" in user && user.companyId is string && user.companyId.size() > 0
+        ? user.companyId
+        : ("tenantId" in user && user.tenantId is string && user.tenantId.size() > 0 ? user.tenantId : "heartwood");
+    }
+    function docOfficeRole(user) {
+      return "role" in user && user.role in ["admin", "manager", "supervisor"];
+    }
+    function docOfficeProfile(tenantId) {
+      let user = docUser();
+      return docAccountCompany(user) == tenantId && docOfficeRole(user);
+    }
+    function storageBillingOpen(data) {
+      let raw = data.get("billing", null);
+      let status = raw is map ? raw.get("status", "") : "";
+      let plan = data.get("plan", "");
+      let trialEnd = data.get("trialEndsAt", null);
+      let friendEnd = data.get("friendEndsAt", null);
+      let trialOver = trialEnd is timestamp && !(trialEnd > request.time);
+      let friendOver = friendEnd is timestamp && !(friendEnd > request.time);
+      return status == "active" || status == "trialing"
+        || (plan == "paid" && status != "past_due" && status != "canceled")
+        || (plan == "friend" && !friendOver)
+        || (plan != "friend" && plan != "paid" && !trialOver && data.get("status", "active") == "active");
+    }
+    function storageCompanyOpen(companyId) {
+      let data = firestore.get(/databases/(default)/documents/companies/$(companyId)).data;
+      return data.get("isTest", false) == true || storageBillingOpen(data);
+    }
+    function docHeartwoodOwner(tenantId) {
+      return signedIn() && tenantId == "heartwood" && (isAlex() || isPatrick());
+    }
+    function docHeartwoodOffice(tenantId) {
+      return signedIn() && tenantId == "heartwood" && !isAlex() && !isPatrick() && docOfficeProfile(tenantId);
+    }
+    function docCompanyOffice(tenantId) {
+      return signedIn() && tenantId != "heartwood" && tenantId.size() > 0
+        && docOfficeProfile(tenantId) && storageCompanyOpen(tenantId);
+    }
+    function docCrewAssigned(tenantId, jobId) {
+      let job = firestore.get(jobPath(jobId)).data;
+      let company = "companyId" in job && job.companyId is string && job.companyId.size() > 0
+        ? job.companyId
+        : ("tenantId" in job && job.tenantId is string && job.tenantId.size() > 0 ? job.tenantId : "heartwood");
+      let assigned = "assigned" in job && job.assigned is list && request.auth.uid in job.assigned;
+      return signedIn() && company == tenantId && assigned
+        && (tenantId == "heartwood" || storageCompanyOpen(tenantId));
+    }
+    function jobCompanyMatches(tenantId, jobId) {
+      let job = firestore.get(jobPath(jobId)).data;
+      let company = "companyId" in job && job.companyId is string && job.companyId.size() > 0
+        ? job.companyId
+        : ("tenantId" in job && job.tenantId is string && job.tenantId.size() > 0 ? job.tenantId : "heartwood");
+      return company == tenantId;
+    }
+    function docNameOk(file) {
+      return file.matches('^d[A-Za-z0-9]{8,40}$');
+    }
+    function docExtOk() {
+      return request.resource.metadata.fileName.matches('(?i).+\\.(pdf|jpe?g|png|webp|gif|heic|heif|docx?|xlsx?|dwg|dxf)$');
+    }
+    function docTypeOk() {
+      return request.resource.contentType.matches('image/(jpeg|jpg|png|webp|gif|heic|heif)')
+        || request.resource.contentType == "application/pdf"
+        || request.resource.contentType == "application/msword"
+        || request.resource.contentType == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        || request.resource.contentType == "application/vnd.ms-excel"
+        || request.resource.contentType == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        || request.resource.contentType in ["application/acad", "application/x-acad", "application/dwg", "application/dxf", "image/vnd.dwg", "image/vnd.dxf"]
+        || (request.resource.contentType == "application/octet-stream" && docExtOk());
+    }
+    function docFileOk(tenantId, jobId) {
+      return request.resource.size > 0
+        && request.resource.size <= 25 * 1024 * 1024
+        && docTypeOk()
+        && request.resource.metadata.tenantId == tenantId
+        && request.resource.metadata.jobId == jobId
+        && request.resource.metadata.uploaderUid == request.auth.uid
+        && request.resource.metadata.purpose == "job-document"
+        && request.resource.metadata.visibility in ["crew", "office"]
+        && request.resource.metadata.fileName is string
+        && request.resource.metadata.fileName.size() > 0
+        && request.resource.metadata.fileName.size() <= 200;
+    }
+    function docCrewRead(tenantId, jobId) {
+      return resource != null
+        && resource.metadata.purpose == "job-document"
+        && resource.metadata.visibility == "crew"
+        && docCrewAssigned(tenantId, jobId);
+    }
+
+    match /tenants/{tenantId}/jobs/{jobId}/documents {
+      allow list: if docHeartwoodOwner(tenantId);
+      allow list: if docHeartwoodOffice(tenantId);
+      allow list: if docCompanyOffice(tenantId);
+    }
+    match /tenants/{tenantId}/jobs/{jobId}/documents/{file} {
+      allow read: if docHeartwoodOwner(tenantId);
+      allow read: if docHeartwoodOffice(tenantId);
+      allow read: if docCompanyOffice(tenantId);
+      allow read: if docCrewRead(tenantId, jobId);
+      allow create: if docNameOk(file) && docFileOk(tenantId, jobId) && docHeartwoodOwner(tenantId) && jobCompanyMatches(tenantId, jobId);
+      allow create: if docNameOk(file) && docFileOk(tenantId, jobId) && docHeartwoodOffice(tenantId) && jobCompanyMatches(tenantId, jobId);
+      allow create: if docNameOk(file) && docFileOk(tenantId, jobId) && docCompanyOffice(tenantId);
+      allow delete: if docHeartwoodOwner(tenantId);
+      allow delete: if docHeartwoodOffice(tenantId);
+      allow delete: if docCompanyOffice(tenantId);
+      allow update: if false;
+    }
+
+    // Pause-retention backups. The Admin SDK writes these before a paused company is deleted.
+    // Clients cannot read or write them.
+    match /pauseBackups/{companyId}/{file} {
+      allow read, write: if false;
+    }
   }
 }

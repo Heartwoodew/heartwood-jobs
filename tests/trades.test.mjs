@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   DEFAULT_TRADE, LAZY_EARTHWORKS_IDS, TRADES, QUOTE_PACKS,
-  addTitle, defaultTitles, levelForTitleName, measureQty, normalizeTrade, quotePack, quoteTradeSwitchHtml,
+  addTitle, companyTradesDoc, defaultTitles, levelForTitleName, measureQty, normalizeTrade, quotePack, quoteTradeSwitchHtml,
   chooseTitleLevel, readTradeList, readyJobTypeMap, removeTitle, renameTitle, resolveCompanySetup, sanitizeSkills, setTitleLevel,
   signupTradesHtml, tradeSettingsHtml, tradeToolsHtml,
 } from "../app/features/trades.js";
@@ -86,7 +86,7 @@ test("a shared title keeps the lower level unless the primary mapping is already
 });
 
 test("every preloaded title maps to the permission level named in the sprint", () => {
-  assert.equal(TRADES.length, 8);
+  assert.equal(TRADES.length, 9);
   const counts = {};
   for (const trade of TRADES) {
     const titles = defaultTitles([trade.id]);
@@ -112,6 +112,21 @@ test("every preloaded title maps to the permission level named in the sprint", (
   assert.equal(levelForTitleName("Licensed electrician"), "operator");
   assert.equal(levelForTitleName("Apprentice plumber"), "labourer");
   assert.equal(levelForTitleName("Electrical trades assistant"), "labourer");
+  assert.equal(levelForTitleName("Manager"), "manager");
+  assert.equal(levelForTitleName("Supervisor"), "supervisor");
+  assert.equal(levelForTitleName("Concrete cutter / saw operator"), "operator");
+  assert.equal(levelForTitleName("Core driller"), "operator");
+  assert.equal(levelForTitleName("Apprentice"), "labourer");
+  const cutting = defaultTitles(["concrete-cutting"]).map(t => [t.name, t.level]);
+  assert.deepEqual(cutting, [
+    ["Admin", "admin"],
+    ["Manager", "manager"],
+    ["Supervisor", "supervisor"],
+    ["Concrete cutter / saw operator", "operator"],
+    ["Core driller", "operator"],
+    ["Labourer", "labourer"],
+    ["Apprentice", "labourer"],
+  ]);
   assert.ok(counts.manager && counts.labourer && counts.operator);
 });
 
@@ -139,7 +154,7 @@ test("another trade is additive and earthworks stays the plant pack", () => {
   assert.equal(quotePack("earthworks").ready, true);
   assert.equal(quotePack("earthworks").wizard, "plant");
   assert.deepEqual(quotePack("earthworks").templates.map(t => t.id), ["truck_skid", "truck_excavator", "truck_skid_excavator", "excavator"]);
-  for (const id of ["landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical"]) {
+  for (const id of ["landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical", "concrete-cutting"]) {
     assert.equal(QUOTE_PACKS[id].ready, true, id);
     assert.equal(QUOTE_PACKS[id].wizard, "measure", id);
   }
@@ -148,7 +163,7 @@ test("another trade is additive and earthworks stays the plant pack", () => {
 });
 
 test("every trade except the plant wizard lands in a measured pack", () => {
-  for (const id of ["landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical"]) {
+  for (const id of ["landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical", "concrete-cutting"]) {
     const setup = resolveCompanySetup({ trades: [id] }, null);
     assert.equal(setup.trade, id);
     assert.ok(Object.keys(readyJobTypeMap(setup)).length > 0, id);
@@ -167,13 +182,32 @@ test("every trade except the plant wizard lands in a measured pack", () => {
   assert.match(tools, /value="plumbing"/);
   assert.match(tools, /value="tiling"/);
   assert.match(tools, /value="electrical"/);
+  assert.match(tools, /value="concrete-cutting"/);
   const settings = tradeSettingsHtml(["landscaping"], { canEdit: true });
   assert.match(settings, /Quote pack ready/);
   assert.doesNotMatch(settings, /coming soon/);
   const signup = signupTradesHtml(["carpentry"]);
   assert.match(signup, /value="carpentry"[^>]*> Carpentry<\/label>/);
   assert.match(signup, /value="tiling"[^>]*> Tiling<\/label>/);
+  assert.match(signup, /value="concrete-cutting"[^>]*> Concrete Cutting<\/label>/);
   assert.doesNotMatch(signup, /coming soon/);
+  const picked = signupTradesHtml(["concrete-cutting", "plumbing"]);
+  assert.match(picked, /value="concrete-cutting" checked/);
+  assert.match(picked, /value="plumbing" checked/);
+  const cutting = resolveCompanySetup({ trades: ["concrete-cutting", "plumbing", "earthworks"] }, null);
+  assert.deepEqual(cutting.enabled, ["concrete-cutting", "plumbing", "earthworks"]);
+  assert.equal(quotePack("concrete-cutting").label, "Concrete Cutting");
+  assert.deepEqual(quotePack("concrete-cutting").jobTypes.map(([, label]) => label), [
+    "Floor sawing", "Wall sawing", "Core drilling", "Wire sawing", "Hand/ring sawing",
+    "Control joint cutting", "Crack chasing", "Concrete removal & breaking", "Floor grinding", "Scanning/GPR",
+  ]);
+  const all = TRADES.map(t => t.id);
+  const doc = companyTradesDoc("cut-co", all, "u");
+  assert.deepEqual(doc.trades, all);
+  assert.equal(doc.trade, "earthworks");
+  assert.equal(doc.extraTrades.length, all.length - 1);
+  assert.ok(doc.extraTrades.includes("concrete-cutting"));
+  assert.ok(doc.titles.length <= 80);
 });
 
 test("measure helpers do area, volume, linear metre and waste, and do not invent a mix", () => {
