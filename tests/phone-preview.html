@@ -21,6 +21,7 @@
 <header class="top">
   <div class="brand"><span class="wordmark" aria-label="CallUp">Call<span>Up</span></span><span class="orgline">Heartwood Earthworx</span></div>
   <div class="gsearch hidden" id="gsw"><input id="gq" type="search" placeholder="Search lot, street, PO or job #" autocomplete="off" aria-label="Search jobs"><div id="gres" class="gres hidden"></div></div>
+  <p id="locshare" class="loc-share" hidden></p>
   <div id="who" class="who"></div>
   <button id="logout" class="ghost hidden">Sign out</button>
 </header>
@@ -32,12 +33,27 @@
   window.HW_TODAY = "2026-11-06";
   window.HW_NOW = Date.parse("2026-11-06T10:00:00+10:00");
   window.HW_PREVIEW_ROLE = q.get("role") || "operator";
+  if (q.get("live") === "1") {
+    const seen = Math.floor(Date.parse("2026-11-06T09:40:00+10:00") / 1000);
+    window.HW_LIVE = [
+      { id: "patrick", uid: "patrick", name: "Patrick", companyId: "heartwood", clockedOn: true, sharing: "gps", lat: -27.604, lng: 152.86, accuracy: 12, updatedAt: { seconds: seen } },
+      { id: "sam", uid: "sam", name: "Sam", companyId: "heartwood", clockedOn: true, sharing: "off", updatedAt: { seconds: seen - 180 } },
+    ];
+    window.HW_GEO_BY_ID = {
+      j1: { lat: -27.608, lng: 152.868, query: "Lot 95 · 21 Lumen Street, Redbank Plains QLD 4301" },
+    };
+  }
+  if (q.get("trade")) window.HW_PREVIEW_TRADES = q.get("trade").split(",").map(s => s.trim()).filter(Boolean);
   if (q.get("open") === "staff") {
     window.HW_PREVIEW_VIEW = "staff";
     window.HW_INVITES = [
-      { id: "p1", name: "Casey Nguyen", email: "casey.nguyen@example.com", role: "operator", status: "pending", token: "pendingpreviewtoken00000000000000000000000", expiresAt: "2026-11-14T10:00:00+10:00" },
-      { id: "a1", name: "Sam Lee", email: "sam.lee@example.com", role: "supervisor", status: "accepted", token: "acceptedpreviewtoken000000000000000000000", expiresAt: "2026-11-20T10:00:00+10:00" },
-      { id: "e1", name: "Riley Chen", email: "riley.chen@example.com", role: "operator", status: "pending", token: "expiredpreviewtoken00000000000000000000000", expiresAt: "2026-11-01T10:00:00+10:00" }
+      { id: "p1", name: "Casey Nguyen", email: "casey.nguyen@example.com", role: "operator", status: "pending", token: "pendingpreviewtoken00000000000000000000000", createdAt: "2026-11-05T09:00:00+10:00", expiresAt: "2026-11-14T10:00:00+10:00", jobTitle: "Operator" },
+      { id: "a1", name: "Sam Lee", email: "Sam.Lee@example.com", role: "supervisor", status: "accepted", token: "acceptedpreviewtoken000000000000000000000", createdAt: "2026-10-20T09:00:00+10:00", expiresAt: "2026-11-20T10:00:00+10:00" },
+      { id: "e1", name: "Riley Chen", email: "riley.chen@example.com", role: "operator", status: "pending", token: "expiredpreviewtoken00000000000000000000000", createdAt: "2026-10-20T09:00:00+10:00", expiresAt: "2026-11-01T10:00:00+10:00" }
+    ];
+    window.HW_STAFF_LOGINS = [
+      { id: "sam-lee", name: "Sam Lee", email: "sam.lee@example.com", role: "supervisor", jobTitle: "Supervisor", skills: ["White card"], companyId: "heartwood", hourlyRate: "$65" },
+      { id: "jordan", name: "Jordan Blake", email: "jordan.blake@example.com", role: "operator", jobTitle: "Excavator operator", skills: ["Excavator"], companyId: "heartwood" }
     ];
   }
   if (q.get("amounts") === "1") {

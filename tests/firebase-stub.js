@@ -268,7 +268,13 @@ export function onSnapshot(ref, onNext) {
           data: () => { if (!found) return undefined; const { id: _id, ...rest } = row; return rest; }
         });
       } else if (col === "jobs") onNext(snap(JOBS.map(previewJob)));
-      else if (col === "invites") {
+      else if (col === "users" && !id) {
+        const rows = (typeof window !== "undefined" && window.HW_STAFF_LOGINS) || [
+          { id: "patrick", name: "Patrick", role: "operator", companyId: "heartwood" },
+          { id: "sam", name: "Sam", role: "supervisor", companyId: "heartwood" },
+        ];
+        onNext(snap(rows));
+      } else if (col === "invites") {
         const rows = (typeof window !== "undefined" && window.HW_INVITES) || [];
         onNext(snap(rows.map(row => ({
           ...row,
@@ -282,8 +288,10 @@ export function onSnapshot(ref, onNext) {
       else if (col === "servicing") onNext(snap((typeof window !== "undefined" && window.HW_SERVICING) || []));
       else if (col === "servicePlans") onNext(snap((typeof window !== "undefined" && window.HW_SERVICE_PLANS) || []));
       else if (col === "serviceCosts") onNext(snap((typeof window !== "undefined" && window.HW_SERVICE_COSTS) || []));
+      else if (col === "liveLocations") onNext(snap((typeof window !== "undefined" && window.HW_LIVE) || []));
       else if (col === "timesheets" && id) onNext({ id, exists: () => false, data: () => undefined });
       else if (col === "jobMoney" && id) onNext({ id, exists: () => false, data: () => undefined });
+      else if (col === "chatSettings") onNext({ id, exists: () => false, data: () => undefined });
       else if (col === "timesheets") onNext(snap((typeof window !== "undefined" && window.HW_TIMESHEETS) || []));
       else if (col === "swmsSignatures") {
         let rows = swmsPreviewRows();

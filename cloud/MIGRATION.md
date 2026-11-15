@@ -368,3 +368,28 @@ Order after merge:
 Sign-up stores `companies/{id}.trades` (a list) and `trade` (the first one). A missing list still reads `trade`, and a company with neither reads as earthworks. No backfill. Admins and managers may later update only `trades`. Reimbursement decisions (approve, decline, mark paid) are manager and admin; supervisors are not.
 
 No Stripe, plan, or timesheet change. No destructive backfill. Job titles and extra trades are written only when a company signs up or an admin/manager saves them.
+
+## Quote packs — landscaping, concreting, fencing (not deployed)
+
+Do not deploy from the pull request until it is merged. No rules change in this batch. No production writes.
+
+Order after merge:
+
+1. Deploy hosting only. Service worker `callup-shell-v101-quote-packs`. New modules: `app/features/packs/money.js`, `landscaping.js`, `concreting.js`, `fencing.js`, `carpentry.js`, `tiling.js`, `plumbing.js`, `electrical.js`, `form.js`.
+2. Do not deploy rules, functions or storage for this batch. Placeholder rates live in the app shell. A company default is written to the existing quote-rates doc (`packRates`) when someone chooses “Save as company default”.
+
+Another open branch may also bump `app/sw.js` (a crew map). This name is `callup-shell-v101-quote-packs` so the two version strings conflict on purpose and need a manual pick at merge.
+
+## Phase 3 — capacity and quote revisions (not deployed)
+
+Do not deploy from this branch. Nothing here writes to production. No new composite index: revision lists filter on `companyId` only, and the jobs date query already has `companyId` + `date`.
+
+Order after merge:
+
+1. Publish `cloud/firestore.production.rules` (quote revisions under `quotes/{id}/revisions`, accepted quotes locked, Heartwood supervisor quote read, Heartwood office job read for capacity). Do not publish `cloud/emulator/firestore.rules`.
+2. Deploy hosting. Service worker `callup-shell-v10x-phase3`. Other open PRs also change this cache name (crew map, quote packs, staff tab, chat push); keep this name so those conflicts stay visible. New modules: `app/features/capacity.js`, `app/features/quote-revisions.js`.
+3. No functions deploy, no Storage rules change, no Stripe change, no index deploy, no backfill. Old quotes have no revisions until the next changed save.
+
+## Bundle merge of PRs 72–77 (15 Nov 2026)
+
+PRs 72 (crew map), 73 (quote packs), 74 (staff tab), 75 (chat and daily job push), 76 (capacity and quote revisions) and 77 (dispatch times) were merged together. One service worker name covers all of them: `callup-shell-v102-phase3-bundle`. The names in the sections above are superseded.

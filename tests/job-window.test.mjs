@@ -38,9 +38,9 @@ test("office app subscribes to older open jobs and merges them into the job list
   const src = readFileSync(new URL("../app/app.js", import.meta.url), "utf8");
   assert.match(src, /companyJobs\(\[where\("status", "in", \[\.\.\.OPEN_STATUSES\]\)\]\)/);
   assert.match(src, /jobs = mergeJobLists\(windowJobs, staleJobs\)\.map\(withMoney\)/);
-  assert.match(src, /u1\(\); u2\(\); u3\(\); u4\(\); u5\(\);/);
+  assert.match(src, /u1\(\); u2\(\); u3\(\); u4\(\); u5\(\); u6\(\);/);
   assert.match(src, /companyJobs\(\[where\("assigned", "array-contains", user\.uid\)\]\)/);
   const sw = readFileSync(new URL("../app/sw.js", import.meta.url), "utf8");
   assert.match(sw, /"features\/job-window\.js"/);
-  assert.match(sw, /callup-shell-v100-multi-trade/);
+  assert.match(sw, /callup-shell-v102-phase3-bundle/);
 });

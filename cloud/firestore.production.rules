@@ -369,8 +369,27 @@ service cloud.firestore {
     function heartwoodManager() {
       return signedIn() && hasProfile() && profile().get("role", "") == "manager" && callerCompany() == "heartwood";
     }
+    function heartwoodSupervisor() {
+      return signedIn() && hasProfile() && profile().get("role", "") == "supervisor" && callerCompany() == "heartwood";
+    }
+    // Capacity: Heartwood supervisors and managers can read Heartwood jobs. They do not gain job writes.
+    function heartwoodOfficeRead() {
+      // Same people as supervisor, manager or admin of Heartwood. Role first, one company lookup, to stay under the expression limit.
+      return signedIn() && hasProfile() && (profile().get("role", "") in ["supervisor", "manager", "admin"])
+        && callerCompany() == "heartwood";
+    }
     function companyStaff() {
       return callerCompany() != "" && callerCompany() != "heartwood" && hasProfile();
+    }
+    // Quote revisions. One user read, no callerCompany(), so it stays under the rules expression limit.
+    function revisionStaff(companyId) {
+      let path = /databases/$(database)/documents/users/$(request.auth.uid);
+      return signedIn() && companyId is string && (
+        (request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "38SU5waAy4f9UI9N6JTqDMaYpQg2", "R7t41e54Ykcdk9WPdVZnDd697iI2"] && companyId == "heartwood")
+        || (exists(path)
+          && (get(path).data.get("role", "") in ["supervisor", "manager", "admin"])
+          && get(path).data.get("companyId", "heartwood") == companyId)
+      );
     }
 
 
@@ -390,19 +409,63 @@ service cloud.firestore {
     match /quotes/{id} {
       allow get: if (isAdmin() && docCompany(resource.data) == "heartwood")
         || (heartwoodManager() && docCompany(resource.data) == "heartwood")
+        || (heartwoodSupervisor() && docCompany(resource.data) == "heartwood")
         || (companyOffice() && docCompany(resource.data) == callerCompany());
       allow list: if isAdmin() && resource.data.companyId == "heartwood";
       allow list: if heartwoodManager() && resource.data.companyId == "heartwood";
+      allow list: if heartwoodSupervisor() && resource.data.companyId == "heartwood";
       allow list: if companyOffice() && resource.data.companyId == callerCompany();
       allow create: if quoteFieldsOk(request.resource.data) && ((isAdmin() && request.resource.data.get("companyId", "heartwood") == "heartwood")
         || (heartwoodManager() && request.resource.data.get("companyId", "heartwood") == "heartwood" && quoteOverridesKept({}))
         || (companyOffice() && request.resource.data.companyId == callerCompany() && quoteOverridesKept({})));
-      allow update: if quoteFieldsOk(request.resource.data) && ((isAdmin() && docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood")
+      // Accepted quotes stay as they were. The check is only a field compare so this rule stays under the expression limit.
+      allow update: if resource.data.get("quoteStatus", "") != "Accepted"
+        && quoteFieldsOk(request.resource.data) && ((isAdmin() && docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood")
         || (heartwoodManager() && docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood"
           && quoteOverridesKept(resource.data.get("priceOverrides", {})))
         || (companyOffice() && docCompany(resource.data) == callerCompany() && docCompany(request.resource.data) == callerCompany()
           && quoteOverridesKept(resource.data.get("priceOverrides", {}))));
       allow delete: if false;
+      // Separate from the office rule above so a Heartwood supervisor is not folded into that expression.
+      allow create: if heartwoodSupervisor() && quoteFieldsOk(request.resource.data)
+        && request.resource.data.get("companyId", "heartwood") == "heartwood"
+        && quoteOverridesKept({});
+      allow update: if heartwoodSupervisor()
+        && resource.data.get("quoteStatus", "") != "Accepted"
+        && quoteFieldsOk(request.resource.data)
+        && docCompany(resource.data) == "heartwood"
+        && docCompany(request.resource.data) == "heartwood"
+        && quoteOverridesKept(resource.data.get("priceOverrides", {}));
+
+      // Numbered quote revisions. Same company, supervisor and above. Create only.
+      match /revisions/{revId} {
+        allow get: if revisionStaff(resource.data.get("companyId", "heartwood"));
+        allow list: if revisionStaff(resource.data.companyId);
+        allow create: if revId.matches('^r[0-9]{3}$')
+          && revisionStaff(request.resource.data.companyId)
+          && request.resource.data.keys().hasOnly(["revision", "quoteId", "companyId", "createdBy", "createdByName", "createdAt", "createdAtIso", "lines", "extraItems", "priceOverrides", "totalEx", "gst", "totalInc", "changes"])
+          && request.resource.data.revision is int
+          && request.resource.data.revision >= 1
+          && request.resource.data.revision <= 999
+          && request.resource.data.quoteId == id
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdByName is string
+          && request.resource.data.createdByName.size() > 0
+          && request.resource.data.createdByName.size() <= 80
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.lines is list
+          && request.resource.data.lines.size() <= 80
+          && request.resource.data.extraItems is list
+          && request.resource.data.extraItems.size() <= 40
+          && request.resource.data.priceOverrides is map
+          && request.resource.data.priceOverrides.size() <= 20
+          && request.resource.data.changes is list
+          && request.resource.data.changes.size() <= 80
+          && exists(/databases/$(database)/documents/quotes/$(id))
+          && get(/databases/$(database)/documents/quotes/$(id)).data.get("quoteStatus", "Draft") != "Accepted"
+          && get(/databases/$(database)/documents/quotes/$(id)).data.get("companyId", "heartwood") == request.resource.data.companyId;
+        allow update, delete: if false;
+      }
     }
 
 
@@ -509,9 +572,13 @@ service cloud.firestore {
       allow read: if isSync() || (signedIn() && isAssigned(resource.data) && isOperator());
       allow get: if isAdmin() && docCompany(resource.data) == "heartwood";
       allow list: if isAdmin() && resource.data.companyId == "heartwood";
+      // Managers (crew map) and supervisors (capacity) read Heartwood jobs through heartwoodOfficeRead() below.
+      // One rule for both keeps the job get under the 1000-expression limit. Read only, no writes.
       allow get: if companyOffice() && docCompany(resource.data) == callerCompany();
       allow get: if companyStaff() && docCompany(resource.data) == callerCompany() && isAssigned(resource.data);
       allow list: if companyOffice() && resource.data.companyId == callerCompany();
+      allow get: if heartwoodOfficeRead() && docCompany(resource.data) == "heartwood";
+      allow list: if heartwoodOfficeRead() && resource.data.companyId == "heartwood";
       allow list: if companyStaff() && resource.data.companyId == callerCompany() && request.auth.uid in resource.data.assigned;
       allow create: if companyOffice() && request.resource.data.companyId == callerCompany() && jobMoneyFreeCreate();
       allow update: if companyOffice()
@@ -588,10 +655,31 @@ service cloud.firestore {
     function cmRole() {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("role", "");
     }
+    // Dispatch day start, travel gap and per-type hours. Each default is at least 1 hour.
+    // Heartwood keeps this on meta/dispatchTimes (admins already write meta). Other companies use companyMeta.
+    function dispatchDurOk(m, k) {
+      return !m.keys().hasAny([k]) || (m[k] is number && m[k] >= 1 && m[k] <= 24);
+    }
+    function dispatchDurationsOk(m) {
+      return m is map && m.size() <= 8
+        && m.keys().hasOnly(["spoil", "backslab", "roof-clean", "scaffold-clean", "final-clean", "site-clean", "waterproof", "other"])
+        && dispatchDurOk(m, "spoil") && dispatchDurOk(m, "backslab") && dispatchDurOk(m, "roof-clean")
+        && dispatchDurOk(m, "scaffold-clean") && dispatchDurOk(m, "final-clean") && dispatchDurOk(m, "site-clean")
+        && dispatchDurOk(m, "waterproof") && dispatchDurOk(m, "other");
+    }
+    function dispatchMetaOk(d) {
+      return d.keys().hasOnly(["companyId", "dayStart", "travelGapMin", "durations", "updatedAt", "updatedBy"])
+        && d.dayStart is string
+        && d.dayStart.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$')
+        && d.travelGapMin is number && d.travelGapMin >= 0 && d.travelGapMin <= 180
+        && dispatchDurationsOk(d.durations)
+        && d.updatedBy == request.auth.uid
+        && d.updatedAt == request.time;
+    }
     function cmGetOk(docId) {
       let c = incProfileCompany();
       return signedIn() && c != "heartwood" && cmRole() in ["admin", "supervisor", "manager"]
-        && docId in [c + "_quoteRates", c + "_supervisors", c + "_invoicing"];
+        && docId in [c + "_quoteRates", c + "_supervisors", c + "_invoicing", c + "_dispatch"];
     }
     function cmWriteOk(docId) {
       let c = incProfileCompany();
@@ -599,7 +687,8 @@ service cloud.firestore {
       return signedIn() && c != "heartwood" && request.resource.data.get("companyId", "") == c
         && ((docId == c + "_supervisors" && role in ["admin", "supervisor", "manager"])
           || (docId == c + "_quoteRates" && role in ["admin", "manager"])
-          || (docId == c + "_invoicing" && role == "admin"));
+          || (docId == c + "_invoicing" && role == "admin")
+          || (docId == c + "_dispatch" && role in ["admin", "manager"] && dispatchMetaOk(request.resource.data)));
     }
     match /companyMeta/{docId} {
       allow get: if cmGetOk(docId);
@@ -989,6 +1078,60 @@ service cloud.firestore {
         && chatCanAccess(tenantId, threadId)
         && request.resource.data.keys().hasOnly(["seenAt"])
         && request.resource.data.seenAt == request.time;
+      allow delete: if false;
+    }
+
+    // Web push tokens. The owner writes their own. Nobody else can read them.
+    function chatExplicitCompany() {
+      return chatHasProfile() && "companyId" in chatProfile() && chatProfile().companyId is string && chatProfile().companyId.size() > 0;
+    }
+    function chatTokenCompany() {
+      return chatExplicitCompany()
+        ? chatProfile().companyId
+        : (chatExplicitTenant()
+          ? chatProfile().tenantId
+          : ((chatHasProfile() || chatIsAlex() || chatIsPatrick()) ? "heartwood" : ""));
+    }
+    function chatCompanyIdOk(id) {
+      return id is string && id.size() >= 2 && id.size() <= 40 && id.matches('^[a-z0-9][a-z0-9-]{0,39}$');
+    }
+    function chatPushOriginOk() {
+      return request.resource.data.origin in [
+        "https://jobs.heartwoodew.com",
+        "https://app.callupapp.com.au",
+        "https://callupapp.web.app"
+      ];
+    }
+    function chatTokenOk() {
+      return request.resource.data.keys().hasOnly(["token", "companyId", "origin", "platform", "updatedAt"])
+        && request.resource.data.token is string
+        && request.resource.data.token.size() >= 20
+        && request.resource.data.token.size() <= 4096
+        && chatCompanyIdOk(request.resource.data.companyId)
+        && request.resource.data.companyId == chatTokenCompany()
+        && chatPushOriginOk()
+        && request.resource.data.platform == "web"
+        && request.resource.data.updatedAt == request.time;
+    }
+    function chatPrefsOk() {
+      return request.resource.data.keys().hasOnly(["muteChat", "muteDaily"])
+        && request.resource.data.muteChat is bool
+        && request.resource.data.muteDaily is bool;
+    }
+    match /users/{uid}/fcmTokens/{tokenId} {
+      allow read: if chatSignedIn() && request.auth.uid == uid;
+      allow create, update: if chatSignedIn()
+        && request.auth.uid == uid
+        && tokenId.matches('^[a-f0-9]{32}$')
+        && chatTokenOk();
+      allow delete: if chatSignedIn() && request.auth.uid == uid;
+    }
+    match /users/{uid}/chatSettings/{docId} {
+      allow read: if chatSignedIn() && request.auth.uid == uid && docId == "prefs";
+      allow create, update: if chatSignedIn()
+        && request.auth.uid == uid
+        && docId == "prefs"
+        && chatPrefsOk();
       allow delete: if false;
     }
 // END CHAT RULES
@@ -2182,6 +2325,74 @@ service cloud.firestore {
       allow delete: if false;
     }
 // END HOURS EXPORT RULES
+
+// BEGIN LIVE LOCATION RULES
+    // One live doc per person (latest position only). Heartwood: liveLocations/{uid}.
+    // Every other company: companies/{id}/liveLocations/{uid}. Written only while that
+    // person's timesheet shift is clocked on (open or on a break). Clock off deletes it.
+    // Manager and admin of the same company read. Supervisor and below do not. No other company does.
+    function llRole() {
+      return hasProfile() ? profile().get("role", "") : "";
+    }
+    function llOffice() {
+      return signedIn() && callerCompany() != "" && (
+        isAlex()
+        || (isPatrick() && callerCompany() == "heartwood")
+        || (hasProfile() && (llRole() == "admin" || llRole() == "manager"))
+      );
+    }
+    function llGps(d) {
+      return d.sharing == "gps"
+        && d.keys().hasOnly(["uid", "name", "companyId", "clockedOn", "sharing", "lat", "lng", "accuracy", "updatedAt", "weekStart", "entryId"])
+        && d.lat is number && d.lat >= -90 && d.lat <= 90
+        && d.lng is number && d.lng >= -180 && d.lng <= 180
+        && d.accuracy is number && d.accuracy >= 0 && d.accuracy <= 100000;
+    }
+    function llOff(d) {
+      return d.sharing == "off"
+        && d.keys().hasOnly(["uid", "name", "companyId", "clockedOn", "sharing", "updatedAt", "weekStart", "entryId"]);
+    }
+    function llOpenEntry(sheet) {
+      let entry = sheet.entries[request.resource.data.entryId];
+      return sheet.uid == request.auth.uid
+        && docCompany(sheet) == request.resource.data.companyId
+        && entry.source == "clock"
+        && (entry.status == "open" || entry.status == "break");
+    }
+    function llClocked() {
+      let path = /databases/$(database)/documents/timesheets/$(request.auth.uid + "_" + request.resource.data.weekStart);
+      return exists(path) && llOpenEntry(get(path).data);
+    }
+    function llBody(d, id) {
+      return d.uid == id
+        && d.uid == request.auth.uid
+        && d.name is string && d.name.size() > 0 && d.name.size() <= 80
+        && d.clockedOn == true
+        && d.updatedAt == request.time
+        && d.weekStart is string && d.weekStart.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && d.entryId is string && d.entryId.matches('^[a-z0-9]{8,24}$')
+        && (llGps(d) || llOff(d))
+        && llClocked();
+    }
+    match /liveLocations/{id} {
+      allow get: if llOffice() && callerCompany() == "heartwood" && docCompany(resource.data) == "heartwood";
+      allow list: if llOffice() && callerCompany() == "heartwood" && resource.data.companyId == "heartwood";
+      allow create, update: if callerCompany() == "heartwood" && request.resource.data.companyId == "heartwood" && llBody(request.resource.data, id);
+      allow delete: if signedIn() && request.auth.uid == id && callerCompany() == "heartwood" && docCompany(resource.data) == "heartwood";
+    }
+    match /companies/{c}/liveLocations/{id} {
+      allow get: if llOffice() && c != "heartwood" && callerCompany() == c && docCompany(resource.data) == c;
+      allow list: if llOffice() && c != "heartwood" && callerCompany() == c && resource.data.companyId == c;
+      allow create, update: if c != "heartwood" && callerCompany() == c && request.resource.data.companyId == c && llBody(request.resource.data, id);
+      allow delete: if signedIn() && request.auth.uid == id && c != "heartwood" && callerCompany() == c && docCompany(resource.data) == c;
+    }
+// END LIVE LOCATION RULES
+
+// BEGIN DAILY JOB RULES
+    match /dailyJobDigest/{id} {
+      allow read, write: if false;
+    }
+// END DAILY JOB RULES
 
     match /{document=**} { allow read, write: if false; }
   }

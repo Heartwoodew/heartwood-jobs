@@ -8,16 +8,23 @@ import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { getStorage, ref as storageRef, uploadBytes, connectStorageEmulator, listAll, getMetadata, getBlob }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
-import { firebaseConfig, useEmulator } from "./firebase-config.js";
+import { firebaseConfig, useEmulator, vapidKey } from "./firebase-config.js";
 import { installQuotes, adminViewRouter, setDefaultDepot, noDollars, setQuoteTradeSetup, setQuoteFocus } from "./features/quotes.js";
+import { capacityViewHtml, shiftWeek } from "./features/capacity.js";
 import { JOB_MONEY_COLLECTION, jobMoneyDoc, mergeJobMoney, splitJobMoney } from "./features/job-money.js";
 import { OPEN_STATUSES, staleOpenJobs, mergeJobLists, parseHoursInput } from "./features/job-window.js";
+import {
+  DISPATCH_CATEGORIES, approvedSheet, dispatchSettingsHtml, estimateDuration, formatEstimate,
+  historyMedians, isManualStart, keepsStart, normaliseTime, planAutoTimes, primaryKey, readDispatchLocal,
+  sanitizeDispatchSettings, spaceDay, withSortHint, writeDispatchLocal,
+} from "./features/dispatch-times.js";
 import { installRouteOrder, orderJobsForRun, runSheetId, geoPatch, setRouteDepot } from "./features/route-order.js";
 import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPlanned, jobPhotoPrefix, storageErrorCode, summarizePhotoListing } from "./features/cloud-storage.js";
 import { buildOperationalExport, retentionAdminText, retentionView } from "./features/cloud-retention.js";
 import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, lightboxHtml, photoFailureText } from "./features/photo-gallery.js";
 import { decidePhotoEmail } from "./features/photo-capture.js";
 import { installChatApp } from "./features/chat-ui.js";
+import { installPush } from "./features/push.js";
 import { installCompliance } from "./features/compliance.js";
 import { SWMS, SWMS_VERSION, sigMs, sigExp, latestSig, statusOf, swmsSignatureData, buildPlaceholderPdf } from "./features/swms-sign.js";
 import {
@@ -37,7 +44,7 @@ import { companySettingsHtml, failureText as companyFailure, masterDetailHtml, m
 import {
   addTitle, companyTradesDoc, jobTypeMap, normalizeTrade, readTradeList, removeTitle, renameTitle, resolveCompanySetup,
   sanitizeSkills, sanitizeTitles, sanitizeTradeList, setTitleLevel, skillsEditorHtml,
-  titlesAfterTradeChange, titlesEditorHtml, tradeLabel,
+  titlesAfterTradeChange, titlesEditorHtml, tradeLabel, quotePack,
 } from "./features/trades.js";
 import { acceptLogoValue, compressLogo, isLogoStoragePath, logoFailureText, logoFileOk, logoUploadPlan } from "./features/company-logo.js";
 import { exportAllowed, hoursCsv, invoiceCsv, jobsCsv, reimbursementsCsv } from "./features/company-exports.js";
@@ -51,6 +58,10 @@ import {
   locationMap, machineChoicePatch, machinePromptNeeded, machineShiftToResume, mapsHref, needsLocationConsent, newTsId, openClock,
   paidShift, prestartStatus, sheetHours, shiftHours, sortedEntries, stampText,
 } from "./features/timesheet.js";
+import {
+  LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, canSeeCrewMap, crewListHtml, crewMapModel,
+  liveCollectionPath, liveLocationBody, shareIndicator, shouldSendPosition,
+} from "./features/live-location.js";
 import {
   assignmentWarning, cellLeaveText, certificateContentType, certificateObjectName, certificateStoragePath,
   leaveCreateBody, leaveDecisionBody, leaveScreenHtml, newLeaveId, plannerLeaveHtml, saveCertificate, certificateDownloadName, weekLeaveHtml,
@@ -108,6 +119,7 @@ function guessType(text) {
 let me = null, staff = [], jobs = [], unsub = null;
 let signingUp = false;
 let CHAT = { badge() { return ""; }, teamHtml() { return ""; }, jobHtml() { return ""; }, mount() {}, openJob() {}, start() {}, stop() {}, watch() {}, refresh() {} };
+let PUSH = { start() {}, stop() {}, mount() {}, settle() {}, panelHtml() { return ""; }, bannerHtml() { return ""; } };
 let COMP = { start() {}, stop() {}, bind() {}, abandon() {}, adminHtml() { return ""; }, staffHtml() { return ""; }, adminBannerHtml() { return ""; }, staffBannerHtml() { return ""; }, canSee() { return false; }, canEdit() { return false; }, canPrestart() { return false; }, canEditService() { return false; } };
 let QG = { bindAdmin() {} }; // Quotes module; filled after helpers load
 let ROUTE = { open() {} };
@@ -118,8 +130,10 @@ const ui = { view: "list", staffF: "", typeF: "", photoLists: {}, photoUrls: {},
 $("#logout").onclick = () => signOut(auth);
 onAuthStateChanged(auth, async user => {
   if (signingUp) return;
+  if (!user || (me && user && me.uid !== user.uid)) liveShareStop(false);
   if (unsub) { unsub(); unsub = null; }
   CHAT.stop();
+  PUSH.stop();
   COMP.stop();
   const inviteToken = new URLSearchParams(location.search).get("invite") || "";
   if (!user) {
@@ -164,10 +178,14 @@ onAuthStateChanged(auth, async user => {
     if (cid) me.testCompanyId = cid;
   }
   await loadCompanyBrand();
+  ui.staffLogins = [];
+  ui.staffLoginsErr = "";
   CLI = null; refreshClientLists();
   if (myCompanyId() !== "heartwood" && (me.role === "admin" || me.role === "manager" || me.role === "supervisor")) loadClients().catch(() => {});
   $("#who").textContent = `${me.name} · ${me.role}`; $("#logout").classList.remove("hidden");
+  watchOwnClock();
   CHAT.start();
+  PUSH.start();
   if (me.role === "admin") {
     if (window.HW_PREVIEW_VIEW === "staff") ui.view = "staff";
     if (window.HW_PREVIEW_VIEW === "settings" || window.HW_PREVIEW_VIEW === "company") ui.view = "settings";
@@ -187,9 +205,9 @@ onAuthStateChanged(auth, async user => {
     // Older jobs still open (Scheduled / In progress, dated before the window) stay in the office list and search.
     let windowJobs = [], staleJobs = [];
     const setJobs = () => { jobs = mergeJobLists(windowJobs, staleJobs).map(withMoney); addNameOnlyStaff(jobs); };
-    const u1 = onSnapshot(q, s => { windowJobs = s.docs.map(d => ({ id: d.id, ...d.data() })); setJobs(); renderAdmin(); }, e => { console.warn("jobs", e.code, e.message); windowJobs = []; setJobs(); renderAdmin(); });
+    const u1 = onSnapshot(q, s => { windowJobs = s.docs.map(d => ({ id: d.id, ...d.data() })); setJobs(); renderAdmin(); queueDispatchPersist(jobs); }, e => { console.warn("jobs", e.code, e.message); windowJobs = []; setJobs(); renderAdmin(); });
     const u5 = onSnapshot(companyJobs([where("status", "in", [...OPEN_STATUSES])]), s => {
-      staleJobs = staleOpenJobs(s.docs.map(d => ({ id: d.id, ...d.data() })), todayStr()); setJobs(); renderAdmin();
+      staleJobs = staleOpenJobs(s.docs.map(d => ({ id: d.id, ...d.data() })), todayStr()); setJobs(); renderAdmin(); queueDispatchPersist(jobs);
     }, e => console.warn("older open jobs", e.code, e.message));
     // Invoicing: every Done job (any date), admin only.
     const u2 = onSnapshot(companyJobs([where("status", "==", "Done")]), s => { ui.done = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); donePill(); if (ui.view === "invoices" || ui.view === "completed" || ui.view === "home") renderAdmin(); }, e => console.warn("done jobs", e.code || e.message));
@@ -199,8 +217,11 @@ onAuthStateChanged(auth, async user => {
       if (ui.view === "staff") renderAdmin();
       watchInviteMail();
     }, e => { ui.invites = []; ui.invitesErr = e.code || "permission-denied"; if (ui.view === "staff") renderAdmin(); });
+    // Company logins for the Staff tab. onSnapshot reads the persistent cache when the phone is offline.
+    const u6 = watchStaffRoster();
     moneyStart(renderAdmin);
-    unsub = () => { u1(); u2(); u3(); u4(); u5(); moneyStop(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; }; swmsSub(); COMP.start(); leaveStart(); claimsStart(); if (me.platformOwner) watchMaster();
+    const stopCap = startCapacityWatch();
+    unsub = () => { u1(); u2(); u3(); u4(); u5(); u6(); stopCap(); moneyStop(); CHAT.stop(); PUSH.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; }; swmsSub(); COMP.start(); leaveStart(); claimsStart(); if (me.platformOwner) watchMaster();
     getDocs(companyJobs([where("date", "==", "")])).then(s => { ui.undated = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); addNameOnlyStaff(ui.undated); renderAdmin(); }).catch(e => console.warn("undated", e.code, e.message));
   } else {
     // Operators may only list jobs assigned to them (enforced by firestore.rules).
@@ -216,8 +237,10 @@ onAuthStateChanged(auth, async user => {
         watchInviteMail();
       }, e => { ui.invites = []; ui.invitesErr = e.code || "permission-denied"; if ((ui.opTab || "today") === "staff") renderOperator(); })
       : () => {};
+    const u6 = watchStaffRoster();
     if (canInvite() && window.HW_PREVIEW_VIEW === "staff") ui.opTab = "staff";
-    unsub = () => { u1(); u3(); u4(); moneyStop(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start(); leaveStart(); claimsStart();
+    const stopCap = startCapacityWatch();
+    unsub = () => { u1(); u3(); u4(); u6(); stopCap(); moneyStop(); CHAT.stop(); PUSH.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start(); leaveStart(); claimsStart();
   }
 });
 
@@ -269,6 +292,10 @@ function applyJobTypes(setup) {
 }
 async function loadTradeSetup(company) {
   const id = (company && company.companyId) || myCompanyId();
+  if (typeof window !== "undefined" && Array.isArray(window.HW_PREVIEW_TRADES) && window.HW_PREVIEW_TRADES.length) {
+    applyJobTypes(resolveCompanySetup({ companyId: id, trades: window.HW_PREVIEW_TRADES }, null));
+    return;
+  }
   const snap = await getDoc(doc(db, "companyTrades", id)).catch(() => null);
   const stored = snap && snap.exists() ? snap.data() : null;
   applyJobTypes(resolveCompanySetup(company || { companyId: id }, stored));
@@ -315,6 +342,132 @@ async function loadCompanyBrand() {
   const depot = orgSettings().address;
   setRouteDepot(depot, { heartwood: id === "heartwood" }); setDefaultDepot(depot, { heartwood: id === "heartwood" });
   paintBrand();
+  loadDispatchSettings().catch(() => {});
+}
+function dispatchSettingsNow() {
+  if (!ui.dispatchSettings) {
+    const local = readDispatchLocal(myCompanyId());
+    if (local) ui.dispatchSettings = local;
+  }
+  return sanitizeDispatchSettings(ui.dispatchSettings || {});
+}
+function dispatchHistory(list) {
+  const seen = new Set(), rows = [];
+  for (const j of [...(list || []), ...(jobs || []), ...(ui.done || [])]) {
+    if (!j || !j.id || seen.has(j.id)) continue;
+    seen.add(j.id);
+    rows.push(j);
+  }
+  const entries = [];
+  for (const sheet of ui.tsAll || []) if (sheet && sheet.entries) entries.push(...entryList(sheet.entries));
+  if (ui.tsMine && ui.tsMine.entries) entries.push(...entryList(ui.tsMine.entries));
+  return historyMedians(rows, entries);
+}
+async function loadDispatchSettings() {
+  const id = myCompanyId();
+  const local = readDispatchLocal(id);
+  if (local) ui.dispatchSettings = local;
+  const ref = id === "heartwood" ? doc(db, "meta", "dispatchTimes") : doc(db, "companyMeta", id + "_dispatch");
+  try {
+    let snap = null;
+    try { snap = await getDocFromCache(ref); } catch { snap = null; }
+    if (!snap || !snapExists(snap)) snap = await getDoc(ref);
+    if (snap && snapExists(snap)) {
+      ui.dispatchSettings = sanitizeDispatchSettings(snap.data());
+      writeDispatchLocal(id, ui.dispatchSettings);
+    }
+  } catch { /* offline, or this login cannot read the company table: defaults still space the day */ }
+}
+let dispatchSpacing = false;
+function queueDispatchPersist(list, dates) {
+  if (!me || me.role !== "admin" || ui.persistHold) return;
+  ui.persistList = list || jobs;
+  if (!dates) ui.persistAll = true;
+  else {
+    ui.persistDates = ui.persistDates || new Set();
+    for (const d of dates) if (d) ui.persistDates.add(d);
+  }
+  clearTimeout(ui.persistTimer);
+  ui.persistTimer = setTimeout(() => { flushDispatchPersist().catch(e => console.warn("dispatch times", e && (e.code || e.message))); }, 80);
+}
+// BEGIN DISPATCH PERSIST
+async function flushDispatchPersist() {
+  if (!me || me.role !== "admin" || ui.persistHold) return;
+  if (dispatchSpacing) { ui.persistAgain = true; return; }
+  const list = ui.persistList || jobs;
+  const dates = ui.persistAll ? null : [...(ui.persistDates || [])];
+  ui.persistDates = new Set();
+  ui.persistAll = false;
+  const writes = planAutoTimes(list, {
+    settings: dispatchSettingsNow(),
+    history: dispatchHistory(list),
+    sheets: ui.runSheets || {},
+    dates: dates && dates.length ? dates : null,
+  });
+  if (!writes.length) return;
+  dispatchSpacing = true;
+  let denied = 0;
+  try {
+    await Promise.all(writes.map(async w => {
+      const hit = (jobs || []).find(j => j.id === w.id) || (ui.undated || []).find(j => j.id === w.id);
+      if (hit) Object.assign(hit, { time: w.time, timeSource: "auto", estHours: w.estHours, estSource: w.estSource });
+      try {
+        await settleOrQueue(updateDoc(doc(db, "jobs", w.id), {
+          time: w.time, timeSource: "auto", estHours: w.estHours, estSource: w.estSource,
+          updatedAt: serverTimestamp(), updatedBy: me.uid,
+        }));
+      } catch (e) {
+        const code = String(e && (e.code || e.message) || "");
+        if (code.includes("permission-denied")) denied++;
+        console.warn("dispatch times", code);
+      }
+    }));
+  } finally {
+    dispatchSpacing = false;
+    if (denied && denied === writes.length) ui.persistHold = true;
+    if (ui.persistAgain) { ui.persistAgain = false; queueDispatchPersist(jobs); }
+  }
+}
+// END DISPATCH PERSIST
+function ensureDispatchSheets(days) {
+  const key = myCompanyId() + "|" + (days || []).join(",");
+  if (!days || !days.length || ui.sheetKey === key) return;
+  ui.sheetKey = key;
+  Promise.all(days.map(d => loadRunSheets(d))).then(() => { if (ui.view === "dispatch") renderAdmin(); }).catch(() => {});
+}
+function noteDispatch(all, days) {
+  ui.dispatchHist = dispatchHistory([...(all || []), ...(ui.done || [])]);
+  ensureDispatchSheets(days);
+  queueDispatchPersist(all, days);
+}
+function personUid(row) {
+  if (!row || !row.raw) return "_none";
+  const person = staff.find(s => skey(s) === row.key);
+  return person && person.uid ? person.uid : row.key;
+}
+function rowPlan(row, day, sched) {
+  const rows = sched.filter(j => j.date === day && row.has(j));
+  const uid = personUid(row);
+  const id = runSheetId(uid, day);
+  const saved = id && ui.runSheets ? ui.runSheets[id] : null;
+  const sheet = saved && saved.status === "approved" ? saved : null;
+  return spaceDay(rows, { settings: dispatchSettingsNow(), history: ui.dispatchHist || dispatchHistory(sched), sheet });
+}
+function boardHour(slot, job) {
+  const t = (slot && slot.time) || (job && job.time) || "07:00";
+  const h = parseInt(t, 10);
+  if (!Number.isFinite(h)) return 7;
+  if (h < 6) return 6;
+  if (h > 18) return 18;
+  return h;
+}
+function dispatchChip(j, slot) {
+  const away = assignmentWarning(ui.leave || [], j.date, leavePeople(namesOf(j)));
+  const time = slot ? slot.time : (j.time || "");
+  const est = slot ? formatEstimate(slot.estHours) : "";
+  const why = slot && slot.estSource === "quote" ? "Hours from the quote" : slot && slot.estSource === "history" ? "Median clocked time for this kind of job" : "Default for this kind of job";
+  return `<div class="dchip ${QCLS[queueOf(j)]} t-${j.type} ${j.status === "In progress" ? "inprog" : ""} ${away ? "on-leave" : ""}" draggable="true" data-id="${j.id}" title="${esc(j.client)} – ${esc(j.description)}${est ? " · " + esc(est) : ""}${away ? " · " + away : ""}">${ipTop(j, "sm")}
+      <b>${esc(time)}</b> ${esc((j.address || "").split(",")[0])}<div class="sub"><span class="est" title="${esc(why)}">${esc(est)}</span>${esc(TYPES[j.type] || "")} · #${esc(jobNo(j))}</div></div>`;
 }
 function inviteDisplayNow() {
   return window.HW_TODAY ? new Date(window.HW_TODAY + "T12:00:00+10:00") : new Date();
@@ -605,7 +758,37 @@ function settingsView() {
     ? `<section class="pad setrates"><h3>Quote rates</h3><p class="sub">Your plant, labour, travel and tip rates for quotes. They start blank and are only used by your company.</p><button type="button" id="setrates" class="sm-btn">Edit quote rates</button></section>`
     : "";
   const trades = (ui.tradeSetup && ui.tradeSetup.enabled) || readTradeList(org, null);
-  return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin"), trades, canEditTrades: canEditTitles() }) + rates;
+  return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin"), trades, canEditTrades: canEditTitles() }) + rates + PUSH.panelHtml()
+    + dispatchSettingsHtml(dispatchSettingsNow(), { canEdit: canEditTitles() });
+}
+async function saveDispatchForm(form) {
+  if (!canEditTitles()) { toast("An admin or a manager can change dispatch times."); return; }
+  const durations = {};
+  for (const cat of DISPATCH_CATEGORIES) {
+    const input = form.querySelector(`[name="dur_${cat.id}"]`);
+    durations[cat.id] = input ? input.value : "";
+  }
+  const settings = sanitizeDispatchSettings({ dayStart: form.dayStart.value, travelGapMin: form.travelGapMin.value, durations });
+  ui.dispatchSettings = settings;
+  ui.persistHold = false;
+  writeDispatchLocal(myCompanyId(), settings);
+  const id = myCompanyId();
+  const payload = {
+    companyId: id, dayStart: settings.dayStart, travelGapMin: settings.travelGapMin, durations: settings.durations,
+    updatedBy: me.uid, updatedAt: serverTimestamp(),
+  };
+  const ref = id === "heartwood" ? doc(db, "meta", "dispatchTimes") : doc(db, "companyMeta", id + "_dispatch");
+  try {
+    await setDoc(ref, payload);
+    toast("Dispatch times saved");
+  } catch (e) {
+    const code = e && (e.code || e.message) || "";
+    toast(String(code).includes("permission-denied")
+      ? "Saved on this phone. Other phones pick this up once the dispatch settings rules are deployed."
+      : "Saved on this phone. " + code);
+  }
+  queueDispatchPersist(jobs);
+  if (me && me.role === "admin") renderAdmin();
 }
 function bindTradeList(A) {
   const root = A || document;
@@ -624,7 +807,7 @@ function bindTradeList(A) {
     if (cur.includes(id)) { toast(tradeLabel(id) + " is already on."); return; }
     try {
       await persistTrades([...cur, id]);
-      toast(tradeLabel(id) + (id === "earthworks" ? " added. Quote pack ready." : " added. Quote pack coming soon."));
+      toast(tradeLabel(id) + (quotePack(id) && quotePack(id).ready ? " added. Quote pack ready." : " added. Quote pack coming soon."));
       redrawAfterSave();
     } catch { toast("Couldn't update trades."); }
   });
@@ -633,6 +816,8 @@ function bindTradeList(A) {
 }
 function bindSettings(A) {
   bindTradeList(A);
+  const dispatchForm = A.querySelector("#dispatchform");
+  if (dispatchForm) dispatchForm.onsubmit = ev => { ev.preventDefault(); saveDispatchForm(dispatchForm); };
   const rb = A.querySelector("#setrates");
   if (rb) rb.onclick = () => QG && QG.openRatesEditor();
   const sub = A.querySelector("#billsub");
@@ -896,7 +1081,7 @@ function queueOf(j) {
 const jobNo = j => j.sm8JobNo ? j.sm8JobNo : companyJobPrefix(orgSettings()) + "-" + String(j.id || "").slice(-4).toUpperCase();
 const firstLine = s => String(s || "").split(/\n|\. /)[0];
 const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Unscheduled";
-const NAV = [["home", "⌂", "Home"], ["compliance", "🚐", "Compliance"], ["prestart", "☑", "Prestart"], ["chat", "💬", "Chat"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["staff", "👥", "Staff"], ["inbox", "✉", "Inbox", 0, 1],
+const NAV = [["home", "⌂", "Home"], ["compliance", "🚐", "Compliance"], ["prestart", "☑", "Prestart"], ["chat", "💬", "Chat"], ["dispatch", "▦", "Dispatch Board"], ["capacity", "▦", "Capacity"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["crew", "⌖", "Crew map"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["staff", "👥", "Staff"], ["inbox", "✉", "Inbox", 0, 1],
   ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["leave", "🌴", "Leave"], ["claims", "🧾", "Reimbursements"], ["reimb", "💵", "Receipt ledger", 0, 1], ["settings", "⚙", "Company"], ["master", "▣", "Master"]];
 ui.view = "home"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
 const PHONE = matchMedia("(max-width:760px)");
@@ -905,12 +1090,12 @@ PHONE.addEventListener?.("change", () => { if (me && me.role === "admin") render
 // Grouped side menu: top items, then collapsible groups (open/closed remembered on this device; the group holding the current screen is always open).
 const NAV_TOP = ["home", "chat", "inbox", "clients", "staff", "master"];
 const NAV_FOOT = ["settings"];
-const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "jobs", "unscheduled", "quotes", "completed", "myjobs"]], ["money", "$", "Money", ["invoices", "claims", "reimb", "timesheet", "leave"]], ["safety", "⚠", "Safety", ["safety", "swms", "prestart", "compliance"]]];
+const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "capacity", "jobs", "unscheduled", "quotes", "completed", "myjobs", "crew"]], ["money", "$", "Money", ["invoices", "claims", "reimb", "timesheet", "leave"]], ["safety", "⚠", "Safety", ["safety", "swms", "prestart", "compliance"]]];
 const NAV_LBL = { safety: "Incidents" };
 ui.navCol = (() => { try { return JSON.parse(localStorage.getItem("hwNavCol") || "{}"); } catch { return {}; } })();
 function shell(inner) {
   const cur = NAV.find(n => n[0] === ui.view);
-  const item = k => { const x = NAV.find(n => n[0] === k); if (!x || x[3] || (k === "inbox" ? !canImport() : (x[4] && !isOwner())) || (k === "invoices" && (!me || me.role !== "admin")) || (k === "staff" && !canInvite()) || (k === "quotes" && !canQuote()) || (k === "compliance" && !COMP.canSee()) || (k === "prestart" && !COMP.canPrestart())) return "";
+  const item = k => { const x = NAV.find(n => n[0] === k); if (!x || x[3] || (k === "inbox" ? !canImport() : (x[4] && !isOwner())) || (k === "invoices" && (!me || me.role !== "admin")) || (k === "staff" && !canInvite()) || (k === "quotes" && !canQuote()) || (k === "capacity" && !canSeeCapacity()) || (k === "compliance" && !COMP.canSee()) || (k === "prestart" && !COMP.canPrestart()) || (k === "crew" && !canSeeCrewMap(me))) return "";
     const badge = k === "chat" ? CHAT.badge("staff") : "";
     if (k === "master" && !(me && me.platformOwner)) return "";
     return `<button class="sm-nav ${ui.view === k ? "on" : ""}" data-view="${k}" title="${esc(NAV_LBL[k] || x[2])}"><span class="ic">${x[1]}</span><span class="lbl">${esc(NAV_LBL[k] || x[2])}</span>${badge}</button>`; };
@@ -919,7 +1104,7 @@ function shell(inner) {
       <div class="sm-gi">${ks.map(item).join("")}</div></div>`; };
   return `<div class="sm-layout ${ui.navOpen ? "navopen" : ""}"><div class="sm-burgerbar"><button class="sm-burger" id="burger" aria-label="Menu">☰</button><b>${esc(cur ? (NAV_LBL[cur[0]] || cur[2]) : "")}</b></div>
     <nav class="sm-side">${NAV_TOP.map(item).join("")}${NAV_GROUPS.map(grp).join("")}${NAV_FOOT.map(item).join("")}</nav>
-    <section class="sm-main">${inner}</section></div>`;
+    <section class="sm-main">${PUSH.bannerHtml()}${inner}</section></div>`;
 }
 // ---- Mixed work: a job whose description lines are different task types (spoil vs backslab vs waterproofing vs clean)
 const TASK_RX = [["waterproof", /water ?proof/i], ["spoil", /spoil|soil removal/i], ["backslab", /back ?slab|back ?blade|slab clean|level site/i], ["clean", /\b(site |final )?clean\b/i]];
@@ -1046,28 +1231,29 @@ function dispatchView(all) {
   const t0 = todayStr(), wk0 = addDays(addDays(t0, -dowMon(t0)), 7 * ui.wk);
   const dayD = addDays(t0, ui.wk);
   const days = ui.dview === "week" ? [...Array(7)].map((_, i) => addDays(wk0, i)) : [dayD];
+  noteDispatch(all, days);
   const sched = all.filter(j => j.date && queueOf(j) !== "Unsuccessful");
   const rows = rowsFor(all);
-  const chip = j => {
-    const away = assignmentWarning(ui.leave || [], j.date, leavePeople(namesOf(j)));
-    return `<div class="dchip ${QCLS[queueOf(j)]} t-${j.type} ${j.status === "In progress" ? "inprog" : ""} ${away ? "on-leave" : ""}" draggable="true" data-id="${j.id}" title="${esc(j.client)} – ${esc(j.description)}${away ? " · " + away : ""}">${ipTop(j, "sm")}
-      <b>${esc(j.time || "")}</b> ${esc((j.address || "").split(",")[0])}<div class="sub">${esc(TYPES[j.type] || "")} · #${esc(jobNo(j))}</div></div>`;
-  };
   const cellAway = (row, day) => {
     if (!row.raw) return "";
     const person = staff.find(s => skey(s) === row.key);
     return cellLeaveText(ui.leave || [], { uid: person && person.uid || "", name: row.raw }, day);
   };
+  const orderedChips = (row, day) => rowPlan(row, day, sched).map(slot => {
+    const j = sched.find(x => x.id === slot.id);
+    return j ? dispatchChip(j, slot) : "";
+  }).join("");
   let grid;
   if (ui.dview === "week") {
     grid = `<div class="dgrid" style="grid-template-columns:150px repeat(7,minmax(0,1fr))"><div class="dh"></div>${days.map(d => `<div class="dh ${d === t0 ? "today" : ""}">${shortDate(d)}</div>`).join("")}
       ${rows.map(r => `<div class="dname">${esc(r.name)}</div>${days.map(d => { const away = cellAway(r, d); return `<div class="dcell drop ${d === t0 ? "today" : ""}" data-date="${d}" data-staff="${esc(r.key)}">
-        ${away ? `<div class="leave-chip">${esc(away)}</div>` : ""}${sched.filter(j => j.date === d && r.has(j)).sort((a, b) => (a.time || "").localeCompare(b.time || "")).map(chip).join("")}</div>`; }).join("")}`).join("")}</div>`;
+        ${away ? `<div class="leave-chip">${esc(away)}</div>` : ""}${orderedChips(r, d)}</div>`; }).join("")}`).join("")}</div>`;
   } else {
     const hrs = [...Array(13)].map((_, i) => 6 + i);
+    const plans = new Map(rows.map(r => [r.key, rowPlan(r, dayD, sched)]));
     grid = `<div class="dgrid" style="grid-template-columns:150px repeat(13,minmax(0,1fr))"><div class="dh"></div>${hrs.map(h => `<div class="dh">${h > 12 ? h - 12 + "pm" : h + (h === 12 ? "pm" : "am")}</div>`).join("")}
       ${rows.map(r => `<div class="dname">${esc(r.name)}</div>${hrs.map(h => `<div class="dcell drop" data-date="${dayD}" data-hour="${h}" data-staff="${esc(r.key)}">
-        ${h === 6 && cellAway(r, dayD) ? `<div class="leave-chip">${esc(cellAway(r, dayD))}</div>` : ""}${sched.filter(j => j.date === dayD && r.has(j) && parseInt(j.time || "7") === h).map(chip).join("")}</div>`).join("")}`).join("")}</div>`;
+        ${h === 6 && cellAway(r, dayD) ? `<div class="leave-chip">${esc(cellAway(r, dayD))}</div>` : ""}${(plans.get(r.key) || []).filter(slot => boardHour(slot) === h).map(slot => { const j = sched.find(x => x.id === slot.id); return j ? dispatchChip(j, slot) : ""; }).join("")}</div>`).join("")}`).join("")}</div>`;
   }
   const leaveBanner = plannerLeaveHtml(ui.leave || [], days, staff.map(s => ({ uid: s.uid || "", name: s.name })));
   return `<div class="sm-head"><h1>Dispatch Board</h1>
@@ -1422,6 +1608,7 @@ const canCompanyExport = () => exportAllowed({ role: me && me.role, companyId: m
 const usesSm8Sync = () => myCompanyId() === "heartwood";
 const syncNote = (heartwoodText, otherText) => usesSm8Sync() ? heartwoodText : otherText;
 const canSeeMoney = () => !!me && (me.role === "admin" || me.role === "manager" || me.role === "supervisor" || me.staffRole === "manager" || me.staffRole === "supervisor");
+const canSeeCapacity = () => canSeeMoney();
 // Job text shown to crew (operators). Descriptions imported from ServiceM8 or typed by the office can mention a price;
 // crew never see dollar figures, so they get the same price filter the quote-to-job copy uses.
 const crewText = t => canSeeMoney() ? String(t ?? "") : noDollars(t);
@@ -1579,6 +1766,7 @@ function donePill() {
 }
 // ---- Timesheets: timesheets/{uid}_{weekStart}. The week document is unchanged for accounts.
 // Clock on / clock off adds one entry per shift, with a server timestamp and one GPS fix at that tap.
+// While that shift is open, the latest position is shared with managers. Clock off deletes it. No trail is kept.
 // Manual shifts are labelled Manual and keep an edit trail. Alex still emails accounts; he alone marks Sent.
 const ACCOUNTS_EMAIL = "accounts@heartwoodew.com";
 const TS_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -1719,6 +1907,7 @@ function tsClockHtml() {
   if (ui.tsAsk) {
     const label = { on: "Agree and clock on", off: "Agree and clock off", "break-start": "Agree and start break", "break-end": "Agree and end break" }[ui.tsAsk] || "Agree and continue";
     return `<div class="ts-consent" role="dialog" aria-label="Location at clock on and clock off"><p>${esc(locationConsent(orgSettings().name))}</p>
+      <p>${esc(LIVE_SHARE_TEXT)} If you say no to the browser, you still clock on and the map shows location off.</p>
       <button type="button" class="ts-go on" id="tsagree">${label}</button>
       <button type="button" class="sm-btn" id="tsno">Not now</button></div>`;
   }
@@ -1732,7 +1921,7 @@ function tsClockHtml() {
         <button type="button" class="ts-go off" id="tsclockoff">Clock off</button>
         <div class="ts-break">${active.entry.status === "break" ? `<button type="button" class="ts-mini" id="tsbrkend">Break end</button>` : `<button type="button" class="ts-mini" id="tsbrk">Break start</button>`}</div>`
       : `<p class="ts-live">Not clocked on</p><button type="button" class="ts-go on" id="tsclockon">Clock on</button>`;
-  return `<div class="ts-clock">${main}<p class="ts-privacy">Location is captured only when you tap Clock on, Clock off, Break start, or Break end.</p></div>`;
+  return `<div class="ts-clock">${main}${shareLine()}<p class="ts-privacy">${esc(LIVE_SHARE_TEXT)} It updates about once a minute while CallUp is open. Clocking off stops it. A browser can't keep sharing after the phone locks.</p><p class="ts-privacy">One location is also saved on the timesheet when you tap Clock on, Clock off, Break start, or Break end.</p></div>`;
 }
 function tsTenant() {
   const m = cloudMembership();
@@ -2077,7 +2266,7 @@ function leaveStart() {
     if (jobForm) refreshJobLeaveWarn(jobForm);
     if (document.activeElement?.closest?.("#leaveform, .lv-decide")) return;
     const admin = me.role === "admin" && !ui.myJobs;
-    if (admin && (ui.view === "leave" || ui.view === "timesheet" || ui.view === "dispatch")) renderAdmin();
+    if (admin && (ui.view === "leave" || ui.view === "timesheet" || ui.view === "dispatch" || ui.view === "capacity")) renderAdmin();
     else if (!admin && (ui.opTab === "leave" || ui.opTab === "hours")) renderOperator();
   }, () => { ui.leave = []; });
 }
@@ -2099,6 +2288,53 @@ function refreshJobLeaveWarn(form) {
   const text = assignmentWarning(ui.leave || [], form.date.value, picked.map(s => ({ uid: s.uid || "", name: s.name })));
   el.hidden = !text;
   el.textContent = text ? text + " Saving still assigns them." : "";
+}
+function capacityCover() {
+  return { from: addDays(todayStr(), -14), to: addDays(todayStr(), 28) };
+}
+function capacityScreen() {
+  ui.capacityCover = capacityCover();
+  const src = me.role === "admin" ? [...(jobs || []), ...(ui.done || [])] : (ui.officeJobs || []);
+  return capacityViewHtml({
+    people: (staff || []).map(s => ({ uid: s.uid || "", name: s.name || "", companyId: s.companyId, tenantId: s.tenantId })),
+    jobs: src,
+    leaves: ui.leave || [],
+    weekStart: shiftWeek(todayStr(), ui.capWk || 0),
+    companyId: myCompanyId(),
+    coverage: ui.capacityCover,
+    today: todayStr(),
+    staffKnown: !!(staff && staff.length),
+    error: ui.capacityErr || "",
+    offline: typeof navigator !== "undefined" && navigator.onLine === false
+  });
+}
+function startCapacityWatch() {
+  ui.capacityCover = capacityCover();
+  ui.capacityErr = "";
+  if (!canSeeCapacity() || me.role === "admin") return () => {};
+  const q = companyJobs([where("date", ">=", ui.capacityCover.from), where("date", "<=", ui.capacityCover.to), orderBy("date")]);
+  const stop = onSnapshot(q, snap => {
+    ui.officeJobs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    ui.capacityErr = "";
+    const admin = me.role === "admin" && !ui.myJobs;
+    if (admin && ui.view === "capacity") renderAdmin();
+    else if (!admin && ui.opTab === "capacity") renderOperator();
+  }, e => {
+    ui.officeJobs = ui.officeJobs || [];
+    ui.capacityErr = e.code || "unavailable";
+    if (ui.opTab === "capacity") renderOperator();
+  });
+  if (!staff.length) {
+    getDocs(query(collection(db, "users"), where("companyId", "==", myCompanyId()))).then(snap => {
+      const companyId = myCompanyId();
+      const logins = snap.docs.map(d => ({ uid: d.id, ...d.data() }))
+        .filter(u => (u.companyId || u.tenantId || "heartwood") === companyId)
+        .filter(u => CREW_ROLES.includes(u.role) || u.role === "supervisor" || u.role === "manager" || u.role === "admin");
+      if (logins.length) staff = logins;
+      if (ui.opTab === "capacity") renderOperator();
+    }).catch(() => {});
+  }
+  return stop;
 }
 function leaveView() {
   return `<div class="sm-head"><h1>Leave</h1><span class="sub">Annual, sick, or other</span></div><div class="lv-wrap">${leaveScreenHtml({
@@ -2388,6 +2624,272 @@ function tsDiffSummary(prev, next) {
   }
   return bits.join(". ").slice(0, 200);
 }
+function shareLine() {
+  const ind = shareIndicator(ui.liveShare || {});
+  if (!ind.visible || ind.mode === "ask") return "";
+  return `<p class="loc-share ${ind.mode}" role="status">${esc(ind.text)}</p>`;
+}
+let shareRun = null;
+let liveCleared = false;
+function paintShareStatus() {
+  const ind = shareIndicator(ui.liveShare || {});
+  const el = document.getElementById("locshare");
+  if (!el) return;
+  el.hidden = !ind.visible;
+  el.textContent = ind.text || "";
+  el.className = "loc-share " + (ind.mode || "off");
+}
+function liveDocRef(companyId) {
+  return doc(db, ...liveCollectionPath(companyId || myCompanyId()), me.uid);
+}
+function disarmShareWatch() {
+  if (!shareRun) return;
+  if (shareRun.watch != null && navigator.geolocation && typeof navigator.geolocation.clearWatch === "function") {
+    navigator.geolocation.clearWatch(shareRun.watch);
+  }
+  shareRun.watch = null;
+  if (shareRun.timer) clearInterval(shareRun.timer);
+  shareRun.timer = null;
+}
+function positionFix(pos) {
+  const c = pos && pos.coords;
+  if (!c || typeof c.latitude !== "number" || typeof c.longitude !== "number") return { fix: "no location" };
+  return { fix: "gps", lat: c.latitude, lng: c.longitude, accuracy: typeof c.accuracy === "number" ? c.accuracy : null };
+}
+function considerShareFix(fix) {
+  if (!shareRun || !me || document.hidden) return;
+  const gps = fix && fix.fix === "gps" && Number.isFinite(fix.lat) && Number.isFinite(fix.lng);
+  if (!gps) { sendShareOff(); return; }
+  const next = { sharing: "gps", lat: fix.lat, lng: fix.lng, accuracy: fix.accuracy, at: Date.now() };
+  if (!shouldSendPosition(shareRun.last, next, next.at)) return;
+  const body = liveLocationBody({
+    uid: me.uid, name: me.name, companyId: shareRun.companyId,
+    weekStart: shareRun.weekStart, entryId: shareRun.entryId, fix,
+  });
+  setDoc(liveDocRef(shareRun.companyId), { ...body, updatedAt: serverTimestamp() }).then(() => {
+    if (!shareRun || shareRun.entryId !== body.entryId) return;
+    shareRun.last = next;
+    shareRun.offSent = false;
+    ui.liveShare = { clockedOn: true, sharing: "gps" };
+    paintShareStatus();
+  }).catch(() => {});
+}
+function sendShareOff() {
+  if (!shareRun || !me || shareRun.offSent || shareRun.offSending) return;
+  shareRun.offSending = true;
+  const body = liveLocationBody({
+    uid: me.uid, name: me.name, companyId: shareRun.companyId,
+    weekStart: shareRun.weekStart, entryId: shareRun.entryId, fix: { fix: "no location" },
+  });
+  setDoc(liveDocRef(shareRun.companyId), { ...body, updatedAt: serverTimestamp() }).then(() => {
+    if (!shareRun) return;
+    shareRun.offSent = true;
+    shareRun.offSending = false;
+    ui.liveShare = { clockedOn: true, sharing: "off" };
+    paintShareStatus();
+  }).catch(() => { if (shareRun) shareRun.offSending = false; });
+}
+function armShareWatch() {
+  if (!shareRun || document.hidden) return;
+  const geo = navigator.geolocation;
+  if (!geo || typeof geo.watchPosition !== "function") { sendShareOff(); return; }
+  if (shareRun.watch == null) {
+    shareRun.watch = geo.watchPosition(
+      pos => considerShareFix(positionFix(pos)),
+      () => sendShareOff(),
+      { enableHighAccuracy: true, maximumAge: 15000, timeout: 20000 },
+    );
+  }
+  if (!shareRun.timer) {
+    shareRun.timer = setInterval(() => {
+      if (!shareRun || document.hidden || !navigator.geolocation || typeof navigator.geolocation.getCurrentPosition !== "function") return;
+      navigator.geolocation.getCurrentPosition(
+        pos => considerShareFix(positionFix(pos)),
+        () => {},
+        { enableHighAccuracy: true, maximumAge: 15000, timeout: 20000 },
+      );
+    }, 60000);
+  }
+}
+function liveShareStart(entryId, weekStart, firstFix) {
+  if (!me || !entryId || !weekStart) return;
+  if (shareRun && shareRun.entryId === entryId && shareRun.weekStart === weekStart) {
+    if (firstFix && !document.hidden) considerShareFix(firstFix);
+    return;
+  }
+  disarmShareWatch();
+  liveCleared = false;
+  shareRun = { entryId, weekStart, companyId: myCompanyId(), last: null, watch: null, timer: null, offSent: false };
+  ui.liveShare = { clockedOn: true, sharing: "ask" };
+  paintShareStatus();
+  if (firstFix) considerShareFix(firstFix);
+  armShareWatch();
+}
+function liveShareStop(clearDoc) {
+  const run = shareRun;
+  disarmShareWatch();
+  shareRun = null;
+  ui.liveShare = { clockedOn: false, sharing: "off" };
+  paintShareStatus();
+  if (clearDoc && run && me && !liveCleared) {
+    liveCleared = true;
+    deleteDoc(doc(db, ...liveCollectionPath(run.companyId), me.uid)).catch(() => {});
+  }
+}
+function clearStaleLive() {
+  if (!me || shareRun || liveCleared) return;
+  liveCleared = true;
+  deleteDoc(doc(db, ...liveCollectionPath(myCompanyId()), me.uid)).catch(() => {});
+}
+document.addEventListener("visibilitychange", () => {
+  if (!shareRun) return;
+  if (document.hidden) disarmShareWatch();
+  else armShareWatch();
+});
+window.addEventListener("pagehide", () => { if (shareRun) disarmShareWatch(); });
+function clockWatchStop() {
+  ui.clockUnsub?.(); ui.clockPrevUnsub?.();
+  ui.clockUnsub = ui.clockPrevUnsub = null;
+}
+function watchOwnClock() {
+  clockWatchStop();
+  if (!me) return;
+  const ws = weekStartOf(todayStr());
+  const prevWs = addDays(ws, -7);
+  let curKnown = false, prevKnown = false, curServer = false, prevServer = false;
+  const sync = () => {
+    if (!curKnown || !prevKnown || !me) return;
+    const here = openClock(ui.clockSheet && ui.clockSheet.entries);
+    const back = openClock(ui.clockPrev && ui.clockPrev.entries);
+    if (here) liveShareStart(here.id, (ui.clockSheet && ui.clockSheet.weekStart) || ws);
+    else if (back) liveShareStart(back.id, (ui.clockPrev && ui.clockPrev.weekStart) || prevWs);
+    else if (curServer && prevServer) { liveShareStop(true); clearStaleLive(); }
+  };
+  ui.clockUnsub = onSnapshot(doc(db, "timesheets", `${me.uid}_${ws}`), s => {
+    ui.clockSheet = s.exists() ? s.data() : null;
+    curKnown = true; curServer = !(s.metadata && s.metadata.fromCache); sync();
+  }, () => { curKnown = true; curServer = true; ui.clockSheet = null; sync(); });
+  ui.clockPrevUnsub = onSnapshot(doc(db, "timesheets", `${me.uid}_${prevWs}`), s => {
+    ui.clockPrev = s.exists() ? s.data() : null;
+    prevKnown = true; prevServer = !(s.metadata && s.metadata.fromCache); sync();
+  }, () => { prevKnown = true; prevServer = true; ui.clockPrev = null; sync(); });
+}
+function destroyCrewMap() {
+  if (ui.crewMap) { ui.crewMap.remove(); ui.crewMap = null; }
+  ui.crewLayer = null;
+  ui.crewFitKey = "";
+}
+function leaveCrewScreen() {
+  destroyCrewMap();
+  ui.crewUnsub?.(); ui.crewJobUnsub?.();
+  ui.crewUnsub = ui.crewJobUnsub = null;
+  ui.crewSubsOn = false;
+}
+function crewMapScreen() {
+  return `<div class="crew-map-wrap">
+    <p class="crew-note">${esc(LIVE_LIMIT_NOTE)} Clocking off removes someone straight away.</p>
+    <div id="crewmap" class="crew-map" role="region" aria-label="Live crew map"></div>
+    <p id="crewmapstatus" class="crew-note"></p>
+    <p class="crew-legend"><span class="crew-dot crew"></span> Clocked on <span class="crew-dot job"></span> Today's job</p>
+    <div id="crewlist"><p class="crew-note">Loading crew…</p></div>
+  </div>`;
+}
+function openCrewScreen() {
+  if (!canSeeCrewMap(me)) return;
+  if (!ui.crewSubsOn) {
+    ui.crewSubsOn = true;
+    ui.crewErr = "";
+    const companyId = myCompanyId();
+    const path = liveCollectionPath(companyId);
+    ui.crewUnsub = onSnapshot(query(collection(db, ...path), where("companyId", "==", companyId)), s => {
+      ui.crewLive = s.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => x.clockedOn === true && (x.companyId || "heartwood") === companyId);
+      ui.crewErr = "";
+      paintCrew();
+    }, e => { ui.crewErr = e.code || "permission-denied"; paintCrew(); });
+    ui.crewJobUnsub = onSnapshot(query(collection(db, "jobs"), where("companyId", "==", companyId), where("date", "==", todayStr())), s => {
+      ui.crewJobs = s.docs.map(d => ({ id: d.id, ...d.data() }));
+      paintCrew();
+    }, () => { paintCrew(); });
+  }
+  paintCrew();
+}
+function paintCrew() {
+  const list = document.getElementById("crewlist");
+  if (!list || !canSeeCrewMap(me)) return;
+  const model = crewMapModel({ locations: ui.crewLive || [], jobs: ui.crewJobs || [], today: todayStr(), now: new Date() });
+  list.innerHTML = crewListHtml(model, esc);
+  const status = document.getElementById("crewmapstatus");
+  if (status) status.textContent = ui.crewErr ? "The crew list isn't available on this sign-in." : "Blue dots are people clocked on. Amber dots are today's jobs that already have a map pin.";
+  ensureCrewMap(model);
+}
+function crewIcon(L, color) {
+  return L.divIcon({ className: "crew-pin", html: `<span style="background:${color}"></span>`, iconSize: [18, 18], iconAnchor: [9, 9] });
+}
+let leafletPromise = null;
+function loadLeaflet() {
+  if (window.L) return Promise.resolve(window.L);
+  if (leafletPromise) return leafletPromise;
+  leafletPromise = new Promise((resolve, reject) => {
+    const css = document.createElement("link");
+    css.rel = "stylesheet";
+    css.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+    document.head.appendChild(css);
+    const script = document.createElement("script");
+    script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+    script.async = true;
+    script.onload = () => (window.L ? resolve(window.L) : reject(new Error("map-unavailable")));
+    script.onerror = () => reject(new Error("map-unavailable"));
+    document.head.appendChild(script);
+  });
+  return leafletPromise;
+}
+async function ensureCrewMap(model) {
+  const el = document.getElementById("crewmap");
+  if (!el) return;
+  const token = (ui.crewMapToken = (ui.crewMapToken || 0) + 1);
+  let L;
+  try { L = await loadLeaflet(); }
+  catch {
+    const status = document.getElementById("crewmapstatus");
+    if (status) status.textContent = "The map needs a connection. The list below still shows who is clocked on.";
+    return;
+  }
+  if (token !== ui.crewMapToken || !document.getElementById("crewmap") || !canSeeCrewMap(me)) return;
+  if (!ui.crewMap) {
+    ui.crewMap = L.map(el);
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    }).addTo(ui.crewMap);
+    ui.crewLayer = L.layerGroup().addTo(ui.crewMap);
+  }
+  ui.crewLayer.clearLayers();
+  const bounds = [];
+  const seenJobs = new Set();
+  for (const p of model.people) {
+    if (p.sharing !== "gps" || p.lat == null) continue;
+    const jobs = p.jobs.map(j => esc(j.label)).filter(Boolean).join(", ");
+    L.marker([p.lat, p.lng], { icon: crewIcon(L, "#1d4ed8"), title: p.name })
+      .bindPopup(`<b>${esc(p.name)}</b><br>${esc(p.lastSeen)}${p.accuracy != null ? `<br>±${p.accuracy} m` : ""}${jobs ? `<br>${jobs}` : ""}`)
+      .addTo(ui.crewLayer);
+    bounds.push([p.lat, p.lng]);
+  }
+  for (const p of model.people) {
+    for (const j of p.jobs) {
+      if (j.lat == null || seenJobs.has(j.id)) continue;
+      seenJobs.add(j.id);
+      L.marker([j.lat, j.lng], { icon: crewIcon(L, "#b45309"), title: j.label })
+        .bindPopup(`<b>${esc(j.label)}</b>${j.jobNo ? `<br>#${esc(j.jobNo)}` : ""}${j.client ? `<br>${esc(j.client)}` : ""}${j.time ? `<br>${esc(j.time)}` : ""}${j.address ? `<br>${esc(j.address)}` : ""}`)
+        .addTo(ui.crewLayer);
+      bounds.push([j.lat, j.lng]);
+    }
+  }
+  const key = bounds.map(b => b.map(n => Number(n).toFixed(5)).join(",")).sort().join("|");
+  if (!bounds.length) ui.crewMap.setView([-27.47, 153.03], 10);
+  else if (key !== ui.crewFitKey) ui.crewMap.fitBounds(bounds, { padding: [28, 28], maxZoom: 15 });
+  ui.crewFitKey = key;
+  setTimeout(() => { if (ui.crewMap) ui.crewMap.invalidateSize(); }, 50);
+}
 async function tsPunch(kind) {
   const active = tsSheets();
   if (kind === "on" && active.entry) return;
@@ -2415,6 +2917,7 @@ async function tsPunch(kind) {
         edits: {}, lastEditId: "",
       };
       const r = await tsWrite(ws, sheet, entries, id, { consent: !(sheet && sheet.locationConsentAt) });
+      liveShareStart(id, ws, fix);
       ui.tsMachineShift = id;
       ui.tsMachineWs = ws;
       toast((fix.fix === "gps" ? "Clocked on" : "Clocked on · no location") + tsQueuedNote(r));
@@ -2435,6 +2938,7 @@ async function tsPunch(kind) {
       entries[e.id] = next;
       const fields = Object.keys(next).filter(k => next[k] !== e[k]);
       const r = await tsWrite(ws, sheet, entries, e.id, { consent: !(sheet && sheet.locationConsentAt), fields });
+      if (kind === "off") liveShareStop(true);
       toast((kind === "off" ? (fix.fix === "gps" ? "Clocked off" : "Clocked off · no location") : "Break saved") + tsQueuedNote(r));
       ui.tsPrevFor = "";
     }
@@ -2644,7 +3148,10 @@ const emailedPhotosNote = () => "";
 const greet = () => { const h = +new Intl.DateTimeFormat("en-AU", { hour: "numeric", hourCycle: "h23", timeZone: TZ }).format(new Date()); return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening"; };
 function homeRow(j) {
   const q = queueOf(j), names = namesOf(j);
-  return `<div class="hrow" data-id="${j.id}"><div class="htime"><b>${esc(j.time || "--")}</b><small>${j.durationHrs ? esc(j.durationHrs) + "h" : ""}</small></div>
+  const slot = ui.homePlan && ui.homePlan.get(j.id);
+  const time = slot ? slot.time : (j.time || "--");
+  const est = slot ? formatEstimate(slot.estHours) : "";
+  return `<div class="hrow" data-id="${j.id}"><div class="htime"><b>${esc(time || "--")}</b>${est ? `<small class="est">${esc(est)}</small>` : ""}</div>
     <div class="hbody"><div class="hcl"><span class="qdot ${QCLS[q]}"></span>${esc(j.client || "")} <span class="jn">#${esc(jobNo(j))}</span>${jobPhotosIcon(j)}</div>
     <div class="sub">${esc(j.address || "-")}</div><div class="sub">${esc(firstLine(crewText(j.description)))}</div>
     <div class="sub">${names.length ? esc(names.map(label).join(", ")) : `<span class="unal">Unallocated</span>`}</div></div>
@@ -2726,8 +3233,32 @@ function attentionHtml(all) {
     row(owed.length, `receipt${owed.length === 1 ? "" : "s"} to check / reimburse${dups.length ? ` · <span class="dupw">${dups.length} possible duplicate${dups.length === 1 ? "" : "s"}</span>` : ""}`, dups.length ? "amber" : "", "", "reimb")].join("");
   return `<div class="hsec attn"><div class="hsec-h">Needs attention</div>${rows || `<p class="muted pad">All clear. Nothing needs you right now.</p>`}</div>`;
 }
+function homePlanFor(list) {
+  const map = new Map(), groups = new Map();
+  for (const j of list || []) {
+    if (!j || !j.date) continue;
+    const key = primaryKey(j) + "|" + j.date;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(j);
+  }
+  const history = dispatchHistory(list);
+  const settings = dispatchSettingsNow();
+  for (const [key, rows] of groups) {
+    const bar = key.lastIndexOf("|");
+    const sheet = approvedSheet(ui.runSheets || {}, key.slice(0, bar), key.slice(bar + 1));
+    for (const slot of spaceDay(rows, { settings, history, sheet })) map.set(slot.id, slot);
+  }
+  return map;
+}
 function homeBody(all, admin, btns) {
   const { live, today, tomorrow, t0, t1 } = homeLists(all, admin);
+  const plan = homePlanFor([...today, ...tomorrow]);
+  ui.homePlan = plan;
+  const byPlan = js => js.slice().sort((a, b) => {
+    const ta = (plan.get(a.id) || {}).time || a.time || "";
+    const tb = (plan.get(b.id) || {}).time || b.time || "";
+    return ta.localeCompare(tb) || String(a.id).localeCompare(String(b.id));
+  });
   const ip = live.filter(j => j.status === "In progress").length;
   const unal = live.filter(j => j.date >= t0 && j.status !== "Done" && !namesOf(j).length).length;
   const ready = (ui.done || []).filter(j => !j.invoiceNo && j.invoiceExcluded !== true && !j.doNotInvoice).length;
@@ -2739,7 +3270,7 @@ function homeBody(all, admin, btns) {
     ${swmsReminderHtml()}${admin ? attentionHtml(all) + (canXero() ? profitChartHtml() : "") : `<div class="hbtns opbtns"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button><button class="hbtn" data-go="swms"><span class="ic">📋</span>SWMS</button></div>`}
     <div class="hstats hidden">${stat(today.length, "Today", "q-wo")}${stat(ip, "In progress", "ip", admin ? "q-ip" : "")}${admin ? stat(ready, "Ready to invoice", "q-comp", "invoices") + stat(unal, "Unallocated", "q-uns", "dispatch") + (canImport() && ui.inbox ? stat(inboxUnread(), "Unread builder emails", "q-inbox", "inbox") : "") : stat(tomorrow.length, "Tomorrow", "q-quote")}</div>
     <div class="hbtns hidden"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button>${btns.map(([go, ic, n]) => `<button class="hbtn" data-go="${go}"><span class="ic">${ic}</span>${n}</button>`).join("")}</div>
-    ${sec("Today", t0, today)}${sec("Tomorrow", t1, tomorrow)}${admin ? "" : myIncidentsHtml()}</div>`;
+    ${sec("Today", t0, byPlan(today))}${sec("Tomorrow", t1, byPlan(tomorrow))}${admin ? "" : myIncidentsHtml()}</div>`;
 }
 function homeView(all) {
   return homeBody(all, true, NAV.filter(x => x[0] !== "home" && !x[3] && (x[0] === "inbox" ? canImport() : (!x[4] || isOwner()))).map(([k, ic, n]) => [k, ic, n]));
@@ -2785,11 +3316,38 @@ function watchInviteMail() {
 function inviteMailMap() {
   return inviteMailShown() ? (ui.inviteMail || {}) : null;
 }
+// Alex has no users/{uid} document. He still has a login, so the Heartwood Staff tab includes him.
+function withHeartwoodOwner(rows, companyId) {
+  if (companyId !== "heartwood" || (rows || []).some(u => u && u.uid === ALEX_UID)) return rows || [];
+  return [{ uid: ALEX_UID, name: "Alex", role: "admin", email: "alex@heartwoodew.com", companyId: "heartwood" }, ...rows];
+}
+function watchStaffRoster() {
+  if (!canInvite()) return () => {};
+  const companyId = myCompanyId();
+  return onSnapshot(query(collection(db, "users"), where("companyId", "==", companyId)), s => {
+    const rows = s.docs.map(d => ({ ...d.data(), uid: d.id })).filter(u => docCompanyId(u) === companyId);
+    ui.staffLogins = withHeartwoodOwner(rows, companyId);
+    ui.staffLoginsErr = "";
+    // Dispatch keeps the same bookable people as before (crew, supervisors, managers, plus Alex at Heartwood).
+    if (me && me.role === "admin") {
+      const bookable = rows.filter(u => CREW_ROLES.includes(u.role) || u.role === "supervisor" || u.role === "manager");
+      staff = companyId === "heartwood"
+        ? [{ uid: ALEX_UID, name: "Alex" }, ...bookable.filter(u => u.uid !== ALEX_UID)]
+        : bookable;
+    }
+    staffRerender();
+  }, () => {
+    ui.staffLogins = withHeartwoodOwner([], companyId);
+    ui.staffLoginsErr = "Some people with a login are not listed.";
+    staffRerender();
+  });
+}
 function staffPageHtml() {
   const setup = ui.tradeSetup || resolveCompanySetup({ companyId: myCompanyId() }, null);
   return staffViewHtml(ui.invites || [], {
     now: inviteDisplayNow(), error: ui.invitesErr || "", origin: appOriginFor(myCompanyId(), location.origin),
     emailStatus: inviteMailMap(), roles: myInviteRoles(), titles: setup.titles,
+    logins: ui.staffLogins || [], companyId: myCompanyId(), loginsNote: ui.staffLoginsErr || "",
   }) + titlesEditorHtml(setup.titles, { canEdit: canEditTitles() })
     + skillsEditorHtml((me && me.cloudProfile && me.cloudProfile.skills) || [], { canEdit: true });
 }
@@ -2947,9 +3505,15 @@ function renderAdmin() {
   donePill(); reimbPill(); inboxSub();
   if (!me || me.role !== "admin") return;
   if (ui.view === "invoices" && me.role !== "admin") ui.view = "home";
+  PUSH.settle();
+  if (ui.view === "capacity" && !canSeeCapacity()) ui.view = "home";
   if (ui.myJobs) return renderOperator();
   if ($("#dlg").open) return;          // don't redraw under an open job card
   const force = ui.forceRender; ui.forceRender = false;
+  if (ui.view === "crew" && !canSeeCrewMap(me)) ui.view = "home";
+  if (ui.view === "crew" && !force && document.getElementById("crewmap")) { paintCrew(); return; }
+  if (ui.view !== "crew") leaveCrewScreen();
+  else destroyCrewMap();
   if (!force && (ui.view === "compliance" || ui.view === "prestart") && document.querySelector("#compform, #prestartform")) return;
   if (!ui.tsForce && ui.view === "timesheet" && (ui.tsBusy || ui.tsAsk || (ui.tsMachineShift && document.getElementById("tsmachine")))) return;
   if (!ui.tsForce && ui.view === "timesheet" && (ui.tsDirty || ui.tsEdit) && ($("#tsman") || $("#tsf"))) return;
@@ -2963,7 +3527,7 @@ function renderAdmin() {
   const quotesHtml = ui.view === "quotes" ? adminViewRouter(ui.view, ui, { esc, $$, staff, jobs: all, todayStr, rerender: () => renderAdmin(), canEditQuoteRates }) : null;
   const staffHtml = ui.view === "staff" ? staffPageHtml() : null;
   paintBrand();
-  $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "master" ? masterView() : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : quotesHtml != null ? quotesHtml : jobsView(all));
+  $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "master" ? masterView() : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "capacity" ? capacityScreen() : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : ui.view === "crew" ? crewMapScreen() : quotesHtml != null ? quotesHtml : jobsView(all));
   const A = $("#app"); inboxBadge();
   CHAT.watch([...(jobs || []), ...(ui.undated || [])]);
   if (ui.view === "chat") CHAT.mount(A);
@@ -2978,7 +3542,9 @@ function renderAdmin() {
   if (ui.view === "staff") bindStaff(A);
   if (ui.view === "compliance" || ui.view === "prestart") COMP.bind(A);
   if (ui.view === "settings") bindSettings(A);
+  PUSH.mount(A);
   if (ui.view === "master") bindMaster(A);
+  if (ui.view === "crew") openCrewScreen();
   A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.navOpen = false;
     if (b.dataset.view === "myjobs") { ui.myJobs = true; ui.opSel = null; window.scrollTo(0, 0); return renderAdmin(); }
     if (b.dataset.view !== "compliance") COMP.abandon();
@@ -2986,7 +3552,7 @@ function renderAdmin() {
   // The menu is a deliberate tap: force the redraw, or an open Prestart/Compliance form swallows it and the admin is stuck there.
   if ($("#burger")) $("#burger").onclick = () => { ui.navOpen = !ui.navOpen; ui.forceRender = true; renderAdmin(); };
   A.querySelectorAll("[data-grp]").forEach(b => b.onclick = () => { const g = b.dataset.grp; if (NAV_GROUPS.find(x => x[0] === g)[3].includes(ui.view)) return;
-    ui.navCol[g] = !ui.navCol[g]; try { localStorage.setItem("hwNavCol", JSON.stringify(ui.navCol)); } catch {} renderAdmin(); });
+    ui.navCol[g] = !ui.navCol[g]; try { localStorage.setItem("hwNavCol", JSON.stringify(ui.navCol)); } catch {} ui.forceRender = true; renderAdmin(); });
   if (ui.view === "dispatch" && PHONE.matches) bindMobileDispatch(A, [...jobs, ...(ui.undated || [])]);
   if ($("#optorder")) $("#optorder").onclick = () => ROUTE.open({ date: (PHONE.matches && ui.mday) || todayStr() });
   A.querySelectorAll("[data-cq]").forEach(b => b.onclick = () => { ui.cq = b.dataset.cq; renderAdmin(); });
@@ -2995,6 +3561,7 @@ function renderAdmin() {
   A.querySelectorAll("[data-q]").forEach(b => b.onclick = () => { ui.queue = b.dataset.q; renderAdmin(); });
   A.querySelectorAll("[data-dv]").forEach(b => b.onclick = () => { ui.dview = b.dataset.dv; ui.wk = 0; renderAdmin(); });
   A.querySelectorAll("[data-wk]").forEach(b => b.onclick = () => { ui.wk = +b.dataset.wk === 0 ? 0 : ui.wk + +b.dataset.wk; renderAdmin(); });
+  A.querySelectorAll("[data-cap]").forEach(b => b.onclick = () => { ui.capWk = +b.dataset.cap === 0 ? 0 : (ui.capWk || 0) + +b.dataset.cap; renderAdmin(); });
   if ($("#fs")) $("#fs").onchange = e => { ui.staffF = e.target.value; renderAdmin(); };
   if ($("#ft")) $("#ft").onchange = e => { ui.typeF = e.target.value; renderAdmin(); };
   if ($("#new")) $("#new").onclick = () => editJob(null);
@@ -3045,7 +3612,6 @@ function renderAdmin() {
 // 30-min ServiceM8 import keeps the change. Nothing is written to ServiceM8.
 async function dispatchMove(j, date, fromKey, toKey, hour) {
   const u = { date, editedInApp: true, updatedAt: serverTimestamp(), updatedBy: me.uid };
-  if (hour) u.time = String(hour).padStart(2, "0") + ":" + ((j.time || "00:00").slice(3) || "00");
   if (toKey && fromKey !== toKey) {
     const find = k => staff.find(s => skey(s) === k);
     let names = namesOf(j).slice(); const from = find(fromKey), to = find(toKey);
@@ -3054,18 +3620,41 @@ async function dispatchMove(j, date, fromKey, toKey, hour) {
     u.assignedNames = names;
     u.assigned = names.map(n => (staff.find(s => s.name.toLowerCase() === n.toLowerCase()) || {}).uid).filter(Boolean);
   }
-  if (j.date === date && !u.assignedNames && !u.time) return;
+  // A pinned start dropped on an hour stays at that hour. An auto job uses the hour only to choose its place in the day.
+  if (hour && keepsStart(j)) {
+    const mm = (normaliseTime(j.time) || "00:00").slice(3);
+    u.time = String(hour).padStart(2, "0") + ":" + mm;
+    u.timeSource = "manual";
+  }
+  if (j.date === date && !u.assignedNames && !u.time && !hour) return;
   const names = u.assignedNames || namesOf(j);
   if (!confirmIfOnLeave(date, names)) return;
+  const draft = {
+    ...j, date,
+    assigned: u.assigned || j.assigned, assignedNames: u.assignedNames || j.assignedNames,
+    time: u.time || j.time, timeSource: u.timeSource || j.timeSource,
+  };
+  let pool = [...jobs, ...(ui.undated || [])].map(x => x.id === j.id ? draft : x);
+  if (hour && !u.timeSource) pool = withSortHint(pool, j.id, hour);
+  const dates = [...new Set([j.date, date].filter(Boolean))];
+  const writes = planAutoTimes(pool, {
+    settings: dispatchSettingsNow(), history: dispatchHistory(pool), sheets: ui.runSheets || {},
+    dates,
+  });
+  const mine = writes.find(w => w.id === j.id);
+  if (mine && !u.timeSource) Object.assign(u, { time: mine.time, timeSource: "auto", estHours: mine.estHours, estSource: mine.estSource });
   try { await updateDoc(doc(db, "jobs", j.id), u); } catch (e) { return toast("Not saved: " + (e.code || e.message)); }
   if (ui.undated) ui.undated = ui.undated.filter(x => x.id !== j.id);
+  Object.assign(j, { date, ...(u.time ? { time: u.time } : {}), ...(u.timeSource ? { timeSource: u.timeSource } : {}), ...(u.estHours != null ? { estHours: u.estHours, estSource: u.estSource } : {}), ...(u.assigned ? { assigned: u.assigned, assignedNames: u.assignedNames } : {}) });
+  const rest = writes.filter(w => w.id !== j.id);
+  if (rest.length) queueDispatchPersist(pool.map(x => x.id === j.id ? { ...x, ...u } : x), dates);
   toast(`Rescheduled to ${shortDate(date)}${u.time ? " " + u.time : ""}${u.assignedNames ? " · " + (u.assignedNames.join(", ") || "Unallocated") : ""}`);
 }
 // "Remove from dispatch board": clears date/time (job goes back to Unscheduled; nothing is deleted). The next sync deletes
 // this visit's staff bookings in ServiceM8 (sm8_push), not the job. Undo puts the date/time back.
 async function unscheduleJob(j) {
-  const prev = { date: j.date || "", time: j.time || "" };
-  const u = { date: "", time: "", editedInApp: true, unscheduledFrom: prev, unscheduledAt: new Date().toISOString(), unscheduledByName: me.name, updatedAt: serverTimestamp(), updatedBy: me.uid };
+  const prev = { date: j.date || "", time: j.time || "", timeSource: j.timeSource || "auto" };
+  const u = { date: "", time: "", timeSource: "auto", editedInApp: true, unscheduledFrom: prev, unscheduledAt: new Date().toISOString(), unscheduledByName: me.name, updatedAt: serverTimestamp(), updatedBy: me.uid };
   await updateDoc(doc(db, "jobs", j.id), u);
   Object.assign(j, { date: "", time: "" }); if (ui.undated && !ui.undated.some(x => x.id === j.id)) ui.undated.push(j);
   undoToast(`#${jobNo(j)} removed from the dispatch board (now Unscheduled)`, async () => {
@@ -3167,6 +3756,7 @@ function editJob(j) {
       <div class="row"><label>Date<input type="date" name="date" value="${esc(j.date)}"></label>
         <label>Start<input type="time" name="time" value="${esc(j.time)}"></label>
         <label>Hours<input type="number" step="any" min="0" max="999" inputmode="decimal" name="durationHrs" value="${esc(j.durationHrs)}"></label></div>
+      <p class="sub">Change the start time to pin it. Leave it and the board spaces this job. Hours on the job do not change timesheets.</p>
       ${!n && j.date && !["Done", "Cancelled"].includes(j.status) ? `<div class="row"><button type="button" id="unschbtn" class="btn">✕ Remove from dispatch board</button><span class="sub">Back to Unscheduled${usesSm8Sync() ? "; the booking is removed at the next sync" : ""} (the job stays).</span></div>` : ""}
       <fieldset class="staffs">${staff.map(s => `<label class="ck"><input type="checkbox" name="assigned" value="${esc(skey(s))}" ${namesOf(j).map(x => x.toLowerCase()).includes(s.name.toLowerCase()) ? "checked" : ""}> <span class="av">${esc(s.name[0])}</span>${esc(label(s.name))}</label>`).join("")}</fieldset>
       <p id="leavewarn" class="leave-warn" hidden></p>
@@ -3196,6 +3786,7 @@ function editJob(j) {
     splitJob(j, pick).catch(e => toast("Not split: " + (e.code || e.message))); };
   if (!n && $("#splitundo")) $("#splitundo").onclick = () => undoSplit(j).catch(e => toast("Undo failed: " + (e.code || e.message)));
   const f = $("#jf");
+  if (f.time) f.time.addEventListener("input", () => { f.time.dataset.touched = "1"; });
   f.description.oninput = () => { if (n && !importing) f.type.value = guessType(f.description.value); };
   if (importing) wireImportForm(j, f);
   f.addEventListener("change", () => refreshJobLeaveWarn(f));
@@ -3208,8 +3799,10 @@ function editJob(j) {
     if (typ === "spoil" && /back ?slab|slab clean|back blade/.test(ds)) { $("#ferr").textContent = "Backslab work must be a separate job from spoil removal."; return; }
     const picked = [...f.querySelectorAll("[name=assigned]:checked")].map(x => staff.find(s => skey(s) === x.value)).filter(Boolean);
     const assigned = picked.filter(s => s.uid).map(s => s.uid);
+    const timeTouched = f.time.dataset.touched === "1";
     const data = { client: f.client.value.trim(), address: f.address.value.trim(), type: typ, po: f.po.value.trim().toUpperCase().replace(/\s+/g, ""),
       description: f.description.value.trim(), date: f.date.value, time: f.time.value, durationHrs: parseHoursInput(f.durationHrs.value),
+      timeSource: timeTouched || isManualStart(j) ? "manual" : "auto",
       assigned, assignedNames: picked.map(s => s.name), status: f.status.value, notes: f.notes.value.trim(),
       loads: f.loads.value === "" ? null : +f.loads.value, editedInApp: true,
       ...(String(j.poAmount ?? "") !== f.poAmount.value ? { poAmount: f.poAmount.value === "" ? null : Math.round(+f.poAmount.value * 100) / 100, poAmountBasis: f.poAmount.value === "" ? null : "entered in app (ex GST)", poAmountSource: "app" } : {}), updatedAt: serverTimestamp(), updatedBy: me.uid };
@@ -3236,6 +3829,8 @@ function editJob(j) {
       const r = await settleOrQueue(write);
       if (r.queued) write.catch(e => toast("Job not saved: " + (e.code || e.message)));
       d.close(); toast(r.queued ? "Saved on this phone. It uploads when you have signal." : "Saved"); refreshAfterImport();
+      const savedId = (j && j.id) || (newRef && newRef.id);
+      queueDispatchPersist([...(jobs || []).filter(x => x.id !== savedId), { ...j, ...data, id: savedId }], [data.date, j && j.date].filter(Boolean));
       if (!data.date && !r.queued) location.reload();
     } catch (e) { $("#ferr").textContent = e.message; }
     finally { guard.end(); if (saveBtn) saveBtn.disabled = false; }
@@ -3277,7 +3872,9 @@ function jobTabs(d, j) {
     f.insertBefore(sc, f.querySelector(".jc-facts")); sc.append(f.querySelector(".jc-facts"), f.querySelector(".jc-tabs"), body); }
   f.querySelectorAll("[data-jt]").forEach(b => b.onclick = () => show(b.dataset.jt));
   if (canXero()) bindXc(f, [j]);
-  show("details");
+  const openChat = ui.openJobChat && !n;
+  ui.openJobChat = false;
+  show(openChat ? "chat" : "details");
 }
 // ------------------------------------------------------------------ invoicing (admin only)
 // Invoice fields live on the job doc: invoiceNo (text), invoiceDescription, invoiceContact,
@@ -4076,15 +4673,38 @@ function workAmountsHtml(j, cls) {
   const list = Array.isArray(j && j.workAmounts) ? j.workAmounts.filter(a => typeof a === "string" && a).map(noDollars).slice(0, 8) : [];
   return list.length ? `<ul class="${cls}">${list.map(a => `<li>${esc(a)}</li>`).join("")}</ul>` : "";
 }
+function prepareOperatorPlan(list) {
+  ui.opPlan = new Map();
+  const settings = dispatchSettingsNow();
+  const history = dispatchHistory(list);
+  const byDate = new Map();
+  for (const j of list || []) {
+    if (!j || !j.date) continue;
+    if (!byDate.has(j.date)) byDate.set(j.date, []);
+    byDate.get(j.date).push(j);
+  }
+  for (const [date, rows] of byDate) {
+    const sheet = me ? readRunSheet(me.uid, date) : null;
+    const ordered = orderJobsForRun(rows, sheet);
+    for (const slot of spaceDay(ordered, { settings, history, ordered: true, reuseStored: true })) ui.opPlan.set(slot.id, slot);
+  }
+}
+function slotFor(j) {
+  const hit = (ui.opPlan && ui.opPlan.get(j.id)) || (ui.homePlan && ui.homePlan.get(j.id));
+  if (hit) return hit;
+  const est = estimateDuration(j, { durations: dispatchSettingsNow().durations, history: ui.dispatchHist || dispatchHistory([j]) });
+  return { time: normaliseTime(j && j.time) || "", estHours: est.hours, estSource: est.source, fixed: keepsStart(j) };
+}
 function opCard(j) {
   const p = phonePlace(j.address);
   const crew = namesOf(j);
   const type = TYPES[j.type] || j.client || "Job";
   const st = j.status === "In progress" ? "inprog" : j.status === "Done" ? "done" : "";
   const stop = ui.runStops && ui.runStops[j.id];
-  return `<div class="mrow opj t-${esc(j.type || "other")}" data-id="${esc(j.id)}" role="button" tabindex="0" aria-label="${esc(type + " " + (p.line || p.full) + " " + phoneTime(j.time))}">
+  const slot = slotFor(j);
+  return `<div class="mrow opj t-${esc(j.type || "other")}" data-id="${esc(j.id)}" role="button" tabindex="0" aria-label="${esc(type + " " + (p.line || p.full) + " " + phoneTime(slot.time || j.time))}">
     ${stop ? `<div class="run-stop">Stop ${stop}</div>` : ""}
-    <div class="mtime"><b>${esc(phoneTime(j.time))}</b>${j.durationHrs ? `<small>${esc(j.durationHrs)}h</small>` : ""}</div>
+    <div class="mtime"><b>${esc(phoneTime(slot.time || j.time))}</b><small class="est" title="${esc(slot.estSource === "quote" ? "Hours from the quote" : slot.estSource === "history" ? "Median clocked time for this kind of job" : "Default for this kind of job")}">${esc(formatEstimate(slot.estHours))}</small></div>
     <div class="mbody">${ipTop(j, "sm")}<div class="mcl"><span class="qdot ${QCLS[queueOf(j)]}"></span>${esc(type)}${jobPhotosIcon(j)}</div>
       <div class="maddr">${esc(p.line || p.full || "-")}</div>
       <div class="mdesc">${esc(p.locality || j.client || "")}</div>
@@ -4093,6 +4713,7 @@ function opCard(j) {
     <div class="chev" aria-hidden="true"></div></div>`;
 }
 function bindOp(mine) {
+  PUSH.mount($("#app"));
   if ($("#toadmin")) $("#toadmin").onclick = () => { ui.myJobs = false; ui.opSel = null; renderAdmin(); };
   // A tab tap is a deliberate move: force the redraw, or an open Prestart/Compliance form keeps the screen (stuck until reload).
   $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; ui.forceRender = true; renderOperator(); window.scrollTo(0, 0); });
@@ -4144,19 +4765,27 @@ function withRunOrder(list) {
 }
 function renderOperator() {
   paintBrand();
+  PUSH.settle();
   if (canImport()) inboxSub();
-  if (!ui.forceRender && document.querySelector("#compform, #prestartform")) return;
+  const forceOp = ui.forceRender;
+  if (!forceOp && document.querySelector("#compform, #prestartform")) return;
   ui.forceRender = false;
+  if (ui.opTab === "crew" && !canSeeCrewMap(me)) ui.opTab = "more";
+  if (ui.opTab === "crew" && !forceOp && document.getElementById("crewmap")) { paintCrew(); return; }
+  if (ui.opTab !== "crew") leaveCrewScreen();
+  else destroyCrewMap();
   document.body.className = "operator";
   ui.runStops = {};
   CHAT.watch(jobs);
   const t0 = todayStr(), t1 = addDays(t0, 1), wkEnd = addDays(t0, 7);
   const mine = jobs.filter(j => j.status !== "Cancelled" && (me.role !== "admin" || (j.assigned || []).includes(me.uid))).sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
+  prepareOperatorPlan(mine);
   const sel = ui.opSel && mine.find(j => j.id === ui.opSel);
   if (sel) return renderOpDetail(sel);
   if (ui.opTab === "chat" && document.activeElement?.closest?.(".chat-compose")) return;
   if (!ui.opTab || ui.opTab === "home") ui.opTab = "today";
   if (ui.opTab === "quotes" && !(canQuote() && me.role !== "admin")) ui.opTab = "more";
+  if (ui.opTab === "capacity" && !canSeeCapacity()) ui.opTab = "more";
   if (ui.opTab === "quotes") {
     const qhtml = adminViewRouter("quotes", ui, { esc, $$, staff, jobs: mine, todayStr, rerender: () => renderOperator(), canEditQuoteRates });
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Quotes</div><div class="mob-sub">Guided pricing · ex GST</div></div>
@@ -4202,7 +4831,7 @@ function renderOperator() {
   if (ui.opTab === "fleet") ui.opTab = "more";
   if (ui.opTab === "staff" && document.activeElement?.closest?.("#invitef")) return;
   if (ui.opTab === "staff" && canInvite()) {
-    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Staff</div><div class="mob-sub">Invite labourers, operators, supervisors and admins</div></div>
+    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Staff</div><div class="mob-sub">Logins and invites</div></div>
       <div class="pad">${staffPageHtml()}</div>${opTabs("more")}</div>`;
     bindOp(mine); bindStaff($("#app")); return;
   }
@@ -4220,13 +4849,27 @@ function renderOperator() {
     bindOp(mine); bindSettings($("#app")); return;
   }
   if (ui.opTab === "settings") ui.opTab = "more";
+  if (ui.opTab === "crew" && canSeeCrewMap(me) && !ui.opSel) {
+    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Crew map</div><div class="mob-sub">Who is clocked on</div></div>
+      <div class="pad">${crewMapScreen()}</div>${opTabs("more")}</div>`;
+    bindOp(mine); openCrewScreen(); return;
+  }
+  if (ui.opTab === "capacity" && canSeeCapacity()) {
+    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="pad">${capacityScreen()}</div>${opTabs("more")}</div>`;
+    bindOp(mine);
+    $("#app").querySelectorAll("[data-cap]").forEach(b => b.onclick = () => { ui.capWk = +b.dataset.cap === 0 ? 0 : (ui.capWk || 0) + +b.dataset.cap; renderOperator(); });
+    return;
+  }
   if (ui.opTab === "more") {
     const quoteBtn = canQuote() && me.role !== "admin" ? `<button type="button" class="mob-more" data-go="quotes"><b>Quotes</b><small>Guided pricing for supervisors</small></button>` : "";
+    const crewBtn = canSeeCrewMap(me) ? `<button type="button" class="mob-more" data-go="crew"><b>Crew map</b><small>Who is clocked on right now</small></button>` : "";
+    const capBtn = canSeeCapacity() ? `<button type="button" class="mob-more" data-go="capacity"><b>Capacity</b><small>Who is free this week</small></button>` : "";
     const fleetBtn = COMP.canSee() ? `<button type="button" class="mob-more" data-go="fleet"><b>Compliance</b><small>Registration and COI status</small></button>` : "";
-    const staffBtn = canInvite() ? `<button type="button" class="mob-more" data-go="staff"><b>Staff</b><small>Invite labourers, operators, supervisors and admins</small></button>` : "";
+    const staffBtn = canInvite() ? `<button type="button" class="mob-more" data-go="staff"><b>Staff</b><small>Everyone with a login or an invite</small></button>` : "";
     const inboxBtn = canImport() ? `<button type="button" class="mob-more" data-go="inbox"><b>Inbox</b><small>Import builder emails as jobs</small></button>` : "";
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">More</div><div class="mob-sub">${esc(me.name || "")} · ${esc(orgSettings().name)}</div></div>
       <div class="mob-menu">
+        ${crewBtn}
         <button type="button" class="mob-more" data-go="hours"><b>Hours</b><small>Clock on, or add hours manually</small></button>
         <button type="button" class="mob-more" data-go="leave"><b>Leave</b><small>Annual, sick, or other</small></button>
         <button type="button" class="mob-more" data-go="claims"><b>Reimbursements</b><small>Claim back fuel, parts, tip fees…</small></button>
@@ -4236,10 +4879,12 @@ function renderOperator() {
         ${COMP.canPrestart() ? `<button type="button" class="mob-more" data-go="prestart"><b>Prestart</b><small>Any machine, before you use it</small></button>` : ""}
         ${fleetBtn}
         <button type="button" class="mob-more incbtn" data-inc=""><b>Report incident</b><small>Safety report</small></button>
+        ${capBtn}
         ${quoteBtn}
         ${staffBtn}
         ${canEditTitles() ? `<button type="button" class="mob-more" data-go="settings"><b>Company</b><small>Add or remove trades. Details and billing stay with an admin.</small></button>` : ""}
         ${inboxBtn}
+        ${PUSH.panelHtml()}
         ${skillsEditorHtml((me.cloudProfile && me.cloudProfile.skills) || [], { canEdit: true })}
         <p class="powered pad">${esc(orgSettings().name)} · ${esc(POWERED_BY)}</p>
       </div>
@@ -4271,7 +4916,7 @@ function renderOperator() {
     const todayJobs = withRunOrder(open.filter(j => j.date === t0 || (j.date < t0 && j.status === "In progress")));
     const todaySheet = readRunSheet(me.uid, t0);
     const n = todayJobs.length;
-    $("#app").innerHTML = `<div class="mob">${adminBack()}
+    $("#app").innerHTML = `<div class="mob">${adminBack()}${PUSH.bannerHtml()}
       <div class="mob-intro"><div class="mob-kicker">Today · ${esc(orgSettings().name)}</div><div class="mob-date">${esc(longDate(t0))}</div>
         <h1 class="mob-hello">${esc(greet())}, ${first}</h1><p class="mob-count">${n} job${n === 1 ? "" : "s"} today</p>${todaySheet ? `<p class="run-note">Approved driving order${todaySheet.returnToDepot ? " · back to the depot" : ""}</p>` : ""}${opSeg("today")}</div>
       ${COMP.staffBannerHtml()}
@@ -4314,7 +4959,7 @@ function renderOpDetail(j) {
       <p class="det-addr">${esc(addrLine || "-")}</p>
       <div class="mcard"><div class="mlbl">Client</div><div class="mval">${esc(j.client || "—")}</div><div class="supcard" data-sup="${esc(j.id)}"></div></div>
       <dl class="det-facts">
-        <div><dt>Scheduled</dt><dd>${esc(j.date ? longDate(j.date) : "Unscheduled")}${j.time ? " · " + esc(phoneTime(j.time)) : ""}${j.durationHrs ? " · " + esc(j.durationHrs) + "h" : ""}</dd></div>
+        <div><dt>Scheduled</dt><dd>${esc(j.date ? longDate(j.date) : "Unscheduled")}${slotFor(j).time ? " · " + esc(phoneTime(slotFor(j).time)) : ""} · ${esc(formatEstimate(slotFor(j).estHours))}</dd></div>
         <div><dt>Crew</dt><dd>${esc(crew.length ? crew.join(", ") : "—")}</dd></div>
         <div><dt>Purchase order</dt><dd><b>${esc(j.po || "—")}</b></dd></div>
         <div class="scope"><dt>Scope</dt><dd>${esc(crewText(j.description) || "—")}</dd></div>
@@ -4546,20 +5191,28 @@ function emailDialog(j, files, infos, o = {}) {
 function mobileDispatch(all) {
   const t0 = todayStr(); ui.mday = ui.mday || t0; const d = ui.mday;
   const sched = all.filter(j => j.date && queueOf(j) !== "Unsuccessful");
+  noteDispatch(all, [d]);
   const wk0 = addDays(d, -dowMon(d)), strip = [...Array(7)].map((_, i) => addDays(wk0, i));
-  const dayJobs = sched.filter(j => j.date === d).sort((a, b) => (a.time || "").localeCompare(b.time || ""));
-  const card = j => {
+  const dayJobs = sched.filter(j => j.date === d);
+  const card = (j, slot) => {
     const away = assignmentWarning(ui.leave || [], j.date, leavePeople(namesOf(j)));
+    const time = slot ? slot.time : (j.time || "--:--");
+    const est = slot ? formatEstimate(slot.estHours) : "";
     return `<div class="mdc ${QCLS[queueOf(j)]} ${away ? "on-leave" : ""}" data-id="${j.id}">
-      <div class="mdc-top"><b class="mdc-time">${esc(j.time || "--:--")}</b><span class="mdc-no">#${esc(jobNo(j))}</span><span class="pstack">${ipPill(j, "sm")}<span class="qpill ${QCLS[queueOf(j)]}">${esc(queueOf(j))}</span></span></div>
+      <div class="mdc-top"><b class="mdc-time">${esc(time)}</b><span class="mdc-no">#${esc(jobNo(j))}</span><span class="pstack">${ipPill(j, "sm")}<span class="qpill ${QCLS[queueOf(j)]}">${esc(queueOf(j))}</span></span></div>
       <div class="mdc-cl">${esc(j.client || "")}</div>
       <a class="mdc-addr" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener">📍 ${esc(j.address || "-")}</a>
       <div class="mdc-desc">${esc(firstLine(crewText(j.description)))}</div>
+      ${est ? `<div class="sub est">${esc(est)}</div>` : ""}
       ${away ? `<p class="leave-chip">${esc(away)}</p>` : ""}
-      <div class="mdc-foot"><span class="sub">${j.po ? "PO " + esc(j.po) : "No PO"}${j.durationHrs ? " · " + esc(j.durationHrs) + "h" : ""}</span>
+      <div class="mdc-foot"><span class="sub">${j.po ? "PO " + esc(j.po) : "No PO"}${est ? " · " + esc(est) : ""}</span>
         <span><button type="button" class="sm-btn mdc-unsch" data-unsch="${j.id}" title="Remove from dispatch board (back to Unscheduled)">✕ Off board</button> <button type="button" class="sm-btn mdc-move" data-move="${j.id}">⇄ Move</button></span></div></div>`;
   };
-  const groups = rowsFor(all).map(r => [r, dayJobs.filter(r.has)]);
+  const groups = rowsFor(all).map(r => {
+    const plan = rowPlan(r, d, dayJobs);
+    const cards = plan.map(slot => { const j = dayJobs.find(x => x.id === slot.id); return j ? card(j, slot) : ""; }).join("");
+    return [r, cards, plan.length];
+  });
   return `<div class="mdisp" id="mdisp"><div class="mdh">
       <div class="mdh-row"><button class="sm-btn" data-md="-1" aria-label="Previous day">‹</button>
         <div class="mdh-date"><b>${esc(dayLabel(d))}</b>${d === t0 ? '<span class="sub">Today</span>' : ""}</div>
@@ -4568,7 +5221,7 @@ function mobileDispatch(all) {
         return `<button class="${x === d ? "on" : ""} ${x === t0 ? "today" : ""}" data-mday="${x}"><small>${new Date(x + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", timeZone: "UTC" })}</small><b>${+x.slice(8)}</b><span class="${n ? "" : "zero"}">${n}</span></button>`; }).join("")}</div></div>
     <button type="button" class="route-open" id="optorder">Optimise order</button>
     ${plannerLeaveHtml(ui.leave || [], [d], staff.map(s => ({ uid: s.uid || "", name: s.name })))}
-    ${groups.map(([r, js]) => `<div class="mgrp">${esc(r.name)} <span class="cnt">${js.length}</span></div>${js.map(card).join("") || `<p class="muted sub pad">Nothing booked for ${esc(orgSettings().name)}.</p>`}`).join("")}
+    ${groups.map(([r, html, n]) => `<div class="mgrp">${esc(r.name)} <span class="cnt">${n}</span></div>${html || `<p class="muted sub pad">Nothing booked for ${esc(orgSettings().name)}.</p>`}`).join("")}
     <p class="sub muted pad">Swipe left / right to change day. Tap a card to open the job.</p></div>`;
 }
 function bindMobileDispatch(A, pool) {
@@ -4591,20 +5244,28 @@ function moveSheet(j) {
   const v = document.createElement("div"); v.className = "emdlg"; const cur = namesOf(j).map(n => n.toLowerCase());
   v.innerHTML = `<form class="embox msheet"><h3>Move #${esc(jobNo(j))}</h3><p class="sub muted">${esc(j.address || "")}</p>
     <div class="row"><label>Date<input type="date" name="date" value="${esc(j.date || todayStr())}" required></label><label>Time<input type="time" name="time" value="${esc(j.time || "07:00")}"></label></div>
+    <p class="sub">Change the time to pin it. Leave it and the board spaces this job.</p>
     <fieldset class="staffs">${staff.map(s => `<label class="ck"><input type="checkbox" name="st" value="${esc(skey(s))}" ${cur.includes(s.name.toLowerCase()) ? "checked" : ""}> ${esc(s.name)}</label>`).join("")}</fieldset>
     <p class="sub muted">No one ticked = Unallocated. ${esc(syncNote("Saved to the app, then synced at the next sync.", "Saved straight away."))}</p>
     <button class="mbtn complete">Save</button><button type="button" class="mbtn" data-x>Cancel</button></form>`;
   document.body.appendChild(v);
   v.querySelector("[data-x]").onclick = () => v.remove();
   v.onclick = e => { if (e.target === v) v.remove(); };
+  const timeInput = v.querySelector("[name=time]");
+  if (timeInput) timeInput.addEventListener("input", () => { timeInput.dataset.touched = "1"; });
   v.querySelector("form").onsubmit = async e => {
     e.preventDefault(); const f = e.target;
     const picked = [...f.querySelectorAll("[name=st]:checked")].map(x => staff.find(s => skey(s) === x.value)).filter(Boolean);
-    const u = { date: f.date.value, time: f.time.value, assignedNames: picked.map(s => s.name), assigned: picked.filter(s => s.uid).map(s => s.uid),
-      editedInApp: true, updatedAt: serverTimestamp(), updatedBy: me.uid };
+    const touched = f.time.dataset.touched === "1";
+    const u = { date: f.date.value, assignedNames: picked.map(s => s.name), assigned: picked.filter(s => s.uid).map(s => s.uid),
+      editedInApp: true, updatedAt: serverTimestamp(), updatedBy: me.uid,
+      ...(touched ? { time: f.time.value, timeSource: "manual" } : {}) };
     if (!confirmIfOnLeave(u.date, u.assignedNames)) return;
     try { await updateDoc(doc(db, "jobs", j.id), u); } catch (err) { return toast("Not saved: " + (err.code || err.message)); }
-    v.remove(); ui.mday = u.date; toast(`Moved to ${shortDate(u.date)} ${u.time} · ${u.assignedNames.join(", ") || "Unallocated"}`); renderAdmin();
+    const prevDate = j.date;
+    Object.assign(j, u);
+    queueDispatchPersist([...(jobs || []).filter(x => x.id !== j.id), { ...j, ...u }], [prevDate, u.date].filter(Boolean));
+    v.remove(); ui.mday = u.date; toast(`Moved to ${shortDate(u.date)} ${u.time || j.time || ""} · ${u.assignedNames.join(", ") || "Unallocated"}`); renderAdmin();
   };
 }
 
@@ -5076,6 +5737,76 @@ document.addEventListener("click", e => {
 })();
 
 CHAT = installChatApp({ db, storage, getMe: () => me, toast });
+function openPushTarget(target) {
+  if (!me || !target) return false;
+  const strip = () => {
+    try {
+      const url = new URL(location.href);
+      url.searchParams.delete("chat");
+      url.searchParams.delete("thread");
+      if (url.searchParams.get("jobs") === "today") url.searchParams.delete("jobs");
+      if (url.searchParams.get("open") === "today" || url.searchParams.get("open") === "chat") url.searchParams.delete("open");
+      history.replaceState(null, "", url.pathname + url.search + url.hash);
+    } catch { /* keep the current address */ }
+  };
+  if (target.kind === "today") {
+    ui.myJobs = me.role === "admin";
+    ui.opTab = "today";
+    ui.opSel = null;
+    ui.jobPane = "job";
+    strip();
+    return true;
+  }
+  if (target.kind !== "chat") return false;
+  if (target.thread === "staff") {
+    ui.opSel = null;
+    if (me.role === "admin" && !ui.myJobs) ui.view = "chat";
+    else ui.opTab = "chat";
+    strip();
+    return true;
+  }
+  const jobId = String(target.thread || "").slice(4);
+  const pool = [...(jobs || []), ...(ui.undated || []), ...(ui.done || [])];
+  const job = pool.find(j => j.id === jobId);
+  if (!job) {
+    if (target.missing) { strip(); return true; }
+    if (!target.loading) {
+      target.loading = true;
+      getDoc(doc(db, "jobs", jobId)).then(snap => {
+        target.loading = false;
+        if (!snapExists(snap)) { target.missing = true; }
+        else {
+          const row = { id: jobId, ...snap.data() };
+          if (docCompanyId(row) === myCompanyId()) jobs.push(row);
+          else target.missing = true;
+        }
+        if (me && me.role === "admin" && !ui.myJobs) renderAdmin(); else renderOperator();
+      }).catch(() => { target.loading = false; });
+    }
+    return false;
+  }
+  if (docCompanyId(job) !== myCompanyId()) { strip(); return true; }
+  strip();
+  if (me.role === "admin" && !ui.myJobs) {
+    ui.openJobChat = true;
+    queueMicrotask(() => editJob(job));
+    return true;
+  }
+  ui.opSel = job.id;
+  ui.jobPane = "chat";
+  return true;
+}
+PUSH = installPush({
+  app: fb, db, vapidKey, emulator: useEmulator,
+  getUid: () => me && me.uid,
+  getCompanyId: () => myCompanyId(),
+  toast,
+  rerender() {
+    if (!me) return;
+    if (me.role === "admin" && !ui.myJobs) renderAdmin(); else renderOperator();
+  },
+  open: openPushTarget,
+});
 COMP = installCompliance({
   db, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp,
   getJobs: () => [...(jobs || []), ...(ui.undated || []), ...(ui.done || [])],
@@ -5112,11 +5843,13 @@ ROUTE = installRouteOrder({
   rememberSheet: (id, data) => {
     ui.runSheets = ui.runSheets || {};
     ui.runSheets[id] = { id, ...data, status: "approved" };
+    queueDispatchPersist(jobs, [data && data.date].filter(Boolean));
+    if (ui.view === "dispatch") renderAdmin();
   },
   cacheGeo: (job, hit) => updateDoc(doc(db, "jobs", job.id), geoPatch(job.address, hit)),
 });
 QG = installQuotes({
-  db, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, collection, query, where, onSnapshot, serverTimestamp, arrayUnion,
+  db, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, collection, query, where, onSnapshot, serverTimestamp, arrayUnion, runTransaction,
   $, esc, toast, $$, CLIENTS, TYPES, canSeeMoney, canQuote, canEditQuoteRates, todayStr, jobNo,
   getMe: () => me, getUi: () => ui, getCompanyId: () => myCompanyId(),
   isAdmin: () => !!(me && me.role === "admin"),
@@ -5127,7 +5860,7 @@ QG = installQuotes({
     if (cur.includes(id)) { toast(tradeLabel(id) + " is already on."); return; }
     try {
       await persistTrades([...cur, id]);
-      toast(tradeLabel(id) + (id === "earthworks" ? " added. Quote pack ready." : " added. Quote pack coming soon."));
+      toast(tradeLabel(id) + (quotePack(id) && quotePack(id).ready ? " added. Quote pack ready." : " added. Quote pack coming soon."));
       redrawAfterSave();
     } catch { toast("Couldn't update trades."); }
   },

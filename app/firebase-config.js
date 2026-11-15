@@ -9,6 +9,10 @@ export const firebaseConfig = {
   appId: "1:414325106644:web:0163e3ccfe965dd6fa9841",
 };
 // Local testing: open the app with ?emu=1 (or on localhost) to use the Firebase Emulator Suite.
+// Public Web Push certificate. Not a secret. The private key stays in Firebase.
+// Replace the placeholder after generating a key pair:
+// Firebase console > Project settings > Cloud Messaging > Web Push certificates.
+export const vapidKey = "REPLACE_WITH_WEB_PUSH_CERTIFICATE";
 export const useEmulator = location.hostname === "localhost" || location.hostname === "127.0.0.1" || new URLSearchParams(location.search).has("emu");
 // Email capture stays on. features/cloud-storage.js also mirrors new photos and receipts
 // into private Storage when the bucket accepts them. This flag stays false so the app
