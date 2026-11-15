@@ -1855,8 +1855,14 @@ service cloud.firestore {
     // Every other company: companies/{id}/liveLocations/{uid}. Written only while that
     // person's timesheet shift is clocked on (open or on a break). Clock off deletes it.
     // Manager and admin of the same company read. Supervisor and below do not. No other company does.
+    // Heartwood: status "paused" blocks locations (llPaused). Other companies use companyNotPaused,
+    // the same trial and billing pause as the rest of the app. No company document means not paused.
     function llRole() {
       return hasProfile() ? profile().get("role", "") : "";
+    }
+    function llPaused(id) {
+      let path = /databases/$(database)/documents/companies/$(id);
+      return exists(path) && get(path).data.get("status", "") == "paused";
     }
     function llOffice() {
       return signedIn() && callerCompany() != "" && (
@@ -1899,15 +1905,15 @@ service cloud.firestore {
         && llClocked();
     }
     match /liveLocations/{id} {
-      allow get: if llOffice() && callerCompany() == "heartwood" && docCompany(resource.data) == "heartwood";
-      allow list: if llOffice() && callerCompany() == "heartwood" && resource.data.companyId == "heartwood";
-      allow create, update: if callerCompany() == "heartwood" && request.resource.data.companyId == "heartwood" && llBody(request.resource.data, id);
-      allow delete: if signedIn() && request.auth.uid == id && callerCompany() == "heartwood" && docCompany(resource.data) == "heartwood";
+      allow get: if llOffice() && !llPaused("heartwood") && callerCompany() == "heartwood" && docCompany(resource.data) == "heartwood";
+      allow list: if llOffice() && !llPaused("heartwood") && callerCompany() == "heartwood" && resource.data.companyId == "heartwood";
+      allow create, update: if callerCompany() == "heartwood" && request.resource.data.companyId == "heartwood" && !llPaused("heartwood") && llBody(request.resource.data, id);
+      allow delete: if signedIn() && request.auth.uid == id && callerCompany() == "heartwood" && docCompany(resource.data) == "heartwood" && !llPaused("heartwood");
     }
     match /companies/{c}/liveLocations/{id} {
       allow get: if llOffice() && c != "heartwood" && callerCompany() == c && docCompany(resource.data) == c && companyNotPaused(c);
       allow list: if llOffice() && c != "heartwood" && callerCompany() == c && resource.data.companyId == c && companyNotPaused(c);
-      allow create, update: if c != "heartwood" && callerCompany() == c && request.resource.data.companyId == c && llBody(request.resource.data, id) && companyNotPaused(c);
+      allow create, update: if c != "heartwood" && callerCompany() == c && request.resource.data.companyId == c && companyNotPaused(c) && llBody(request.resource.data, id);
       allow delete: if signedIn() && request.auth.uid == id && c != "heartwood" && callerCompany() == c && docCompany(resource.data) == c && companyNotPaused(c);
     }
 // END LIVE LOCATION RULES

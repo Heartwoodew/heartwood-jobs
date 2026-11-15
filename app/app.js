@@ -61,8 +61,8 @@ import {
   paidShift, prestartStatus, sheetHours, shiftHours, sortedEntries, stampText,
 } from "./features/timesheet.js";
 import {
-  LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, canSeeCrewMap, crewListHtml, crewMapModel,
-  liveCollectionPath, liveLocationBody, shareIndicator, shouldSendPosition,
+  LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, canSeeCrewMap, companySharesLocation, crewListHtml, crewMapModel,
+  homeCrewSlot, liveCollectionPath, liveLocationBody, shareIndicator, shouldSendPosition,
 } from "./features/live-location.js";
 import {
   assignmentWarning, cellLeaveText, certificateContentType, certificateObjectName, certificateStoragePath,
@@ -348,6 +348,7 @@ async function loadCompanyBrand() {
   const snap = await getDoc(doc(db, "companies", id)).catch(() => null);
   const loaded = snap && snap.exists() ? { ...snap.data(), companyId: id } : null;
   ui.companyRecord = loaded;
+  ui.companyStatus = loaded ? String(loaded.status || "") : "";
   const fallback = { companyId: id, name: id === "heartwood" ? "" : "Your company" };
   if (loaded) setActiveCompany(loaded);
   else setActiveCompany(id === "heartwood" ? null : fallback);
@@ -2822,6 +2823,7 @@ function armShareWatch() {
   }
 }
 function liveShareStart(entryId, weekStart, firstFix) {
+  if (!companySharesLocation({ status: ui.companyStatus })) { liveShareStop(false); return; }
   if (!me || !entryId || !weekStart) return;
   if (shareRun && shareRun.entryId === entryId && shareRun.weekStart === weekStart) {
     if (firstFix && !document.hidden) considerShareFix(firstFix);
@@ -2904,8 +2906,19 @@ function crewMapScreen() {
     <div id="crewlist"><p class="crew-note">Loading crew…</p></div>
   </div>`;
 }
+function homeCrewCard() {
+  if (homeCrewSlot(me) !== "crew") return "";
+  return `<section class="hsec crew-home" aria-label="Crew on the clock"><div class="hsec-h">Crew <small>clocked on now</small></div>${crewMapScreen()}</section>`;
+}
 function openCrewScreen() {
   if (!canSeeCrewMap(me)) return;
+  if (!companySharesLocation({ status: ui.companyStatus })) {
+    leaveCrewScreen();
+    ui.crewLive = [];
+    ui.crewErr = "paused";
+    paintCrew();
+    return;
+  }
   if (!ui.crewSubsOn) {
     ui.crewSubsOn = true;
     ui.crewErr = "";
@@ -2926,9 +2939,15 @@ function openCrewScreen() {
 function paintCrew() {
   const list = document.getElementById("crewlist");
   if (!list || !canSeeCrewMap(me)) return;
+  const status = document.getElementById("crewmapstatus");
+  if (!companySharesLocation({ status: ui.companyStatus }) || ui.crewErr === "paused") {
+    list.innerHTML = `<p class="crew-note">Location sharing is off while this company is paused.</p>`;
+    if (status) status.textContent = "A paused company cannot see or share locations.";
+    if (ui.crewLayer) ui.crewLayer.clearLayers();
+    return;
+  }
   const model = crewMapModel({ locations: ui.crewLive || [], jobs: ui.crewJobs || [], today: todayStr(), now: new Date() });
   list.innerHTML = crewListHtml(model, esc);
-  const status = document.getElementById("crewmapstatus");
   if (status) status.textContent = ui.crewErr ? "The crew list isn't available on this sign-in." : "Blue dots are people clocked on. Amber dots are today's jobs that already have a map pin.";
   ensureCrewMap(model);
 }
@@ -3273,7 +3292,8 @@ function homeLists(all, admin) {
   const by = d => live.filter(j => j.date === d || (d === t0 && j.date && j.date < t0 && j.status === "In progress")).sort((a, b) => (a.time || "99").localeCompare(b.time || "99"));
   return { live, today: by(t0), tomorrow: by(t1), t0, t1 };
 }
-// ---- Monthly PROFIT chart (Alex only). Figures are Xero's Profit and Loss (cash basis, ex GST), copied by a box script
+// ---- Monthly PROFIT chart. Not shown on Home (managers and admins see the live crew card there; supervisors and below see neither).
+// Figures are Xero's Profit and Loss (cash basis, ex GST), copied by a box script
 // (tools/xero_profit_sync.py) into meta/profitHistory, because the app can't call Xero itself. Nothing here is estimated.
 function profHistLoad() { if (ui.profReq || !canXero()) return; ui.profReq = true;
   getDoc(doc(db, "meta", "profitHistory")).then(s => { ui.profHist = s && s.exists() ? s.data() : null; if (ui.view === "home") renderAdmin(); }).catch(() => { ui.profHist = null; }); }
@@ -3377,7 +3397,7 @@ function homeBody(all, admin, btns) {
     ${js.map(homeRow).join("") || `<p class="muted pad">Nothing booked for ${esc(orgSettings().name)}.</p>`}</div>`;
   return `<div class="home"><div class="hhead"><h1>${greet()}, ${esc(String(me.name || "").split(" ")[0])}</h1><div class="muted">${esc(dayLabel(t0))} · ${esc(orgSettings().name)}</div></div>
     ${admin ? COMP.adminBannerHtml() : ""}${admin ? cloudExpiryNotice(all) : ""}
-    ${swmsReminderHtml()}${admin ? attentionHtml(all) + (canXero() ? profitChartHtml() : "") : `<div class="hbtns opbtns"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button><button class="hbtn" data-go="swms"><span class="ic">📋</span>SWMS</button></div>`}
+    ${swmsReminderHtml()}${admin ? attentionHtml(all) + homeCrewCard() : `<div class="hbtns opbtns"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button><button class="hbtn" data-go="swms"><span class="ic">📋</span>SWMS</button></div>`}
     <div class="hstats hidden">${stat(today.length, "Today", "q-wo")}${stat(ip, "In progress", "ip", admin ? "q-ip" : "")}${admin ? stat(ready, "Ready to invoice", "q-comp", "invoices") + stat(unal, "Unallocated", "q-uns", "dispatch") + (canImport() && ui.inbox ? stat(inboxUnread(), "Unread builder emails", "q-inbox", "inbox") : "") : stat(tomorrow.length, "Tomorrow", "q-quote")}</div>
     <div class="hbtns hidden"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button>${btns.map(([go, ic, n]) => `<button class="hbtn" data-go="${go}"><span class="ic">${ic}</span>${n}</button>`).join("")}</div>
     ${sec("Today", t0, byPlan(today))}${sec("Tomorrow", t1, byPlan(tomorrow))}${admin ? "" : myIncidentsHtml()}</div>`;
@@ -3640,7 +3660,8 @@ function renderAdmin() {
   const force = ui.forceRender; ui.forceRender = false;
   if (ui.view === "crew" && !canSeeCrewMap(me)) ui.view = "home";
   if (ui.view === "crew" && !force && document.getElementById("crewmap")) { paintCrew(); return; }
-  if (ui.view !== "crew") leaveCrewScreen();
+  const crewHere = canSeeCrewMap(me) && (ui.view === "crew" || ui.view === "home");
+  if (!crewHere) leaveCrewScreen();
   else destroyCrewMap();
   if (!force && (ui.view === "compliance" || ui.view === "prestart") && document.querySelector("#compform, #prestartform")) return;
   if (!ui.tsForce && ui.view === "timesheet" && (ui.tsBusy || ui.tsAsk || (ui.tsMachineShift && document.getElementById("tsmachine")))) return;
@@ -3672,7 +3693,7 @@ function renderAdmin() {
   if (ui.view === "settings") bindSettings(A);
   PUSH.mount(A);
   if (ui.view === "master") bindMaster(A);
-  if (ui.view === "crew") openCrewScreen();
+  if (ui.view === "crew" || (ui.view === "home" && homeCrewSlot(me) === "crew")) openCrewScreen();
   A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.navOpen = false;
     if (b.dataset.view === "myjobs") { ui.myJobs = true; ui.opSel = null; window.scrollTo(0, 0); return renderAdmin(); }
     if (b.dataset.view !== "compliance") COMP.abandon();
@@ -4953,9 +4974,11 @@ function renderOperator() {
   const forceOp = ui.forceRender;
   if (!forceOp && document.querySelector("#compform, #prestartform")) return;
   ui.forceRender = false;
+  if (!ui.opTab || ui.opTab === "home") ui.opTab = "today";
   if (ui.opTab === "crew" && !canSeeCrewMap(me)) ui.opTab = "more";
   if (ui.opTab === "crew" && !forceOp && document.getElementById("crewmap")) { paintCrew(); return; }
-  if (ui.opTab !== "crew") leaveCrewScreen();
+  const opCrew = canSeeCrewMap(me) && (ui.opTab === "crew" || ui.opTab === "today");
+  if (!opCrew) leaveCrewScreen();
   else destroyCrewMap();
   document.body.className = "operator";
   ui.runStops = {};
@@ -4967,7 +4990,6 @@ function renderOperator() {
   if (sel) return renderOpDetail(sel);
   unmountDocuments();
   if (ui.opTab === "chat" && document.activeElement?.closest?.(".chat-compose")) return;
-  if (!ui.opTab || ui.opTab === "home") ui.opTab = "today";
   if (ui.opTab === "quotes" && !(canQuote() && me.role !== "admin")) ui.opTab = "more";
   if (ui.opTab === "capacity" && !canSeeCapacity()) ui.opTab = "more";
   if (ui.opTab === "quotes") {
@@ -5105,9 +5127,12 @@ function renderOperator() {
         <h1 class="mob-hello">${esc(greet())}, ${first}</h1><p class="mob-count">${n} job${n === 1 ? "" : "s"} today</p>${todaySheet ? `<p class="run-note">Approved driving order${todaySheet.returnToDepot ? " · back to the depot" : ""}</p>` : ""}${opSeg("today")}</div>
       ${COMP.staffBannerHtml()}
       ${swmsReminderHtml()}
+      ${homeCrewCard()}
       <div class="mob-list">${todayJobs.map(opCard).join("") || `<p class="muted pad">Nothing booked for ${esc(orgSettings().name)}.</p>`}</div>
       ${opTabs("today")}</div>`;
-    bindOp(mine); return;
+    bindOp(mine);
+    if (homeCrewSlot(me) === "crew") openCrewScreen();
+    return;
   }
   const groups = ui.opTab === "done" ? groupByDate(doneL).map(([d, js]) => [d === t0 ? "Today · " + dayLabel(d) : dayLabel(d), js])
     : groupByDate(withRunOrder(open.filter(j => j.date >= t1 && j.date <= wkEnd))).map(([d, js]) => [(d === t1 ? "Tomorrow · " : "") + dayLabel(d), js]);
