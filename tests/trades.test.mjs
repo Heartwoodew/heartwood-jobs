@@ -2,8 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   DEFAULT_TRADE, LAZY_EARTHWORKS_IDS, TRADES, QUOTE_PACKS,
-  addTitle, defaultTitles, levelForTitleName, measureQty, normalizeTrade, quotePack,
+  addTitle, defaultTitles, levelForTitleName, measureQty, normalizeTrade, quotePack, quoteTradeSwitchHtml,
   chooseTitleLevel, readTradeList, readyJobTypeMap, removeTitle, renameTitle, resolveCompanySetup, sanitizeSkills, setTitleLevel,
+  signupTradesHtml, tradeSettingsHtml, tradeToolsHtml,
 } from "../app/features/trades.js";
 import {
   COMPANY_SETTINGS_ROLES, CREW_ROLES, INVITE_ROLES, MONEY_ROLES, RATE_ROLES,
@@ -131,17 +132,46 @@ test("a company can add, rename and remove titles without dropping the permissio
   assert.equal(addTitle(removed.titles, { name: "Fencer", level: "operator" }).reason, "duplicate");
 });
 
-test("another trade is additive and only earthworks is a ready quote pack", () => {
+test("another trade is additive and earthworks stays the plant pack", () => {
   const setup = resolveCompanySetup({ trade: "carpentry" }, { extraTrades: ["earthworks", "carpentry", "nope"] });
   assert.deepEqual(setup.enabled, ["carpentry", "earthworks"]);
   assert.equal(quotePack("earthworks").ready, true);
   assert.equal(quotePack("earthworks").wizard, "plant");
   assert.deepEqual(quotePack("earthworks").templates.map(t => t.id), ["truck_skid", "truck_excavator", "truck_skid_excavator", "excavator"]);
-  for (const trade of TRADES) {
-    if (trade.id !== "earthworks") assert.equal(QUOTE_PACKS[trade.id].ready, false, trade.id);
+  for (const id of ["carpentry", "tiling", "plumbing", "electrical"]) assert.equal(QUOTE_PACKS[id].ready, false, id);
+  for (const id of ["landscaping", "concreting", "fencing"]) {
+    assert.equal(QUOTE_PACKS[id].ready, true, id);
+    assert.equal(QUOTE_PACKS[id].wizard, "measure", id);
   }
   const types = readyJobTypeMap(setup);
   assert.deepEqual(Object.keys(types), ["spoil", "backslab", "waterproof", "clean", "other"]);
+});
+
+test("a landscaping, concreting or fencing company lands in a ready pack", () => {
+  for (const id of ["landscaping", "concreting", "fencing"]) {
+    const setup = resolveCompanySetup({ trades: [id] }, null);
+    assert.equal(setup.trade, id);
+    assert.ok(Object.keys(readyJobTypeMap(setup)).length > 0, id);
+    const html = quoteTradeSwitchHtml(setup, id);
+    assert.match(html, new RegExp(quotePack(id).label));
+    assert.doesNotMatch(html, /coming soon/);
+  }
+  const mixed = resolveCompanySetup({ trades: ["carpentry", "landscaping"] }, null);
+  const switcher = quoteTradeSwitchHtml(mixed, "carpentry");
+  assert.match(switcher, /Landscaping/);
+  assert.doesNotMatch(switcher, /Carpentry/);
+  const tools = tradeToolsHtml(mixed, { canEdit: true, focus: "landscaping" });
+  assert.match(tools, /value="concreting"/);
+  assert.match(tools, /value="fencing"/);
+  assert.match(tools, /value="earthworks"/);
+  assert.doesNotMatch(tools, /value="plumbing"/);
+  assert.doesNotMatch(tools, /value="tiling"/);
+  const settings = tradeSettingsHtml(["landscaping"], { canEdit: true });
+  assert.match(settings, /Quote pack ready/);
+  assert.match(settings, /Plumbing — quote pack coming soon/);
+  const signup = signupTradesHtml(["landscaping"]);
+  assert.match(signup, /value="landscaping"[^>]*> Landscaping<\/label>/);
+  assert.match(signup, /value="carpentry"[^>]*> Carpentry <span class="sub">quote pack coming soon<\/span>/);
 });
 
 test("measure helpers do area, volume, linear metre and waste, and do not invent a mix", () => {

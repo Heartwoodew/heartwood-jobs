@@ -2,8 +2,13 @@
 // Sign-up stores a list of trades. An older company with only `trade` still reads that one trade.
 // A company with neither reads as ["earthworks"] (Heartwood, callup-test-h2vx, anyone else). Nothing here writes.
 
-// Earthworks is the only quote pack with the plant wizard. Other trades contribute job titles and job types
-// and are marked quote-pack coming soon. No mix design, no assignment filtering, no sign-off flag.
+// Earthworks keeps the plant wizard. Landscaping, concreting and fencing are measured quote packs.
+// Carpentry, tiling, plumbing and electrical stay quote-pack coming soon.
+// No mix design, no assignment filtering, no sign-off flag. The measured packs live in features/packs/.
+import { LANDSCAPING } from "./packs/landscaping.js";
+import { CONCRETING } from "./packs/concreting.js";
+import { FENCING } from "./packs/fencing.js";
+export { measureQty } from "./packs/money.js";
 
 export const DEFAULT_TRADE = "earthworks";
 export const LAZY_EARTHWORKS_IDS = Object.freeze(["heartwood", "callup-test-h2vx"]);
@@ -57,7 +62,7 @@ const EARTHWORKS_TYPES = Object.freeze([
 const OTHER_TYPES = Object.freeze({
   landscaping: [["ls-garden", "Garden build"], ["ls-turf", "Turf"], ["ls-paving", "Paving"], ["ls-retaining", "Retaining"], ["ls-maintain", "Maintenance"], ["ls-other", "Other"]],
   concreting: [["co-slab", "Slab"], ["co-driveway", "Driveway"], ["co-footing", "Footings"], ["co-path", "Paths"], ["co-other", "Other"]],
-  fencing: [["fe-timber", "Timber fence"], ["fe-colorbond", "Colorbond fence"], ["fe-gate", "Gate"], ["fe-other", "Other"]],
+  fencing: [["fe-timber", "Timber paling"], ["fe-colorbond", "Colorbond"], ["fe-pool", "Pool fence"], ["fe-chain", "Chain wire"], ["fe-gate", "Gate"], ["fe-other", "Other"]],
   carpentry: [["ca-frame", "Framing"], ["ca-fitout", "Fit-out"], ["ca-deck", "Deck"], ["ca-other", "Other"]],
   tiling: [["ti-floor", "Floor tiling"], ["ti-wall", "Wall tiling"], ["ti-waterproof", "Waterproofing"], ["ti-other", "Other"]],
   plumbing: [["pl-rough", "Rough-in"], ["pl-fitoff", "Fit-off"], ["pl-drain", "Drainage"], ["pl-gas", "Gas"], ["pl-other", "Other"]],
@@ -256,11 +261,26 @@ function pack(id, jobTypes, ready) {
   });
 }
 
+function measurePack(data, jobTypes) {
+  return Object.freeze({
+    id: data.id,
+    label: tradeLabel(data.id),
+    ready: true,
+    wizard: "measure",
+    soon: "",
+    jobTypes: Object.freeze(jobTypes.map(row => Object.freeze([...row]))),
+    templates: Object.freeze(data.packages.map(row => Object.freeze({ id: row.id, label: row.label }))),
+    lineItems: Object.freeze(data.lines.map(row => Object.freeze({ id: row.id, label: row.label, lineType: row.lineType }))),
+    defaultsNote: data.defaultsNote,
+    data,
+  });
+}
+
 export const QUOTE_PACKS = Object.freeze({
   earthworks: pack("earthworks", EARTHWORKS_TYPES, true),
-  landscaping: pack("landscaping", OTHER_TYPES.landscaping, false),
-  concreting: pack("concreting", OTHER_TYPES.concreting, false),
-  fencing: pack("fencing", OTHER_TYPES.fencing, false),
+  landscaping: measurePack(LANDSCAPING, OTHER_TYPES.landscaping),
+  concreting: measurePack(CONCRETING, OTHER_TYPES.concreting),
+  fencing: measurePack(FENCING, OTHER_TYPES.fencing),
   carpentry: pack("carpentry", OTHER_TYPES.carpentry, false),
   tiling: pack("tiling", OTHER_TYPES.tiling, false),
   plumbing: pack("plumbing", OTHER_TYPES.plumbing, false),
@@ -355,36 +375,6 @@ export function normalizeLineType(value, kind) {
   return LINE_TYPE_IDS.includes(value) ? value : lineTypeForKind(kind);
 }
 
-function num(v) {
-  if (v === "" || v == null) return null;
-  const n = Number(v);
-  if (!Number.isFinite(n) || n < 0) return null;
-  return n;
-}
-
-/** Area m², volume m³, linear metre, then waste %. No mix design. */
-export function measureQty({ measure, length, width, depth, wastePct } = {}) {
-  const kind = String(measure || "");
-  let base = null;
-  if (kind === "area") {
-    const a = num(length), b = num(width);
-    if (a == null || b == null) return { ok: false, reason: "Enter length and width in metres." };
-    base = a * b;
-  } else if (kind === "volume") {
-    const a = num(length), b = num(width), c = num(depth);
-    if (a == null || b == null || c == null) return { ok: false, reason: "Enter length, width and depth in metres." };
-    base = a * b * c;
-  } else if (kind === "linear") {
-    const a = num(length);
-    if (a == null) return { ok: false, reason: "Enter the length in metres." };
-    base = a;
-  } else return { ok: false, reason: "Choose area, volume or linear metre." };
-  const waste = num(wastePct);
-  const pct = waste == null ? 0 : Math.min(100, waste);
-  const qty = Math.round(base * (1 + pct / 100) * 1000) / 1000;
-  return { ok: true, qty, base: Math.round(base * 1000) / 1000, wastePct: pct, unit: kind === "linear" ? "m" : kind === "volume" ? "m3" : "m2" };
-}
-
 export const RATE_SAVE_QUOTE = "quote";
 export const RATE_SAVE_COMPANY = "company";
 
@@ -421,7 +411,7 @@ export function companyTradesDoc(companyId, tradeOrList, uid) {
 export function signupTradesHtml(selected = [DEFAULT_TRADE]) {
   const on = new Set(sanitizeTradeList(selected).length ? sanitizeTradeList(selected) : [DEFAULT_TRADE]);
   return `<fieldset class="tradepick"><legend>Trades</legend>
-    <p class="sub">Choose every trade this company does. At least one. Earthworks includes the plant quote wizard. The first ticked trade is the one quotes open on.</p>
+    <p class="sub">Choose every trade this company does. At least one. Earthworks, landscaping, concreting and fencing include a quote pack. The first ticked trade is the one quotes open on.</p>
     ${TRADES.map(t => `<label class="ck"><input type="checkbox" name="trades" value="${esc(t.id)}"${on.has(t.id) ? " checked" : ""}> ${esc(t.label)}${quotePack(t.id) && quotePack(t.id).ready ? "" : " <span class=\"sub\">quote pack coming soon</span>"}</label>`).join("")}
   </fieldset>`;
 }
@@ -457,9 +447,9 @@ export function titlesEditorHtml(titles, { canEdit = false } = {}) {
   </section>`;
 }
 
-function unselectedTradeOptions(selected) {
+function unselectedTradeOptions(selected, { readyOnly = false } = {}) {
   const on = new Set(sanitizeTradeList(selected));
-  return TRADES.filter(t => !on.has(t.id)).map(t => {
+  return TRADES.filter(t => !on.has(t.id) && (!readyOnly || (quotePack(t.id) && quotePack(t.id).ready))).map(t => {
     const row = quotePack(t.id);
     const soon = row && row.ready ? "" : " — quote pack coming soon";
     return `<option value="${esc(t.id)}">${esc(t.label)}${esc(soon)}</option>`;
@@ -467,14 +457,17 @@ function unselectedTradeOptions(selected) {
 }
 
 export function quoteTradeSwitchHtml(setup, focus) {
-  const ids = (setup && setup.enabled) || [DEFAULT_TRADE];
+  const enabled = (setup && setup.enabled) || [DEFAULT_TRADE];
+  const ids = enabled.filter(id => quotePack(id) && quotePack(id).ready);
+  if (!ids.length) {
+    const names = enabled.map(tradeLabel).filter(Boolean).join(", ");
+    return `<p class="sub pad">Quote pack coming soon${names ? ` for ${esc(names)}` : ""}. Job types for the selected trades still show on the job.</p>`;
+  }
   const cur = ids.includes(focus) ? focus : ids[0];
   return `<label class="pad">Quote trade<select id="quotetrade" aria-label="Quote trade">${ids.map(id => {
-    const row = quotePack(id);
-    const soon = row && row.ready ? "" : " — quote pack coming soon";
-    return `<option value="${esc(id)}"${id === cur ? " selected" : ""}>${esc(tradeLabel(id))}${esc(soon)}</option>`;
+    return `<option value="${esc(id)}"${id === cur ? " selected" : ""}>${esc(tradeLabel(id))}</option>`;
   }).join("")}</select></label>
-    <p class="sub pad">Quotes open on ${esc(tradeLabel(ids[0]))}. This switch only changes the quote. Job types on a job include every selected trade.</p>`;
+    <p class="sub pad">Quotes open on ${esc(tradeLabel(ids[0]))}. This switch only changes the quote, and only a ready pack is listed. Job types on a job include every selected trade.</p>`;
 }
 
 export function tradeSettingsHtml(trades, { canEdit = false } = {}) {
@@ -501,7 +494,7 @@ export function tradeSettingsHtml(trades, { canEdit = false } = {}) {
 
 export function tradeToolsHtml(setup, { canEdit = false, focus = "" } = {}) {
   const selected = (setup && setup.enabled) || [DEFAULT_TRADE];
-  const options = unselectedTradeOptions(selected);
+  const options = unselectedTradeOptions(selected, { readyOnly: true });
   const add = canEdit && options ? `<form id="tradeadd" class="jf">
       <label>Use another trade<select name="trade"><option value="">Choose a trade</option>${options}</select></label>
       <button type="submit" class="sm-btn">Add trade</button>
@@ -532,5 +525,5 @@ export function quotePackNote(setup) {
   if (!setup) return "";
   const readyTxt = ready.length ? ready.join(", ") : "none yet";
   const soonTxt = soon.length ? ` ${soon.join(", ")}: quote pack coming soon.` : "";
-  return `<p class="pad sub">Quote pack ready: ${esc(readyTxt)}.${esc(soonTxt)} Earthworks uses the plant wizard and extras. Other packs are titles and job types until their quote pack is added.</p>`;
+  return `<p class="pad sub">Quote pack ready: ${esc(readyTxt)}.${esc(soonTxt)} Earthworks keeps the plant wizard. Landscaping, concreting and fencing price from measurements, and those prices are defaults to review.</p>`;
 }

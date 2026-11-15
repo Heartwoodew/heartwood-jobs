@@ -368,3 +368,14 @@ Order after merge:
 Sign-up stores `companies/{id}.trades` (a list) and `trade` (the first one). A missing list still reads `trade`, and a company with neither reads as earthworks. No backfill. Admins and managers may later update only `trades`. Reimbursement decisions (approve, decline, mark paid) are manager and admin; supervisors are not.
 
 No Stripe, plan, or timesheet change. No destructive backfill. Job titles and extra trades are written only when a company signs up or an admin/manager saves them.
+
+## Quote packs — landscaping, concreting, fencing (not deployed)
+
+Do not deploy from the pull request until it is merged. No rules change in this batch. No production writes.
+
+Order after merge:
+
+1. Deploy hosting only. Service worker `callup-shell-v101-quote-packs`. New modules: `app/features/packs/money.js`, `landscaping.js`, `concreting.js`, `fencing.js`, `form.js`.
+2. Do not deploy rules, functions or storage for this batch. Placeholder rates live in the app shell. A company default is written to the existing quote-rates doc (`packRates`) when someone chooses “Save as company default”.
+
+Another open branch may also bump `app/sw.js` (a crew map). This name is `callup-shell-v101-quote-packs` so the two version strings conflict on purpose and need a manual pick at merge.

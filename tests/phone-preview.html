@@ -32,6 +32,7 @@
   window.HW_TODAY = "2026-11-06";
   window.HW_NOW = Date.parse("2026-11-06T10:00:00+10:00");
   window.HW_PREVIEW_ROLE = q.get("role") || "operator";
+  if (q.get("trade")) window.HW_PREVIEW_TRADES = q.get("trade").split(",").map(s => s.trim()).filter(Boolean);
   if (q.get("open") === "staff") {
     window.HW_PREVIEW_VIEW = "staff";
     window.HW_INVITES = [
