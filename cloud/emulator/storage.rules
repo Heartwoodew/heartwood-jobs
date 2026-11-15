@@ -400,5 +400,10 @@ service firebase.storage {
       allow delete: if signedIn() && callerTenant() == companyId
         && hasProfile() && profile().get("role", "") == "admin";
     }
+    // Pause-retention backups. The Admin SDK writes these before a paused company is deleted.
+    // Clients cannot read or write them.
+    match /pauseBackups/{companyId}/{file} {
+      allow read, write: if false;
+    }
   }
 }

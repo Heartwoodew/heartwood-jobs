@@ -60,6 +60,11 @@ export function signupFormHtml({ friend = false } = {}) {
     <label>Accounts email<span class="sub">Hours spreadsheets are sent here.</span><input name="accountsEmail" type="email" required maxlength="120"></label>
     <label>Hubdoc address<span class="sub">Optional. Must end in @app.hubdoc.com.</span><input name="hubdocAddress" maxlength="120" placeholder="name@app.hubdoc.com"></label>
     ${logoFieldHtml({}, { signup: true })}
+    ${friend ? "" : `<fieldset class="cardopt">
+      <legend>Card details, optional</legend>
+      <p class="sub">You won't be charged until the 14-day trial ends. Skip this and you can add a card later in Settings.</p>
+      <label class="ck"><input type="checkbox" name="addCard"> Add a card now</label>
+    </fieldset>`}
     <button class="big primary" type="submit">Create company</button>
     <button class="big ghost" type="button" id="signupback">Back to sign in</button>
     <p id="signuperr" class="err"></p>
@@ -95,7 +100,7 @@ function billingCard(org, canEdit) {
   if (!canEdit || !org || org.companyId === "heartwood" || org.isTest || org.plan === "friend") return "";
   const status = (org.billing && org.billing.status) || "not-configured";
   const subscribed = !!(org.billing && org.billing.stripeCustomerId);
-  const label = status === "active" ? "Active" : status === "past_due" ? "Past due" : status === "canceled" ? "Canceled" : "Not set up";
+  const label = status === "active" ? "Active" : status === "trialing" ? "Trialing" : status === "past_due" ? "Past due" : status === "canceled" ? "Canceled" : "Not set up";
   return `<div class="card" id="billingcard">
     <h2>Billing</h2>
     <p class="sub">The trial is 14 days and does not ask for a card. CallUp is A$20 a month including 1 person, plus A$5 a month for each extra staff member. GST is added at checkout.</p>
@@ -104,6 +109,41 @@ function billingCard(org, canEdit) {
       ? `<button type="button" class="primary" id="billportal">Manage billing</button>`
       : `<button type="button" class="primary" id="billsub">Subscribe</button>`}
   </div>`;
+}
+
+function dayWord(n) {
+  return `${n} ${n === 1 ? "day" : "days"}`;
+}
+
+// Small admin reminder from day one. Last 3 days use the shorter line. Dismiss is for this session only.
+export function trialBannerHtml(access = {}) {
+  const n = access.daysLeft || 1;
+  const text = access.remind ? `Trial ends in ${dayWord(n)}:` : `${dayWord(n)} left in your free trial.`;
+  const button = access.remind ? "Subscribe" : "Subscribe now";
+  return `<div class="trial-banner" id="trialbanner" role="status"><span>${esc(text)}</span> <button type="button" class="sm-btn" id="trialsub">${button}</button> <button type="button" class="sm-btn" id="trialdismiss">Dismiss</button></div>`;
+}
+
+export function pausedAdminHtml(access = {}) {
+  const until = access.deleteAt
+    ? `Your data is kept until ${when(access.deleteAt)}. Subscribe before then and everything comes back.`
+    : "Subscribe to restore this company.";
+  return `<form class="card login" id="paused">
+    <h2>Your free trial has ended</h2>
+    <p>This account is paused. CallUp is A$20 a month including 1 person, plus A$5 a month for each extra staff member. GST is added at checkout.</p>
+    <p>${esc(until)}</p>
+    ${access.manageBilling
+      ? `<button class="big primary" type="button" id="billportal">Manage billing</button>`
+      : `<button class="big primary" type="button" id="billsub">Subscribe</button>`}
+    <button class="big ghost" type="button" id="pausedout">Sign out</button>
+  </form>`;
+}
+
+export function pausedStaffHtml() {
+  return `<form class="card login" id="paused">
+    <h2>Account paused</h2>
+    <p>This company's account is paused. Ask your admin to subscribe.</p>
+    <button class="big ghost" type="button" id="pausedout">Sign out</button>
+  </form>`;
 }
 
 function badge(row) {

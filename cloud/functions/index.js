@@ -23,7 +23,9 @@
  * An environment change cannot turn it back on. See helper/DEPLOY.md.
  *
  * Phone notifications live in push-schedule.js: chatMessagePush, dailyJobPush
- * (06:00 Australia/Brisbane) and dailyJobChangePush. Retention is not scheduled.
+ * (06:00 Australia/Brisbane) and dailyJobChangePush. Photo retention is not scheduled.
+ * pauseRetentionSweep (03:00 Australia/Brisbane) logs paused companies it would delete.
+ * It does not delete anything unless PAUSE_DELETE_DRY_RUN=false.
  */
 import { onDocumentCreated, onDocumentWritten } from "firebase-functions/v2/firestore";
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
@@ -58,6 +60,7 @@ import {
   companiesTouchedByUser,
   mergeBilling,
 } from "./billing/stripe-billing.js";
+export { pauseRetentionSweep } from "./pause-retention.js";
 
 const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
 // Resend API key for staff invite email. Always declared so a deploy binds it even if
@@ -397,10 +400,22 @@ async function testStripe() {
 }
 
 function billingFailure(result) {
+  if (result && result.reason === "stripe-not-configured") {
+    throw new HttpsError("failed-precondition", "Card setup isn't available yet, you can add it later in Settings");
+  }
   const code = result && (result.code === "unauthenticated" || result.code === "permission-denied" || result.code === "not-found")
     ? result.code
     : "failed-precondition";
   throw new HttpsError(code, (result && result.reason) || "billing-failed");
+}
+
+async function stripeClient() {
+  try {
+    return await testStripe();
+  } catch (e) {
+    console.warn("stripe not configured", e && e.message);
+    return null;
+  }
 }
 
 export const createBillingCheckout = onCall(
@@ -412,8 +427,9 @@ export const createBillingCheckout = onCall(
       companyId: String(request.data?.companyId || ""),
       origin: request.data?.origin,
       getContext: billingContext,
-      stripe: await testStripe(),
+      stripe: await stripeClient(),
       prices: currentPrices(),
+      preserveTrial: request.data?.preserveTrial === true,
     });
     if (!result.ok) billingFailure(result);
     return { url: result.url };

@@ -47,6 +47,35 @@ service cloud.firestore {
           ? data.tenantId
           : "heartwood");
     }
+    // Paused: the trial has ended and the company is not paying. One company lookup.
+    // Heartwood returns before the lookup, so Heartwood rules stay under the expression limit.
+    // A missing company document is not paused (legacy Heartwood data and tests). isTest is
+    // checked before the other fields so a test company does not pay for the rest.
+    // Billing writes from the webhook use the Admin SDK and bypass these rules.
+    function companyRecordOpen(data) {
+      return data.get("isTest", false) == true || companyBillingOpen(data);
+    }
+    function companyBillingOpen(data) {
+      let raw = data.get("billing", null);
+      let status = raw is map ? raw.get("status", "") : "";
+      let plan = data.get("plan", "");
+      let trialEnd = data.get("trialEndsAt", null);
+      let friendEnd = data.get("friendEndsAt", null);
+      let trialOver = trialEnd is timestamp && !(trialEnd > request.time);
+      let friendOver = friendEnd is timestamp && !(friendEnd > request.time);
+      // Pause only when a trial or friend end is actually in the past. A missing end (older docs) stays open.
+      return status == "active" || status == "trialing"
+        || (plan == "paid" && status != "past_due" && status != "canceled")
+        || (plan == "friend" && !friendOver)
+        || (plan != "friend" && plan != "paid" && !trialOver && data.get("status", "active") == "active");
+    }
+    function companyNotPaused(companyId) {
+      let path = /databases/$(database)/documents/companies/$(companyId);
+      return !exists(path) || companyRecordOpen(get(path).data);
+    }
+    function companyOpen(companyId) {
+      return companyId == "heartwood" || companyNotPaused(companyId);
+    }
     function sessionPath() { return /databases/$(database)/documents/platformSessions/$(request.auth.uid); }
     function sessionCompany() {
       let id = platformOwner() && exists(sessionPath()) ? get(sessionPath()).data.get("companyId", "") : "";
@@ -348,8 +377,10 @@ service cloud.firestore {
 
 
     function companyOffice() {
-      return callerCompany() != "" && callerCompany() != "heartwood" && hasProfile()
-        && (profile().role == "admin" || profile().role == "supervisor" || profile().role == "manager");
+      let id = callerCompany();
+      return id != "" && id != "heartwood" && hasProfile()
+        && (profile().role == "admin" || profile().role == "supervisor" || profile().role == "manager")
+        && companyNotPaused(id);
     }
     function heartwoodManager() {
       return signedIn() && hasProfile() && profile().get("role", "") == "manager" && callerCompany() == "heartwood";
@@ -364,12 +395,13 @@ service cloud.firestore {
         && callerCompany() == "heartwood";
     }
     function companyStaff() {
-      return callerCompany() != "" && callerCompany() != "heartwood" && hasProfile();
+      let id = callerCompany();
+      return id != "" && id != "heartwood" && hasProfile() && companyNotPaused(id);
     }
     // Quote revisions. One user read, no callerCompany(), so it stays under the rules expression limit.
     function revisionStaff(companyId) {
       let path = /databases/$(database)/documents/users/$(request.auth.uid);
-      return signedIn() && companyId is string && (
+      return signedIn() && companyId is string && (companyId == "heartwood" || companyNotPaused(companyId)) && (
         (request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "38SU5waAy4f9UI9N6JTqDMaYpQg2", "R7t41e54Ykcdk9WPdVZnDd697iI2"] && companyId == "heartwood")
         || (exists(path)
           && (get(path).data.get("role", "") in ["supervisor", "manager", "admin"])
@@ -414,7 +446,7 @@ service cloud.firestore {
       return actor.ok && company is string && (
         (actor.listed && company == "heartwood")
         || (actor.company == company && company == "heartwood" && actor.role in ["manager", "supervisor"])
-        || (actor.company == company && company != "heartwood" && company != "" && actor.role in ["admin", "manager", "supervisor"])
+        || (actor.company == company && company != "heartwood" && company != "" && actor.role in ["admin", "manager", "supervisor"] && companyNotPaused(company))
       );
     }
     // Admin and manager may change guided prices. A supervisor must leave priceOverrides as they were.
@@ -534,6 +566,7 @@ service cloud.firestore {
       allow get: if signedIn() && request.auth.uid == uid;
       // Skill and licence tags are informational. The person can change only that list.
       allow update: if signedIn() && request.auth.uid == uid
+        && companyOpen(docCompany(resource.data))
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["skills"])
         && skillsOk(request.resource.data.skills);
       // Admin or manager sets the job title and permission level, up to their own level. Not an admin, unless the editor is an admin.
@@ -586,7 +619,7 @@ service cloud.firestore {
         && (!df.affectedKeys().hasAny(["quote"]) || jobQuoteNoPrices(request.resource.data));
     }
     match /jobs/{jobId} {
-      allow read: if isSync() || (signedIn() && isAssigned(resource.data) && isOperator());
+      allow read: if isSync() || (signedIn() && isAssigned(resource.data) && isOperator() && (resource.data.get("companyId", "heartwood") == "heartwood" || companyNotPaused(resource.data.get("companyId", ""))));
       allow get: if isAdmin() && docCompany(resource.data) == "heartwood";
       allow list: if isAdmin() && resource.data.companyId == "heartwood";
       // Managers (crew map) and supervisors (capacity) read Heartwood jobs through heartwoodOfficeRead() below.
@@ -791,7 +824,7 @@ service cloud.firestore {
     match /timesheets/{tid} {
       function mine() { return signedIn() && tid.matches(request.auth.uid + "_[0-9]{4}-[0-9]{2}-[0-9]{2}"); }
       function noSentChange() { return !request.resource.data.diff(resource == null ? {} : resource.data).affectedKeys().hasAny(["sent", "sentAt", "sentBy"]); }
-      allow read: if isSync() || mine();
+      allow read: if isSync() || (mine() && (resource == null || companyOpen(resource.data.get("companyId", "heartwood"))));
       allow get: if isOwner() && docCompany(resource.data) == "heartwood";
       allow list: if isOwner() && resource.data.companyId == "heartwood";
       // Workers write their own sheet through the TIMESHEET RULES block below (tsWorkerCreate / tsWorkerUpdate), which
@@ -814,7 +847,8 @@ service cloud.firestore {
     function incStaffOf(c) {
       return signedIn() && c != "heartwood"
         && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && incProfileCompany() == c;
+        && incProfileCompany() == c
+        && companyNotPaused(c);
     }
     // True for Heartwood staff and the box (no profile); false for staff of any other company.
     function notOtherCompany() {
@@ -1020,7 +1054,7 @@ service cloud.firestore {
     }
     function chatJobId(threadId) { return threadId[4:threadId.size()]; }
     function chatCanAccess(tenantId, threadId) {
-      return chatThreadOk(threadId) && (
+      return companyOpen(tenantId) && chatThreadOk(threadId) && (
         threadId == "staff"
           ? chatMember(tenantId)
           : chatCanSeeJob(tenantId, chatJobId(threadId))
@@ -2013,7 +2047,7 @@ service cloud.firestore {
       allow list: if tsHeartwoodAdmin() && resource.data.companyId == "heartwood";
       allow read: if signedIn() && (
         (resource == null && id.matches('^' + request.auth.uid + '_[0-9]{4}-[0-9]{2}-[0-9]{2}$'))
-        || (resource != null && resource.data.uid == request.auth.uid)
+        || (resource != null && resource.data.uid == request.auth.uid && companyOpen(resource.data.get("companyId", "heartwood")))
       );
       allow get: if resource.data.get("companyId", "heartwood") != "heartwood" && incAdminOf(resource.data.companyId);
       allow list: if resource.data.companyId != "heartwood" && incAdminOf(resource.data.companyId);
@@ -2396,10 +2430,10 @@ service cloud.firestore {
       allow delete: if signedIn() && request.auth.uid == id && callerCompany() == "heartwood" && docCompany(resource.data) == "heartwood";
     }
     match /companies/{c}/liveLocations/{id} {
-      allow get: if llOffice() && c != "heartwood" && callerCompany() == c && docCompany(resource.data) == c;
-      allow list: if llOffice() && c != "heartwood" && callerCompany() == c && resource.data.companyId == c;
-      allow create, update: if c != "heartwood" && callerCompany() == c && request.resource.data.companyId == c && llBody(request.resource.data, id);
-      allow delete: if signedIn() && request.auth.uid == id && c != "heartwood" && callerCompany() == c && docCompany(resource.data) == c;
+      allow get: if llOffice() && c != "heartwood" && callerCompany() == c && docCompany(resource.data) == c && companyNotPaused(c);
+      allow list: if llOffice() && c != "heartwood" && callerCompany() == c && resource.data.companyId == c && companyNotPaused(c);
+      allow create, update: if c != "heartwood" && callerCompany() == c && request.resource.data.companyId == c && llBody(request.resource.data, id) && companyNotPaused(c);
+      allow delete: if signedIn() && request.auth.uid == id && c != "heartwood" && callerCompany() == c && docCompany(resource.data) == c && companyNotPaused(c);
     }
 // END LIVE LOCATION RULES
 
