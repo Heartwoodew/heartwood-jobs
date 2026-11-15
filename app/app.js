@@ -35,13 +35,13 @@ import {
 import { saveGuard, settleOrQueue } from "./features/pending-write.js";
 import { PRODUCT_NAME, POWERED_BY, orgSettings, saveOrgSettings, setActiveCompany } from "./org-settings.js";
 import {
-  buildCompanyCreate, buildFriendCompany, buildTestCompany, companyDetailPatch, companyIdFromName, demoBundle,
+  buildCompanyCreate, buildFriendCompany, buildTestCompany, companyAccess, companyDetailPatch, companyIdFromName, demoBundle,
   friendCodeOk, friendInviteLink, hoursBrand, isPlatformOwner, newFriendCode,
-  ownerProfile, scopeRecord, trialEnd, validateCompanyInput, masterRow,
+  ownerProfile, scopeRecord, trialEnd, validateCompanyInput, masterRow, CARD_SETUP_LATER,
   builderSignoff, clientDocId, companyClientNames, companyJobPrefix, companyMailbox, companyStdClients, timesheetMailParts,
   supervisorsPath, docCompanyId,
 } from "./features/company.js";
-import { companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, signupFormHtml } from "./features/company-ui.js";
+import { companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, pausedAdminHtml, pausedStaffHtml, signupFormHtml, trialBannerHtml } from "./features/company-ui.js";
 import {
   addTitle, companyTradesDoc, jobTypeMap, normalizeTrade, readTradeList, removeTitle, renameTitle, resolveCompanySetup,
   sanitizeSkills, sanitizeTitles, sanitizeTradeList, setTitleLevel, skillsEditorHtml,
@@ -184,11 +184,16 @@ onAuthStateChanged(auth, async user => {
     if (cid) me.testCompanyId = cid;
   }
   await loadCompanyBrand();
+  $("#who").textContent = `${me.name} · ${me.role}`; $("#logout").classList.remove("hidden");
+  if (ui.companyAccess && ui.companyAccess.paused) {
+    renderAccountPaused();
+    return;
+  }
+  showBillingNote();
   ui.staffLogins = [];
   ui.staffLoginsErr = "";
   CLI = null; refreshClientLists();
   if (myCompanyId() !== "heartwood" && (me.role === "admin" || me.role === "manager" || me.role === "supervisor")) loadClients().catch(() => {});
-  $("#who").textContent = `${me.name} · ${me.role}`; $("#logout").classList.remove("hidden");
   watchOwnClock();
   CHAT.start();
   PUSH.start();
@@ -340,10 +345,17 @@ async function saveTradeSetup(next) {
 async function loadCompanyBrand() {
   const id = myCompanyId();
   const snap = await getDoc(doc(db, "companies", id)).catch(() => null);
-  const company = snap && snap.exists() ? { ...snap.data(), companyId: id } : { companyId: id, name: id === "heartwood" ? "" : "Your company" };
-  if (snap && snap.exists()) setActiveCompany(company);
-  else setActiveCompany(id === "heartwood" ? null : company);
-  await loadTradeSetup(snap && snap.exists() ? company : { companyId: id });
+  const loaded = snap && snap.exists() ? { ...snap.data(), companyId: id } : null;
+  ui.companyRecord = loaded;
+  const fallback = { companyId: id, name: id === "heartwood" ? "" : "Your company" };
+  if (loaded) setActiveCompany(loaded);
+  else setActiveCompany(id === "heartwood" ? null : fallback);
+  ui.companyAccess = companyAccess(loaded, id);
+  if (ui.companyAccess.paused) {
+    paintBrand();
+    return;
+  }
+  await loadTradeSetup(loaded || { companyId: id });
   // Depot for quotes and run sheets: the company's address from settings (Heartwood: Chuwar unless changed there).
   const depot = orgSettings().address;
   setRouteDepot(depot, { heartwood: id === "heartwood" }); setDefaultDepot(depot, { heartwood: id === "heartwood" });
@@ -490,14 +502,57 @@ function renderInviteSignedIn() {
   </form>`;
   $("#invitesignout").onclick = () => signOut(auth);
 }
-async function openBilling(name) {
+async function openBilling(name, extra = {}) {
   try {
-    const result = await callAuthed(name, { companyId: myCompanyId(), origin: location.origin });
+    const result = await callAuthed(name, { companyId: myCompanyId(), origin: location.origin, ...extra });
     if (result.url) location.assign(result.url);
     else toast("Billing did not return a page.");
   } catch (e) {
-    toast(e.message || "Billing is not available.");
+    toast((e && e.message) || "Billing is not available.");
   }
+}
+function billingExtra() {
+  return ui.companyAccess && ui.companyAccess.trialActive ? { preserveTrial: true } : {};
+}
+function renderAccountPaused() {
+  paintBrand();
+  $("#who").textContent = `${me.name} · ${me.role}`;
+  $("#logout").classList.remove("hidden");
+  $("#app").innerHTML = me.role === "admin" ? pausedAdminHtml(ui.companyAccess || {}) : pausedStaffHtml();
+  const out = $("#pausedout");
+  if (out) out.onclick = () => signOut(auth);
+  const sub = $("#billsub");
+  if (sub) sub.onclick = () => openBilling("createBillingCheckout");
+  const portal = $("#billportal");
+  if (portal) portal.onclick = () => openBilling("createBillingPortal");
+}
+function trialBannerNow() {
+  const access = ui.companyAccess;
+  if (!me || me.role !== "admin" || !access || access.paused || !access.trialActive || access.paying) return "";
+  const key = access.remind ? `callup.trialRemind.${myCompanyId()}` : `callup.trialBanner.${myCompanyId()}`;
+  try { if (sessionStorage.getItem(key) === "1") return ""; } catch { /* private mode: the banner stays */ }
+  return trialBannerHtml(access);
+}
+function bindTrialBanner(root) {
+  const bar = root && root.querySelector && root.querySelector("#trialbanner");
+  if (!bar) return;
+  const dismiss = root.querySelector("#trialdismiss");
+  if (dismiss) dismiss.onclick = () => {
+    const access = ui.companyAccess || {};
+    const key = access.remind ? `callup.trialRemind.${myCompanyId()}` : `callup.trialBanner.${myCompanyId()}`;
+    try { sessionStorage.setItem(key, "1"); } catch { /* the banner is gone for this paint either way */ }
+    bar.remove();
+  };
+  const sub = root.querySelector("#trialsub");
+  if (sub) sub.onclick = () => openBilling("createBillingCheckout", { preserveTrial: true });
+}
+function showBillingNote() {
+  let note = "";
+  try {
+    note = sessionStorage.getItem("callup.billingNote") || "";
+    sessionStorage.removeItem("callup.billingNote");
+  } catch { note = ""; }
+  if (note) toast(note);
 }
 async function callAuthed(name, data) {
   const projectId = useEmulator ? "demo-heartwood" : firebaseConfig.projectId;
@@ -767,6 +822,17 @@ function renderSignup(friendCode = "") {
         } catch { /* company is already created; they can add the logo in settings */ }
       }
       signingUp = false;
+      const addCard = !friendCodeOk(friendCode) && f.addCard && f.addCard.checked;
+      if (addCard) {
+        try {
+          const result = await callAuthed("createBillingCheckout", { companyId, origin: location.origin, preserveTrial: true });
+          if (result && result.url) { location.assign(result.url); return; }
+          try { sessionStorage.setItem("callup.billingNote", CARD_SETUP_LATER); } catch { /* continue into the app */ }
+        } catch (err) {
+          const msg = (err && err.message) || "";
+          try { sessionStorage.setItem("callup.billingNote", /Card setup isn't available yet/.test(msg) ? msg : CARD_SETUP_LATER); } catch { /* continue into the app */ }
+        }
+      }
       location.reload();
     } catch (e) {
       // Keep signingUp set while the half-made login is removed, so the auth listener does not
@@ -851,7 +917,7 @@ function bindSettings(A) {
   if (rb) rb.onclick = () => QG && QG.openRatesEditor();
   const sub = A.querySelector("#billsub");
   const portal = A.querySelector("#billportal");
-  if (sub) sub.onclick = () => openBilling("createBillingCheckout");
+  if (sub) sub.onclick = () => openBilling("createBillingCheckout", billingExtra());
   if (portal) portal.onclick = () => openBilling("createBillingPortal");
   const form = A.querySelector("#orgform");
   if (!form || form.querySelector("[disabled]")) { loadOrgLogos(A); return; }
@@ -1133,7 +1199,7 @@ function shell(inner) {
       <div class="sm-gi">${ks.map(item).join("")}</div></div>`; };
   return `<div class="sm-layout ${ui.navOpen ? "navopen" : ""}"><div class="sm-burgerbar"><button class="sm-burger" id="burger" aria-label="Menu">☰</button><b>${esc(cur ? (NAV_LBL[cur[0]] || cur[2]) : "")}</b></div>
     <nav class="sm-side">${NAV_TOP.map(item).join("")}${NAV_GROUPS.map(grp).join("")}${NAV_FOOT.map(item).join("")}</nav>
-    <section class="sm-main">${PUSH.bannerHtml()}${inner}</section></div>`;
+    <section class="sm-main">${trialBannerNow()}${PUSH.bannerHtml()}${inner}</section></div>`;
 }
 // ---- Mixed work: a job whose description lines are different task types (spoil vs backslab vs waterproofing vs clean)
 const TASK_RX = [["waterproof", /water ?proof/i], ["spoil", /spoil|soil removal/i], ["backslab", /back ?slab|back ?blade|slab clean|level site/i], ["clean", /\b(site |final )?clean\b/i]];
@@ -3589,7 +3655,7 @@ function renderAdmin() {
   const staffHtml = ui.view === "staff" ? staffPageHtml() : null;
   paintBrand();
   $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "master" ? masterView() : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "capacity" ? capacityScreen() : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : ui.view === "crew" ? crewMapScreen() : quotesHtml != null ? quotesHtml : jobsView(all));
-  const A = $("#app"); inboxBadge();
+  const A = $("#app"); inboxBadge(); bindTrialBanner(A);
   CHAT.watch([...(jobs || []), ...(ui.undated || [])]);
   if (ui.view === "chat") CHAT.mount(A);
   if (ui.view === "invoices") bindInvoices(A);

@@ -70,7 +70,7 @@ export function setActiveCompany(company) {
     plan: typeof company.plan === "string" ? company.plan : "",
     billing: billing ? {
       provider: billing.provider === "stripe" ? "stripe" : null,
-      status: ["active", "past_due", "canceled", "not-configured"].includes(billing.status) ? billing.status : "not-configured",
+      status: ["active", "trialing", "past_due", "canceled", "not-configured"].includes(billing.status) ? billing.status : "not-configured",
       stripeCustomerId: typeof billing.stripeCustomerId === "string" ? billing.stripeCustomerId : null,
       stripeSubscriptionId: typeof billing.stripeSubscriptionId === "string" ? billing.stripeSubscriptionId : null,
     } : null,
