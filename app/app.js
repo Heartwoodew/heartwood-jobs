@@ -42,7 +42,7 @@ import { companySettingsHtml, failureText as companyFailure, masterDetailHtml, m
 import {
   addTitle, companyTradesDoc, jobTypeMap, normalizeTrade, readTradeList, removeTitle, renameTitle, resolveCompanySetup,
   sanitizeSkills, sanitizeTitles, sanitizeTradeList, setTitleLevel, skillsEditorHtml,
-  titlesAfterTradeChange, titlesEditorHtml, tradeLabel,
+  titlesAfterTradeChange, titlesEditorHtml, tradeLabel, quotePack,
 } from "./features/trades.js";
 import { acceptLogoValue, compressLogo, isLogoStoragePath, logoFailureText, logoFileOk, logoUploadPlan } from "./features/company-logo.js";
 import { exportAllowed, hoursCsv, invoiceCsv, jobsCsv, reimbursementsCsv } from "./features/company-exports.js";
@@ -280,6 +280,10 @@ function applyJobTypes(setup) {
 }
 async function loadTradeSetup(company) {
   const id = (company && company.companyId) || myCompanyId();
+  if (typeof window !== "undefined" && Array.isArray(window.HW_PREVIEW_TRADES) && window.HW_PREVIEW_TRADES.length) {
+    applyJobTypes(resolveCompanySetup({ companyId: id, trades: window.HW_PREVIEW_TRADES }, null));
+    return;
+  }
   const snap = await getDoc(doc(db, "companyTrades", id)).catch(() => null);
   const stored = snap && snap.exists() ? snap.data() : null;
   applyJobTypes(resolveCompanySetup(company || { companyId: id }, stored));
@@ -791,7 +795,7 @@ function bindTradeList(A) {
     if (cur.includes(id)) { toast(tradeLabel(id) + " is already on."); return; }
     try {
       await persistTrades([...cur, id]);
-      toast(tradeLabel(id) + (id === "earthworks" ? " added. Quote pack ready." : " added. Quote pack coming soon."));
+      toast(tradeLabel(id) + (quotePack(id) && quotePack(id).ready ? " added. Quote pack ready." : " added. Quote pack coming soon."));
       redrawAfterSave();
     } catch { toast("Couldn't update trades."); }
   });
@@ -5681,7 +5685,7 @@ QG = installQuotes({
     if (cur.includes(id)) { toast(tradeLabel(id) + " is already on."); return; }
     try {
       await persistTrades([...cur, id]);
-      toast(tradeLabel(id) + (id === "earthworks" ? " added. Quote pack ready." : " added. Quote pack coming soon."));
+      toast(tradeLabel(id) + (quotePack(id) && quotePack(id).ready ? " added. Quote pack ready." : " added. Quote pack coming soon."));
       redrawAfterSave();
     } catch { toast("Couldn't update trades."); }
   },

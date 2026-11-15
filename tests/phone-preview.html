@@ -43,6 +43,7 @@
       j1: { lat: -27.608, lng: 152.868, query: "Lot 95 · 21 Lumen Street, Redbank Plains QLD 4301" },
     };
   }
+  if (q.get("trade")) window.HW_PREVIEW_TRADES = q.get("trade").split(",").map(s => s.trim()).filter(Boolean);
   if (q.get("open") === "staff") {
     window.HW_PREVIEW_VIEW = "staff";
     window.HW_INVITES = [
