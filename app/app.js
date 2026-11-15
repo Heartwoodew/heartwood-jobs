@@ -9,7 +9,7 @@ import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager
 import { getStorage, ref as storageRef, uploadBytes, uploadBytesResumable, deleteObject, connectStorageEmulator, listAll, getMetadata, getBlob }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
 import { firebaseConfig, useEmulator, vapidKey } from "./firebase-config.js";
-import { installQuotes, adminViewRouter, setDefaultDepot, noDollars, setQuoteTradeSetup, setQuoteFocus } from "./features/quotes.js";
+import { installQuotes, adminViewRouter, quoteRatesSettingsBlurb, setDefaultDepot, noDollars, setQuoteTradeSetup, setQuoteFocus } from "./features/quotes.js";
 import { capacityViewHtml, shiftWeek } from "./features/capacity.js";
 import { JOB_MONEY_COLLECTION, jobMoneyDoc, mergeJobMoney, splitJobMoney } from "./features/job-money.js";
 import { OPEN_STATUSES, staleOpenJobs, mergeJobLists, parseHoursInput } from "./features/job-window.js";
@@ -857,11 +857,11 @@ function renderSignup(friendCode = "") {
 }
 function settingsView() {
   const org = orgSettings();
+  const trades = (ui.tradeSetup && ui.tradeSetup.enabled) || readTradeList(org, null);
   // Other companies edit their own quote rates and depot here (Heartwood keeps the Quotes-page button only).
   const rates = me && me.role === "admin" && myCompanyId() !== "heartwood"
-    ? `<section class="pad setrates"><h3>Quote rates</h3><p class="sub">Your plant, labour, travel and tip rates for quotes. They start blank and are only used by your company.</p><button type="button" id="setrates" class="sm-btn">Edit quote rates</button></section>`
+    ? `<section class="pad setrates"><h3>Quote rates</h3><p class="sub">${esc(quoteRatesSettingsBlurb(trades))}</p><button type="button" id="setrates" class="sm-btn">Edit quote rates</button></section>`
     : "";
-  const trades = (ui.tradeSetup && ui.tradeSetup.enabled) || readTradeList(org, null);
   const perfSet = canEditPerformanceSettings(me) ? performanceSettingsHtml(ui.perfSettings || { weights: DEFAULT_WEIGHTS }, { take5On: ui.take5On !== false }) : "";
   return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin"), trades, canEditTrades: canEditTitles() }) + rates + perfSet + PUSH.panelHtml()
     + dispatchSettingsHtml(dispatchSettingsNow(), { canEdit: canEditTitles() });
