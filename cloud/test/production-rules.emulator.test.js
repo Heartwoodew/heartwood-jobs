@@ -127,6 +127,26 @@ test("self-signup: a new owner creates the company and their own admin profile, 
   await assertFails(setDoc(doc(sneaky, "users/sneaky"), { name: "S", email: "s@x.test", role: "admin", companyId: "heartwood", tenantId: "heartwood" }));
 });
 
+// 15 Nov 2026: PR 71 made the signup screen add jobTitle/jobTitleId to the owner profile, and
+// ownerProfileCreate rejected it, leaving company docs with no owner. This mirrors app/app.js renderSignup exactly.
+test("self-signup with several trades: the app's exact owner profile (jobTitle, jobTitleId) is accepted", async () => {
+  for (const [uid, token] of [["echoowner", { email: "owner@echo.test" }],
+    ["foxowner", { email: "owner@fox.test", email_verified: true, firebase: { sign_in_provider: "google.com" } }]]) {
+    const owner = env.authenticatedContext(uid, token).firestore();
+    const companyId = uid.replace("owner", "") + "-diggers-zz02";
+    const trades = ["landscaping", "earthworks", "concreting", "fencing"];
+    await assertSucceeds(setDoc(doc(owner, "companies", companyId), { ...buildCompanyCreate({ ...signupInput, accountsEmail: "someone@hotmail.com" }, {
+      companyId, ownerUid: uid, signedUpAt: serverTimestamp(), trialEndsAt: Timestamp.fromDate(trialEnd(new Date())), lastActivityAt: serverTimestamp(),
+    }), trades, trade: trades[0] }));
+    const profile = { ...ownerProfile(signupInput, companyId, "Owner"), email: token.email, jobTitle: "Admin", jobTitleId: trades[0] + ":admin" };
+    // Only the owner label is allowed at signup, not any other title.
+    await assertFails(setDoc(doc(owner, "users", uid), { ...profile, jobTitle: "Owner" }));
+    await assertFails(setDoc(doc(owner, "users", uid), { ...profile, jobTitleId: "landscaping:labourer" }));
+    await assertFails(setDoc(doc(owner, "users", uid), { ...profile, jobTitleId: "bogus:admin" }));
+    await assertSucceeds(setDoc(doc(owner, "users", uid), profile));
+  }
+});
+
 test("a second company's admin can create a staff invite (the app adds companyId)", async () => {
   const bravo = db(BRAVO);
   const draft = buildInviteDraft({ name: "Bob New", email: "bob.new@bravo.test", role: "operator", createdBy: BRAVO, now: new Date(), token: newInviteToken(), tenantId: "bravo" });
