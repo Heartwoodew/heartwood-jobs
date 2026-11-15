@@ -92,13 +92,16 @@ test("prestart status reads today's checklist and stays quiet when the feature i
   assert.equal(done.by, "Riley");
 });
 
-test("timesheet code never watches the device location", () => {
+test("timesheet stamps stay one fix; live sharing watches only while the shift is open", () => {
   const app = readFileSync(new URL("../../app/app.js", import.meta.url), "utf8");
   const feature = readFileSync(new URL("../../app/features/timesheet.js", import.meta.url), "utf8");
-  const combined = app + feature;
-  assert.equal((combined.match(/watchPosition/g) || []).length, 0);
+  assert.equal((feature.match(/watchPosition/g) || []).length, 0);
   assert.equal((feature.match(/\.getCurrentPosition\(/g) || []).length, 1);
   assert.match(feature, /maximumAge: 0/);
+  assert.equal((app.match(/\.watchPosition\(/g) || []).length, 1);
+  assert.match(app, /if \(document\.hidden\) disarmShareWatch/);
+  assert.match(app, /if \(kind === "off"\) liveShareStop\(true\)/);
+  assert.doesNotMatch(app + feature, /locationHistory|liveTrail/);
 });
 
 test("timesheet rules fragment matches the emulator block and does not replace other rules", () => {
