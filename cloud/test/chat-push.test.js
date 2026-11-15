@@ -190,10 +190,12 @@ test("opt-in stays a button press, and iPhone Safari shows the Home Screen hint"
   assert.match(logic, /Mute daily job list/);
   assert.match(logic, /Add to Home Screen to get notifications/);
   assert.match(notify, /Notification\.requestPermission/);
-  assert.match(config, /REPLACE_WITH_WEB_PUSH_CERTIFICATE/);
+  assert.match(config, /export const vapidKey = "BMyCNKMjDvbOQW74GyjS7GlTo-Qe7r203dbshLNIPpuDcaafAuZmq-WSjX7Ptys4ZTXEH1GKy8QhtkNsaD1Zlk8"/);
+  assert.doesNotMatch(config, /vapidKey = "REPLACE_WITH_WEB_PUSH_CERTIFICATE"/);
   assert.match(config, /Web Push certificates/);
   assert.doesNotMatch(config, /BEGIN PRIVATE|-----BEGIN/);
-  assert.match(sw, /callup-shell-v102-phase3-bundle/);
+  assert.equal(vapidReady("BMyCNKMjDvbOQW74GyjS7GlTo-Qe7r203dbshLNIPpuDcaafAuZmq-WSjX7Ptys4ZTXEH1GKy8QhtkNsaD1Zlk8"), true);
+  assert.match(sw, /callup-shell-v103-push-key/);
   assert.match(sw, /notificationclick/);
   assert.match(sw, /visibilityState === "visible"/);
   assert.match(sw, /features\/push\.js/);
