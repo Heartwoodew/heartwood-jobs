@@ -10,6 +10,7 @@ import { getStorage, ref as storageRef, uploadBytes, connectStorageEmulator, lis
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
 import { firebaseConfig, useEmulator } from "./firebase-config.js";
 import { installQuotes, adminViewRouter, setDefaultDepot, noDollars, setQuoteTradeSetup, setQuoteFocus } from "./features/quotes.js";
+import { capacityViewHtml, shiftWeek } from "./features/capacity.js";
 import { JOB_MONEY_COLLECTION, jobMoneyDoc, mergeJobMoney, splitJobMoney } from "./features/job-money.js";
 import { OPEN_STATUSES, staleOpenJobs, mergeJobLists, parseHoursInput } from "./features/job-window.js";
 import { installRouteOrder, orderJobsForRun, runSheetId, geoPatch, setRouteDepot } from "./features/route-order.js";
@@ -200,7 +201,8 @@ onAuthStateChanged(auth, async user => {
       watchInviteMail();
     }, e => { ui.invites = []; ui.invitesErr = e.code || "permission-denied"; if (ui.view === "staff") renderAdmin(); });
     moneyStart(renderAdmin);
-    unsub = () => { u1(); u2(); u3(); u4(); u5(); moneyStop(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; }; swmsSub(); COMP.start(); leaveStart(); claimsStart(); if (me.platformOwner) watchMaster();
+    const stopCap = startCapacityWatch();
+    unsub = () => { u1(); u2(); u3(); u4(); u5(); stopCap(); moneyStop(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; }; swmsSub(); COMP.start(); leaveStart(); claimsStart(); if (me.platformOwner) watchMaster();
     getDocs(companyJobs([where("date", "==", "")])).then(s => { ui.undated = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); addNameOnlyStaff(ui.undated); renderAdmin(); }).catch(e => console.warn("undated", e.code, e.message));
   } else {
     // Operators may only list jobs assigned to them (enforced by firestore.rules).
@@ -217,7 +219,8 @@ onAuthStateChanged(auth, async user => {
       }, e => { ui.invites = []; ui.invitesErr = e.code || "permission-denied"; if ((ui.opTab || "today") === "staff") renderOperator(); })
       : () => {};
     if (canInvite() && window.HW_PREVIEW_VIEW === "staff") ui.opTab = "staff";
-    unsub = () => { u1(); u3(); u4(); moneyStop(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start(); leaveStart(); claimsStart();
+    const stopCap = startCapacityWatch();
+    unsub = () => { u1(); u3(); u4(); stopCap(); moneyStop(); CHAT.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start(); leaveStart(); claimsStart();
   }
 });
 
@@ -896,7 +899,7 @@ function queueOf(j) {
 const jobNo = j => j.sm8JobNo ? j.sm8JobNo : companyJobPrefix(orgSettings()) + "-" + String(j.id || "").slice(-4).toUpperCase();
 const firstLine = s => String(s || "").split(/\n|\. /)[0];
 const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Unscheduled";
-const NAV = [["home", "⌂", "Home"], ["compliance", "🚐", "Compliance"], ["prestart", "☑", "Prestart"], ["chat", "💬", "Chat"], ["dispatch", "▦", "Dispatch Board"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["staff", "👥", "Staff"], ["inbox", "✉", "Inbox", 0, 1],
+const NAV = [["home", "⌂", "Home"], ["compliance", "🚐", "Compliance"], ["prestart", "☑", "Prestart"], ["chat", "💬", "Chat"], ["dispatch", "▦", "Dispatch Board"], ["capacity", "▦", "Capacity"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["staff", "👥", "Staff"], ["inbox", "✉", "Inbox", 0, 1],
   ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["leave", "🌴", "Leave"], ["claims", "🧾", "Reimbursements"], ["reimb", "💵", "Receipt ledger", 0, 1], ["settings", "⚙", "Company"], ["master", "▣", "Master"]];
 ui.view = "home"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
 const PHONE = matchMedia("(max-width:760px)");
@@ -905,12 +908,12 @@ PHONE.addEventListener?.("change", () => { if (me && me.role === "admin") render
 // Grouped side menu: top items, then collapsible groups (open/closed remembered on this device; the group holding the current screen is always open).
 const NAV_TOP = ["home", "chat", "inbox", "clients", "staff", "master"];
 const NAV_FOOT = ["settings"];
-const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "jobs", "unscheduled", "quotes", "completed", "myjobs"]], ["money", "$", "Money", ["invoices", "claims", "reimb", "timesheet", "leave"]], ["safety", "⚠", "Safety", ["safety", "swms", "prestart", "compliance"]]];
+const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "capacity", "jobs", "unscheduled", "quotes", "completed", "myjobs"]], ["money", "$", "Money", ["invoices", "claims", "reimb", "timesheet", "leave"]], ["safety", "⚠", "Safety", ["safety", "swms", "prestart", "compliance"]]];
 const NAV_LBL = { safety: "Incidents" };
 ui.navCol = (() => { try { return JSON.parse(localStorage.getItem("hwNavCol") || "{}"); } catch { return {}; } })();
 function shell(inner) {
   const cur = NAV.find(n => n[0] === ui.view);
-  const item = k => { const x = NAV.find(n => n[0] === k); if (!x || x[3] || (k === "inbox" ? !canImport() : (x[4] && !isOwner())) || (k === "invoices" && (!me || me.role !== "admin")) || (k === "staff" && !canInvite()) || (k === "quotes" && !canQuote()) || (k === "compliance" && !COMP.canSee()) || (k === "prestart" && !COMP.canPrestart())) return "";
+  const item = k => { const x = NAV.find(n => n[0] === k); if (!x || x[3] || (k === "inbox" ? !canImport() : (x[4] && !isOwner())) || (k === "invoices" && (!me || me.role !== "admin")) || (k === "staff" && !canInvite()) || (k === "quotes" && !canQuote()) || (k === "capacity" && !canSeeCapacity()) || (k === "compliance" && !COMP.canSee()) || (k === "prestart" && !COMP.canPrestart())) return "";
     const badge = k === "chat" ? CHAT.badge("staff") : "";
     if (k === "master" && !(me && me.platformOwner)) return "";
     return `<button class="sm-nav ${ui.view === k ? "on" : ""}" data-view="${k}" title="${esc(NAV_LBL[k] || x[2])}"><span class="ic">${x[1]}</span><span class="lbl">${esc(NAV_LBL[k] || x[2])}</span>${badge}</button>`; };
@@ -1422,6 +1425,7 @@ const canCompanyExport = () => exportAllowed({ role: me && me.role, companyId: m
 const usesSm8Sync = () => myCompanyId() === "heartwood";
 const syncNote = (heartwoodText, otherText) => usesSm8Sync() ? heartwoodText : otherText;
 const canSeeMoney = () => !!me && (me.role === "admin" || me.role === "manager" || me.role === "supervisor" || me.staffRole === "manager" || me.staffRole === "supervisor");
+const canSeeCapacity = () => canSeeMoney();
 // Job text shown to crew (operators). Descriptions imported from ServiceM8 or typed by the office can mention a price;
 // crew never see dollar figures, so they get the same price filter the quote-to-job copy uses.
 const crewText = t => canSeeMoney() ? String(t ?? "") : noDollars(t);
@@ -2077,7 +2081,7 @@ function leaveStart() {
     if (jobForm) refreshJobLeaveWarn(jobForm);
     if (document.activeElement?.closest?.("#leaveform, .lv-decide")) return;
     const admin = me.role === "admin" && !ui.myJobs;
-    if (admin && (ui.view === "leave" || ui.view === "timesheet" || ui.view === "dispatch")) renderAdmin();
+    if (admin && (ui.view === "leave" || ui.view === "timesheet" || ui.view === "dispatch" || ui.view === "capacity")) renderAdmin();
     else if (!admin && (ui.opTab === "leave" || ui.opTab === "hours")) renderOperator();
   }, () => { ui.leave = []; });
 }
@@ -2099,6 +2103,53 @@ function refreshJobLeaveWarn(form) {
   const text = assignmentWarning(ui.leave || [], form.date.value, picked.map(s => ({ uid: s.uid || "", name: s.name })));
   el.hidden = !text;
   el.textContent = text ? text + " Saving still assigns them." : "";
+}
+function capacityCover() {
+  return { from: addDays(todayStr(), -14), to: addDays(todayStr(), 28) };
+}
+function capacityScreen() {
+  ui.capacityCover = capacityCover();
+  const src = me.role === "admin" ? [...(jobs || []), ...(ui.done || [])] : (ui.officeJobs || []);
+  return capacityViewHtml({
+    people: (staff || []).map(s => ({ uid: s.uid || "", name: s.name || "", companyId: s.companyId, tenantId: s.tenantId })),
+    jobs: src,
+    leaves: ui.leave || [],
+    weekStart: shiftWeek(todayStr(), ui.capWk || 0),
+    companyId: myCompanyId(),
+    coverage: ui.capacityCover,
+    today: todayStr(),
+    staffKnown: !!(staff && staff.length),
+    error: ui.capacityErr || "",
+    offline: typeof navigator !== "undefined" && navigator.onLine === false
+  });
+}
+function startCapacityWatch() {
+  ui.capacityCover = capacityCover();
+  ui.capacityErr = "";
+  if (!canSeeCapacity() || me.role === "admin") return () => {};
+  const q = companyJobs([where("date", ">=", ui.capacityCover.from), where("date", "<=", ui.capacityCover.to), orderBy("date")]);
+  const stop = onSnapshot(q, snap => {
+    ui.officeJobs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    ui.capacityErr = "";
+    const admin = me.role === "admin" && !ui.myJobs;
+    if (admin && ui.view === "capacity") renderAdmin();
+    else if (!admin && ui.opTab === "capacity") renderOperator();
+  }, e => {
+    ui.officeJobs = ui.officeJobs || [];
+    ui.capacityErr = e.code || "unavailable";
+    if (ui.opTab === "capacity") renderOperator();
+  });
+  if (!staff.length) {
+    getDocs(query(collection(db, "users"), where("companyId", "==", myCompanyId()))).then(snap => {
+      const companyId = myCompanyId();
+      const logins = snap.docs.map(d => ({ uid: d.id, ...d.data() }))
+        .filter(u => (u.companyId || u.tenantId || "heartwood") === companyId)
+        .filter(u => CREW_ROLES.includes(u.role) || u.role === "supervisor" || u.role === "manager" || u.role === "admin");
+      if (logins.length) staff = logins;
+      if (ui.opTab === "capacity") renderOperator();
+    }).catch(() => {});
+  }
+  return stop;
 }
 function leaveView() {
   return `<div class="sm-head"><h1>Leave</h1><span class="sub">Annual, sick, or other</span></div><div class="lv-wrap">${leaveScreenHtml({
@@ -2947,6 +2998,7 @@ function renderAdmin() {
   donePill(); reimbPill(); inboxSub();
   if (!me || me.role !== "admin") return;
   if (ui.view === "invoices" && me.role !== "admin") ui.view = "home";
+  if (ui.view === "capacity" && !canSeeCapacity()) ui.view = "home";
   if (ui.myJobs) return renderOperator();
   if ($("#dlg").open) return;          // don't redraw under an open job card
   const force = ui.forceRender; ui.forceRender = false;
@@ -2963,7 +3015,7 @@ function renderAdmin() {
   const quotesHtml = ui.view === "quotes" ? adminViewRouter(ui.view, ui, { esc, $$, staff, jobs: all, todayStr, rerender: () => renderAdmin(), canEditQuoteRates }) : null;
   const staffHtml = ui.view === "staff" ? staffPageHtml() : null;
   paintBrand();
-  $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "master" ? masterView() : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : quotesHtml != null ? quotesHtml : jobsView(all));
+  $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "master" ? masterView() : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "capacity" ? capacityScreen() : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : quotesHtml != null ? quotesHtml : jobsView(all));
   const A = $("#app"); inboxBadge();
   CHAT.watch([...(jobs || []), ...(ui.undated || [])]);
   if (ui.view === "chat") CHAT.mount(A);
@@ -2995,6 +3047,7 @@ function renderAdmin() {
   A.querySelectorAll("[data-q]").forEach(b => b.onclick = () => { ui.queue = b.dataset.q; renderAdmin(); });
   A.querySelectorAll("[data-dv]").forEach(b => b.onclick = () => { ui.dview = b.dataset.dv; ui.wk = 0; renderAdmin(); });
   A.querySelectorAll("[data-wk]").forEach(b => b.onclick = () => { ui.wk = +b.dataset.wk === 0 ? 0 : ui.wk + +b.dataset.wk; renderAdmin(); });
+  A.querySelectorAll("[data-cap]").forEach(b => b.onclick = () => { ui.capWk = +b.dataset.cap === 0 ? 0 : (ui.capWk || 0) + +b.dataset.cap; renderAdmin(); });
   if ($("#fs")) $("#fs").onchange = e => { ui.staffF = e.target.value; renderAdmin(); };
   if ($("#ft")) $("#ft").onchange = e => { ui.typeF = e.target.value; renderAdmin(); };
   if ($("#new")) $("#new").onclick = () => editJob(null);
@@ -4157,6 +4210,7 @@ function renderOperator() {
   if (ui.opTab === "chat" && document.activeElement?.closest?.(".chat-compose")) return;
   if (!ui.opTab || ui.opTab === "home") ui.opTab = "today";
   if (ui.opTab === "quotes" && !(canQuote() && me.role !== "admin")) ui.opTab = "more";
+  if (ui.opTab === "capacity" && !canSeeCapacity()) ui.opTab = "more";
   if (ui.opTab === "quotes") {
     const qhtml = adminViewRouter("quotes", ui, { esc, $$, staff, jobs: mine, todayStr, rerender: () => renderOperator(), canEditQuoteRates });
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Quotes</div><div class="mob-sub">Guided pricing · ex GST</div></div>
@@ -4220,8 +4274,15 @@ function renderOperator() {
     bindOp(mine); bindSettings($("#app")); return;
   }
   if (ui.opTab === "settings") ui.opTab = "more";
+  if (ui.opTab === "capacity" && canSeeCapacity()) {
+    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="pad">${capacityScreen()}</div>${opTabs("more")}</div>`;
+    bindOp(mine);
+    $("#app").querySelectorAll("[data-cap]").forEach(b => b.onclick = () => { ui.capWk = +b.dataset.cap === 0 ? 0 : (ui.capWk || 0) + +b.dataset.cap; renderOperator(); });
+    return;
+  }
   if (ui.opTab === "more") {
     const quoteBtn = canQuote() && me.role !== "admin" ? `<button type="button" class="mob-more" data-go="quotes"><b>Quotes</b><small>Guided pricing for supervisors</small></button>` : "";
+    const capBtn = canSeeCapacity() ? `<button type="button" class="mob-more" data-go="capacity"><b>Capacity</b><small>Who is free this week</small></button>` : "";
     const fleetBtn = COMP.canSee() ? `<button type="button" class="mob-more" data-go="fleet"><b>Compliance</b><small>Registration and COI status</small></button>` : "";
     const staffBtn = canInvite() ? `<button type="button" class="mob-more" data-go="staff"><b>Staff</b><small>Invite labourers, operators, supervisors and admins</small></button>` : "";
     const inboxBtn = canImport() ? `<button type="button" class="mob-more" data-go="inbox"><b>Inbox</b><small>Import builder emails as jobs</small></button>` : "";
@@ -4236,6 +4297,7 @@ function renderOperator() {
         ${COMP.canPrestart() ? `<button type="button" class="mob-more" data-go="prestart"><b>Prestart</b><small>Any machine, before you use it</small></button>` : ""}
         ${fleetBtn}
         <button type="button" class="mob-more incbtn" data-inc=""><b>Report incident</b><small>Safety report</small></button>
+        ${capBtn}
         ${quoteBtn}
         ${staffBtn}
         ${canEditTitles() ? `<button type="button" class="mob-more" data-go="settings"><b>Company</b><small>Add or remove trades. Details and billing stay with an admin.</small></button>` : ""}
@@ -5116,7 +5178,7 @@ ROUTE = installRouteOrder({
   cacheGeo: (job, hit) => updateDoc(doc(db, "jobs", job.id), geoPatch(job.address, hit)),
 });
 QG = installQuotes({
-  db, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, collection, query, where, onSnapshot, serverTimestamp, arrayUnion,
+  db, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, collection, query, where, onSnapshot, serverTimestamp, arrayUnion, runTransaction,
   $, esc, toast, $$, CLIENTS, TYPES, canSeeMoney, canQuote, canEditQuoteRates, todayStr, jobNo,
   getMe: () => me, getUi: () => ui, getCompanyId: () => myCompanyId(),
   isAdmin: () => !!(me && me.role === "admin"),

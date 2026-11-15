@@ -368,3 +368,13 @@ Order after merge:
 Sign-up stores `companies/{id}.trades` (a list) and `trade` (the first one). A missing list still reads `trade`, and a company with neither reads as earthworks. No backfill. Admins and managers may later update only `trades`. Reimbursement decisions (approve, decline, mark paid) are manager and admin; supervisors are not.
 
 No Stripe, plan, or timesheet change. No destructive backfill. Job titles and extra trades are written only when a company signs up or an admin/manager saves them.
+
+## Phase 3 — capacity and quote revisions (not deployed)
+
+Do not deploy from this branch. Nothing here writes to production. No new composite index: revision lists filter on `companyId` only, and the jobs date query already has `companyId` + `date`.
+
+Order after merge:
+
+1. Publish `cloud/firestore.production.rules` (quote revisions under `quotes/{id}/revisions`, accepted quotes locked, Heartwood supervisor quote read, Heartwood office job read for capacity). Do not publish `cloud/emulator/firestore.rules`.
+2. Deploy hosting. Service worker `callup-shell-v10x-phase3`. Other open PRs also change this cache name (crew map, quote packs, staff tab, chat push); keep this name so those conflicts stay visible. New modules: `app/features/capacity.js`, `app/features/quote-revisions.js`.
+3. No functions deploy, no Storage rules change, no Stripe change, no index deploy, no backfill. Old quotes have no revisions until the next changed save.

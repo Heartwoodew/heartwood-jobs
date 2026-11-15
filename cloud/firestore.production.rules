@@ -369,8 +369,26 @@ service cloud.firestore {
     function heartwoodManager() {
       return signedIn() && hasProfile() && profile().get("role", "") == "manager" && callerCompany() == "heartwood";
     }
+    function heartwoodSupervisor() {
+      return signedIn() && hasProfile() && profile().get("role", "") == "supervisor" && callerCompany() == "heartwood";
+    }
+    // Capacity: Heartwood supervisors and managers can read Heartwood jobs. They do not gain job writes.
+    function heartwoodOfficeRead() {
+      return heartwoodSupervisor() || heartwoodManager()
+        || (signedIn() && hasProfile() && callerCompany() == "heartwood" && profile().get("role", "") == "admin");
+    }
     function companyStaff() {
       return callerCompany() != "" && callerCompany() != "heartwood" && hasProfile();
+    }
+    // Quote revisions. One user read, no callerCompany(), so it stays under the rules expression limit.
+    function revisionStaff(companyId) {
+      let path = /databases/$(database)/documents/users/$(request.auth.uid);
+      return signedIn() && companyId is string && (
+        (request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "38SU5waAy4f9UI9N6JTqDMaYpQg2", "R7t41e54Ykcdk9WPdVZnDd697iI2"] && companyId == "heartwood")
+        || (exists(path)
+          && (get(path).data.get("role", "") in ["supervisor", "manager", "admin"])
+          && get(path).data.get("companyId", "heartwood") == companyId)
+      );
     }
 
 
@@ -390,19 +408,63 @@ service cloud.firestore {
     match /quotes/{id} {
       allow get: if (isAdmin() && docCompany(resource.data) == "heartwood")
         || (heartwoodManager() && docCompany(resource.data) == "heartwood")
+        || (heartwoodSupervisor() && docCompany(resource.data) == "heartwood")
         || (companyOffice() && docCompany(resource.data) == callerCompany());
       allow list: if isAdmin() && resource.data.companyId == "heartwood";
       allow list: if heartwoodManager() && resource.data.companyId == "heartwood";
+      allow list: if heartwoodSupervisor() && resource.data.companyId == "heartwood";
       allow list: if companyOffice() && resource.data.companyId == callerCompany();
       allow create: if quoteFieldsOk(request.resource.data) && ((isAdmin() && request.resource.data.get("companyId", "heartwood") == "heartwood")
         || (heartwoodManager() && request.resource.data.get("companyId", "heartwood") == "heartwood" && quoteOverridesKept({}))
         || (companyOffice() && request.resource.data.companyId == callerCompany() && quoteOverridesKept({})));
-      allow update: if quoteFieldsOk(request.resource.data) && ((isAdmin() && docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood")
+      // Accepted quotes stay as they were. The check is only a field compare so this rule stays under the expression limit.
+      allow update: if resource.data.get("quoteStatus", "") != "Accepted"
+        && quoteFieldsOk(request.resource.data) && ((isAdmin() && docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood")
         || (heartwoodManager() && docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood"
           && quoteOverridesKept(resource.data.get("priceOverrides", {})))
         || (companyOffice() && docCompany(resource.data) == callerCompany() && docCompany(request.resource.data) == callerCompany()
           && quoteOverridesKept(resource.data.get("priceOverrides", {}))));
       allow delete: if false;
+      // Separate from the office rule above so a Heartwood supervisor is not folded into that expression.
+      allow create: if heartwoodSupervisor() && quoteFieldsOk(request.resource.data)
+        && request.resource.data.get("companyId", "heartwood") == "heartwood"
+        && quoteOverridesKept({});
+      allow update: if heartwoodSupervisor()
+        && resource.data.get("quoteStatus", "") != "Accepted"
+        && quoteFieldsOk(request.resource.data)
+        && docCompany(resource.data) == "heartwood"
+        && docCompany(request.resource.data) == "heartwood"
+        && quoteOverridesKept(resource.data.get("priceOverrides", {}));
+
+      // Numbered quote revisions. Same company, supervisor and above. Create only.
+      match /revisions/{revId} {
+        allow get: if revisionStaff(resource.data.get("companyId", "heartwood"));
+        allow list: if revisionStaff(resource.data.companyId);
+        allow create: if revId.matches('^r[0-9]{3}$')
+          && revisionStaff(request.resource.data.companyId)
+          && request.resource.data.keys().hasOnly(["revision", "quoteId", "companyId", "createdBy", "createdByName", "createdAt", "createdAtIso", "lines", "extraItems", "priceOverrides", "totalEx", "gst", "totalInc", "changes"])
+          && request.resource.data.revision is int
+          && request.resource.data.revision >= 1
+          && request.resource.data.revision <= 999
+          && request.resource.data.quoteId == id
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdByName is string
+          && request.resource.data.createdByName.size() > 0
+          && request.resource.data.createdByName.size() <= 80
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.lines is list
+          && request.resource.data.lines.size() <= 80
+          && request.resource.data.extraItems is list
+          && request.resource.data.extraItems.size() <= 40
+          && request.resource.data.priceOverrides is map
+          && request.resource.data.priceOverrides.size() <= 20
+          && request.resource.data.changes is list
+          && request.resource.data.changes.size() <= 80
+          && exists(/databases/$(database)/documents/quotes/$(id))
+          && get(/databases/$(database)/documents/quotes/$(id)).data.get("quoteStatus", "Draft") != "Accepted"
+          && get(/databases/$(database)/documents/quotes/$(id)).data.get("companyId", "heartwood") == request.resource.data.companyId;
+        allow update, delete: if false;
+      }
     }
 
 
@@ -512,6 +574,8 @@ service cloud.firestore {
       allow get: if companyOffice() && docCompany(resource.data) == callerCompany();
       allow get: if companyStaff() && docCompany(resource.data) == callerCompany() && isAssigned(resource.data);
       allow list: if companyOffice() && resource.data.companyId == callerCompany();
+      allow get: if heartwoodOfficeRead() && docCompany(resource.data) == "heartwood";
+      allow list: if heartwoodOfficeRead() && resource.data.companyId == "heartwood";
       allow list: if companyStaff() && resource.data.companyId == callerCompany() && request.auth.uid in resource.data.assigned;
       allow create: if companyOffice() && request.resource.data.companyId == callerCompany() && jobMoneyFreeCreate();
       allow update: if companyOffice()
