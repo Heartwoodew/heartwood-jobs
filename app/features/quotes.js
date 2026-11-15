@@ -11,6 +11,7 @@ import { calcCarpentry } from "./packs/carpentry.js";
 import { calcTiling } from "./packs/tiling.js";
 import { calcPlumbing } from "./packs/plumbing.js";
 import { calcElectrical } from "./packs/electrical.js";
+import { calcConcreteCutting } from "./packs/concrete-cutting.js";
 import { defaultMeasures, gstFromEx, roundMoney, sanitizeQuotePrices } from "./packs/money.js";
 import { measureReviewHtml, measureSetupHtml } from "./packs/form.js";
 import { changeLines, compareHtml, commercialSnapshot, diffRevisions, revisionBody, revisionDocId, revisionNeeded, revisionsPanelHtml } from "./quote-revisions.js";
@@ -753,6 +754,7 @@ async function saveCompanyPreset(item) {
 const PACK_CALCS = {
   landscaping: calcLandscaping, concreting: calcConcreting, fencing: calcFencing,
   carpentry: calcCarpentry, tiling: calcTiling, plumbing: calcPlumbing, electrical: calcElectrical,
+  "concrete-cutting": calcConcreteCutting,
 };
 
 function combinePackExtras(packCalc, data, rates) {
@@ -860,6 +862,8 @@ export const MAX_QUOTE_SECTIONS = 8;
 const CATEGORY_PACKAGE = {
   "ls-turf": "soft", "ls-garden": "soft", "ls-maintain": "soft",
   "ls-paving": "hard", "ls-retaining": "hard", "ls-other": "both",
+  "cc-floor": "floor", "cc-wall": "wall", "cc-core": "core", "cc-wire": "wire", "cc-hand": "hand",
+  "cc-joint": "joint", "cc-crack": "crack", "cc-break": "break", "cc-grind": "grind", "cc-scan": "scan",
 };
 
 export function categoryChoices(setup) {

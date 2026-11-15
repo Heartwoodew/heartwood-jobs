@@ -8,6 +8,7 @@ import { calcCarpentry, CARPENTRY } from "../app/features/packs/carpentry.js";
 import { calcTiling, TILING } from "../app/features/packs/tiling.js";
 import { calcPlumbing, PLUMBING } from "../app/features/packs/plumbing.js";
 import { calcElectrical, ELECTRICAL } from "../app/features/packs/electrical.js";
+import { calcConcreteCutting, CONCRETE_CUTTING } from "../app/features/packs/concrete-cutting.js";
 import { gstFromEx, measureQty, placeholderRates } from "../app/features/packs/money.js";
 import { measureReviewHtml, measureSetupHtml } from "../app/features/packs/form.js";
 import { measuredJobFields } from "../app/features/quotes.js";
@@ -40,6 +41,7 @@ test("GST stays in whole cents for each pack calculator", () => {
     [calcTiling, { packageId: "floor", measures: { floor: { length: 1, width: 1, wastePct: 0 } } }, "floor"],
     [calcPlumbing, { packageId: "rough", measures: { points: { qty: 1 } } }, "points"],
     [calcElectrical, { packageId: "rough", measures: { epoints: { qty: 1 } } }, "epoints"],
+    [calcConcreteCutting, { packageId: "floor", measures: { floor: { length: 1, wastePct: 0, option: "100" } } }, "floor:100"],
   ];
   for (const [fn, input, key] of cases) {
     for (const [ex, gst, inc] of GST) {
@@ -409,4 +411,58 @@ test("electrical templates add parts, labour and permit or certificate costs", (
   assert.match(form, /Electrical safety certificate/);
   assert.match(form, /not required before the job can be marked done/);
   assert.match(form, /defaults to review/i);
+});
+
+test("concrete cutting presets price depth, diameter, grinding and machine hire, and hide dollars from crew", () => {
+  const rates = placeholderRates(CONCRETE_CUTTING);
+  assert.equal(rates["floor:100"], 28);
+  assert.equal(rates["floor:300"], 95);
+  assert.equal(rates["wall:200"], 92);
+  assert.equal(rates["core:100@300"], 98);
+  assert.equal(rates["core:200@450"], 320);
+  assert.equal(rates["grind:standard"], 28);
+  assert.equal(rates.roadh, 165);
+  assert.equal(rates.roadday, 980);
+  assert.equal(rates.callout, 280);
+  assert.equal(rates.slurry, 110);
+  assert.equal(rates.travel, 3);
+  assert.equal(CONCRETE_CUTTING.lines.some(l => /asbestos/i.test(l.id + l.label)), false);
+  const floor = calcConcreteCutting({
+    packageId: "floor",
+    measures: { floor: { length: 10, wastePct: 0, option: "200" }, roadh: { qty: 2 } },
+  });
+  assert.equal(line(floor, "floor").qty, 10);
+  assert.equal(line(floor, "floor").rate, 58);
+  assert.equal(line(floor, "floor").amount, 580);
+  assert.equal(line(floor, "roadh").amount, 330);
+  assert.equal(floor.lines.some(l => l.id === "wall" || l.id === "core"), false);
+  const holes = calcConcreteCutting({
+    packageId: "core",
+    measures: { core: { qty: 4, style: "150", height: "200" } },
+  }, { "core:150@200": 100 });
+  assert.equal(line(holes, "core").rate, 100);
+  assert.equal(line(holes, "core").rateSource, "company");
+  assert.equal(line(holes, "core").amount, 400);
+  const grind = calcConcreteCutting({ packageId: "grind", measures: { grind: { length: 5, width: 4, wastePct: 0, option: "heavy" } } });
+  assert.equal(line(grind, "grind").qty, 20);
+  assert.equal(line(grind, "grind").amount, 960);
+  const esc = s => String(s ?? "");
+  const setup = measureSetupHtml(CONCRETE_CUTTING, { packageId: "floor", measures: { floor: { option: "150" } } }, esc);
+  assert.match(setup, /Depth/);
+  assert.match(setup, /Up to 150 mm/);
+  assert.match(setup, /Road saw — hourly/);
+  assert.match(setup, /Minimum call-out/);
+  assert.match(setup, /Slurry vacuum and cleanup/);
+  assert.match(setup, /defaults to review/i);
+  assert.equal(CONCRETE_CUTTING.packages.some(p => /asbestos/i.test(p.label)), false);
+  assert.doesNotMatch(setup, /<legend>[^<]*asbestos/i);
+  const coreForm = measureSetupHtml(CONCRETE_CUTTING, { packageId: "core", measures: { core: { style: "100", height: "300" } } }, esc);
+  assert.match(coreForm, /Diameter/);
+  assert.match(coreForm, /Up to 100 mm dia/);
+  assert.match(coreForm, /Up to 300 mm deep/);
+  const hidden = measureReviewHtml(floor, esc, false, false);
+  assert.doesNotMatch(hidden, /\$ \/|data-packprice|580/);
+  const job = measuredJobFields({ packId: "concrete-cutting", description: "Cut $580 ex GST", hoursOnSite: 2, lines: floor.lines });
+  assert.doesNotMatch(job.description, /\$|580/);
+  assert.equal(JSON.stringify(job.quote).includes("58"), false);
 });

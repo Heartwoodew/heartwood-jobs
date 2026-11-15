@@ -102,6 +102,9 @@ export function defaultMeasures(pack) {
       out[line.id] = { ...(out[line.id] || {}), on: true };
       if (line.options && line.options[0]) out[line.id].option = line.options[0].id;
     }
+    if (line.options && line.options[0] && !line.group && !(out[line.id] && out[line.id].option)) {
+      out[line.id] = { ...(out[line.id] || {}), option: line.options[0].id };
+    }
   }
   return out;
 }
