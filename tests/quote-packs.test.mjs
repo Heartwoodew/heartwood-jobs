@@ -4,6 +4,10 @@ import { readFileSync } from "node:fs";
 import { calcLandscaping, LANDSCAPING } from "../app/features/packs/landscaping.js";
 import { calcConcreting, CONCRETING } from "../app/features/packs/concreting.js";
 import { calcFencing, FENCING } from "../app/features/packs/fencing.js";
+import { calcCarpentry, CARPENTRY } from "../app/features/packs/carpentry.js";
+import { calcTiling, TILING } from "../app/features/packs/tiling.js";
+import { calcPlumbing, PLUMBING } from "../app/features/packs/plumbing.js";
+import { calcElectrical, ELECTRICAL } from "../app/features/packs/electrical.js";
 import { gstFromEx, measureQty, placeholderRates } from "../app/features/packs/money.js";
 import { measureReviewHtml, measureSetupHtml } from "../app/features/packs/form.js";
 import { measuredJobFields } from "../app/features/quotes.js";
@@ -32,6 +36,10 @@ test("GST stays in whole cents for each pack calculator", () => {
     [calcLandscaping, { packageId: "soft", measures: { turf: { length: 1, width: 1, wastePct: 0 } } }, "turf"],
     [calcConcreting, { measures: { slab: { length: 1, width: 1, depth: 1, wastePct: 0 }, mesh: { on: false }, finish: { on: false } } }, "concrete"],
     [calcFencing, { measures: { run: { length: 1, wastePct: 0, style: "colorbond", height: "1.8" } } }, "run:colorbond@1.8"],
+    [calcCarpentry, { packageId: "frame", measures: { sheets: { length: 1, width: 1, wastePct: 0 } } }, "sheets"],
+    [calcTiling, { packageId: "floor", measures: { floor: { length: 1, width: 1, wastePct: 0 } } }, "floor"],
+    [calcPlumbing, { packageId: "rough", measures: { points: { qty: 1 } } }, "points"],
+    [calcElectrical, { packageId: "rough", measures: { epoints: { qty: 1 } } }, "epoints"],
   ];
   for (const [fn, input, key] of cases) {
     for (const [ex, gst, inc] of GST) {
@@ -247,4 +255,158 @@ test("the measured wizard labels placeholder prices and asks this quote only or 
   assert.match(review, /\$ \/ m² ex GST/);
   const hidden = measureReviewHtml(calc, esc, false, false);
   assert.doesNotMatch(hidden, /\$ \/|data-packprice/);
+});
+
+test("carpentry take-offs apply waste, and wet-area and labour-only stay on their templates", () => {
+  assert.equal(placeholderRates(CARPENTRY).sheets, 48);
+  assert.equal(placeholderRates(CARPENTRY).lining, 78);
+  assert.equal(placeholderRates(CARPENTRY).labourhours, 85);
+  const frame = calcCarpentry({
+    packageId: "frame",
+    measures: {
+      sheets: { length: 10, width: 2.4, wastePct: 10 },
+      framing: { length: 12, wastePct: 8 },
+      deck: { length: 6, width: 4, wastePct: 0 },
+    },
+  });
+  assert.equal(line(frame, "sheets").qty, 26.4);
+  assert.equal(line(frame, "sheets").amount, 1267.2);
+  assert.equal(line(frame, "sheets").rateSource, "default");
+  assert.equal(line(frame, "framing").qty, 12.96);
+  assert.equal(line(frame, "framing").amount, 414.72);
+  assert.equal(frame.lines.some(l => l.id === "deck" || l.id === "lining"), false);
+  const wet = calcCarpentry({ packageId: "wet", measures: { lining: { length: 5, width: 2.4, wastePct: 12 }, vanity: { qty: 1 } } });
+  assert.equal(line(wet, "lining").qty, 13.44);
+  assert.equal(line(wet, "lining").amount, 1048.32);
+  assert.equal(line(wet, "vanity").amount, 420);
+  assert.equal(wet.lines.some(l => l.id === "sheets"), false);
+  const labour = calcCarpentry({
+    packageId: "labour",
+    hoursOnSite: 8,
+    measures: { labourhours: { qty: 4 }, sheets: { length: 10, width: 2.4, wastePct: 0 } },
+  });
+  assert.equal(labour.lines.map(l => l.id).join(","), "labourhours");
+  assert.equal(line(labour, "labourhours").amount, 340);
+  assert.equal(labour.allocatedHours, 8);
+  assert.equal(CARPENTRY.lines.some(l => /mix|mpa|slump|cement/i.test(l.id)), false);
+});
+
+test("tiling take-offs apply waste, and the wet-area template prices membrane without a test result", () => {
+  assert.equal(placeholderRates(TILING).floor, 88);
+  assert.equal(placeholderRates(TILING).wetfloor, 98);
+  assert.equal(placeholderRates(TILING).membrane, 58);
+  const floor = calcTiling({
+    packageId: "floor",
+    measures: { floor: { length: 6, width: 4, wastePct: 10 }, screed: { length: 6, width: 4, wastePct: 5 }, wetfloor: { length: 2, width: 2, wastePct: 0 } },
+  });
+  assert.equal(line(floor, "floor").qty, 26.4);
+  assert.equal(line(floor, "floor").amount, 2323.2);
+  assert.equal(line(floor, "screed").qty, 25.2);
+  assert.equal(floor.lines.some(l => l.id === "wetfloor" || l.id === "membrane"), false);
+  const wet = calcTiling({
+    packageId: "wet",
+    measures: {
+      wetfloor: { length: 4, width: 3, wastePct: 15 },
+      wetwall: { length: 8, width: 2.1, wastePct: 15 },
+      membrane: { length: 4, width: 3, wastePct: 10 },
+    },
+  });
+  assert.equal(line(wet, "wetfloor").qty, 13.8);
+  assert.equal(line(wet, "wetfloor").amount, 1352.4);
+  assert.equal(line(wet, "wetwall").qty, 19.32);
+  assert.equal(line(wet, "membrane").qty, 13.2);
+  assert.equal(line(wet, "membrane").lineType, "material");
+  const labour = calcTiling({ packageId: "labour", measures: { tilelabour: { qty: 5 }, floor: { length: 3, width: 3, wastePct: 0 } } });
+  assert.equal(labour.lines.map(l => l.id).join(","), "tilelabour");
+  assert.equal(line(labour, "tilelabour").amount, 390);
+  const quoted = calcTiling({
+    packageId: "floor",
+    measures: { floor: { length: 2, width: 2, wastePct: 0 } },
+    quotePrices: { floor: 10.35 },
+  }, { floor: 90 });
+  assert.equal(line(quoted, "floor").rate, 10.35);
+  assert.equal(line(quoted, "floor").rateSource, "quote");
+  assert.equal(quoted.gst, 4.14);
+});
+
+test("plumbing templates add parts, labour and certificate costs, and leave other templates out", () => {
+  assert.equal(placeholderRates(PLUMBING).pipe, 42);
+  assert.equal(placeholderRates(PLUMBING).permit, 290);
+  assert.equal(placeholderRates(PLUMBING).certificate, 175);
+  const rough = calcPlumbing({
+    packageId: "rough",
+    hoursOnSite: 6,
+    measures: {
+      points: { qty: 4 },
+      pipe: { length: 20, wastePct: 10 },
+      labouradd: { qty: 3 },
+      permit: { qty: 1 },
+      drainpipe: { length: 15, wastePct: 0 },
+    },
+  });
+  assert.equal(line(rough, "points").amount, 660);
+  assert.equal(line(rough, "points").lineType, "labour");
+  assert.equal(line(rough, "pipe").qty, 22);
+  assert.equal(line(rough, "pipe").amount, 924);
+  assert.equal(line(rough, "pipe").lineType, "material");
+  assert.equal(line(rough, "labouradd").amount, 294);
+  assert.equal(line(rough, "permit").amount, 290);
+  assert.equal(line(rough, "permit").lineType, "compliance");
+  assert.equal(rough.lines.some(l => l.id === "drainpipe" || l.id === "certificate"), false);
+  assert.equal(rough.allocatedHours, 6);
+  const gas = calcPlumbing({ packageId: "gas", measures: { gaspoints: { qty: 2 }, gaspipe: { length: 10, wastePct: 8 }, certificate: { qty: 1 } } });
+  assert.equal(line(gas, "gaspoints").amount, 390);
+  assert.equal(line(gas, "gaspipe").qty, 10.8);
+  assert.equal(line(gas, "gaspipe").amount, 561.6);
+  assert.equal(line(gas, "certificate").lineType, "compliance");
+  assert.equal(line(gas, "certificate").amount, 175);
+  assert.equal(gas.lines.some(l => l.id === "points"), false);
+  assert.equal(PLUMBING.lines.some(l => /mix|mpa|testresult|stage/i.test(l.id)), false);
+});
+
+test("electrical templates add parts, labour and permit or certificate costs", () => {
+  assert.equal(placeholderRates(ELECTRICAL).cable, 12);
+  assert.equal(placeholderRates(ELECTRICAL).permit, 340);
+  assert.equal(placeholderRates(ELECTRICAL).certificate, 175);
+  assert.equal(placeholderRates(ELECTRICAL).callout, 150);
+  const rough = calcElectrical({
+    packageId: "rough",
+    measures: {
+      epoints: { qty: 8 },
+      cable: { length: 30, wastePct: 15 },
+      efittings: { qty: 8 },
+      certificate: { qty: 1 },
+      callout: { qty: 1 },
+    },
+  });
+  assert.equal(line(rough, "epoints").amount, 680);
+  assert.equal(line(rough, "cable").qty, 34.5);
+  assert.equal(line(rough, "cable").amount, 414);
+  assert.equal(line(rough, "efittings").amount, 256);
+  assert.equal(line(rough, "efittings").lineType, "material");
+  assert.equal(line(rough, "certificate").lineType, "compliance");
+  assert.equal(line(rough, "certificate").amount, 175);
+  assert.equal(rough.lines.some(l => l.id === "callout"), false);
+  const fault = calcElectrical({ packageId: "fault", hoursOnSite: 2, includeLabour: true, measures: { callout: { qty: 1 }, faultparts: { qty: 2 }, labouradd: { qty: 1.5 } } });
+  assert.equal(line(fault, "callout").amount, 150);
+  assert.equal(line(fault, "faultparts").amount, 90);
+  assert.equal(line(fault, "labouradd").amount, 147);
+  assert.equal(line(fault, "labour").qty, 2);
+  assert.equal(line(fault, "labour").amount, 196);
+  assert.equal(fault.allocatedHours, 2);
+  assert.equal(fault.lines.some(l => l.id === "cable" || l.id === "permit"), false);
+  const job = measuredJobFields({
+    packId: "electrical",
+    description: "Safety certificate $175 ex GST",
+    hoursOnSite: 2,
+    lines: fault.lines,
+  });
+  assert.equal(job.allocatedHours, 2);
+  assert.doesNotMatch(job.description, /\$|175/);
+  assert.equal(JSON.stringify(job.quote).includes("175"), false);
+  const esc = s => String(s ?? "");
+  const form = measureSetupHtml(ELECTRICAL, { packageId: "rough", measures: {} }, esc);
+  assert.match(form, /Electrical safety certificate/);
+  assert.match(form, /not required before the job can be marked done/);
+  assert.match(form, /defaults to review/i);
 });

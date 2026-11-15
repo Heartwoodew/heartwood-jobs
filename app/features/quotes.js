@@ -7,6 +7,10 @@ import { LINE_TYPES, measureQty, normalizeLineType, quotePack, quotePackNote, ra
 import { calcLandscaping } from "./packs/landscaping.js";
 import { calcConcreting } from "./packs/concreting.js";
 import { calcFencing } from "./packs/fencing.js";
+import { calcCarpentry } from "./packs/carpentry.js";
+import { calcTiling } from "./packs/tiling.js";
+import { calcPlumbing } from "./packs/plumbing.js";
+import { calcElectrical } from "./packs/electrical.js";
 import { defaultMeasures, gstFromEx, roundMoney, sanitizeQuotePrices } from "./packs/money.js";
 import { measureReviewHtml, measureSetupHtml } from "./packs/form.js";
 // Rates from meta/quoteRates only — never invent business rates.
@@ -742,7 +746,10 @@ async function saveCompanyPreset(item) {
   } catch (e) { api.toast("Not saved: " + (e.code || e.message)); return false; }
 }
 
-const PACK_CALCS = { landscaping: calcLandscaping, concreting: calcConcreting, fencing: calcFencing };
+const PACK_CALCS = {
+  landscaping: calcLandscaping, concreting: calcConcreting, fencing: calcFencing,
+  carpentry: calcCarpentry, tiling: calcTiling, plumbing: calcPlumbing, electrical: calcElectrical,
+};
 
 function wizardFor(existing) {
   if (existing && existing.packId) {

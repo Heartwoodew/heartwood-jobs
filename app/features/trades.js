@@ -2,12 +2,15 @@
 // Sign-up stores a list of trades. An older company with only `trade` still reads that one trade.
 // A company with neither reads as ["earthworks"] (Heartwood, callup-test-h2vx, anyone else). Nothing here writes.
 
-// Earthworks keeps the plant wizard. Landscaping, concreting and fencing are measured quote packs.
-// Carpentry, tiling, plumbing and electrical stay quote-pack coming soon.
+// Earthworks keeps the plant wizard. The other trades are measured quote packs.
 // No mix design, no assignment filtering, no sign-off flag. The measured packs live in features/packs/.
 import { LANDSCAPING } from "./packs/landscaping.js";
 import { CONCRETING } from "./packs/concreting.js";
 import { FENCING } from "./packs/fencing.js";
+import { CARPENTRY } from "./packs/carpentry.js";
+import { TILING } from "./packs/tiling.js";
+import { PLUMBING } from "./packs/plumbing.js";
+import { ELECTRICAL } from "./packs/electrical.js";
 export { measureQty } from "./packs/money.js";
 
 export const DEFAULT_TRADE = "earthworks";
@@ -63,8 +66,8 @@ const OTHER_TYPES = Object.freeze({
   landscaping: [["ls-garden", "Garden build"], ["ls-turf", "Turf"], ["ls-paving", "Paving"], ["ls-retaining", "Retaining"], ["ls-maintain", "Maintenance"], ["ls-other", "Other"]],
   concreting: [["co-slab", "Slab"], ["co-driveway", "Driveway"], ["co-footing", "Footings"], ["co-path", "Paths"], ["co-other", "Other"]],
   fencing: [["fe-timber", "Timber paling"], ["fe-colorbond", "Colorbond"], ["fe-pool", "Pool fence"], ["fe-chain", "Chain wire"], ["fe-gate", "Gate"], ["fe-other", "Other"]],
-  carpentry: [["ca-frame", "Framing"], ["ca-fitout", "Fit-out"], ["ca-deck", "Deck"], ["ca-other", "Other"]],
-  tiling: [["ti-floor", "Floor tiling"], ["ti-wall", "Wall tiling"], ["ti-waterproof", "Waterproofing"], ["ti-other", "Other"]],
+  carpentry: [["ca-frame", "Framing"], ["ca-fitout", "Fit-out"], ["ca-deck", "Deck"], ["ca-wet", "Wet area"], ["ca-labour", "Labour only"], ["ca-other", "Other"]],
+  tiling: [["ti-floor", "Floor tiling"], ["ti-wall", "Wall tiling"], ["ti-wet", "Wet area"], ["ti-waterproof", "Waterproofing"], ["ti-labour", "Labour only"], ["ti-other", "Other"]],
   plumbing: [["pl-rough", "Rough-in"], ["pl-fitoff", "Fit-off"], ["pl-drain", "Drainage"], ["pl-gas", "Gas"], ["pl-other", "Other"]],
   electrical: [["el-rough", "Rough-in"], ["el-fitoff", "Fit-off"], ["el-fault", "Fault finding"], ["el-other", "Other"]],
 });
@@ -281,10 +284,10 @@ export const QUOTE_PACKS = Object.freeze({
   landscaping: measurePack(LANDSCAPING, OTHER_TYPES.landscaping),
   concreting: measurePack(CONCRETING, OTHER_TYPES.concreting),
   fencing: measurePack(FENCING, OTHER_TYPES.fencing),
-  carpentry: pack("carpentry", OTHER_TYPES.carpentry, false),
-  tiling: pack("tiling", OTHER_TYPES.tiling, false),
-  plumbing: pack("plumbing", OTHER_TYPES.plumbing, false),
-  electrical: pack("electrical", OTHER_TYPES.electrical, false),
+  carpentry: measurePack(CARPENTRY, OTHER_TYPES.carpentry),
+  tiling: measurePack(TILING, OTHER_TYPES.tiling),
+  plumbing: measurePack(PLUMBING, OTHER_TYPES.plumbing),
+  electrical: measurePack(ELECTRICAL, OTHER_TYPES.electrical),
 });
 
 export function quotePack(id) {
@@ -411,7 +414,7 @@ export function companyTradesDoc(companyId, tradeOrList, uid) {
 export function signupTradesHtml(selected = [DEFAULT_TRADE]) {
   const on = new Set(sanitizeTradeList(selected).length ? sanitizeTradeList(selected) : [DEFAULT_TRADE]);
   return `<fieldset class="tradepick"><legend>Trades</legend>
-    <p class="sub">Choose every trade this company does. At least one. Earthworks, landscaping, concreting and fencing include a quote pack. The first ticked trade is the one quotes open on.</p>
+    <p class="sub">Choose every trade this company does. At least one. Every trade includes a quote pack. Earthworks uses the plant wizard. The first ticked trade is the one quotes open on.</p>
     ${TRADES.map(t => `<label class="ck"><input type="checkbox" name="trades" value="${esc(t.id)}"${on.has(t.id) ? " checked" : ""}> ${esc(t.label)}${quotePack(t.id) && quotePack(t.id).ready ? "" : " <span class=\"sub\">quote pack coming soon</span>"}</label>`).join("")}
   </fieldset>`;
 }
@@ -525,5 +528,5 @@ export function quotePackNote(setup) {
   if (!setup) return "";
   const readyTxt = ready.length ? ready.join(", ") : "none yet";
   const soonTxt = soon.length ? ` ${soon.join(", ")}: quote pack coming soon.` : "";
-  return `<p class="pad sub">Quote pack ready: ${esc(readyTxt)}.${esc(soonTxt)} Earthworks keeps the plant wizard. Landscaping, concreting and fencing price from measurements, and those prices are defaults to review.</p>`;
+  return `<p class="pad sub">Quote pack ready: ${esc(readyTxt)}.${esc(soonTxt)} Earthworks keeps the plant wizard. The other packs price from measurements or job templates, and those prices are defaults to review.</p>`;
 }

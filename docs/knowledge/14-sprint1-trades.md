@@ -31,7 +31,7 @@ Reimbursement claims (approve, decline, mark paid) are manager and admin only. S
 
 Preloaded titles and their levels are `defaultTitles` / `levelForTitleName`. Admins and managers add, rename and remove titles on Staff. The title’s level is the invite’s permission level.
 
-Quotes has “Use another trade”. On the quotes screen that list, and the quote trade switcher, only include a pack once it is ready. Earthworks keeps the plant wizard. Landscaping, concreting and fencing are measured packs (area, volume or linear metres). Carpentry, tiling, plumbing and electrical stay “Quote pack coming soon”. Company settings can still add a coming-soon trade so its job titles and job types are available.
+Quotes has “Use another trade”. On the quotes screen that list, and the quote trade switcher, only include a pack once it is ready. Earthworks keeps the plant wizard. Landscaping, concreting, fencing, carpentry, tiling, plumbing and electrical are measured packs. A pack that is not ready would still say “Quote pack coming soon”.
 
 ## Skills
 
@@ -39,7 +39,7 @@ Quotes has “Use another trade”. On the quotes screen that list, and the quot
 
 ## Quotes
 
-The earthworks pack is data (`QUOTE_PACKS.earthworks`: templates, line types labour / material / compliance / hire / waste, job types spoil, backslab, waterproof, clean, other). The plant wizard maths are unchanged. Landscaping, concreting and fencing each have one data file under `app/features/packs/` with placeholder A$ rates marked as defaults to review.
+The earthworks pack is data (`QUOTE_PACKS.earthworks`: templates, line types labour / material / compliance / hire / waste, job types spoil, backslab, waterproof, clean, other). The plant wizard maths are unchanged. Each other trade has one data file under `app/features/packs/` with placeholder A$ rates marked as defaults to review.
 
 Extra lines can apply area (m²), volume (m³), linear metre and a waste %. Changing a price on a line, when the person can edit rates, asks “This quote only” or “Save as company default”.
 

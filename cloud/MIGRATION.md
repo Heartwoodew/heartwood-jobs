@@ -375,7 +375,7 @@ Do not deploy from the pull request until it is merged. No rules change in this 
 
 Order after merge:
 
-1. Deploy hosting only. Service worker `callup-shell-v101-quote-packs`. New modules: `app/features/packs/money.js`, `landscaping.js`, `concreting.js`, `fencing.js`, `form.js`.
+1. Deploy hosting only. Service worker `callup-shell-v101-quote-packs`. New modules: `app/features/packs/money.js`, `landscaping.js`, `concreting.js`, `fencing.js`, `carpentry.js`, `tiling.js`, `plumbing.js`, `electrical.js`, `form.js`.
 2. Do not deploy rules, functions or storage for this batch. Placeholder rates live in the app shell. A company default is written to the existing quote-rates doc (`packRates`) when someone chooses “Save as company default”.
 
 Another open branch may also bump `app/sw.js` (a crew map). This name is `callup-shell-v101-quote-packs` so the two version strings conflict on purpose and need a manual pick at merge.
