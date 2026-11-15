@@ -1,9 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { calcLandscaping } from "../app/features/packs/landscaping.js";
+import { calcConcreteCutting } from "../app/features/packs/concrete-cutting.js";
 import { gstFromEx } from "../app/features/packs/money.js";
 import {
-  calcQuote, calcSections, categoryChoices, customerQuoteHtml, jobsFromAcceptedQuote, normalizeQuoteSections,
+  blankSection, calcQuote, calcSections, categoryChoices, customerQuoteHtml, jobsFromAcceptedQuote, normalizeQuoteSections,
 } from "../app/features/quotes.js";
 import { commercialSnapshot, diffRevisions, revisionNeeded, sameCommercial } from "../app/features/quote-revisions.js";
 
@@ -183,6 +184,57 @@ test("a change in any section is one revision of the whole quote", () => {
   assert.equal(diff.lines.some(row => row.key.startsWith("s2:") && row.change === "changed"), false);
   assert.ok(diff.totals.some(row => row.name === "totalEx"));
   assert.equal(commercialSnapshot(before).lines.length, before.lines.filter(l => l.key).length);
+});
+
+test("two concrete-cutting categories price depth bands, holes, hire, call-out, slurry and travel", () => {
+  const floor = {
+    id: "s1", type: "cc-floor", packId: "concrete-cutting", label: "Floor sawing", packageId: "floor", hoursOnSite: 0,
+    measures: {
+      floor: { length: 12, wastePct: 0, option: "150" },
+      roadhalf: { qty: 1 },
+      callout: { qty: 1 },
+      travel: { qty: 20 },
+    },
+  };
+  const core = {
+    id: "s2", type: "cc-core", packId: "concrete-cutting", label: "Core drilling", packageId: "core", hoursOnSite: 3,
+    measures: {
+      core: { qty: 6, style: "100", height: "300" },
+      coreh: { qty: 3 },
+      slurry: { qty: 2 },
+    },
+  };
+  const alone = calcConcreteCutting(floor);
+  assert.equal(alone.lines.find(l => l.rateKey === "floor:150").amount, 12 * 42);
+  assert.equal(alone.lines.find(l => l.id === "roadhalf").amount, 580);
+  assert.equal(alone.lines.find(l => l.id === "callout").amount, 280);
+  assert.equal(alone.lines.find(l => l.id === "travel").amount, 60);
+  assert.equal(alone.lines.some(l => l.id === "wall" || l.id === "core"), false);
+  const calc = calcSections({ sections: [floor, core] }, {});
+  assert.equal(calc.sections[0].subtotalEx, 12 * 42 + 580 + 280 + 60);
+  assert.equal(calc.sections[1].subtotalEx, 6 * 98 + 3 * 145 + 2 * 110);
+  assert.equal(calc.totalEx, 1424 + 1243);
+  assert.equal(calc.gst, gstFromEx(calc.totalEx).gst);
+  assert.equal(calc.totalInc, gstFromEx(calc.totalEx).totalInc);
+  assert.equal(calc.gst, 266.7);
+  const blank = blankSection("cc-wall");
+  assert.equal(blank.packId, "concrete-cutting");
+  assert.equal(blank.packageId, "wall");
+  const choices = categoryChoices({ enabled: ["concrete-cutting", "plumbing"] });
+  assert.deepEqual(choices.map(g => g.tradeId), ["concrete-cutting", "plumbing"]);
+  assert.ok(choices[0].categories.some(c => c.type === "cc-floor" && c.label === "Floor sawing"));
+  assert.ok(choices[0].categories.some(c => c.type === "cc-scan" && c.label === "Scanning/GPR"));
+  const html = customerQuoteHtml({ client: "Northside", address: "9 Cut St", dateIso: "2026-11-15T00:00:00Z" }, calc, { legalName: "Cut Co" });
+  assert.match(html, /<h2>Floor sawing<\/h2>/);
+  assert.match(html, /<h2>Core drilling<\/h2>/);
+  assert.equal(html.match(/GST \(10%\)/g).length, 1);
+  const jobs = jobsFromAcceptedQuote({ client: "Northside", address: "9 Cut St", description: "Saw and core" }, calc, "one");
+  assert.equal(jobs.length, 1);
+  assert.deepEqual(jobs[0].types, ["cc-floor", "cc-core"]);
+  const blob = JSON.stringify({ description: jobs[0].description, workAmounts: jobs[0].workAmounts, quote: jobs[0].quote });
+  assert.doesNotMatch(blob, /\$\d/);
+  assert.doesNotMatch(blob, /unitPrice|"rate":|"amount":|totalEx|priceOverrides|gst/);
+  assert.equal(blob.includes("580") || blob.includes("280") || blob.includes("\"42\""), false);
 });
 
 test("category ticks can come from every ready trade on the company", () => {

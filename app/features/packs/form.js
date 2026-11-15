@@ -37,8 +37,12 @@ function groupHtml(lines, state, esc) {
     const style = selectedStyle(primary, raw);
     const heights = style ? style.heights : [];
     const height = raw.height && heights.some(h => h.id === String(raw.height)) ? String(raw.height) : (heights[0] && heights[0].id);
-    fields += `<label>Style<select data-m="${esc(groupId)}" data-mf="style">${primary.styles.map(s => `<option value="${esc(s.id)}" ${raw.style === s.id || (!raw.style && s === primary.styles[0]) ? "selected" : ""}>${esc(s.label)}</option>`).join("")}</select></label>`;
-    fields += `<label>Height<select data-m="${esc(groupId)}" data-mf="height">${heights.map(h => `<option value="${esc(h.id)}" ${height === h.id ? "selected" : ""}>${esc(h.label)}</option>`).join("")}</select></label>`;
+    fields += `<label>${esc(primary.styleLabel || "Style")}<select data-m="${esc(groupId)}" data-mf="style">${primary.styles.map(s => `<option value="${esc(s.id)}" ${raw.style === s.id || (!raw.style && s === primary.styles[0]) ? "selected" : ""}>${esc(s.label)}</option>`).join("")}</select></label>`;
+    fields += `<label>${esc(primary.heightLabel || "Height")}<select data-m="${esc(groupId)}" data-mf="height">${heights.map(h => `<option value="${esc(h.id)}" ${height === h.id ? "selected" : ""}>${esc(h.label)}</option>`).join("")}</select></label>`;
+  }
+  if (primary.options) {
+    const opt = raw.option && primary.options.some(o => o.id === raw.option) ? raw.option : primary.options[0].id;
+    fields += `<label>${esc(primary.optionLabel || primary.label)}<select data-m="${esc(groupId)}" data-mf="option">${primary.options.map(o => `<option value="${esc(o.id)}" ${opt === o.id ? "selected" : ""}>${esc(o.label)}</option>`).join("")}</select></label>`;
   }
   if (primary.measure === "volume" || primary.measure === "area" || primary.measure === "linear") {
     fields += numInput(groupId, "length", "Length m", raw.length, esc);

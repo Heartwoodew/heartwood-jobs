@@ -11,6 +11,7 @@ import { CARPENTRY } from "./packs/carpentry.js";
 import { TILING } from "./packs/tiling.js";
 import { PLUMBING } from "./packs/plumbing.js";
 import { ELECTRICAL } from "./packs/electrical.js";
+import { CONCRETE_CUTTING } from "./packs/concrete-cutting.js";
 export { measureQty } from "./packs/money.js";
 
 export const DEFAULT_TRADE = "earthworks";
@@ -25,6 +26,7 @@ export const TRADES = Object.freeze([
   { id: "tiling", label: "Tiling" },
   { id: "plumbing", label: "Plumbing" },
   { id: "electrical", label: "Electrical" },
+  { id: "concrete-cutting", label: "Concrete Cutting" },
 ]);
 
 export const TRADE_IDS = Object.freeze(TRADES.map(t => t.id));
@@ -52,6 +54,7 @@ const TITLE_NAMES = Object.freeze({
   tiling: ["Operations manager", "Project manager", "Leading tiler", "Tiler", "Apprentice tiler", "Labourer"],
   plumbing: ["Operations manager", "Project manager", "Licensed plumber", "Drainer", "Gas fitter", "Roof plumber", "Apprentice plumber", "Labourer"],
   electrical: ["Operations manager", "Project manager", "Licensed electrician", "Apprentice electrician", "Electrical trades assistant"],
+  "concrete-cutting": ["Admin", "Manager", "Supervisor", "Concrete cutter / saw operator", "Core driller", "Labourer", "Apprentice"],
 });
 
 const EARTHWORKS_TYPES = Object.freeze([
@@ -70,6 +73,18 @@ const OTHER_TYPES = Object.freeze({
   tiling: [["ti-floor", "Floor tiling"], ["ti-wall", "Wall tiling"], ["ti-wet", "Wet area"], ["ti-waterproof", "Waterproofing"], ["ti-labour", "Labour only"], ["ti-other", "Other"]],
   plumbing: [["pl-rough", "Rough-in"], ["pl-fitoff", "Fit-off"], ["pl-drain", "Drainage"], ["pl-gas", "Gas"], ["pl-other", "Other"]],
   electrical: [["el-rough", "Rough-in"], ["el-fitoff", "Fit-off"], ["el-fault", "Fault finding"], ["el-other", "Other"]],
+  "concrete-cutting": [
+    ["cc-floor", "Floor sawing"],
+    ["cc-wall", "Wall sawing"],
+    ["cc-core", "Core drilling"],
+    ["cc-wire", "Wire sawing"],
+    ["cc-hand", "Hand/ring sawing"],
+    ["cc-joint", "Control joint cutting"],
+    ["cc-crack", "Crack chasing"],
+    ["cc-break", "Concrete removal & breaking"],
+    ["cc-grind", "Floor grinding"],
+    ["cc-scan", "Scanning/GPR"],
+  ],
 });
 
 // Earthworks pack is today's plant wizard and extras, described as data. Behaviour stays in quotes.js.
@@ -111,13 +126,13 @@ export function normalizeTrade(id) {
   return TRADE_IDS.includes(s) ? s : "";
 }
 
-/** Project / operations manager -> manager; leading hand / leading tiler -> supervisor; apprentices, labourers and trades assistants -> labourer; Admin -> admin; licensed trades, operators and drivers -> operator. */
+/** Admin -> admin; a manager title (including operations or project manager) -> manager; supervisor, leading hand or leading tiler -> supervisor; apprentices, labourers and trades assistants -> labourer; operators, drivers and licensed trades -> operator. */
 export function levelForTitleName(name) {
   const n = String(name || "").trim().toLowerCase();
   if (!n) return "";
   if (n === "admin") return "admin";
-  if (n.includes("operations manager") || n.includes("project manager")) return "manager";
-  if (n.startsWith("leading ") || n.includes("leading hand")) return "supervisor";
+  if (n === "manager" || n.endsWith(" manager")) return "manager";
+  if (n === "supervisor" || n.endsWith(" supervisor") || n.startsWith("leading ") || n.includes("leading hand")) return "supervisor";
   if (n.includes("apprentice") || n === "labourer" || n.includes("labourer") || n.includes("trades assistant")) return "labourer";
   return "operator";
 }
@@ -132,7 +147,7 @@ export function sanitizeTradeList(list) {
     const trade = normalizeTrade(id);
     if (!trade || out.includes(trade)) continue;
     out.push(trade);
-    if (out.length >= 8) break;
+    if (out.length >= TRADE_IDS.length) break;
   }
   return out;
 }
@@ -288,6 +303,7 @@ export const QUOTE_PACKS = Object.freeze({
   tiling: measurePack(TILING, OTHER_TYPES.tiling),
   plumbing: measurePack(PLUMBING, OTHER_TYPES.plumbing),
   electrical: measurePack(ELECTRICAL, OTHER_TYPES.electrical),
+  "concrete-cutting": measurePack(CONCRETE_CUTTING, OTHER_TYPES["concrete-cutting"]),
 });
 
 export function quotePack(id) {
@@ -301,7 +317,7 @@ export function sanitizeExtraTrades(list, main) {
     const trade = normalizeTrade(id);
     if (!trade || trade === primary || out.includes(trade)) continue;
     out.push(trade);
-    if (out.length >= 7) break;
+    if (out.length >= TRADE_IDS.length - 1) break;
   }
   return out;
 }
