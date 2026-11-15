@@ -97,7 +97,7 @@ test("supervisors and admins can manage invites; operators cannot", () => {
   assert.equal(canManageInvites(operator), false);
 });
 
-test("draft lowercases email, expires in 7 days, and takes only the four roles", () => {
+test("draft lowercases email, expires in 7 days, and takes the permission levels", () => {
   const ok = draft();
   assert.equal(ok.ok, true);
   assert.equal(ok.invite.email, "casey.nguyen@example.com");
@@ -105,6 +105,7 @@ test("draft lowercases email, expires in 7 days, and takes only the four roles",
   assert.equal(ok.invite.role, "operator");
   assert.equal(ok.invite.expiresAt.getTime() - NOW.getTime(), 7 * 24 * 60 * 60 * 1000);
   assert.equal(draft({ role: "labourer" }).invite.role, "labourer");
+  assert.equal(draft({ role: "manager" }).invite.role, "manager");
   assert.equal(draft({ role: "admin", tenantId: "otherco" }).invite.role, "admin");
   assert.equal(draft({ role: "owner" }).reason, "role");
   assert.equal(draft({ role: "Admin" }).reason, "role");
@@ -281,7 +282,7 @@ test("invite rules fragment matches the emulator block and does not open mail", 
     return text.slice(start, end + "// END INVITE RULES".length);
   };
   assert.equal(slice(emu), slice(frag));
-  assert.match(slice(frag), /role in \["labourer", "operator", "supervisor"\]\s*\|\| \(request\.resource\.data\.role == "admin" && inviteFullAdmin\(\)\)/);
+  assert.match(slice(frag), /role in \["labourer", "operator", "supervisor", "manager"\]\s*\|\| \(request\.resource\.data\.role == "admin" && inviteFullAdmin\(\)\)/);
   assert.match(slice(frag), /allow delete: if false/);
   assert.match(slice(frag), /match \/mail\/\{id\}/);
   assert.doesNotMatch(slice(frag), /match \/users\/|match \/jobs\/|match \/xeroQueue\//);
@@ -295,8 +296,8 @@ test("invite rules fragment matches the emulator block and does not open mail", 
 });
 
 // 12 Nov 2026 (Alex): four invite profiles. Labourer = operator access, a different label. Admin only from an admin.
-test("four invite roles; supervisors never offer or accept an admin invite; Heartwood admins need the fixed list or a grant", () => {
-  assert.deepEqual([...INVITE_ROLES], ["labourer", "operator", "supervisor", "admin"]);
+test("five permission levels; a manager invites up to manager; only an admin invites an admin", () => {
+  assert.deepEqual([...INVITE_ROLES], ["labourer", "operator", "supervisor", "manager", "admin"]);
   assert.deepEqual([...CREW_ROLES], ["labourer", "operator"]);
   assert.equal(roleLabel("labourer"), "Labourer");
   assert.equal(roleLabel("admin"), "Admin");
@@ -304,15 +305,20 @@ test("four invite roles; supervisors never offer or accept an admin invite; Hear
   const coSup = { uid: "s1", profile: { role: "supervisor", companyId: "otherco" } };
   const coOp = { uid: "o1", profile: { role: "operator" } };
   const coLab = { uid: "l1", profile: { role: "labourer" } };
-  assert.deepEqual([...invitableRoles({ ...coAdmin, tenantId: "otherco" })], ["labourer", "operator", "supervisor", "admin"]);
+  assert.deepEqual([...invitableRoles({ ...coAdmin, tenantId: "otherco" })], ["labourer", "operator", "supervisor", "manager", "admin"]);
   assert.deepEqual([...invitableRoles({ ...coSup, tenantId: "otherco" })], ["labourer", "operator", "supervisor"]);
+  const coMgr = { uid: "m1", profile: { role: "manager", companyId: "otherco" } };
+  assert.deepEqual([...invitableRoles({ ...coMgr, tenantId: "otherco" })], ["labourer", "operator", "supervisor", "manager"]);
+  assert.equal(inviterMayInvite(coMgr, "manager", "otherco"), true);
+  assert.equal(inviterMayInvite(coMgr, "admin", "otherco"), false);
+  assert.equal(inviterMayInvite(coSup, "manager", "otherco"), false);
   assert.deepEqual([...invitableRoles({ ...coOp, tenantId: "otherco" })], []);
   assert.deepEqual([...invitableRoles({ ...coLab, tenantId: "otherco" })], []);
-  assert.deepEqual([...invitableRoles({ uid: "1JKLsoxkQNfkphBBO0vDz2ziEyj2", profile: null, tenantId: "heartwood" })], ["labourer", "operator", "supervisor", "admin"]);
+  assert.deepEqual([...invitableRoles({ uid: "1JKLsoxkQNfkphBBO0vDz2ziEyj2", profile: null, tenantId: "heartwood" })], ["labourer", "operator", "supervisor", "manager", "admin"]);
   // A Heartwood profile with role admin counts only with the heartwoodAdmins grant.
   const hwProfile = { role: "admin", companyId: "heartwood" };
   assert.deepEqual([...invitableRoles({ uid: "hw1", profile: hwProfile, tenantId: "heartwood" })], []);
-  assert.deepEqual([...invitableRoles({ uid: "hw1", profile: hwProfile, tenantId: "heartwood", heartwoodAdmin: true })], ["labourer", "operator", "supervisor", "admin"]);
+  assert.deepEqual([...invitableRoles({ uid: "hw1", profile: hwProfile, tenantId: "heartwood", heartwoodAdmin: true })], ["labourer", "operator", "supervisor", "manager", "admin"]);
   assert.deepEqual([...invitableRoles({ uid: "hwS", profile: { role: "supervisor" }, tenantId: "heartwood", heartwoodAdmin: true })], ["labourer", "operator", "supervisor"]);
   assert.equal(inviterMayInvite(coAdmin, "admin", "otherco"), true);
   assert.equal(inviterMayInvite(coSup, "admin", "otherco"), false);

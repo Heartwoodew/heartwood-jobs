@@ -23,8 +23,8 @@
     function lvDecider() {
       return lvSignedIn() && hasProfile() == false && (isAlex() || isPatrick())
         || lvSignedIn() && (
-          (callerCompany() == "heartwood" && (isAlex() || isPatrick() || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor"))))
-          || (callerCompany() != "heartwood" && hasProfile() && (profile().role == "admin" || profile().role == "supervisor"))
+          (callerCompany() == "heartwood" && (isAlex() || isPatrick() || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor" || profile().role == "manager"))))
+          || (callerCompany() != "heartwood" && hasProfile() && (profile().role == "admin" || profile().role == "supervisor" || profile().role == "manager"))
         );
     }
     function lvDate(v) {
@@ -105,11 +105,11 @@
       allow get: if (lvHeartwood() && (resource == null && id.matches('^lv[a-z0-9]{16}$')
           || resource != null && docCompany(resource.data) == "heartwood" && (lvDecider() || resource.data.uid == request.auth.uid)))
         || (callerCompany() != "heartwood" && resource != null && resource.data.companyId == callerCompany()
-          && (resource.data.uid == request.auth.uid || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor"))));
+          && (resource.data.uid == request.auth.uid || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor" || profile().role == "manager"))));
       allow list: if lvHeartwood() && resource.data.uid == request.auth.uid;
       allow list: if lvHeartwood() && lvDecider() && resource.data.companyId == "heartwood";
       allow list: if callerCompany() != "heartwood" && resource.data.companyId == callerCompany()
-        && (resource.data.uid == request.auth.uid || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor")));
+        && (resource.data.uid == request.auth.uid || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor" || profile().role == "manager")));
       allow create: if lvCreate(id) && (lvHeartwood() && callerCompany() == "heartwood" || request.resource.data.companyId == callerCompany());
       allow update: if lvDecision() && docCompany(resource.data) == callerCompany();
       allow delete: if false;

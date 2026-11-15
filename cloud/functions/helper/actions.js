@@ -56,7 +56,7 @@ export function intentFromQuestion(question) {
   }
   match = /^(approve|decline) leave (.+?): (.+)$/i.exec(q);
   if (match) return { type: "leave-decision", status: match[1].toLowerCase() === "approve" ? "approved" : "declined", hint: match[2].trim(), note: match[3].trim() };
-  match = /^invite (labourer|operator|supervisor|admin) (.+?) at (\S+)$/i.exec(q);
+  match = /^invite (labourer|operator|supervisor|manager|admin) (.+?) at (\S+)$/i.exec(q);
   if (match) return { type: "invite", role: match[1].toLowerCase(), name: match[2].trim(), email: match[3].trim() };
   return null;
 }
@@ -117,7 +117,7 @@ const ADMIN_ACTIONS = new Set([...SUPERVISOR_ACTIONS, "job-draft", "job-edit"]);
 export function actionAllowed(membership, type) {
   if (!membership?.ok) return { ok: false, reason: "not-allowed" };
   if (membership.rulesAdmin) return ADMIN_ACTIONS.has(type) ? { ok: true } : { ok: false, reason: "not-allowed" };
-  if (membership.role === "supervisor") {
+  if (membership.role === "supervisor" || membership.role === "manager") {
     if (type === "job-draft" || type === "job-edit") return { ok: false, reason: "admin-only" };
     return SUPERVISOR_ACTIONS.has(type) ? { ok: true } : { ok: false, reason: "not-allowed" };
   }
@@ -394,7 +394,7 @@ function randomLeaveId() {
 }
 
 async function prepareLeaveDecision(membership, intent, reader, name) {
-  if (!(membership.rulesAdmin || membership.role === "supervisor")) return deny("supervisor-only");
+  if (!(membership.rulesAdmin || membership.role === "supervisor" || membership.role === "manager")) return deny("supervisor-only");
   if (intent.status !== "approved" && intent.status !== "declined") return deny("not-allowed");
   const note = cleanText(intent.note, 500, true);
   if (!note) return deny("empty");
@@ -422,11 +422,14 @@ async function prepareLeaveDecision(membership, intent, reader, name) {
 }
 
 async function prepareInvite(membership, intent, reader) {
-  if (!(membership.rulesAdmin || membership.role === "supervisor")) return deny("supervisor-only");
+  if (!(membership.rulesAdmin || membership.role === "supervisor" || membership.role === "manager")) return deny("supervisor-only");
   const role = String(intent.role || "");
-  // Supervisors: labourer, operator or supervisor. Admin invites: rules-admins (Heartwood: fixed list or granted admin).
+  // Supervisors: labourer, operator or supervisor. Managers add manager. Admin invites: rules-admins only.
   const roles = membership.rulesAdmin
-    ? ["labourer", "operator", "supervisor", "admin"] : ["labourer", "operator", "supervisor"];
+    ? ["labourer", "operator", "supervisor", "manager", "admin"]
+    : membership.role === "manager"
+      ? ["labourer", "operator", "supervisor", "manager"]
+      : ["labourer", "operator", "supervisor"];
   if (!roles.includes(role)) return deny("not-allowed");
   const email = String(intent.email || "").trim().toLowerCase();
   if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(email) || email.length > 120) return deny("invalid");

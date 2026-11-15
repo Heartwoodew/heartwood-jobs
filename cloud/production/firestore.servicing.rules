@@ -38,7 +38,7 @@
     }
     function svcWriter(tenantId) {
       return svcAdmin(tenantId)
-        || (svcMember(tenantId) && svcHasProfile() && "role" in svcProfile() && svcProfile().role == "supervisor");
+        || (svcMember(tenantId) && svcHasProfile() && "role" in svcProfile() && svcProfile().role in ["supervisor", "manager"]);
     }
     function svcInt(v, max) {
       return v is int && v >= 0 && v <= max;

@@ -23,6 +23,12 @@ test.before(async () => {
     await setDoc(doc(d, "users/bSup"), { role: "supervisor", name: "Sid", companyId: "bravo", tenantId: "bravo" });
     await setDoc(doc(d, "users/bOp"), { role: "operator", name: "Bo", companyId: "bravo", tenantId: "bravo" });
     await setDoc(doc(d, "users/bLab"), { role: "labourer", name: "Bix", companyId: "bravo", tenantId: "bravo" });
+    await setDoc(doc(d, "users/bMgr"), { role: "manager", name: "Mo", companyId: "bravo", tenantId: "bravo" });
+    await setDoc(doc(d, "users/hwMgr"), { role: "manager", name: "Hana", companyId: "heartwood" });
+    await setDoc(doc(d, "quotes/hwq"), { companyId: "heartwood", client: "Orbit", quoteStatus: "Draft", extraItems: [], priceOverrides: {} });
+    await setDoc(doc(d, "jobMoney/hwq"), { jobId: "hwq", companyId: "heartwood", poAmount: 10 });
+    await setDoc(doc(d, "meta/quoteRates"), { travelPerKm: 2 });
+    await setDoc(doc(d, "meta/invoicing"), { next: 1 });
     await setDoc(doc(d, "companies/bravo"), { name: "Bravo", ownerUid: "bAdmin", status: "active", plan: "base", isTest: false });
     for (const [id, uid] of [["hwOp", "op1"], ["hwLab", "lab1"]])
       await setDoc(doc(d, "jobs", id), { companyId: "heartwood", assigned: [uid], status: "Scheduled", log: [] });
@@ -121,4 +127,60 @@ test("invites: admin gives all four roles; a supervisor gives three, never admin
   // Nobody writes a role onto their own profile.
   await assertFails(updateDoc(doc(db("bLab"), "users", "bLab"), { role: "admin" }));
   await assertFails(updateDoc(doc(db("bSup"), "users", "bSup"), { role: "admin" }));
+});
+
+test("manager edits rates, leave is already open to supervisors, and a manager cannot touch billing or an admin", async () => {
+  const mgr = db("bMgr");
+  await assertSucceeds(getDoc(doc(mgr, "quotes/qb")));
+  await assertSucceeds(getDoc(doc(mgr, "jobMoney/bJob")));
+  await assertSucceeds(setDoc(doc(mgr, "companyMeta/bravo_quoteRates"), { companyId: "bravo", travelPerKm: 4 }));
+  await assertFails(setDoc(doc(db("bSup"), "companyMeta/bravo_quoteRates"), { companyId: "bravo", travelPerKm: 9 }));
+  await assertFails(updateDoc(doc(mgr, "companies/bravo"), { plan: "paid" }));
+  await assertSucceeds(invite(mgr, "bMgr", "manager", "mgr.m@bravo.test"));
+  await assertFails(invite(mgr, "bMgr", "admin", "admin.m@bravo.test"));
+  await assertFails(invite(db("bSup"), "bSup", "manager", "mgr.s@bravo.test"));
+  await assertSucceeds(getDoc(doc(db("hwMgr"), "quotes/hwq")));
+  await assertSucceeds(getDoc(doc(db("hwMgr"), "jobMoney/hwq")));
+  await assertSucceeds(getDoc(doc(db("hwMgr"), "meta/quoteRates")));
+  await assertFails(getDoc(doc(db("hwMgr"), "meta/invoicing")));
+  await assertSucceeds(setDoc(doc(mgr, "companyTrades/bravo"), {
+    companyId: "bravo", trade: "earthworks", extraTrades: ["landscaping"], titles: [], updatedBy: "bMgr", updatedAt: serverTimestamp(),
+  }));
+  await assertFails(setDoc(doc(db("bSup"), "companyTrades/bravo"), {
+    companyId: "bravo", trade: "fencing", extraTrades: [], titles: [], updatedBy: "bSup", updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(updateDoc(doc(db("bLab"), "users/bLab"), { skills: ["White card"] }));
+  await assertFails(updateDoc(doc(db("bLab"), "users/bLab"), { skills: ["White card"], role: "manager" }));
+  await assertSucceeds(updateDoc(doc(mgr, "users/bOp"), { jobTitle: "Leading hand", jobTitleId: "earthworks:leading-hand" }));
+  await assertFails(updateDoc(doc(mgr, "users/bOp"), { role: "supervisor", jobTitle: "Leading hand", jobTitleId: "earthworks:leading-hand" }));
+  await assertFails(updateDoc(doc(mgr, "users/bAdmin"), { jobTitle: "Operator", jobTitleId: "earthworks:operator" }));
+  await assertSucceeds(updateDoc(doc(mgr, "companies/bravo"), { trades: ["earthworks", "plumbing"] }));
+  await assertFails(updateDoc(doc(db("bSup"), "companies/bravo"), { trades: ["fencing"] }));
+  await assertFails(updateDoc(doc(mgr, "companies/bravo"), { trades: ["earthworks"], plan: "paid" }));
+});
+
+test("only a manager or an admin can approve a reimbursement claim", async () => {
+  const id = "rcbravo00000000009";
+  const claim = {
+    uid: "bLab", name: "Bix", date: "2026-11-13", amountCents: 1500, supplier: "Ampol", category: "fuel",
+    notes: "", paidWith: "cash", jobId: "", jobLabel: "", receiptPath: "", receiptName: "", status: "submitted",
+    decisionNote: "", decidedBy: "", decidedByName: "", decidedAt: null, paidAt: null,
+  };
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), "companies/bravo/reimbursementClaims/" + id), claim);
+  });
+  const decide = (uid, name) => updateDoc(doc(db(uid), "companies/bravo/reimbursementClaims/" + id), {
+    status: "approved", decisionNote: "ok", decidedBy: uid, decidedByName: name,
+    decidedAt: serverTimestamp(), paidAt: null, updatedAt: serverTimestamp(),
+  });
+  await assertFails(decide("bLab", "Bix"));
+  await assertFails(decide("bSup", "Sid"));
+  await assertSucceeds(decide("bMgr", "Mo"));
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), "companies/bravo/reimbursementClaims/rcbravo00000000008"), claim);
+  });
+  await assertSucceeds(updateDoc(doc(db("bAdmin"), "companies/bravo/reimbursementClaims/rcbravo00000000008"), {
+    status: "approved", decisionNote: "ok", decidedBy: "bAdmin", decidedByName: "Bea",
+    decidedAt: serverTimestamp(), paidAt: null, updatedAt: serverTimestamp(),
+  }));
 });

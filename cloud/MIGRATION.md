@@ -353,3 +353,18 @@ with a typed $ stay as written (the app hides dollars from crew).
   208-220 Holdsworth Rd, Chuwar. A client company with no address can't approve and is told to add one.
 - Existing sheets have no companyId and read as Heartwood (only Heartwood used run sheets).
 - Tests: `test/heartwood-admin-runsheets.emulator.test.js`.
+
+## Sprint 1 — manager, trades, job titles (not deployed)
+
+Do not deploy from this branch until the rules, functions and hosting below are reviewed. `cloud/scripts/refuse-live-deploy.js` still refuses `firebase deploy`. Nothing here writes to production. Heartwood and `callup-test-h2vx` are not migrated by a script: a company with no `trade` field reads as earthworks.
+
+Order after merge:
+
+1. Publish `cloud/firestore.production.rules` (manager on office reads, quote-rate writes, invites up to manager, `companyTrades/{companyId}`, optional `trade` on company create, skill tags on `users/{uid}`). Do not publish `cloud/emulator/firestore.rules` as the live ruleset.
+2. Publish `cloud/production/storage.rules` (manager can see office money the same way a supervisor can). Crew still read the amount on their own receipts and claims.
+3. Deploy Cloud Functions (`previewStaffInvite`, `acceptStaffInvite`, helper) so a manager invite is accepted and the helper allows manager the same actions as a supervisor, except an admin invite.
+4. Deploy hosting. Service worker `callup-shell-v100-multi-trade`. The new module is `app/features/trades.js`.
+
+Sign-up stores `companies/{id}.trades` (a list) and `trade` (the first one). A missing list still reads `trade`, and a company with neither reads as earthworks. No backfill. Admins and managers may later update only `trades`. Reimbursement decisions (approve, decline, mark paid) are manager and admin; supervisors are not.
+
+No Stripe, plan, or timesheet change. No destructive backfill. Job titles and extra trades are written only when a company signs up or an admin/manager saves them.

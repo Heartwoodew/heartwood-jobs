@@ -71,7 +71,7 @@ export function resolveMembership({ uid, profile, requestedTenantId, requestedBu
   const customerIds = profile && Array.isArray(profile.customerIds)
     ? profile.customerIds.filter(x => typeof x === "string" && x.trim()).map(x => x.trim())
     : null;
-  const canSeeMoney = rulesAdmin || role === "supervisor";
+  const canSeeMoney = rulesAdmin || role === "supervisor" || role === "manager";
   return {
     ok: true,
     uid,

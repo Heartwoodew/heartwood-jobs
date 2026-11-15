@@ -23,7 +23,7 @@
     function inviteAdmin() {
       return inviteIsAlex() || inviteIsPatrick()
         || (inviteHasProfile() && "role" in inviteProfile()
-          && (inviteProfile().role == "admin" || inviteProfile().role == "supervisor"));
+          && (inviteProfile().role == "admin" || inviteProfile().role == "supervisor" || inviteProfile().role == "manager"));
     }
     function inviteCallerTenant() {
       return inviteIsAlex() || inviteIsPatrick()
@@ -50,7 +50,7 @@
         : (inviteHasProfile() && "role" in inviteProfile() && inviteProfile().role == "admin");
     }
     function inviteRoleOk() {
-      return request.resource.data.role in ["labourer", "operator", "supervisor"]
+      return request.resource.data.role in ["labourer", "operator", "supervisor", "manager"]
         || (request.resource.data.role == "admin" && inviteFullAdmin());
     }
     function inviteSame(key) {
@@ -99,7 +99,7 @@
     function inviteCreateOk(inviteId) {
       return inviteAdmin()
         && inviteBaseOk()
-        && request.resource.data.keys().hasOnly(["name", "email", "role", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId", "companyId"])
+        && request.resource.data.keys().hasOnly(["name", "email", "role", "jobTitle", "jobTitleId", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId", "companyId"])
         && request.resource.data.status == "pending"
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.createdAt == request.time
@@ -132,14 +132,14 @@
     function inviteUpdateOk(inviteId) {
       return inviteAdmin()
         && inviteBaseOk()
-        && request.resource.data.keys().hasOnly(["name", "email", "role", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId", "companyId", "cancelledAt", "cancelledBy", "resentAt", "resentBy"])
+        && request.resource.data.keys().hasOnly(["name", "email", "role", "jobTitle", "jobTitleId", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId", "companyId", "cancelledAt", "cancelledBy", "resentAt", "resentBy"])
         && (inviteCancelOk(inviteId) || inviteResendOk(inviteId));
     }
 
     match /invites/{inviteId} {
       // Supervisors never read an admin invite (it carries the sign-up token): their list asks for the three crew/supervisor roles.
       allow get, list: if inviteAdmin() && resource.data.tenantId == inviteCallerTenant()
-        && (resource.data.role in ["labourer", "operator", "supervisor"] || inviteFullAdmin());
+        && (resource.data.role in ["labourer", "operator", "supervisor", "manager"] || inviteFullAdmin());
       allow create: if inviteCreateOk(inviteId);
       allow update: if inviteUpdateOk(inviteId);
       allow delete: if false;

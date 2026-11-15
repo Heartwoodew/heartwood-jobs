@@ -9,7 +9,7 @@ import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager
 import { getStorage, ref as storageRef, uploadBytes, connectStorageEmulator, listAll, getMetadata, getBlob }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
 import { firebaseConfig, useEmulator } from "./firebase-config.js";
-import { installQuotes, adminViewRouter, setDefaultDepot, noDollars } from "./features/quotes.js";
+import { installQuotes, adminViewRouter, setDefaultDepot, noDollars, setQuoteTradeSetup, setQuoteFocus } from "./features/quotes.js";
 import { JOB_MONEY_COLLECTION, jobMoneyDoc, mergeJobMoney, splitJobMoney } from "./features/job-money.js";
 import { OPEN_STATUSES, staleOpenJobs, mergeJobLists, parseHoursInput } from "./features/job-window.js";
 import { installRouteOrder, orderJobsForRun, runSheetId, geoPatch, setRouteDepot } from "./features/route-order.js";
@@ -34,6 +34,11 @@ import {
   supervisorsPath, docCompanyId,
 } from "./features/company.js";
 import { companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, signupFormHtml } from "./features/company-ui.js";
+import {
+  addTitle, companyTradesDoc, jobTypeMap, normalizeTrade, readTradeList, removeTitle, renameTitle, resolveCompanySetup,
+  sanitizeSkills, sanitizeTitles, sanitizeTradeList, setTitleLevel, skillsEditorHtml,
+  titlesAfterTradeChange, titlesEditorHtml, tradeLabel,
+} from "./features/trades.js";
 import { acceptLogoValue, compressLogo, isLogoStoragePath, logoFailureText, logoFileOk, logoUploadPlan } from "./features/company-logo.js";
 import { exportAllowed, hoursCsv, invoiceCsv, jobsCsv, reimbursementsCsv } from "./features/company-exports.js";
 import {
@@ -127,7 +132,9 @@ onAuthStateChanged(auth, async user => {
   if (inviteToken) return renderInviteSignedIn();
   // Admin = UID listed in firestore.rules (Alex, sync, Patrick): detected by being ALLOWED to list users - so if the
   // rules don't (yet) make someone admin they simply fall back to the operator view.
-  // users/{uid}.role: "labourer" / "operator" (crew, no $, same access) | "supervisor" (staff shell + canSeeMoney) | "admin". Patrick is rules-admin with an operator profile (bookable).
+  // users/{uid}.role: "labourer" / "operator" (crew, no $, same access) | "supervisor" (staff shell + canSeeMoney)
+  // | "manager" (supervisor, plus company rates, leave decisions and staff up to manager) | "admin".
+  // A manager cannot change billing, the plan, company details, or an admin. A manager can change the trade list. Patrick is rules-admin with an operator profile (bookable).
   const snap = await getDoc(doc(db, "users", user.uid)).catch(() => null);
   const prof = snap && snap.exists() ? snap.data() : null;
   // Heartwood admins list only Heartwood profiles (rules deny every other company's staff).
@@ -158,7 +165,7 @@ onAuthStateChanged(auth, async user => {
   }
   await loadCompanyBrand();
   CLI = null; refreshClientLists();
-  if (myCompanyId() !== "heartwood" && (me.role === "admin" || me.role === "supervisor")) loadClients().catch(() => {});
+  if (myCompanyId() !== "heartwood" && (me.role === "admin" || me.role === "manager" || me.role === "supervisor")) loadClients().catch(() => {});
   $("#who").textContent = `${me.name} · ${me.role}`; $("#logout").classList.remove("hidden");
   CHAT.start();
   if (me.role === "admin") {
@@ -171,7 +178,7 @@ onAuthStateChanged(auth, async user => {
     if (!users && staffSnap) HOME_UIDS = staffSnap.docs.filter(d => docCompanyId(d.data()) === companyId).map(d => d.id);
     const logins = (staffSnap ? staffSnap.docs : []).map(d => ({ uid: d.id, ...d.data() }))
       .filter(u => (u.companyId || u.tenantId || "heartwood") === companyId)
-      .filter(u => CREW_ROLES.includes(u.role) || u.role === "supervisor");
+      .filter(u => CREW_ROLES.includes(u.role) || u.role === "supervisor" || u.role === "manager");
     staff = companyId === "heartwood"
       ? [{ uid: ALEX_UID, name: "Alex" }, ...logins.filter(u => u.uid !== ALEX_UID)]
       : logins;
@@ -253,11 +260,57 @@ function writeJob(id, patch) {
   const { job, money, hasMoney } = splitJobMoney(patch, deleteField);
   return Promise.all([updateDoc(doc(db, "jobs", id), job), ...(hasMoney ? [jobMoneyWrite(id, money)] : [])]);
 }
+function applyJobTypes(setup) {
+  ui.tradeSetup = setup;
+  const map = jobTypeMap(setup);
+  for (const k of Object.keys(TYPES)) delete TYPES[k];
+  Object.assign(TYPES, map);
+  setQuoteTradeSetup(setup);
+}
+async function loadTradeSetup(company) {
+  const id = (company && company.companyId) || myCompanyId();
+  const snap = await getDoc(doc(db, "companyTrades", id)).catch(() => null);
+  const stored = snap && snap.exists() ? snap.data() : null;
+  applyJobTypes(resolveCompanySetup(company || { companyId: id }, stored));
+}
+async function persistTrades(nextList) {
+  const trades = sanitizeTradeList(nextList);
+  if (!trades.length) throw Object.assign(new Error("trade"), { code: "trade" });
+  const id = myCompanyId();
+  const prev = ui.tradeSetup || resolveCompanySetup({ companyId: id }, null);
+  const titles = titlesAfterTradeChange(prev.titles, prev.saved, trades);
+  const catalog = {
+    companyId: id, trade: trades[0], trades, extraTrades: trades.slice(1),
+    titles: sanitizeTitles(titles), updatedBy: me.uid, updatedAt: serverTimestamp(),
+  };
+  await setDoc(doc(db, "companyTrades", id), catalog);
+  try { await updateDoc(doc(db, "companies", id), { trades, trade: trades[0] }); }
+  catch (e) { console.warn("company trades", e && (e.code || e.message)); }
+  applyJobTypes(resolveCompanySetup({ companyId: id, trades, trade: trades[0] }, catalog));
+}
+async function saveTradeSetup(next) {
+  const id = myCompanyId();
+  const setup = next || ui.tradeSetup || resolveCompanySetup({ companyId: id }, null);
+  const trades = sanitizeTradeList(setup.enabled || [setup.trade]);
+  const data = {
+    companyId: id,
+    trade: trades[0] || setup.trade,
+    trades,
+    extraTrades: trades.slice(1),
+    titles: sanitizeTitles(setup.titles),
+    updatedBy: me.uid,
+    updatedAt: serverTimestamp(),
+  };
+  await setDoc(doc(db, "companyTrades", id), data);
+  applyJobTypes(resolveCompanySetup({ companyId: id, trades, trade: data.trade }, data));
+}
 async function loadCompanyBrand() {
   const id = myCompanyId();
   const snap = await getDoc(doc(db, "companies", id)).catch(() => null);
-  if (snap && snap.exists()) setActiveCompany({ ...snap.data(), companyId: id });
-  else setActiveCompany(id === "heartwood" ? null : { companyId: id, name: "Your company" });
+  const company = snap && snap.exists() ? { ...snap.data(), companyId: id } : { companyId: id, name: id === "heartwood" ? "" : "Your company" };
+  if (snap && snap.exists()) setActiveCompany(company);
+  else setActiveCompany(id === "heartwood" ? null : company);
+  await loadTradeSetup(snap && snap.exists() ? company : { companyId: id });
   // Depot for quotes and run sheets: the company's address from settings (Heartwood: Chuwar unless changed there).
   const depot = orgSettings().address;
   setRouteDepot(depot, { heartwood: id === "heartwood" }); setDefaultDepot(depot, { heartwood: id === "heartwood" });
@@ -485,11 +538,13 @@ function renderSignup(friendCode = "") {
     ev.preventDefault();
     const f = ev.target;
     const err = $("#signuperr");
+    const trades = sanitizeTradeList([...(f.querySelectorAll("input[name=trades]:checked") || [])].map(el => el.value));
     const checked = validateCompanyInput({
       name: f.name.value, legalName: f.legalName.value, abn: f.abn.value, address: f.address.value,
       phone: f.phone.value, email: f.email.value, accountsEmail: f.accountsEmail.value,
       hubdocAddress: f.hubdocAddress.value, logoUrl: "", signoff: f.name.value,
     });
+    if (!trades.length) { err.textContent = "Choose at least one trade."; return; }
     if (!checked.ok) { err.textContent = companyFailure(checked.reason); return; }
     if (!f.ownerName.value.trim()) { err.textContent = "Enter your name."; return; }
     if (f.password.value.length < 8) { err.textContent = companyFailure("weak-password"); return; }
@@ -504,17 +559,20 @@ function renderSignup(friendCode = "") {
           const invRef = doc(db, "friendInvites", friendCode);
           const inv = await tx.get(invRef);
           if (!inv.exists() || inv.data().status !== "pending") throw Object.assign(new Error("invite"), { code: "invite" });
-          tx.set(doc(db, "companies", companyId), buildFriendCompany(checked.value, {
+          tx.set(doc(db, "companies", companyId), { ...buildFriendCompany(checked.value, {
             companyId, ownerUid: cred.user.uid, signedUpAt, friendInvite: friendCode,
-          }));
+          }), trades, trade: trades[0] });
           tx.update(invRef, { status: "used", usedBy: cred.user.uid, companyId, usedAt: serverTimestamp() });
         });
       } else {
-        await setDoc(doc(db, "companies", companyId), buildCompanyCreate(checked.value, {
+        await setDoc(doc(db, "companies", companyId), { ...buildCompanyCreate(checked.value, {
           companyId, ownerUid: cred.user.uid, signedUpAt, trialEndsAt: Timestamp.fromDate(trialEnd(new Date())), lastActivityAt: signedUpAt,
-        }));
+        }), trades, trade: trades[0] });
       }
-      await setDoc(doc(db, "users", cred.user.uid), { ...ownerProfile(checked.value, companyId, f.ownerName.value.trim()), email: f.ownerEmail.value.trim().toLowerCase() });
+      await setDoc(doc(db, "users", cred.user.uid), { ...ownerProfile(checked.value, companyId, f.ownerName.value.trim()), email: f.ownerEmail.value.trim().toLowerCase(), jobTitle: "Admin", jobTitleId: trades[0] + ":admin" });
+      try {
+        await setDoc(doc(db, "companyTrades", companyId), { ...companyTradesDoc(companyId, trades, cred.user.uid), updatedAt: serverTimestamp() });
+      } catch (err) { console.warn("trade catalog", err && (err.code || err.message)); }
       const logoFile = f.logoFile && f.logoFile.files && f.logoFile.files[0];
       if (logoFile && logoFileOk(logoFile).ok) {
         try {
@@ -546,9 +604,35 @@ function settingsView() {
   const rates = me && me.role === "admin" && myCompanyId() !== "heartwood"
     ? `<section class="pad setrates"><h3>Quote rates</h3><p class="sub">Your plant, labour, travel and tip rates for quotes. They start blank and are only used by your company.</p><button type="button" id="setrates" class="sm-btn">Edit quote rates</button></section>`
     : "";
-  return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin") }) + rates;
+  const trades = (ui.tradeSetup && ui.tradeSetup.enabled) || readTradeList(org, null);
+  return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin"), trades, canEditTrades: canEditTitles() }) + rates;
+}
+function bindTradeList(A) {
+  const root = A || document;
+  root.querySelectorAll("[data-trade-remove]").forEach(b => b.onclick = async () => {
+    const cur = (ui.tradeSetup && ui.tradeSetup.enabled) || [];
+    const next = cur.filter(id => id !== b.dataset.tradeRemove);
+    if (next.length < 1) { toast("Keep at least one trade."); return; }
+    try { await persistTrades(next); toast(tradeLabel(b.dataset.tradeRemove) + " removed."); redrawAfterSave(); }
+    catch { toast("Couldn't update trades."); }
+  });
+  root.querySelectorAll("#tradeset, #tradeadd").forEach(form => form.onsubmit = async ev => {
+    ev.preventDefault();
+    const id = normalizeTrade(form.trade && form.trade.value);
+    if (!id || !canEditTitles()) { toast("Only an admin or a manager can change trades."); return; }
+    const cur = (ui.tradeSetup && ui.tradeSetup.enabled) || [];
+    if (cur.includes(id)) { toast(tradeLabel(id) + " is already on."); return; }
+    try {
+      await persistTrades([...cur, id]);
+      toast(tradeLabel(id) + (id === "earthworks" ? " added. Quote pack ready." : " added. Quote pack coming soon."));
+      redrawAfterSave();
+    } catch { toast("Couldn't update trades."); }
+  });
+  const sw = root.querySelector("#quotetrade");
+  if (sw) sw.onchange = () => { setQuoteFocus(sw.value); redrawAfterSave(); };
 }
 function bindSettings(A) {
+  bindTradeList(A);
   const rb = A.querySelector("#setrates");
   if (rb) rb.onclick = () => QG && QG.openRatesEditor();
   const sub = A.querySelector("#billsub");
@@ -1337,19 +1421,21 @@ const canCompanyExport = () => exportAllowed({ role: me && me.role, companyId: m
 // Internal field names (sm8JobNo, sm8Status, sm8Uuid) are unchanged.
 const usesSm8Sync = () => myCompanyId() === "heartwood";
 const syncNote = (heartwoodText, otherText) => usesSm8Sync() ? heartwoodText : otherText;
-const canSeeMoney = () => !!me && (me.role === "admin" || me.role === "supervisor" || me.staffRole === "supervisor");
+const canSeeMoney = () => !!me && (me.role === "admin" || me.role === "manager" || me.role === "supervisor" || me.staffRole === "manager" || me.staffRole === "supervisor");
 // Job text shown to crew (operators). Descriptions imported from ServiceM8 or typed by the office can mention a price;
 // crew never see dollar figures, so they get the same price filter the quote-to-job copy uses.
 const crewText = t => canSeeMoney() ? String(t ?? "") : noDollars(t);
-const canInvite = () => !!(me && (me.role === "admin" || me.role === "supervisor" || me.staffRole === "supervisor"));
+const canInvite = () => !!(me && (me.role === "admin" || me.role === "manager" || me.role === "supervisor" || me.staffRole === "manager" || me.staffRole === "supervisor"));
+const canEditTitles = () => !!(me && (me.role === "admin" || me.role === "manager" || me.staffRole === "manager"));
 // Inbox and import: admins and supervisors. Operators (staff) do not see the Inbox.
 // Builder-email Inbox and Find PO (Orbit portal, Alex's mailbox, box workers) are Heartwood-only.
 const canImport = () => canImportInbox(me) && myCompanyId() === "heartwood";
 const canFindPo = () => myCompanyId() === "heartwood";
 // Quotes: same people who see money (admins + users.role/staffRole supervisor). Ordinary staff: no Quotes nav or dollars.
 const canQuote = () => canSeeMoney();
-// Business quote rates (meta/quoteRates): admin edit only — supervisors can read/use rates while quoting, not change them.
-const canEditQuoteRates = () => !!(me && me.role === "admin");
+// Business quote rates: admin or manager. Supervisors can read and use rates while quoting, not change them.
+// Company billing, plan and company settings stay admin-only (me.role === "admin").
+const canEditQuoteRates = () => !!(me && (me.role === "admin" || me.role === "manager" || me.staffRole === "manager"));
 async function shrinkImage(file, max = 1600, q = 0.72) {
   const bmp = await createImageBitmap(file).catch(() => null);
   if (!bmp) throw new Error("Can't read that image - try a JPEG/PNG photo");
@@ -1963,7 +2049,7 @@ function tsLeaveFor(uid, name, week) {
   return weekLeaveHtml(ui.leave || [], week || tsWeek(), { uid, name });
 }
 function leaveCanDecide() {
-  return !!(me && (me.role === "admin" || me.role === "supervisor" || me.staffRole === "supervisor"));
+  return !!(me && (me.role === "admin" || me.role === "manager" || me.role === "supervisor" || me.staffRole === "manager" || me.staffRole === "supervisor"));
 }
 function leaveCanOpen() {
   return !!(me && me.role === "admin");
@@ -2127,7 +2213,8 @@ function bindLeave(A) {
   A.querySelectorAll(".lv-cert-dl").forEach(btn => { btn.onclick = () => downloadLeaveCert(btn.dataset.cert); });
 }
 function claimsIsAdmin() {
-  return !!(me && me.role === "admin");
+  // Approve, decline and mark paid: manager and admin only. Supervisors see their own claim amount and cannot decide.
+  return !!(me && (me.role === "admin" || me.role === "manager" || me.staffRole === "manager"));
 }
 function claimsStop() {
   ui.claimsUnsub?.();
@@ -2165,7 +2252,7 @@ function claimsView() {
 async function downloadClaimReceipt(id) {
   const row = (ui.claims || []).find(item => item.id === id);
   if (!row || !row.receiptPath) return;
-  if (row.uid !== me.uid && !claimsIsAdmin()) { toast("Only that person and an admin can open the receipt."); return; }
+  if (row.uid !== me.uid && !claimsIsAdmin()) { toast("Only that person, a manager or an admin can open the receipt."); return; }
   const fileRef = storageRef(storage, row.receiptPath);
   try {
     const blob = await getBlob(fileRef);
@@ -2698,6 +2785,14 @@ function watchInviteMail() {
 function inviteMailMap() {
   return inviteMailShown() ? (ui.inviteMail || {}) : null;
 }
+function staffPageHtml() {
+  const setup = ui.tradeSetup || resolveCompanySetup({ companyId: myCompanyId() }, null);
+  return staffViewHtml(ui.invites || [], {
+    now: inviteDisplayNow(), error: ui.invitesErr || "", origin: appOriginFor(myCompanyId(), location.origin),
+    emailStatus: inviteMailMap(), roles: myInviteRoles(), titles: setup.titles,
+  }) + titlesEditorHtml(setup.titles, { canEdit: canEditTitles() })
+    + skillsEditorHtml((me && me.cloudProfile && me.cloudProfile.skills) || [], { canEdit: true });
+}
 async function saveInvite(fields) {
   const draft = buildInviteDraft({ ...fields, createdBy: me.uid, now: new Date(), token: newInviteToken(), tenantId: myTenant() });
   if (!draft.ok) return draft.reason;
@@ -2764,7 +2859,12 @@ function bindStaff(A) {
   if (form) form.onsubmit = async ev => {
     ev.preventDefault();
     const err = A.querySelector("#inviteerr");
-    const reason = await saveInvite({ name: form.name.value, email: form.email.value, role: form.role.value });
+    const picked = form.jobTitle && form.jobTitle.selectedOptions && form.jobTitle.selectedOptions[0];
+    const role = picked && picked.dataset.level ? picked.dataset.level : form.role.value;
+    const reason = await saveInvite({
+      name: form.name.value, email: form.email.value, role,
+      jobTitle: picked && picked.dataset.name || "", jobTitleId: picked && picked.value || "",
+    });
     if (reason) { if (err) err.textContent = inviteFailureText(reason); return; }
     form.reset();
     toast(inviteMailShown() ? "Invite saved. The list shows whether it was emailed." : "Invite saved. Copy the link. Mail was not sent.");
@@ -2783,6 +2883,65 @@ function bindStaff(A) {
     try { await cancelInvite(b.dataset.inviteCancel); toast("Invite cancelled."); }
     catch (e) { toast("Couldn't cancel (" + (e.code || "error") + ")."); }
   });
+  bindProfileExtras(A);
+}
+function bindProfileExtras(A) {
+  const root = A || document;
+  const skillForm = root.querySelector("#skilladd");
+  if (skillForm) skillForm.onsubmit = async ev => {
+    ev.preventDefault();
+    const skills = sanitizeSkills([...(me.cloudProfile && me.cloudProfile.skills || []), skillForm.skill.value]);
+    try {
+      await updateDoc(doc(db, "users", me.uid), { skills });
+      me.cloudProfile = { ...(me.cloudProfile || {}), skills };
+      toast("Saved.");
+      redrawAfterSave();
+    } catch (e) { toast("Couldn't save that (" + ((e && e.code) || "error") + ")."); }
+  };
+  root.querySelectorAll("[data-skill-remove]").forEach(b => b.onclick = async () => {
+    const skills = sanitizeSkills(me.cloudProfile && me.cloudProfile.skills).filter(s => s !== b.dataset.skillRemove);
+    try {
+      await updateDoc(doc(db, "users", me.uid), { skills });
+      me.cloudProfile = { ...(me.cloudProfile || {}), skills };
+      redrawAfterSave();
+    } catch (e) { toast("Couldn't save that (" + ((e && e.code) || "error") + ")."); }
+  });
+  const titleForm = root.querySelector("#titleadd");
+  if (titleForm && canEditTitles()) titleForm.onsubmit = async ev => {
+    ev.preventDefault();
+    const added = addTitle((ui.tradeSetup && ui.tradeSetup.titles) || [], { name: titleForm.name.value, level: titleForm.level.value, trade: ui.tradeSetup && ui.tradeSetup.trade });
+    const err = root.querySelector("#titleerr");
+    if (!added.ok) { if (err) err.textContent = added.reason === "duplicate" ? "That title is already in the list." : "Enter a name and a permission level."; return; }
+    try { await saveTradeSetup({ ...ui.tradeSetup, titles: added.titles }); toast("Title added."); redrawAfterSave(); }
+    catch { if (err) err.textContent = "Couldn't save titles."; }
+  };
+  root.querySelectorAll("[data-title-rename]").forEach(b => b.onclick = async () => {
+    const row = b.closest("[data-title]");
+    const name = row && row.querySelector("[data-title-name]") && row.querySelector("[data-title-name]").value;
+    const level = row && row.querySelector("[data-title-level]") && row.querySelector("[data-title-level]").value;
+    const renamed = renameTitle(ui.tradeSetup && ui.tradeSetup.titles, b.dataset.titleRename, name);
+    if (!renamed.ok) { toast(renamed.reason === "duplicate" ? "That title is already in the list." : "Enter a name."); return; }
+    const leveled = setTitleLevel(renamed.titles, b.dataset.titleRename, level);
+    try { await saveTradeSetup({ ...ui.tradeSetup, titles: leveled.ok ? leveled.titles : renamed.titles }); toast("Title saved."); redrawAfterSave(); }
+    catch { toast("Couldn't save titles."); }
+  });
+  root.querySelectorAll("[data-title-remove]").forEach(b => b.onclick = async () => {
+    if (!confirm("Remove this job title? People who already have it keep their permission level.")) return;
+    const next = removeTitle(ui.tradeSetup && ui.tradeSetup.titles, b.dataset.titleRemove);
+    if (!next.ok) return;
+    try { await saveTradeSetup({ ...ui.tradeSetup, titles: next.titles }); toast("Title removed."); redrawAfterSave(); }
+    catch { toast("Couldn't save titles."); }
+  });
+  const titlePick = root.querySelector("#invitef select[name=jobTitle]");
+  const rolePick = root.querySelector("#invitef select[name=role]");
+  if (titlePick && rolePick) {
+    const sync = () => {
+      const opt = titlePick.selectedOptions && titlePick.selectedOptions[0];
+      if (opt && opt.dataset.level && [...rolePick.options].some(o => o.value === opt.dataset.level)) rolePick.value = opt.dataset.level;
+    };
+    titlePick.onchange = sync;
+    sync();
+  }
 }
 function renderAdmin() {
   donePill(); reimbPill(); inboxSub();
@@ -2802,7 +2961,7 @@ function renderAdmin() {
   const fj = filtered(), und = (ui.undated || []).filter(j => (!ui.typeF || j.type === ui.typeF));
   const all = [...fj, ...und.filter(u => !fj.some(j => j.id === u.id))];
   const quotesHtml = ui.view === "quotes" ? adminViewRouter(ui.view, ui, { esc, $$, staff, jobs: all, todayStr, rerender: () => renderAdmin(), canEditQuoteRates }) : null;
-  const staffHtml = ui.view === "staff" ? staffViewHtml(ui.invites || [], { now: inviteDisplayNow(), error: ui.invitesErr || "", origin: appOriginFor(myCompanyId(), location.origin), emailStatus: inviteMailMap(), roles: myInviteRoles() }) : null;
+  const staffHtml = ui.view === "staff" ? staffPageHtml() : null;
   paintBrand();
   $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "master" ? masterView() : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : quotesHtml != null ? quotesHtml : jobsView(all));
   const A = $("#app"); inboxBadge();
@@ -3949,6 +4108,7 @@ function bindOp(mine) {
     const j = (mine || []).find(x => x.id === b.dataset.photo);
     if (j) emailPhotos(j);
   });
+  bindProfileExtras($("#app"));
 }
 function snapExists(snap) {
   if (!snap) return false;
@@ -4043,7 +4203,7 @@ function renderOperator() {
   if (ui.opTab === "staff" && document.activeElement?.closest?.("#invitef")) return;
   if (ui.opTab === "staff" && canInvite()) {
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Staff</div><div class="mob-sub">Invite labourers, operators, supervisors and admins</div></div>
-      <div class="pad">${staffViewHtml(ui.invites || [], { now: inviteDisplayNow(), error: ui.invitesErr || "", origin: appOriginFor(myCompanyId(), location.origin), emailStatus: inviteMailMap(), roles: myInviteRoles() })}</div>${opTabs("more")}</div>`;
+      <div class="pad">${staffPageHtml()}</div>${opTabs("more")}</div>`;
     bindOp(mine); bindStaff($("#app")); return;
   }
   if (ui.opTab === "staff") ui.opTab = "more";
@@ -4054,6 +4214,12 @@ function renderOperator() {
     bindInbox($("#app")); bindOp(mine); return;
   }
   if (ui.opTab === "inbox") ui.opTab = "more";
+  if (ui.opTab === "settings" && canEditTitles()) {
+    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Company</div><div class="mob-sub">Trades</div></div>
+      <div class="pad">${settingsView()}</div>${opTabs("more")}</div>`;
+    bindOp(mine); bindSettings($("#app")); return;
+  }
+  if (ui.opTab === "settings") ui.opTab = "more";
   if (ui.opTab === "more") {
     const quoteBtn = canQuote() && me.role !== "admin" ? `<button type="button" class="mob-more" data-go="quotes"><b>Quotes</b><small>Guided pricing for supervisors</small></button>` : "";
     const fleetBtn = COMP.canSee() ? `<button type="button" class="mob-more" data-go="fleet"><b>Compliance</b><small>Registration and COI status</small></button>` : "";
@@ -4072,7 +4238,9 @@ function renderOperator() {
         <button type="button" class="mob-more incbtn" data-inc=""><b>Report incident</b><small>Safety report</small></button>
         ${quoteBtn}
         ${staffBtn}
+        ${canEditTitles() ? `<button type="button" class="mob-more" data-go="settings"><b>Company</b><small>Add or remove trades. Details and billing stay with an admin.</small></button>` : ""}
         ${inboxBtn}
+        ${skillsEditorHtml((me.cloudProfile && me.cloudProfile.skills) || [], { canEdit: true })}
         <p class="powered pad">${esc(orgSettings().name)} · ${esc(POWERED_BY)}</p>
       </div>
       ${myIncidentsHtml()}
@@ -4952,6 +5120,17 @@ QG = installQuotes({
   $, esc, toast, $$, CLIENTS, TYPES, canSeeMoney, canQuote, canEditQuoteRates, todayStr, jobNo,
   getMe: () => me, getUi: () => ui, getCompanyId: () => myCompanyId(),
   isAdmin: () => !!(me && me.role === "admin"),
+  saveExtraTrade: async (tradeId) => {
+    const id = normalizeTrade(tradeId);
+    if (!id || !canEditTitles()) { toast("Only an admin or a manager can change trades."); return; }
+    const cur = (ui.tradeSetup && ui.tradeSetup.enabled) || [];
+    if (cur.includes(id)) { toast(tradeLabel(id) + " is already on."); return; }
+    try {
+      await persistTrades([...cur, id]);
+      toast(tradeLabel(id) + (id === "earthworks" ? " added. Quote pack ready." : " added. Quote pack coming soon."));
+      redrawAfterSave();
+    } catch { toast("Couldn't update trades."); }
+  },
   renderAdmin: () => (me && me.role === "admin" ? renderAdmin() : renderOperator()),
   get staff() { return staff; }
 });

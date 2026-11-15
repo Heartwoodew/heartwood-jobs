@@ -316,6 +316,7 @@ test("helper invites: labourer cannot invite; supervisor invites a labourer but 
   assert.equal(okLab.proposal.title, "Invite staff");
   const supAdmin = harness();
   assert.equal((await ask(supAdmin, "sup1", { question: "Invite admin Pat at pat@example.com" })).proposal ?? null, null);
+  assert.equal((await ask(harness(), "sup1", { question: "Invite manager Pat at pat@example.com" })).proposal ?? null, null);
   // Heartwood: Alex (fixed list) may invite an admin; accepting it writes the heartwoodAdmins grant.
   const hwAdmin = harness();
   assert.equal((await ask(hwAdmin, ALEX_UID, { question: "Invite admin Pat at pat@example.com" })).proposal.title, "Invite staff");

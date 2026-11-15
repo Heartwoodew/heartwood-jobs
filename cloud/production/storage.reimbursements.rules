@@ -6,7 +6,7 @@
       return ((rcFileIsAlex() || rcFileIsPatrick()) && userCompanyOf(uid) == "heartwood") || (
         rcFileSignedIn()
         && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
-        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.get("role", "") == "admin"
+        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.get("role", "") in ["admin", "manager"]
         && userCompanyOf(request.auth.uid) == userCompanyOf(uid)
       );
     }

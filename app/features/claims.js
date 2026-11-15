@@ -169,7 +169,7 @@ export function claimsScreenHtml({ claims, uid, isAdmin, jobs, today, error, fil
     <fieldset class="rc-paidwith"><legend>How you paid</legend>${paid}</fieldset>
     <label>Job <span class="sub">optional</span><select name="jobId">${jobOpts}</select></label>
     <label>Notes <span class="sub">optional</span><textarea name="notes" maxlength="1000" rows="2"></textarea></label>
-    <label>Receipt <span class="sub">optional · photo or PDF · only you and admins can open it</span><input type="file" name="receipt" accept="image/jpeg,image/png,image/webp,application/pdf,.jpg,.jpeg,.png,.webp,.pdf"></label>
+    <label>Receipt <span class="sub">optional · photo or PDF · only you, a manager or an admin can open it</span><input type="file" name="receipt" accept="image/jpeg,image/png,image/webp,application/pdf,.jpg,.jpeg,.png,.webp,.pdf"></label>
     <p id="claimerr" class="err">${esc(error || "")}</p>
     <button type="submit" class="sm-btn primary">Submit claim</button>
   </form>`;

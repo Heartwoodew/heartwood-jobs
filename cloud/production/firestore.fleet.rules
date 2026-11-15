@@ -62,7 +62,7 @@
     }
     function fleetEditor(tenantId) {
       return fleetAdmin(tenantId)
-        || (fleetMember(tenantId) && fleetHasProfile() && "role" in fleetProfile() && fleetProfile().role == "supervisor");
+        || (fleetMember(tenantId) && fleetHasProfile() && "role" in fleetProfile() && fleetProfile().role in ["supervisor", "manager"]);
     }
     function fleetPolicyOk() {
       return request.resource.data.keys().hasOnly(["type", "insurer", "policyNumber", "startDate", "expiry", "amount", "notes", "assetId", "updatedAt", "updatedBy"])

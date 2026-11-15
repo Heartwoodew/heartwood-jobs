@@ -38,6 +38,7 @@ Every topic file cites `file`, function or rule name, and line numbers on that c
 | [10-offline-errors.md](10-offline-errors.md) | Offline cache and error strings from code |
 | [11-tenancy-cloud-plans.md](11-tenancy-cloud-plans.md) | Tenant boundaries, Base vs Pro, rules, functions |
 | [12-open-and-planned.md](12-open-and-planned.md) | Open PRs vs planned work vs things not found |
+| [14-sprint1-trades.md](14-sprint1-trades.md) | Manager role, trades, job titles and quote packs (in repo, not deployed) |
 | [13-limitations.md](13-limitations.md) | Precise limits and gaps |
 | [persona-and-voice.md](persona-and-voice.md) | Helper persona and spoken-reply spec. Not built. |
 | [callup-knowledge.md](callup-knowledge.md) | The same topics in one file |

@@ -17,7 +17,7 @@ const DATE_LABEL = /(?:required(?:\s+date)?|date\s+required|call[-\s]?up(?:\s+da
 const NOISE = /\b(remittance|statement of account|payment advice|out of office|automatic reply|newsletter|password reset)\b/i;
 
 export function canImportInbox(me) {
-  return !!(me && (me.role === "admin" || me.role === "supervisor" || me.staffRole === "supervisor"));
+  return !!(me && (me.role === "admin" || me.role === "manager" || me.role === "supervisor" || me.staffRole === "manager" || me.staffRole === "supervisor"));
 }
 
 export function isImported(email) {

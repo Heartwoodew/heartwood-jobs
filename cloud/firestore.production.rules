@@ -91,6 +91,41 @@ service cloud.firestore {
         && data.billing.stripeCustomerId == null
         && data.billing.stripeSubscriptionId == null;
     }
+    function oneTradeId(id) {
+      return id == "earthworks" || id == "landscaping" || id == "concreting" || id == "fencing"
+        || id == "carpentry" || id == "tiling" || id == "plumbing" || id == "electrical";
+    }
+    function tradeFieldOk(data) {
+      return !("trade" in data) || oneTradeId(data.trade);
+    }
+    function tradesListOk(list) {
+      return list is list && list.size() >= 1 && list.size() <= 8
+        && (list.size() < 1 || oneTradeId(list[0]))
+        && (list.size() < 2 || oneTradeId(list[1]))
+        && (list.size() < 3 || oneTradeId(list[2]))
+        && (list.size() < 4 || oneTradeId(list[3]))
+        && (list.size() < 5 || oneTradeId(list[4]))
+        && (list.size() < 6 || oneTradeId(list[5]))
+        && (list.size() < 7 || oneTradeId(list[6]))
+        && (list.size() < 8 || oneTradeId(list[7]));
+    }
+    function companyTradesEdit(companyId) {
+      return signedIn()
+        && companyId == callerCompany()
+        && ((isAlex() || isPatrick()) || (hasProfile() && (profile().role == "admin" || profile().role == "manager")))
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["trades"])
+        && request.resource.data.trades is list
+        && request.resource.data.trades.size() >= 1
+        && request.resource.data.trades.size() <= 8
+        && oneTradeId(request.resource.data.trades[0])
+        && (request.resource.data.trades.size() < 2 || oneTradeId(request.resource.data.trades[1]))
+        && (request.resource.data.trades.size() < 3 || oneTradeId(request.resource.data.trades[2]))
+        && (request.resource.data.trades.size() < 4 || oneTradeId(request.resource.data.trades[3]))
+        && (request.resource.data.trades.size() < 5 || oneTradeId(request.resource.data.trades[4]))
+        && (request.resource.data.trades.size() < 6 || oneTradeId(request.resource.data.trades[5]))
+        && (request.resource.data.trades.size() < 7 || oneTradeId(request.resource.data.trades[6]))
+        && (request.resource.data.trades.size() < 8 || oneTradeId(request.resource.data.trades[7]));
+    }
     function companyOwnerCreate(companyId) {
       let d = request.resource.data;
       return signedIn()
@@ -98,8 +133,8 @@ service cloud.firestore {
         && !hasProfile()
         && companyIdOk(companyId)
         && companyId != "heartwood"
-        && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing"])
-        && companyDetailText(d)
+        && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing", "trade", "trades"])
+        && companyDetailText(d) && tradeFieldOk(d) && (!("trades" in d) || tradesListOk(d.trades))
         && d.ownerUid == request.auth.uid
         && d.createdBy == request.auth.uid
         && d.status == "active"
@@ -141,8 +176,8 @@ service cloud.firestore {
       return platformOwner()
         && companyIdOk(companyId)
         && companyId != "heartwood"
-        && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "demoData", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing"])
-        && companyDetailText(d)
+        && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "demoData", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing", "trade", "trades"])
+        && companyDetailText(d) && tradeFieldOk(d) && (!("trades" in d) || tradesListOk(d.trades))
         && d.isTest == true
         && d.plan == "trial"
         && d.origin == "test"
@@ -164,8 +199,8 @@ service cloud.firestore {
         && !hasProfile()
         && companyIdOk(companyId)
         && companyId != "heartwood"
-        && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "demoData", "friendInvite", "friendEndsAt", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing"])
-        && companyDetailText(d)
+        && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "demoData", "friendInvite", "friendEndsAt", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing", "trade", "trades"])
+        && companyDetailText(d) && tradeFieldOk(d) && (!("trades" in d) || tradesListOk(d.trades))
         && d.plan == "friend"
         && d.isTest == false
         && d.demoData == false
@@ -258,7 +293,7 @@ service cloud.firestore {
       // Box sync account (Hubdoc filer, receipts worker) reads each company's Hubdoc address and test flag.
       allow read: if isSync();
       allow create: if companyOwnerCreate(companyId) || testCompanyCreate(companyId) || friendCompanyCreate(companyId);
-      allow update: if ownerPlanEdit(companyId) || testArchive(companyId) || testDemoCounts(companyId) || companyAdminEdit(companyId) || companyStatsBump(companyId);
+      allow update: if companyTradesEdit(companyId) || ownerPlanEdit(companyId) || testArchive(companyId) || testDemoCounts(companyId) || companyAdminEdit(companyId) || companyStatsBump(companyId);
       allow delete: if false;
     }
 // END COMPANY RULES
@@ -329,7 +364,10 @@ service cloud.firestore {
 
     function companyOffice() {
       return callerCompany() != "" && callerCompany() != "heartwood" && hasProfile()
-        && (profile().role == "admin" || profile().role == "supervisor");
+        && (profile().role == "admin" || profile().role == "supervisor" || profile().role == "manager");
+    }
+    function heartwoodManager() {
+      return signedIn() && hasProfile() && profile().get("role", "") == "manager" && callerCompany() == "heartwood";
     }
     function companyStaff() {
       return callerCompany() != "" && callerCompany() != "heartwood" && hasProfile();
@@ -347,16 +385,21 @@ service cloud.firestore {
     }
     // Guided price overrides are admin only (Nov 2026 round 3): a supervisor may save a quote but must leave them as they were.
     function quoteOverridesKept(before) {
-      return isAdmin() || profile().role == "admin" || request.resource.data.get("priceOverrides", {}) == before;
+      return isAdmin() || profile().role == "admin" || profile().role == "manager" || request.resource.data.get("priceOverrides", {}) == before;
     }
     match /quotes/{id} {
       allow get: if (isAdmin() && docCompany(resource.data) == "heartwood")
+        || (heartwoodManager() && docCompany(resource.data) == "heartwood")
         || (companyOffice() && docCompany(resource.data) == callerCompany());
       allow list: if isAdmin() && resource.data.companyId == "heartwood";
+      allow list: if heartwoodManager() && resource.data.companyId == "heartwood";
       allow list: if companyOffice() && resource.data.companyId == callerCompany();
       allow create: if quoteFieldsOk(request.resource.data) && ((isAdmin() && request.resource.data.get("companyId", "heartwood") == "heartwood")
+        || (heartwoodManager() && request.resource.data.get("companyId", "heartwood") == "heartwood" && quoteOverridesKept({}))
         || (companyOffice() && request.resource.data.companyId == callerCompany() && quoteOverridesKept({})));
       allow update: if quoteFieldsOk(request.resource.data) && ((isAdmin() && docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood")
+        || (heartwoodManager() && docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood"
+          && quoteOverridesKept(resource.data.get("priceOverrides", {})))
         || (companyOffice() && docCompany(resource.data) == callerCompany() && docCompany(request.resource.data) == callerCompany()
           && quoteOverridesKept(resource.data.get("priceOverrides", {}))));
       allow delete: if false;
@@ -383,14 +426,45 @@ service cloud.firestore {
       allow update: if false;
       allow delete: if isAdmin() && request.auth.uid != uid;
     }
+    function skillItem(list, i) {
+      return i >= list.size() || (list[i] is string && list[i].size() > 0 && list[i].size() <= 40 && !list[i].matches('.*[\\n\\r\\t<>].*'));
+    }
+    function skillsOk(list) {
+      return list is list && list.size() <= 12
+        && skillItem(list, 0) && skillItem(list, 1) && skillItem(list, 2) && skillItem(list, 3)
+        && skillItem(list, 4) && skillItem(list, 5) && skillItem(list, 6) && skillItem(list, 7)
+        && skillItem(list, 8) && skillItem(list, 9) && skillItem(list, 10) && skillItem(list, 11);
+    }
+    function staffEditOk(uid) {
+      return signedIn() && request.auth.uid != uid && hasProfile()
+        && (profile().get("role", "") == "admin" || (profile().get("role", "") == "manager" && resource.data.get("role", "") != "admin"))
+        && callerCompany() != ""
+        && docCompany(resource.data) == callerCompany()
+        && docCompany(request.resource.data) == callerCompany()
+        && request.resource.data.get("role", "") == resource.data.get("role", "")
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["jobTitle", "jobTitleId", "skills"])
+        && request.resource.data.get("jobTitle", "") is string
+        && request.resource.data.get("jobTitle", "").size() <= 80
+        && request.resource.data.get("jobTitleId", "") is string
+        && request.resource.data.get("jobTitleId", "").size() <= 60
+        && (!request.resource.data.keys().hasAny(["skills"]) || skillsOk(request.resource.data.skills));
+    }
     match /users/{uid} {
       // Everyone reads their own profile.
       allow get: if signedIn() && request.auth.uid == uid;
+      // Skill and licence tags are informational. The person can change only that list.
+      allow update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["skills"])
+        && skillsOk(request.resource.data.skills);
+      // Admin or manager sets the job title and permission level, up to their own level. Not an admin, unless the editor is an admin.
+      allow update: if staffEditOk(uid);
       // Box sync account (routines, staff sync) keeps full access.
       allow read, write: if isSync();
       // Heartwood admins (Alex, Patrick): Heartwood profiles only. A profile with no companyId/tenantId is Heartwood.
       allow get: if isAdmin() && docCompany(resource.data) == "heartwood";
       allow list: if isAdmin() && resource.data.companyId == "heartwood";
+      allow get: if heartwoodManager() && docCompany(resource.data) == "heartwood";
+      allow list: if heartwoodManager() && resource.data.companyId == "heartwood";
       allow create: if isAdmin() && docCompany(request.resource.data) == "heartwood";
       allow update: if isAdmin() && docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood";
       allow delete: if isAdmin() && docCompany(resource.data) == "heartwood";
@@ -486,9 +560,14 @@ service cloud.firestore {
       // A missing doc (a job with no money yet) reads as "not found" for the office, so the Find PO listener stays alive. Crew still fail.
       allow read, write: if isSync();
       allow get: if isAdmin() && (resource == null || docCompany(resource.data) == "heartwood");
+      allow get: if heartwoodManager() && (resource == null || docCompany(resource.data) == "heartwood");
       allow list: if isAdmin() && resource.data.companyId == "heartwood";
+      allow list: if heartwoodManager() && resource.data.companyId == "heartwood";
       allow create: if isAdmin() && docCompany(request.resource.data) == "heartwood" && jobMoneyOk(request.resource.data, jobId);
+      allow create: if heartwoodManager() && docCompany(request.resource.data) == "heartwood" && jobMoneyOk(request.resource.data, jobId);
       allow update: if isAdmin() && docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood"
+        && jobMoneyOk(request.resource.data, jobId);
+      allow update: if heartwoodManager() && docCompany(resource.data) == "heartwood" && docCompany(request.resource.data) == "heartwood"
         && jobMoneyOk(request.resource.data, jobId);
       allow get: if companyOffice() && (resource == null || docCompany(resource.data) == callerCompany());
       allow list: if companyOffice() && resource.data.companyId == callerCompany();
@@ -501,6 +580,8 @@ service cloud.firestore {
     // Invoicing counters (invoice numbers). Admins only; operators can neither read nor write.
     match /meta/{docId} {
       allow read, write: if isAdmin() && docId != "profitHistory";
+      allow get: if heartwoodManager() && docId == "quoteRates";
+      allow create, update: if heartwoodManager() && docId == "quoteRates";
     }
     // Per-company settings for companies other than Heartwood (Heartwood keeps meta/quoteRates and meta/supervisors).
     // {companyId}_quoteRates: office reads, company admins write. {companyId}_supervisors: office reads and writes.
@@ -509,19 +590,50 @@ service cloud.firestore {
     }
     function cmGetOk(docId) {
       let c = incProfileCompany();
-      return signedIn() && c != "heartwood" && cmRole() in ["admin", "supervisor"]
+      return signedIn() && c != "heartwood" && cmRole() in ["admin", "supervisor", "manager"]
         && docId in [c + "_quoteRates", c + "_supervisors", c + "_invoicing"];
     }
     function cmWriteOk(docId) {
       let c = incProfileCompany();
       let role = cmRole();
       return signedIn() && c != "heartwood" && request.resource.data.get("companyId", "") == c
-        && ((docId == c + "_supervisors" && role in ["admin", "supervisor"])
-          || (docId in [c + "_quoteRates", c + "_invoicing"] && role == "admin"));
+        && ((docId == c + "_supervisors" && role in ["admin", "supervisor", "manager"])
+          || (docId == c + "_quoteRates" && role in ["admin", "manager"])
+          || (docId == c + "_invoicing" && role == "admin"));
     }
     match /companyMeta/{docId} {
       allow get: if cmGetOk(docId);
       allow create, update: if cmWriteOk(docId);
+      allow delete: if false;
+    }
+    function extraTradeAt(list, i) {
+      return i >= list.size() || (list[i] == "earthworks" || list[i] == "landscaping" || list[i] == "concreting"
+        || list[i] == "fencing" || list[i] == "carpentry" || list[i] == "tiling" || list[i] == "plumbing" || list[i] == "electrical");
+    }
+    function tradeDocOk(companyId) {
+      let d = request.resource.data;
+      return d.keys().hasOnly(["companyId", "trade", "trades", "extraTrades", "titles", "updatedBy", "updatedAt"])
+        && d.companyId == companyId
+        && ("trade" in d) && tradeFieldOk(d) && (!("trades" in d) || tradesListOk(d.trades))
+        && d.extraTrades is list && d.extraTrades.size() <= 7
+        && extraTradeAt(d.extraTrades, 0) && extraTradeAt(d.extraTrades, 1) && extraTradeAt(d.extraTrades, 2)
+        && extraTradeAt(d.extraTrades, 3) && extraTradeAt(d.extraTrades, 4) && extraTradeAt(d.extraTrades, 5)
+        && extraTradeAt(d.extraTrades, 6)
+        && d.titles is list && d.titles.size() <= 80
+        && d.updatedBy == request.auth.uid
+        && d.updatedAt == request.time;
+    }
+    function tradeWriter(companyId) {
+      return companyId == callerCompany() && (
+        (companyOffice() && profile().get("role", "") in ["admin", "manager"])
+        || heartwoodManager()
+        || (isAdmin() && companyId == "heartwood")
+      );
+    }
+    match /companyTrades/{companyId} {
+      allow get: if signedIn() && callerCompany() == companyId;
+      allow list: if false;
+      allow create, update: if tradeWriter(companyId) && tradeDocOk(companyId);
       allow delete: if false;
     }
     // Xero monthly P&L for the Home profit chart: Xero users read; only the box (tools/xero_profit_sync.py) writes.
@@ -694,6 +806,7 @@ service cloud.firestore {
           && (
             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("role", "") == "admin"
             || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("role", "") == "supervisor"
+            || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("role", "") == "manager"
           )
           && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("tenantId", "heartwood") == "heartwood"
           && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("companyId", "heartwood") == "heartwood"
@@ -1074,7 +1187,7 @@ service cloud.firestore {
     }
     function fleetEditor(tenantId) {
       return fleetAdmin(tenantId)
-        || (fleetMember(tenantId) && fleetHasProfile() && "role" in fleetProfile() && fleetProfile().role == "supervisor");
+        || (fleetMember(tenantId) && fleetHasProfile() && "role" in fleetProfile() && fleetProfile().role in ["supervisor", "manager"]);
     }
     function fleetPolicyOk() {
       return request.resource.data.keys().hasOnly(["type", "insurer", "policyNumber", "startDate", "expiry", "amount", "notes", "assetId", "updatedAt", "updatedBy"])
@@ -1140,7 +1253,7 @@ service cloud.firestore {
     function inviteAdmin() {
       return inviteIsAlex() || inviteIsPatrick()
         || (inviteHasProfile() && "role" in inviteProfile()
-          && (inviteProfile().role == "admin" || inviteProfile().role == "supervisor"));
+          && (inviteProfile().role == "admin" || inviteProfile().role == "supervisor" || inviteProfile().role == "manager"));
     }
     function inviteCallerTenant() {
       return inviteIsAlex() || inviteIsPatrick()
@@ -1164,8 +1277,12 @@ service cloud.firestore {
             && inviteHasProfile() && inviteProfile().get("role", "") == "admin"))
         : (inviteHasProfile() && "role" in inviteProfile() && inviteProfile().role == "admin");
     }
+    function inviteCanGrantManager() {
+      return inviteFullAdmin() || (inviteHasProfile() && inviteProfile().get("role", "") == "manager");
+    }
     function inviteRoleOk() {
       return request.resource.data.role in ["labourer", "operator", "supervisor"]
+        || (request.resource.data.role == "manager" && inviteCanGrantManager())
         || (request.resource.data.role == "admin" && inviteFullAdmin());
     }
     function inviteSame(key) {
@@ -1213,7 +1330,7 @@ service cloud.firestore {
     function inviteCreateOk(inviteId) {
       return inviteAdmin()
         && inviteBaseOk()
-        && request.resource.data.keys().hasOnly(["name", "email", "role", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId", "companyId"])
+        && request.resource.data.keys().hasOnly(["name", "email", "role", "jobTitle", "jobTitleId", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId", "companyId"])
         && request.resource.data.get("companyId", request.resource.data.tenantId) == request.resource.data.tenantId
         && request.resource.data.status == "pending"
         && request.resource.data.createdBy == request.auth.uid
@@ -1229,7 +1346,7 @@ service cloud.firestore {
         && request.resource.data.cancelledAt == request.time
         && inviteSame("name") && inviteSame("email") && inviteSame("role") && inviteSame("createdBy")
         && inviteSame("createdAt") && inviteSame("expiresAt") && inviteSame("token") && inviteSame("tenantId")
-        && inviteSame("companyId")
+        && inviteSame("companyId") && inviteSame("jobTitle") && inviteSame("jobTitleId")
         && inviteSame("resentAt") && inviteSame("resentBy")
         && inviteLockAgrees(request.resource.data.email, inviteId);
     }
@@ -1241,21 +1358,23 @@ service cloud.firestore {
         && request.resource.data.resentAt == request.time
         && inviteExpiryWindow()
         && inviteSame("name") && inviteSame("email") && inviteSame("role") && inviteSame("createdBy")
-        && inviteSame("createdAt") && inviteSame("tenantId") && inviteSame("companyId")
+        && inviteSame("createdAt") && inviteSame("tenantId") && inviteSame("companyId") && inviteSame("jobTitle") && inviteSame("jobTitleId")
         && inviteSame("cancelledAt") && inviteSame("cancelledBy")
         && inviteLockAgrees(request.resource.data.email, inviteId);
     }
     function inviteUpdateOk(inviteId) {
       return inviteAdmin()
         && inviteBaseOk()
-        && request.resource.data.keys().hasOnly(["name", "email", "role", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId", "companyId", "cancelledAt", "cancelledBy", "resentAt", "resentBy"])
+        && request.resource.data.keys().hasOnly(["name", "email", "role", "jobTitle", "jobTitleId", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId", "companyId", "cancelledAt", "cancelledBy", "resentAt", "resentBy"])
         && (inviteCancelOk(inviteId) || inviteResendOk(inviteId));
     }
 
     match /invites/{inviteId} {
       // Supervisors never read an admin invite (it carries the sign-up token): their list asks for the three crew/supervisor roles.
       allow get, list: if inviteAdmin() && resource.data.tenantId == inviteCallerTenant()
-        && (resource.data.role in ["labourer", "operator", "supervisor"] || inviteFullAdmin());
+        && (resource.data.role in ["labourer", "operator", "supervisor"]
+          || (resource.data.role == "manager" && inviteCanGrantManager())
+          || inviteFullAdmin());
       allow create: if inviteCreateOk(inviteId);
       allow update: if inviteUpdateOk(inviteId);
       allow delete: if false;
@@ -1318,7 +1437,7 @@ service cloud.firestore {
     match /inviteStatus/{id} {
       allow get: if (isAdmin() && docCompany(resource.data) == "heartwood")
         || (resource.data.get("companyId", "heartwood") != "heartwood" && incStaffOf(resource.data.companyId)
-          && cmRole() in ["admin", "supervisor"]);
+          && cmRole() in ["admin", "supervisor", "manager"]);
       allow write: if false;
     }
 
@@ -1350,7 +1469,7 @@ service cloud.firestore {
     }
     function svcWriter(tenantId) {
       return svcAdmin(tenantId)
-        || (svcMember(tenantId) && svcHasProfile() && "role" in svcProfile() && svcProfile().role == "supervisor");
+        || (svcMember(tenantId) && svcHasProfile() && "role" in svcProfile() && svcProfile().role in ["supervisor", "manager"]);
     }
     function svcInt(v, max) {
       return v is int && v >= 0 && v <= max;
@@ -1769,7 +1888,7 @@ service cloud.firestore {
     function lvDecider() {
       return lvHeartwood() && (
         isAlex() || isPatrick() || (
-          hasProfile() && (profile().role == "admin" || profile().role == "supervisor")
+          hasProfile() && (profile().role == "admin" || profile().role == "supervisor" || profile().role == "manager")
         )
       );
     }
@@ -1858,7 +1977,7 @@ service cloud.firestore {
     }
     // Other companies (not Heartwood): leave lives under companies/{c}/leaveRequests, so Heartwood's own list
     // never sees it. Staff of that company create and read their own; its admins and supervisors read and decide.
-    function lvCoDecider(c) { return incStaffOf(c) && cmRole() in ["admin", "supervisor"]; }
+    function lvCoDecider(c) { return incStaffOf(c) && cmRole() in ["admin", "supervisor", "manager"]; }
     match /companies/{c}/leaveRequests/{id} {
       allow read: if incStaffOf(c) && (
         lvCoDecider(c)
@@ -1881,7 +2000,10 @@ service cloud.firestore {
       );
     }
     function rcAdmin() {
-      return rcStaff() && (isAlex() || isPatrick() || (hasProfile() && profile().role == "admin"));
+      return rcStaff() && (isAlex() || isPatrick() || (hasProfile() && (profile().role == "admin" || profile().role == "manager")));
+    }
+    function rcCompanyDecider(c) {
+      return incStaffOf(c) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("role", "") in ["admin", "manager"];
     }
     function rcReceiptPath(uid, id) {
       return request.resource.data.receiptPath == ""
@@ -1982,12 +2104,12 @@ service cloud.firestore {
     // company's admins read and decide. The box filer reads paid ones and records Hubdoc state only.
     match /companies/{c}/reimbursementClaims/{id} {
       allow read: if (rcSync() && resource != null && resource.data.status == "paid") || incStaffOf(c) && (
-        incAdminOf(c)
+        rcCompanyDecider(c)
         || (resource != null && resource.data.uid == request.auth.uid)
         || (resource == null && id.matches('^rc[a-z0-9]{16}$'))
       );
       allow create: if incStaffOf(c) && rcCreateBody(id);
-      allow update: if (incAdminOf(c) && rcDecisionBody()) || rcHubdoc();
+      allow update: if (rcCompanyDecider(c) && rcDecisionBody()) || rcHubdoc();
       allow delete: if false;
     }
 // END REIMBURSEMENT CLAIM RULES
