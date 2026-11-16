@@ -30,7 +30,7 @@ test("app address: Heartwood stays on jobs.heartwoodew.com, others use the CallU
   assert.equal(billingOrigin(HEARTWOOD_APP_ORIGIN, "heartwood"), HEARTWOOD_APP_ORIGIN);
   const sw = readFileSync(new URL("../../app/sw.js", import.meta.url), "utf8");
 
-  assert.match(sw, /callup-shell-v122-referral/);
+  assert.match(sw, /callup-shell-v123-price50/);
 
 });
 

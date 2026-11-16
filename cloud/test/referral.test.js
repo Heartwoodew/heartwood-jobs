@@ -355,7 +355,7 @@ test("billing settings show the referral to an admin and hide prices from crew",
   const adminHtml = companySettingsHtml(org, { canEdit: true });
   assert.match(adminHtml, /Refer another business\. When they start paying, you get 2 months free\./);
   assert.match(adminHtml, /id="referralbox"/);
-  assert.match(adminHtml, /A\$20 a month/);
+  assert.match(adminHtml, /A\$50 a month/);
   const ready = referralBoxHtml({ code: CODE, link: referralLink(CODE), pending: 2, earned: 1 });
   assert.match(ready, /id="refcopy"/);
   assert.match(ready, new RegExp(CODE));
@@ -364,9 +364,9 @@ test("billing settings show the referral to an admin and hide prices from crew",
   const crew = companySettingsHtml(org, { canEdit: false });
   assert.doesNotMatch(crew, /referralbox/);
   assert.doesNotMatch(crew, /2 months free/);
-  assert.doesNotMatch(crew, /A\$20/);
+  assert.doesNotMatch(crew, /A\$20|A\$50/);
   const staff = pausedStaffHtml();
-  assert.doesNotMatch(staff, /A\$20/);
+  assert.doesNotMatch(staff, /A\$20|A\$50/);
   assert.doesNotMatch(staff, /referral/);
   assert.match(signupFormHtml(), /14-day trial/);
   assert.doesNotMatch(signupFormHtml(), /2 months free/);
@@ -385,6 +385,6 @@ test("billing settings show the referral to an admin and hide prices from crew",
   assert.match(index, /export const attachSignupReferral = onCall/);
   assert.match(index, /handleReferralWebhookEvent/);
   const sw = readFileSync(new URL("../../app/sw.js", import.meta.url), "utf8");
-  assert.match(sw, /callup-shell-v122-referral/);
+  assert.match(sw, /callup-shell-v123-price50/);
   assert.match(sw, /features\/referral\.js/);
 });

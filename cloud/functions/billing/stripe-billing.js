@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { CALLUP_ORIGINS, HEARTWOOD_APP_ORIGIN, appOriginFor } from "../shared/staff-invites.js";
 
-// Stripe for CallUp (live since 11 Nov 2026 via STRIPE_MODE=live). One plan: A$20 includes 1 person, A$5 each extra person.
+// Stripe for CallUp (live since 11 Nov 2026 via STRIPE_MODE=live). One plan: A$50 includes 1 person, A$5 each extra person.
 // There is no second tier. Test companies, friend trials and Heartwood never call Stripe.
 // Test mode (default): the secret key must be an sk_test_ key and live events are refused.
 // Test secrets are STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in Secret Manager.
@@ -10,7 +10,7 @@ import { CALLUP_ORIGINS, HEARTWOOD_APP_ORIGIN, appOriginFor } from "../shared/st
 // In live mode, test keys and test events are refused instead. See /workspace/callup/stripe-go-live-steps.md.
 // Webhook URL, after a human deploys: https://australia-southeast1-heartwood-9f37f.cloudfunctions.net/stripeWebhook
 
-export const BASE_PRICE_ID = "price_1UZRdBHEbjZCMeDTohSuaIwr";
+export const BASE_PRICE_ID = "price_1UcGvhHEbjZCMeDTkneG3K90";
 export const EXTRA_PRICE_ID = "price_1UZRdDHEbjZCMeDTrPHYbfnK";
 export const BASE_LOOKUP = "callup_base_monthly";
 export const EXTRA_LOOKUP = "callup_extra_staff_monthly";
