@@ -1,7 +1,9 @@
-// Phone notifications for chat and the morning job list.
+// Phone notifications for chat, the morning job list, and a prestart assignment.
 // Chat: a new message document wakes this. The sender is not notified.
 // Jobs: 06:00 Australia/Brisbane, one note per person who has work that day.
 // A later change to today's list sends at most one "Your jobs changed".
+// Prestart: a new or changed machine assignment writes one notice and, when the
+// phone has push on, one notification. The same pairing does not send again.
 // Retention is not scheduled here. Deploy is still blocked by refuse-live-deploy.js.
 import { onDocumentCreated, onDocumentWritten } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
@@ -13,6 +15,10 @@ import {
   affectedUids, brisbaneDate, companySkipped, digestDocId, dispatchDailyChange, dispatchDailyJobs,
   scheduleFieldsChanged,
 } from "./daily-jobs.js";
+import {
+  buildPrestartNotices, changedAssetAssignments, changedJobAssignments, changedTimesheetAssignments,
+  deliverPrestartNotices, dueAssignments, prestartEnabled,
+} from "./prestart-notify.js";
 
 const REGION = "australia-southeast1";
 
@@ -241,6 +247,113 @@ export const dailyJobChangePush = onDocumentWritten(
         });
         if (result.sent || result.skipped === "send") console.log("daily change", companyId, result.sent, result.skipped || "");
       }
+    }
+  },
+);
+
+const COMPANY_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
+function claimPrestartNotice(db, notice) {
+  const ref = db.collection("users").doc(notice.uid).collection("prestartNotices").doc(notice.id);
+  return ref.create({
+    companyId: notice.companyId,
+    day: notice.day,
+    assetId: notice.assetId,
+    assetName: notice.assetName,
+    kind: notice.kind,
+    ambiguous: notice.ambiguous === true,
+    jobId: notice.jobId,
+    jobLabel: notice.jobLabel,
+    body: notice.body,
+    source: notice.source,
+    createdAt: FieldValue.serverTimestamp(),
+  }).then(() => true).catch(err => {
+    const code = err && (err.code || err.message);
+    if (code === 6 || code === "already-exists" || code === "ALREADY_EXISTS") return false;
+    throw err;
+  });
+}
+
+async function runPrestart(db, companyId, assignments) {
+  // Back-filling yesterday's timesheet, or editing an old job, is not today's work.
+  const due = dueAssignments(assignments, brisbaneDate(new Date()));
+  if (!COMPANY_RE.test(String(companyId || "")) || !due.length) return;
+  const companySnap = await db.collection("companies").doc(companyId).get();
+  const company = companySnap.exists ? { id: companySnap.id, ...(companySnap.data() || {}) } : null;
+  if (!prestartEnabled(company)) return;
+  const [assetSnap, ...daySnaps] = await Promise.all([
+    db.collection("tenants").doc(companyId).collection("fleet").get(),
+    ...[...new Set(due.map(row => row.day))].map(day =>
+      db.collection("tenants").doc(companyId).collection("prestarts").where("day", "==", day).get()),
+  ]);
+  const assets = assetSnap.docs.map(docSnap => ({ id: docSnap.id, ...(docSnap.data() || {}) }));
+  const prestarts = daySnaps.flatMap(snap => snap.docs.map(docSnap => ({ id: docSnap.id, ...(docSnap.data() || {}) })));
+  const people = [];
+  for (const uid of [...new Set(due.map(row => row.uid))]) people.push(await loadOnePerson(db, uid));
+  const notices = buildPrestartNotices({ companyId, assignments: due, assets, prestarts, people, enabled: true });
+  const result = await deliverPrestartNotices({
+    notices,
+    claim: notice => claimPrestartNotice(db, notice),
+    sendEach: messages => getMessaging().sendEach(messages),
+    deleteToken: target => deleteToken(db, target),
+  });
+  console.log("prestart", companyId, result.noticed, result.sent, result.skipped);
+}
+
+export const prestartJobPush = onDocumentWritten(
+  { document: "jobs/{jobId}", region: REGION, timeoutSeconds: 60, memory: "256MiB" },
+  async (event) => {
+    if (process.env.NODE_TEST_CONTEXT) return;
+    const beforeSnap = event.data && event.data.before;
+    const afterSnap = event.data && event.data.after;
+    const before = beforeSnap && beforeSnap.exists ? { id: event.params.jobId, ...beforeSnap.data() } : null;
+    const after = afterSnap && afterSnap.exists ? { id: event.params.jobId, ...afterSnap.data() } : null;
+    const assignments = changedJobAssignments(before, after);
+    if (!assignments.length) return;
+    ensureAdmin();
+    const db = getFirestore();
+    const companies = [...new Set(assignments.map(row => row.companyId))];
+    for (const companyId of companies) {
+      await runPrestart(db, companyId, assignments.filter(row => row.companyId === companyId));
+    }
+  },
+);
+
+export const prestartAssetPush = onDocumentWritten(
+  { document: "tenants/{tenantId}/fleet/{assetId}", region: REGION, timeoutSeconds: 60, memory: "256MiB" },
+  async (event) => {
+    if (process.env.NODE_TEST_CONTEXT) return;
+    const beforeSnap = event.data && event.data.before;
+    const afterSnap = event.data && event.data.after;
+    const before = beforeSnap && beforeSnap.exists ? { id: event.params.assetId, ...beforeSnap.data() } : null;
+    const after = afterSnap && afterSnap.exists ? { id: event.params.assetId, ...afterSnap.data() } : null;
+    const assignments = changedAssetAssignments(before, after, {
+      assetId: event.params.assetId,
+      companyId: event.params.tenantId,
+      day: brisbaneDate(new Date()),
+    });
+    if (!assignments.length) return;
+    ensureAdmin();
+    await runPrestart(getFirestore(), event.params.tenantId, assignments);
+  },
+);
+
+export const prestartTimesheetPush = onDocumentWritten(
+  { document: "timesheets/{sheetId}", region: REGION, timeoutSeconds: 60, memory: "256MiB" },
+  async (event) => {
+    if (process.env.NODE_TEST_CONTEXT) return;
+    const beforeSnap = event.data && event.data.before;
+    const afterSnap = event.data && event.data.after;
+    const before = beforeSnap && beforeSnap.exists ? beforeSnap.data() : null;
+    const after = afterSnap && afterSnap.exists ? afterSnap.data() : null;
+    const uid = String((after && after.uid) || String(event.params.sheetId || "").split("_")[0] || "");
+    const assignments = changedTimesheetAssignments(before, after, uid);
+    if (!assignments.length) return;
+    ensureAdmin();
+    const db = getFirestore();
+    const companies = [...new Set(assignments.map(row => row.companyId))];
+    for (const companyId of companies) {
+      await runPrestart(db, companyId, assignments.filter(row => row.companyId === companyId));
     }
   },
 );

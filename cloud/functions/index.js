@@ -23,7 +23,8 @@
  * An environment change cannot turn it back on. See helper/DEPLOY.md.
  *
  * Phone notifications live in push-schedule.js: chatMessagePush, dailyJobPush
- * (06:00 Australia/Brisbane) and dailyJobChangePush. Photo retention is not scheduled.
+ * (06:00 Australia/Brisbane), dailyJobChangePush, prestartJobPush, prestartAssetPush
+ * and prestartTimesheetPush. Photo retention is not scheduled.
  * pauseRetentionSweep (03:00 Australia/Brisbane) logs paused companies it would delete.
  * It does not delete anything unless PAUSE_DELETE_DRY_RUN=false.
  * An owner-paused company is never selected. That pause is not an automatic deletion.
@@ -146,7 +147,7 @@ export const helperAsk = onCall(
 );
 
 export { retentionSweepHandler } from "./lib/retention-run.js";
-export { chatMessagePush, dailyJobPush, dailyJobChangePush } from "./push-schedule.js";
+export { chatMessagePush, dailyJobPush, dailyJobChangePush, prestartJobPush, prestartAssetPush, prestartTimesheetPush } from "./push-schedule.js";
 
 const INVITE_REGION = "australia-southeast1";
 

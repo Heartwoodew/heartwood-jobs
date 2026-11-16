@@ -2581,6 +2581,15 @@ service cloud.firestore {
     }
 // END DAILY JOB RULES
 
+// BEGIN PRESTART NOTICE RULES
+    // Written by the prestart assignment function. The person reads their own
+    // company only. Clients cannot write. The document has no prices.
+    match /users/{uid}/prestartNotices/{noticeId} {
+      allow read: if signedIn() && request.auth.uid == uid && resource.data.companyId == callerCompany();
+      allow create, update, delete: if false;
+    }
+// END PRESTART NOTICE RULES
+
 // BEGIN STAFF PERFORMANCE RULES
     // One profile read per helper. Heartwood returns before the company lookup.
     // performanceSettings is managers and admins only (weights and the crew-only ranking switch).

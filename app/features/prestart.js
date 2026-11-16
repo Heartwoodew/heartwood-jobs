@@ -485,3 +485,58 @@ export function fleetReadingUpdate(asset, prestart, uid, name) {
   if (sameUnit && reading === prev) return { update: null, warn: "" };
   return { update: { reading, readingUnit: unit, readingBy: uid, readingByName: String(name || "").slice(0, 80) }, warn: "" };
 }
+
+// Keep in step with cloud/functions/prestart-notify.js prestartCovers.
+// A notice drops off Today once that machine (or that kind, when the plant
+// was not one specific asset) already has a prestart for the day or the job.
+export function noticeAlreadyDone(records, notice) {
+  const assetId = String(notice && notice.assetId || "");
+  const kind = String(notice && notice.kind || "");
+  const day = String(notice && notice.day || "");
+  const jobId = String(notice && notice.jobId || "");
+  const ambiguous = !!(notice && (notice.ambiguous === true || !assetId));
+  return (records || []).some(row => {
+    if (!row) return false;
+    const sameMachine = (assetId && row.assetId === assetId) || (ambiguous && kind && row.kind === kind);
+    if (!sameMachine) return false;
+    if (day && row.day === day) return true;
+    if (jobId && (row.jobId === jobId || row.job === jobId)) return true;
+    return false;
+  });
+}
+
+export function duePrestartNotices({ today, companyId, notices, prestarts }) {
+  const day = String(today || "");
+  const company = String(companyId || "");
+  const out = [];
+  const seen = new Set();
+  for (const notice of notices || []) {
+    if (!notice || notice.companyId !== company || notice.day !== day) continue;
+    if (noticeAlreadyDone(prestarts, notice)) continue;
+    const key = notice.assetId || notice.kind || notice.id || "";
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(notice);
+  }
+  return out;
+}
+
+export function prestartAssetChoice(assets, { assetId, kind } = {}) {
+  const list = assets || [];
+  const exact = assetId && list.find(asset => asset && asset.id === assetId);
+  if (exact) return exact;
+  if (kind) {
+    const matches = list.filter(asset => asset && assetKind(asset) === kind)
+      .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "en-AU"));
+    if (matches.length) return matches[0];
+  }
+  return null;
+}
+
+export function prestartReminderHtml(rows) {
+  if (!rows || !rows.length) return "";
+  return rows.map(row => {
+    const sentence = text(row && row.body) || "Prestart needed. Tap to complete.";
+    return `<button type="button" class="swremind sw-due comp-banner" data-ps-open="${esc(row.assetId || "")}" data-ps-kind="${esc(row.kind || "")}"><span>${esc(sentence)}</span><span class="chev">›</span></button>`;
+  }).join("");
+}
