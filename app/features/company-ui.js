@@ -103,7 +103,7 @@ function billingCard(org, canEdit) {
   const label = status === "active" ? "Active" : status === "trialing" ? "Trialing" : status === "past_due" ? "Past due" : status === "canceled" ? "Canceled" : "Not set up";
   return `<div class="card" id="billingcard">
     <h2>Billing</h2>
-    <p class="sub">The trial is 14 days and does not ask for a card. CallUp is A$20 a month including 1 person, plus A$5 a month for each extra staff member. GST is added at checkout.</p>
+    <p class="sub">The trial is 14 days and does not ask for a card. CallUp is A$50 a month including 1 person, plus A$5 a month for each extra staff member. GST is added at checkout.</p>
     <p>Status: <b>${esc(label)}</b></p>
     ${subscribed
       ? `<button type="button" class="primary" id="billportal">Manage billing</button>`
@@ -129,7 +129,7 @@ export function pausedAdminHtml(access = {}) {
     : "Subscribe to restore this company.";
   return `<form class="card login" id="paused">
     <h2>Your free trial has ended</h2>
-    <p>This account is paused. CallUp is A$20 a month including 1 person, plus A$5 a month for each extra staff member. GST is added at checkout.</p>
+    <p>This account is paused. CallUp is A$50 a month including 1 person, plus A$5 a month for each extra staff member. GST is added at checkout.</p>
     <p>${esc(until)}</p>
     ${access.manageBilling
       ? `<button class="big primary" type="button" id="billportal">Manage billing</button>`
