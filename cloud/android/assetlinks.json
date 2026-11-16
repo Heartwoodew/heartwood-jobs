@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.callupapp.app",
+      "sha256_cert_fingerprints": [
+        "4C:39:7A:2B:8C:D3:E3:F2:26:20:06:2C:0B:61:9A:55:77:1A:FA:F5:BB:2A:B3:31:E8:A5:39:8C:46:D7:BD:BA"
+      ]
+    }
+  }
+]

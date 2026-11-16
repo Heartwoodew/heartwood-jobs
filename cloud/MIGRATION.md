@@ -397,3 +397,14 @@ PRs 72 (crew map), 73 (quote packs), 74 (staff tab), 75 (chat and daily job push
 ## Admin password reset (15 Nov 2026)
 
 Do not deploy from this branch. When it is deployed: hosting (service worker `callup-shell-v108-password-reset`) and the function `adminSendPasswordReset` in australia-southeast1. It uses the same `RESEND_API_KEY` and `INVITE_EMAIL_ENABLED` gate as `inviteEmailWorker`. The reset link is emailed to the staff member and is not returned to the browser. Firestore `passwordResetRate/{uid}` is Admin SDK only (client read and write denied). Rebased onto main's `callup-shell-v106-multi-category-quotes`; this branch stays `callup-shell-v108-password-reset`.
+
+## Android app (Trusted Web Activity) prep
+
+Do not deploy without Alex's "merge". Hosting only. Service worker `callup-shell-v124-twa`.
+Adds separate maskable icons (`app/icons/icon-maskable-192.png`, `icon-maskable-512.png`) to the manifest, and
+`/.well-known/assetlinks.json` (source `cloud/android/assetlinks.json`, copied by `tools/build-callup-hosting.sh`)
+for package `com.callupapp.app`. `cloud/firebase.hosting.json` sets `"appAssociation": "NONE"` so Firebase stops
+serving its auto-generated empty `[]` assetlinks. After deploy, check
+`https://app.callupapp.com.au/.well-known/assetlinks.json` returns the file as `application/json`. When Play
+Console shows the App signing key SHA-256, add it to `cloud/android/assetlinks.json` and redeploy hosting.
+See `cloud/android/README.md`.
