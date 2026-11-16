@@ -155,6 +155,86 @@ export function pausedOwnerHtml({ platformOwner = false } = {}) {
   </form>`;
 }
 
+// The platform owner is inside a company opened from Master. The session doc is the only switch.
+export const RETURN_MASTER_KEY = "callup.returnMaster";
+export const IN_COMPANY_VIEW_KEY = "callup.inCompanyView";
+export const ADMIN_VIEW_PARAM = "adminView";
+
+export function viewingAnotherCompany({ platformOwner = false, sessionCompanyId = "" } = {}) {
+  return platformOwner === true && String(sessionCompanyId || "").trim().length > 0;
+}
+
+// Dark brown Admin view bar. The master button is only for the platform owner while that session is open.
+// An admin on My jobs still gets the existing Admin view button, with nothing extra.
+export function adminViewBannerHtml({ platformOwner = false, sessionCompanyId = "", companyName = "", operatorAdmin = false } = {}) {
+  const viewing = viewingAnotherCompany({ platformOwner, sessionCompanyId });
+  const adminButton = operatorAdmin
+    ? `<button class="mback adminback" id="toadmin" type="button">Admin view</button>`
+    : "";
+  if (!viewing) return adminButton;
+  const name = String(companyName || "").trim();
+  const label = `Admin view${name ? " · " + esc(name) : ""}`;
+  const title = operatorAdmin ? "" : `<span class="adminview-label">${label}</span>`;
+  return `<div class="adminview-banner" role="status">${title}${adminButton}<button type="button" class="adminview-back" id="backmaster">Back to master page</button></div>`;
+}
+
+export function clearedCompanySession() {
+  return { companyId: "" };
+}
+
+export function companyHistoryState(companyId) {
+  return { callupView: "company", companyId: String(companyId || "").trim() };
+}
+
+export function masterHistoryState() {
+  return { callupView: "master" };
+}
+
+export function historyStepOnEnter(current, companyId) {
+  const next = companyHistoryState(companyId);
+  if (current && current.callupView === "company" && current.companyId === next.companyId) return { action: "keep", state: next };
+  return { action: "push", state: next };
+}
+
+export function historyStepOnMasterReturn(current) {
+  if (current && current.callupView === "company") return { action: "replace", state: masterHistoryState() };
+  return { action: "push", state: masterHistoryState() };
+}
+
+export function urlMarksCompanyView(search) {
+  const raw = String(search || "");
+  const q = raw.includes("?") ? raw.slice(raw.indexOf("?")) : raw;
+  return new URLSearchParams(q).get(ADMIN_VIEW_PARAM) === "1";
+}
+
+export function withCompanyViewParam(href, on) {
+  const url = new URL(href, "https://app.callupapp.com.au");
+  if (on) url.searchParams.set(ADMIN_VIEW_PARAM, "1");
+  else url.searchParams.delete(ADMIN_VIEW_PARAM);
+  return url.pathname + url.search + url.hash;
+}
+
+export function takeReturnMasterFlag(storage) {
+  if (!storage || typeof storage.getItem !== "function") return false;
+  let on = false;
+  try { on = storage.getItem(RETURN_MASTER_KEY) === "1"; } catch { return false; }
+  if (!on) return false;
+  try { storage.removeItem(RETURN_MASTER_KEY); } catch { /* still leave the company view */ }
+  return true;
+}
+
+// How to treat the saved session on a fresh load.
+// A reload keeps the company view. Back onto an address without the mark leaves it and opens Master.
+export function bootCompanyView({ platformOwner = false, sessionCompanyId = "", urlMarked = false, navType = "", returnMaster = false } = {}) {
+  const companyId = String(sessionCompanyId || "").trim();
+  if (platformOwner !== true) return { action: "ignore", clearSession: false, companyId: "" };
+  if (returnMaster) return { action: "master", clearSession: companyId.length > 0, companyId: "" };
+  if (!companyId) return { action: urlMarked ? "strip-mark" : "ignore", clearSession: false, companyId: "" };
+  if (urlMarked) return { action: "stay", clearSession: false, companyId };
+  if (navType === "back_forward") return { action: "master", clearSession: true, companyId: "" };
+  return { action: "stay-and-mark", clearSession: false, companyId };
+}
+
 function accountBadgeHtml(row) {
   const label = (row && row.accountBadge) || "Active";
   const cls = label === "Paused (owner)" ? "co-owner-pause"

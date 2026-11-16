@@ -110,3 +110,9 @@ export function saveOrgSettings(partial) {
   } catch { /* private mode: the form still shows the typed values for this view */ }
   return stored;
 }
+
+// Drop a name saved while the platform owner was inside another company.
+// With no active company, orgSettings() would otherwise keep that name.
+export function clearSavedOrg() {
+  try { localStorage.removeItem(STORE_KEY); } catch { /* private mode: nothing was stored */ }
+}
