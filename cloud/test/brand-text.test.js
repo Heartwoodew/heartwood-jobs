@@ -53,6 +53,8 @@ const HEARTWOOD_OK = new Set([
   "Heartwood Jobs <jobs@heartwoodew.com>", "Heartwood Jobs <noreply@callupapp.com.au>", "You're invited to Heartwood Jobs",
   "Reset your Heartwood Jobs password",
   "Optional. Heartwood receipts still use the address on the Receipts page.",
+  "Heartwood cannot be deleted.", // platform-owner delete refusal, not shown to a client company
+  "companies/heartwood", "tenants/heartwood", // deletion path guards, never shown
 ]);
 test("every shipped string that mentions Heartwood is on the reviewed list", () => {
   const hits = shippedStrings().filter(s => !s.f.endsWith(".html") && !s.f.endsWith(".css") && !s.f.endsWith(".webmanifest"))

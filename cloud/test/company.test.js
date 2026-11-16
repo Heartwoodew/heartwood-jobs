@@ -9,7 +9,7 @@ import {
   companyAccess, companyDetailPatch, docCompanyId, filterMaster, friendCodeOk, friendInviteLink, heartwoodSeed, hoursBrand, isPlatformOwner,
   masterRow, masterTotals, planCompanyField, scopeRecord, trialEnd, validateCompanyInput,
 } from "../../app/features/company.js";
-import { masterPageHtml, pausedAdminHtml, pausedStaffHtml, signupFormHtml, trialBannerHtml } from "../../app/features/company-ui.js";
+import { masterDetailHtml, masterPageHtml, pausedAdminHtml, pausedOwnerHtml, pausedStaffHtml, signupFormHtml, trialBannerHtml } from "../../app/features/company-ui.js";
 import { locationConsent, TS_CONSENT } from "../../app/features/timesheet.js";
 import { CALLUP_APP_ORIGIN, CALLUP_FALLBACK_ORIGIN, HEARTWOOD_APP_ORIGIN, profileFromInvite } from "../../app/features/staff-invites.js";
 import { ACCOUNTS_TO, exportFileName, reportSheets, buildHoursReport } from "../../app/features/hours-export.js";
@@ -238,4 +238,53 @@ test("plan view: trial end pauses the company, paying and trialing do not, last 
   setActiveCompany({ companyId: "acme", name: "Acme", plan: "trial", billing: { provider: "stripe", status: "trialing", stripeCustomerId: "cus_1", stripeSubscriptionId: "sub_1" } });
   assert.equal(orgSettings().billing.status, "trialing");
   setActiveCompany(null);
+});
+
+test("owner pause keeps the data, and the master page shows pause, reactivate and a typed delete", () => {
+  const now = new Date("2026-11-15T00:00:00Z");
+  const base = { name: "Acme Civil", plan: "trial", status: "active", isTest: false, email: "office@acme.test", abn: "1", billing: { status: "not-configured" } };
+  const held = companyAccess({ ...base, plan: "paid", ownerPaused: true, billing: { status: "active", stripeCustomerId: "cus_1" }, trialEndsAt: "2026-11-01T00:00:00Z" }, "acme", now);
+  assert.equal(held.ownerPaused, true);
+  assert.equal(held.paused, true);
+  assert.equal(held.deleteAt, null);
+  assert.equal(held.accountBadge, "Paused (owner)");
+  const ended = companyAccess({ ...base, trialEndsAt: "2026-11-01T00:00:00Z" }, "old", now);
+  assert.equal(ended.accountBadge, "Paused (trial ended)");
+  assert.equal(ended.ownerPaused, false);
+  const trial = companyAccess({ ...base, trialEndsAt: "2026-11-20T00:00:00Z" }, "acme", now);
+  assert.equal(trial.accountBadge, "Trial");
+  const paying = companyAccess({ ...base, plan: "paid", billing: { status: "active", stripeCustomerId: "cus_1" } }, "paidco", now);
+  assert.equal(paying.accountBadge, "Active");
+  const heartwood = companyAccess({ ...base, ownerPaused: true }, "heartwood", now);
+  assert.equal(heartwood.paused, false);
+  assert.equal(heartwood.accountBadge, "Active");
+  const screen = pausedOwnerHtml();
+  assert.match(screen, /This account has been paused\./);
+  assert.doesNotMatch(screen, /Subscribe/);
+  assert.match(pausedOwnerHtml({ platformOwner: true }), /id="pausedhome"/);
+  const rows = [
+    masterRow("acme", { ...base, trialEndsAt: "2026-11-20T00:00:00Z" }, now),
+    masterRow("old", { ...base, name: "Old Co", trialEndsAt: "2026-11-01T00:00:00Z" }, now),
+    masterRow("held", { ...base, name: "Held Co", plan: "paid", ownerPaused: true, ownerPausedBy: "1JKLsoxkQNfkphBBO0vDz2ziEyj2", ownerPausedAt: "2026-11-10T00:00:00Z", billing: { status: "active" } }, now),
+    masterRow("paidco", { ...base, name: "Paid Co", plan: "paid", billing: { status: "active" } }, now),
+  ];
+  const html = masterPageHtml(rows);
+  assert.match(html, /co-trial">Trial</);
+  assert.match(html, /co-trial-pause">Paused \(trial ended\)/);
+  assert.match(html, /co-owner-pause">Paused \(owner\)/);
+  assert.match(html, /co-active">Active</);
+  const detail = masterDetailHtml(rows[2], { ownCompanyId: "heartwood" });
+  assert.match(detail, /id="ownerreactivate"/);
+  assert.match(detail, /id="ownerdelete"/);
+  assert.match(detail, /Type the company name exactly/);
+  assert.match(detail, /1JKLsoxkQNfkphBBO0vDz2ziEyj2/);
+  assert.doesNotMatch(detail, /id="ownerpause"/);
+  const open = masterDetailHtml(rows[0], { ownCompanyId: "heartwood" });
+  assert.match(open, /id="ownerpause"/);
+  const own = masterDetailHtml(rows[0], { ownCompanyId: "acme" });
+  assert.match(own, /cannot be paused or deleted/);
+  assert.doesNotMatch(own, /id="ownerdelete"/);
+  const hw = masterDetailHtml(masterRow("heartwood", { ...base, name: "Heartwood Earthworx", plan: "paid" }, now), { ownCompanyId: "heartwood" });
+  assert.match(hw, /cannot be paused or deleted/);
+  assert.doesNotMatch(hw, /id="ownerpause"/);
 });

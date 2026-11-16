@@ -22,6 +22,8 @@ function trial(daysAgo, extra = {}) {
 test("only an unpaid trial company is eligible, and only after trialEndsAt plus 30 days", () => {
   assert.equal(PAUSE_GRACE_DAYS, 30);
   assert.equal(retentionEligible(trial(31), "acme"), true);
+  assert.equal(retentionEligible(trial(31, { ownerPaused: true }), "acme"), false);
+  assert.equal(pauseRetentionPlan(trial(40, { ownerPaused: true }), "acme", NOW).action, "skip");
   assert.equal(retentionEligible(trial(31), "heartwood"), false);
   assert.equal(retentionEligible(trial(31, { isTest: true }), "yard"), false);
   assert.equal(retentionEligible(trial(31, { plan: "friend" }), "mate"), false);

@@ -436,7 +436,8 @@ service firebase.storage {
     }
     function storageCompanyOpen(companyId) {
       let data = firestore.get(/databases/(default)/documents/companies/$(companyId)).data;
-      return data.get("isTest", false) == true || storageBillingOpen(data);
+      return data.get("ownerPaused", false) != true
+        && (data.get("isTest", false) == true || storageBillingOpen(data));
     }
     function docHeartwoodOwner(tenantId) {
       return signedIn() && tenantId == "heartwood" && (isAlex() || isPatrick());

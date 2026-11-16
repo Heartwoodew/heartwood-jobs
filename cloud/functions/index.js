@@ -26,6 +26,12 @@
  * (06:00 Australia/Brisbane) and dailyJobChangePush. Photo retention is not scheduled.
  * pauseRetentionSweep (03:00 Australia/Brisbane) logs paused companies it would delete.
  * It does not delete anything unless PAUSE_DELETE_DRY_RUN=false.
+ * An owner-paused company is never selected. That pause is not an automatic deletion.
+ *
+ * deleteCompanyAccount is the platform-owner callable that deletes one CallUp company.
+ * It refuses Heartwood and the caller's own company. When the company has a Stripe
+ * subscription id, it cancels that subscription (invoice_now false, prorate false)
+ * and does not create a charge, invoice, or Checkout session.
  */
 import { onDocumentCreated, onDocumentWritten } from "firebase-functions/v2/firestore";
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
@@ -59,7 +65,10 @@ import {
   syncStaffQuantity,
   companiesTouchedByUser,
   mergeBilling,
+  cancelSubscriptionOnCompanyDeletion,
 } from "./billing/stripe-billing.js";
+import { deleteCompanyAccountData } from "./owner-company.js";
+import { deletionErrorMessage } from "./billing/owner-company.js";
 export { pauseRetentionSweep } from "./pause-retention.js";
 
 const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
@@ -506,6 +515,33 @@ export const syncStripeStaff = onDocumentWritten(
       const staff = await db.collection("users").where("companyId", "==", companyId).get();
       await syncStaffQuantity({ companyId, company: snap.data(), staffCount: staff.size, stripe, prices: currentPrices() });
     }
+  },
+);
+
+export const deleteCompanyAccount = onCall(
+  { region: INVITE_REGION, secrets: STRIPE_KEY_SECRETS, invoker: "public", cors: true },
+  async request => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Sign in.");
+    ensureAdmin();
+    const result = await deleteCompanyAccountData({
+      companyId: request.data?.companyId,
+      confirmName: request.data?.confirmName,
+      auth: request.auth,
+      now: Date.now(),
+      // Existing Stripe integration only. cancelSubscriptionOnCompanyDeletion calls
+      // subscriptions.cancel and does not create a charge.
+      cancelSubscription: async subscriptionId => cancelSubscriptionOnCompanyDeletion({
+        stripe: await stripeClient(),
+        subscriptionId,
+      }),
+    });
+    if (!result.ok) {
+      const code = result.code === "unauthenticated" || result.code === "permission-denied" || result.code === "not-found"
+        ? result.code
+        : "failed-precondition";
+      throw new HttpsError(code, deletionErrorMessage(result));
+    }
+    return { ok: true, companyId: result.companyId, counts: result.counts, stripe: result.stripe };
   },
 );
 

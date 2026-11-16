@@ -49,7 +49,7 @@ import {
   builderSignoff, clientDocId, companyClientNames, companyJobPrefix, companyMailbox, companyStdClients, timesheetMailParts,
   supervisorsPath, docCompanyId, isHeartwoodCompany,
 } from "./features/company.js";
-import { companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, pausedAdminHtml, pausedStaffHtml, signupFormHtml, trialBannerHtml } from "./features/company-ui.js";
+import { companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, pausedAdminHtml, pausedOwnerHtml, pausedStaffHtml, signupFormHtml, trialBannerHtml } from "./features/company-ui.js";
 import {
   addTitle, companyTradesDoc, jobTypeMap, normalizeTrade, readTradeList, removeTitle, renameTitle, resolveCompanySetup,
   sanitizeSkills, sanitizeTitles, sanitizeTradeList, setTitleLevel, skillsEditorHtml,
@@ -527,13 +527,24 @@ function renderAccountPaused() {
   paintBrand();
   $("#who").textContent = `${me.name} · ${me.role}`;
   $("#logout").classList.remove("hidden");
-  $("#app").innerHTML = me.role === "admin" ? pausedAdminHtml(ui.companyAccess || {}) : pausedStaffHtml();
+  const access = ui.companyAccess || {};
+  $("#app").innerHTML = access.ownerPaused
+    ? pausedOwnerHtml({ platformOwner: !!(me && me.platformOwner) })
+    : (me.role === "admin" ? pausedAdminHtml(access) : pausedStaffHtml());
   const out = $("#pausedout");
   if (out) out.onclick = () => signOut(auth);
+  const home = $("#pausedhome");
+  if (home) home.onclick = () => leavePausedSession();
   const sub = $("#billsub");
   if (sub) sub.onclick = () => openBilling("createBillingCheckout");
   const portal = $("#billportal");
   if (portal) portal.onclick = () => openBilling("createBillingPortal");
+}
+async function leavePausedSession() {
+  try {
+    await setDoc(doc(db, "platformSessions", me.uid), { companyId: "" });
+  } catch (e) { console.warn("leave paused", e && (e.code || e.message)); }
+  location.reload();
 }
 function trialBannerNow() {
   const access = ui.companyAccess;
@@ -1079,7 +1090,7 @@ function bindMaster(A) {
     tr.onclick = () => {
       const row = (ui.masterRows || []).find(r => r.id === tr.dataset.company);
       const slot = A.querySelector("#masterdetail");
-      if (slot) slot.innerHTML = masterDetailHtml(row);
+      if (slot) slot.innerHTML = masterDetailHtml(row, { ownCompanyId: ownerHomeCompany() });
       const close = A.querySelector("#masterclose");
       if (close) close.onclick = () => { slot.innerHTML = ""; };
       bindMasterActions(slot, row);
@@ -1096,6 +1107,62 @@ function bindMasterActions(slot, row) {
   if (archive) archive.onclick = () => archiveTestCompany(row.id);
   const plan = slot.querySelector("#friendplan");
   if (plan) plan.onsubmit = ev => { ev.preventDefault(); saveFriendPlan(row.id, ev.submitter && ev.submitter.value, plan.end.value); };
+  const pause = slot.querySelector("#ownerpause");
+  const reactivate = slot.querySelector("#ownerreactivate");
+  const openDelete = slot.querySelector("#ownerdeleteopen");
+  const dialog = slot.querySelector("#ownerdelete");
+  const cancel = slot.querySelector("#ownerdeletecancel");
+  const form = slot.querySelector("#ownerdeleteform");
+  if (pause) pause.onclick = () => pauseCompanyByOwner(row.id);
+  if (reactivate) reactivate.onclick = () => reactivateCompanyByOwner(row.id);
+  if (openDelete && dialog) openDelete.onclick = () => { if (dialog.showModal) dialog.showModal(); };
+  if (cancel && dialog) cancel.onclick = () => { if (dialog.close) dialog.close(); };
+  if (form) form.onsubmit = ev => { ev.preventDefault(); confirmDeleteCompany(row, slot); };
+}
+function ownerHomeCompany() {
+  const profile = me && me.cloudProfile;
+  const company = profile && typeof profile.companyId === "string" ? profile.companyId.trim() : "";
+  if (company) return company;
+  const tenant = profile && typeof profile.tenantId === "string" ? profile.tenantId.trim() : "";
+  return tenant || "heartwood";
+}
+async function pauseCompanyByOwner(companyId) {
+  try {
+    await updateDoc(doc(db, "companies", companyId), {
+      ownerPaused: true,
+      ownerPausedAt: serverTimestamp(),
+      ownerPausedBy: me.uid,
+    });
+    toast("Company paused");
+  } catch (e) { toast(e.code || e.message); }
+}
+async function reactivateCompanyByOwner(companyId) {
+  try {
+    await updateDoc(doc(db, "companies", companyId), {
+      ownerPaused: false,
+      ownerReactivatedAt: serverTimestamp(),
+      ownerReactivatedBy: me.uid,
+    });
+    toast("Company reactivated");
+  } catch (e) { toast(e.code || e.message); }
+}
+async function confirmDeleteCompany(row, slot) {
+  const input = slot.querySelector("[name=confirmName]");
+  const err = slot.querySelector("#ownerdeleteerr");
+  const typed = input ? input.value : "";
+  if (typed !== row.name) {
+    if (err) err.textContent = "Type the company name exactly.";
+    return;
+  }
+  try {
+    await callAuthed("deleteCompanyAccount", { companyId: row.id, confirmName: typed });
+    const dialog = slot.querySelector("#ownerdelete");
+    if (dialog && dialog.close) dialog.close();
+    slot.innerHTML = "";
+    toast("Company deleted");
+  } catch (e) {
+    if (err) err.textContent = (e && e.message) || "That company could not be deleted.";
+  }
 }
 async function createTestCompany(form) {
   const err = form.querySelector("#testerr");

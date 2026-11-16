@@ -36,6 +36,8 @@ function billingStatus(company) {
 export function retentionEligible(company, companyId) {
   if (!company || typeof company !== "object") return false;
   if (!companyId || companyId === "heartwood") return false;
+  // Platform-owner pause keeps the company indefinitely. The daily sweep must not select it.
+  if (company.ownerPaused === true) return false;
   if (company.isTest === true) return false;
   if (company.plan === "friend" || company.plan === "paid") return false;
   const status = billingStatus(company);

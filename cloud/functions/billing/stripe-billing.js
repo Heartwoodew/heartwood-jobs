@@ -351,6 +351,25 @@ export async function handleStripeWebhook({ rawBody, signature, secret, loadComp
   return { status: 200, body: { received: true, companyId: decision.companyId } };
 }
 
+// Owner deletion of a CallUp company. This is the only subscription call that path makes.
+// It cancels an existing subscription and does not create a charge, invoice, PaymentIntent,
+// or Checkout session. invoice_now and prorate are false so Stripe does not bill a final amount.
+export async function cancelSubscriptionOnCompanyDeletion({ stripe, subscriptionId }) {
+  const id = String(subscriptionId || "").trim();
+  if (!id) return { ok: true, skipped: "no-subscription" };
+  if (!stripe || !stripe.subscriptions || typeof stripe.subscriptions.cancel !== "function") {
+    return { ok: false, code: "failed-precondition", reason: "stripe-not-configured" };
+  }
+  try {
+    await stripe.subscriptions.cancel(id, { invoice_now: false, prorate: false });
+    return { ok: true, cancelled: id };
+  } catch (err) {
+    const code = err && (err.code || (err.raw && err.raw.code));
+    if (code === "resource_missing") return { ok: true, skipped: "already-gone" };
+    return { ok: false, code: "failed-precondition", reason: "stripe-cancel-failed" };
+  }
+}
+
 function eventStamp(event) {
   const created = Math.floor(Number(event && event.created));
   return { id: String((event && event.id) || ""), created: Number.isFinite(created) && created > 0 ? created : 0 };
