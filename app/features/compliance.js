@@ -9,7 +9,7 @@
 
 import { CALLUP_BASE, resolveMembership } from "./cloud-storage.js";
 import { costPayload, intervalFormHtml, planPayload, serviceAfterReading, serviceAttention, serviceFormHtml, servicePayload, serviceViews, servicingHtml } from "./servicing.js";
-import { PRESTART_KINDS, assetKind, itemsFor, kindMeta, openDefects, prestartAdminHtml, prestartFormHtml, prestartHistoryHtml, prestartPayload, fleetReadingUpdate, templateFormHtml, templatePayload, templateSeedDocs } from "./prestart.js";
+import { PRESTART_KINDS, assetKind, duePrestartNotices, itemsFor, kindMeta, openDefects, prestartAdminHtml, prestartAssetChoice, prestartFormHtml, prestartHistoryHtml, prestartPayload, prestartReminderHtml, fleetReadingUpdate, templateFormHtml, templatePayload, templateSeedDocs } from "./prestart.js";
 
 export const DUE_DAYS = 30;
 
@@ -614,7 +614,11 @@ export function installCompliance(deps) {
       const help = editFleet() ? "No machines yet. Add one to start a prestart." : "No machines yet. Ask a supervisor or admin to add one.";
       return `${err}<p class="muted pad comp-empty">${help}</p>${editFleet() ? `<div class="comp-actions">${addMachineBtn()}</div>` : ""}`;
     }
-    const asset = state.assets.find(item => item.id === state.prestartAsset) || state.assets[0];
+    const ui = deps.getUi() || {};
+    const wantedId = state.prestartAsset || ui.prestartAsset || "";
+    const wantedKind = state.prestartKind || ui.prestartKind || "";
+    const asset = prestartAssetChoice(state.assets, { assetId: wantedId, kind: wantedKind }) || state.assets[0];
+    if (asset && (wantedId || wantedKind)) state.prestartAsset = asset.id;
     const kind = assetKind(asset);
     const items = itemsFor(kind, state.templates);
     const form = prestartFormHtml({
@@ -887,6 +891,19 @@ export function installCompliance(deps) {
     canEdit: () => canEditCompliance(plan(), me() && me().role),
     canEditService: () => editService(),
     canPrestart: () => viewPrestart(),
+    focusPrestart(assetId, kind) {
+      state.prestartAsset = assetId || "";
+      state.prestartKind = kind || "";
+    },
+    prestartReminder(notices) {
+      if (!viewPrestart()) return "";
+      return prestartReminderHtml(duePrestartNotices({
+        today: today(),
+        companyId: tenant(),
+        notices: notices || [],
+        prestarts: state.prestarts,
+      }));
+    },
     abandon,
     baseFleet: CALLUP_BASE.features.fleet,
   };

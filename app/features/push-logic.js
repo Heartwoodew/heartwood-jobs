@@ -37,6 +37,18 @@ export function pushTargetFromUrl(href) {
     return null;
   }
   if (params.get("jobs") === "today" || params.get("open") === "today") return { kind: "today" };
+  const prestart = params.get("prestart");
+  if (prestart) {
+    const assetId = prestart === "1" ? "" : prestart;
+    if (assetId && !/^[A-Za-z0-9_-]{1,80}$/.test(assetId)) return null;
+    const prestartKind = params.get("kind") || "";
+    if (prestartKind && !/^[a-z0-9-]{1,40}$/.test(prestartKind)) return null;
+    const day = params.get("day") || "";
+    if (day && !/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+    const jobId = params.get("psjob") || "";
+    if (jobId && !/^[A-Za-z0-9_-]{1,200}$/.test(jobId)) return null;
+    return { kind: "prestart", assetId, prestartKind, day, jobId };
+  }
   const thread = params.get("chat") || (params.get("open") === "chat" ? params.get("thread") || "" : "");
   if (thread === "staff" || THREAD_RE.test(thread)) return { kind: "chat", thread };
   return null;

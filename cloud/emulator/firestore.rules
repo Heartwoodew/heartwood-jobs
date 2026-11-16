@@ -1967,6 +1967,15 @@ service cloud.firestore {
     }
 // END DAILY JOB RULES
 
+// BEGIN PRESTART NOTICE RULES
+    // Written by the prestart assignment function. The person reads their own
+    // company only. Clients cannot write. The document has no prices.
+    match /users/{uid}/prestartNotices/{noticeId} {
+      allow read: if signedIn() && request.auth.uid == uid && resource.data.companyId == callerCompany();
+      allow create, update, delete: if false;
+    }
+// END PRESTART NOTICE RULES
+
 // BEGIN QUOTE WRITE RULES
     // Same quote create/update as cloud/firestore.production.rules: one profile read,
     // so a verified email does not blow the 1000-expression limit. Crew cannot write.

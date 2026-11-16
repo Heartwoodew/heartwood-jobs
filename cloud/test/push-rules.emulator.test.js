@@ -66,6 +66,30 @@ test("mute prefs are the caller's own booleans", async () => {
   await assertFails(deleteDoc(doc(db("bOp"), "users/bOp/chatSettings/prefs")));
 });
 
+test("a prestart notice is only that operator's own company, and clients cannot write it", async () => {
+  await env.withSecurityRulesDisabled(async ctx => {
+    const d = ctx.firestore();
+    const body = "Prestart needed: Excavator for Creek Rd / 16 Nov. Tap to complete.";
+    const fields = (companyId) => ({
+      companyId, day: "2026-11-16", assetId: "ex1", assetName: "Excavator", kind: "excavator",
+      ambiguous: false, jobId: "j1", jobLabel: "Creek Rd / 16 Nov", body, source: "job",
+    });
+    await setDoc(doc(d, "users/bOp/prestartNotices/bravo_2026-11-16_ex1"), fields("bravo"));
+    await setDoc(doc(d, "users/bOp/prestartNotices/heartwood_2026-11-16_ex1"), fields("heartwood"));
+    await setDoc(doc(d, "users/hwOp/prestartNotices/heartwood_2026-11-16_ex1"), fields("heartwood"));
+  });
+  await assertSucceeds(getDoc(doc(db("bOp"), "users/bOp/prestartNotices/bravo_2026-11-16_ex1")));
+  await assertSucceeds(getDocs(query(collection(db("bOp"), "users/bOp/prestartNotices"), where("companyId", "==", "bravo"))));
+  await assertFails(getDocs(collection(db("bOp"), "users/bOp/prestartNotices")));
+  await assertFails(getDoc(doc(db("bOp"), "users/bOp/prestartNotices/heartwood_2026-11-16_ex1")));
+  await assertFails(getDoc(doc(db("bAdm"), "users/bOp/prestartNotices/bravo_2026-11-16_ex1")));
+  await assertFails(getDoc(doc(db("cOp"), "users/bOp/prestartNotices/bravo_2026-11-16_ex1")));
+  await assertSucceeds(getDoc(doc(db("hwOp"), "users/hwOp/prestartNotices/heartwood_2026-11-16_ex1")));
+  await assertFails(setDoc(doc(db("bOp"), "users/bOp/prestartNotices/bravo_2026-11-17_ex1"), { companyId: "bravo", body: "x" }));
+  await assertFails(updateDoc(doc(db("bOp"), "users/bOp/prestartNotices/bravo_2026-11-16_ex1"), { body: "changed" }));
+  await assertFails(deleteDoc(doc(db("bOp"), "users/bOp/prestartNotices/bravo_2026-11-16_ex1")));
+});
+
 test("the daily digest log is server only", async () => {
   for (const uid of [ALEX, "bAdm", "bOp"]) {
     await assertFails(getDoc(doc(db(uid), "dailyJobDigest/bravo_2026-11-12_bOp")));

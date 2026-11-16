@@ -134,7 +134,7 @@ let me = null, staff = [], jobs = [], unsub = null;
 let signingUp = false;
 let CHAT = { badge() { return ""; }, teamHtml() { return ""; }, jobHtml() { return ""; }, mount() {}, openJob() {}, start() {}, stop() {}, watch() {}, refresh() {} };
 let PUSH = { start() {}, stop() {}, mount() {}, settle() {}, panelHtml() { return ""; }, bannerHtml() { return ""; } };
-let COMP = { start() {}, stop() {}, bind() {}, abandon() {}, adminHtml() { return ""; }, staffHtml() { return ""; }, adminBannerHtml() { return ""; }, staffBannerHtml() { return ""; }, canSee() { return false; }, canEdit() { return false; }, canPrestart() { return false; }, canEditService() { return false; } };
+let COMP = { start() {}, stop() {}, bind() {}, abandon() {}, adminHtml() { return ""; }, staffHtml() { return ""; }, adminBannerHtml() { return ""; }, staffBannerHtml() { return ""; }, canSee() { return false; }, canEdit() { return false; }, canPrestart() { return false; }, prestartReminder() { return ""; }, focusPrestart() {}, canEditService() { return false; } };
 let QG = { bindAdmin() {} }; // Quotes module; filled after helpers load
 let ROUTE = { open() {} };
 const ALEX_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";      // Alex has no users/{uid} profile doc; always staff
@@ -275,7 +275,7 @@ onAuthStateChanged(auth, async user => {
     const u6 = watchStaffRoster();
     moneyStart(renderAdmin);
     const stopCap = startCapacityWatch();
-    unsub = () => { u1(); u2(); u3(); u4(); u5(); u6(); stopCap(); moneyStop(); CHAT.stop(); PUSH.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; }; swmsSub(); COMP.start(); leaveStart(); claimsStart(); watchTake5Flag(); if (me.platformOwner) watchMaster();
+    unsub = () => { u1(); u2(); u3(); u4(); u5(); u6(); stopCap(); moneyStop(); CHAT.stop(); PUSH.stop(); COMP.stop(); stopPrestartNotices(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; }; swmsSub(); COMP.start(); watchPrestartNotices(); leaveStart(); claimsStart(); watchTake5Flag(); if (me.platformOwner) watchMaster();
     getDocs(companyJobs([where("date", "==", "")])).then(s => { ui.undated = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); addNameOnlyStaff(ui.undated); renderAdmin(); }).catch(e => console.warn("undated", e.code, e.message));
   } else {
     // Operators may only list jobs assigned to them (enforced by firestore.rules).
@@ -294,7 +294,7 @@ onAuthStateChanged(auth, async user => {
     const u6 = watchStaffRoster();
     if (canInvite() && window.HW_PREVIEW_VIEW === "staff") ui.opTab = "staff";
     const stopCap = startCapacityWatch();
-    unsub = () => { u1(); u3(); u4(); u6(); stopCap(); moneyStop(); CHAT.stop(); PUSH.stop(); COMP.stop(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start(); leaveStart(); claimsStart(); watchTake5Flag();
+    unsub = () => { u1(); u3(); u4(); u6(); stopCap(); moneyStop(); CHAT.stop(); PUSH.stop(); COMP.stop(); stopPrestartNotices(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start(); watchPrestartNotices(); leaveStart(); claimsStart(); watchTake5Flag();
   }
 });
 
@@ -2373,13 +2373,53 @@ function tsMachineStatusHtml(entry) {
   }
   return line + `<p class="ts-prestart">Prestart isn't done for this machine today.</p><button type="button" class="sm-btn tsprestart" data-asset="${esc(entry.machineId)}">Open prestart</button>`;
 }
+function stopPrestartNotices() {
+  if (ui.prestartNoticeUnsub) {
+    try { ui.prestartNoticeUnsub(); } catch { /* already stopped */ }
+  }
+  ui.prestartNoticeUnsub = null;
+  ui.prestartNotices = [];
+}
+function noticeMs(row) {
+  const value = row && row.createdAt;
+  if (!value) return 0;
+  if (typeof value.toDate === "function") {
+    try { return value.toDate().getTime() || 0; } catch { return 0; }
+  }
+  if (typeof value.seconds === "number") return value.seconds * 1000;
+  return 0;
+}
+function watchPrestartNotices() {
+  stopPrestartNotices();
+  if (!me || !COMP.canPrestart || !COMP.canPrestart()) return;
+  const companyId = myCompanyId();
+  const startedAt = Date.now();
+  ui.prestartToasted = {};
+  ui.prestartNoticeUnsub = onSnapshot(query(collection(db, "users", me.uid, "prestartNotices"), where("companyId", "==", companyId)), snap => {
+    const next = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const pushOn = PUSH.model && PUSH.model().enabled;
+    if (!pushOn) {
+      for (const row of next) {
+        if (!row.body || ui.prestartToasted[row.id]) continue;
+        if (noticeMs(row) < startedAt - 15000) continue;
+        ui.prestartToasted[row.id] = true;
+        toast(row.body);
+      }
+    }
+    ui.prestartNotices = next;
+    if (me.role === "admin" && !ui.myJobs) return;
+    if (!ui.opSel && (ui.opTab || "today") === "today") renderOperator();
+  }, () => { ui.prestartNotices = []; });
+}
 function tsOpenPrestart(assetId) {
-  ui.prestartAsset = assetId;
+  ui.prestartAsset = assetId || "";
+  if (COMP.focusPrestart) COMP.focusPrestart(assetId || "", ui.prestartKind || "");
   const admin = me.role === "admin" && !ui.myJobs;
   if (admin) { ui.view = "prestart"; ui.navOpen = false; renderAdmin(); }
   else { ui.opTab = "prestart"; renderOperator(); }
   const select = document.querySelector("#prestartform [name=assetId]");
-  if (select) { select.value = assetId; select.dispatchEvent(new Event("change")); return; }
+  if (select && assetId) { select.value = assetId; select.dispatchEvent(new Event("change")); return; }
+  if (select || document.querySelector("#prestartform")) return;
   if (!document.querySelector("#prestartform, [data-ctab=prestart]")) {
     ui.tsPrestartState = "absent";
     if (admin) { ui.view = "timesheet"; renderAdmin(); }
@@ -5457,6 +5497,10 @@ function bindOp(mine) {
   // A tab tap is a deliberate move: force the redraw, or an open Prestart/Compliance form keeps the screen (stuck until reload).
   $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; ui.forceRender = true; renderOperator(); window.scrollTo(0, 0); });
   $("#app").querySelectorAll("[data-go]").forEach(b => b.onclick = () => { if (b.dataset.go === "swms") return swmsOverlay(); ui.opTab = b.dataset.go; renderOperator(); window.scrollTo(0, 0); });
+  $("#app").querySelectorAll("[data-ps-open]").forEach(b => b.onclick = () => {
+    ui.prestartKind = b.dataset.psKind || "";
+    tsOpenPrestart(b.dataset.psOpen || "");
+  });
   const openJob = id => { if (ui.opSel !== id) ui.jobPane = "job"; ui.opSel = id; renderOperator(); window.scrollTo(0, 0); };
   $("#app").querySelectorAll(".mrow").forEach(r => {
     r.onclick = e => { if (e.target.closest("a, button")) return; openJob(r.dataset.id); };
@@ -5669,6 +5713,7 @@ function renderOperator() {
         <h1 class="mob-hello">${esc(greet())}, ${first}</h1><p class="mob-count">${n} job${n === 1 ? "" : "s"} today</p>${todaySheet ? `<p class="run-note">Approved driving order${todaySheet.returnToDepot ? " · back to the depot" : ""}</p>` : ""}${opSeg("today")}</div>
       ${COMP.staffBannerHtml()}
       ${swmsReminderHtml()}
+      ${COMP.prestartReminder(ui.prestartNotices)}
       ${homeCrewCard()}
       <div class="mob-list">${todayJobs.map(opCard).join("") || `<p class="muted pad">Nothing booked for ${esc(orgSettings().name)}.</p>`}</div>
       ${opTabs("today")}</div>`;
@@ -6547,6 +6592,10 @@ function openPushTarget(target) {
       const url = new URL(location.href);
       url.searchParams.delete("chat");
       url.searchParams.delete("thread");
+      url.searchParams.delete("prestart");
+      url.searchParams.delete("kind");
+      url.searchParams.delete("day");
+      url.searchParams.delete("psjob");
       if (url.searchParams.get("jobs") === "today") url.searchParams.delete("jobs");
       if (url.searchParams.get("open") === "today" || url.searchParams.get("open") === "chat") url.searchParams.delete("open");
       history.replaceState(null, "", url.pathname + url.search + url.hash);
@@ -6557,6 +6606,17 @@ function openPushTarget(target) {
     ui.opTab = "today";
     ui.opSel = null;
     ui.jobPane = "job";
+    strip();
+    return true;
+  }
+  if (target.kind === "prestart") {
+    ui.prestartAsset = target.assetId || "";
+    ui.prestartKind = target.prestartKind || "";
+    if (COMP.focusPrestart) COMP.focusPrestart(ui.prestartAsset, ui.prestartKind);
+    ui.opSel = null;
+    ui.jobPane = "job";
+    if (me.role === "admin" && !ui.myJobs) ui.view = "prestart";
+    else ui.opTab = "prestart";
     strip();
     return true;
   }

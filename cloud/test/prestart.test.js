@@ -5,8 +5,9 @@ import { CALLUP_BASE } from "../../app/features/cloud-storage.js";
 import { CALLUP_PLAN, canViewPrestart } from "../../app/features/compliance.js";
 import { SCHEDULING_APPROVED } from "../../app/features/cloud-retention.js";
 import {
-  DEFAULT_PRESTART, PRESTART_KINDS, PRESTART_SECTIONS, assetKind, itemsFor, missingToday, openDefects,
-  prestartFormHtml, prestartPayload, stopsOperation, templatePayload, templateReviewMarkdown, templateSeedDocs,
+  DEFAULT_PRESTART, PRESTART_KINDS, PRESTART_SECTIONS, assetKind, duePrestartNotices, itemsFor, missingToday,
+  noticeAlreadyDone, openDefects, prestartAssetChoice, prestartFormHtml, prestartPayload, prestartReminderHtml,
+  stopsOperation, templatePayload, templateReviewMarkdown, templateSeedDocs,
 } from "../../app/features/prestart.js";
 
 const asset = { id: "a1", type: "vehicle", prestartKind: "tip-truck", name: "Preview tipper", rego: "PRE001" };
@@ -138,4 +139,31 @@ test("prestart readings are required by unit and only move Fleet up", async () =
   assert.equal(fleetReadingUpdate({ id: "t", type: "trailer" }, { reading: 0, readingUnit: "" }, "sam", "Sam").update, null);
   const html = form({ assets: [ex], assetId: "ex", items, signerName: "Sam", defects: [], kind: "excavator" });
   assert.match(html, /Hour meter \(hrs\)<input name="reading"[^>]*required/);
+});
+
+test("today shows one reminder until that machine's prestart exists, and the form opens on it", () => {
+  const notice = {
+    id: "n1", companyId: "bravo", day: "2026-11-16", assetId: "ex1", assetName: "JCB",
+    kind: "excavator", ambiguous: false, jobId: "job1",
+    body: "Prestart needed: JCB for Springfield / 16 Nov. Tap to complete.",
+  };
+  const open = duePrestartNotices({ today: "2026-11-16", companyId: "bravo", notices: [notice, { ...notice, id: "n2" }], prestarts: [] });
+  assert.equal(open.length, 1);
+  assert.equal(duePrestartNotices({ today: "2026-11-17", companyId: "bravo", notices: [notice], prestarts: [] }).length, 0);
+  assert.equal(duePrestartNotices({ today: "2026-11-16", companyId: "heartwood", notices: [notice], prestarts: [] }).length, 0);
+  assert.equal(noticeAlreadyDone([{ assetId: "ex1", day: "2026-11-16" }], notice), true);
+  assert.equal(duePrestartNotices({
+    today: "2026-11-16", companyId: "bravo", notices: [notice], prestarts: [{ assetId: "ex1", day: "2026-11-16" }],
+  }).length, 0);
+  const html = prestartReminderHtml(open);
+  assert.match(html, /Prestart needed: JCB for Springfield \/ 16 Nov\. Tap to complete\./);
+  assert.match(html, /data-ps-open="ex1"/);
+  assert.equal(html.includes("$"), false);
+  const assets = [
+    { id: "sk1", name: "Bobcat", type: "plant", prestartKind: "skid-steer" },
+    { id: "ex1", name: "JCB", type: "plant", prestartKind: "excavator" },
+  ];
+  assert.equal(prestartAssetChoice(assets, { assetId: "ex1" }).id, "ex1");
+  assert.equal(prestartAssetChoice(assets, { assetId: "", kind: "skid-steer" }).id, "sk1");
+  assert.equal(assetKind(assets[1]), "excavator");
 });
