@@ -29,6 +29,8 @@ main{max-width:1150px;margin:0 auto;padding:12px}
 .login{max-width:360px;margin:40px auto;display:grid;gap:12px}
 .cardopt{border:1px solid #e6d3a1;border-radius:10px;padding:10px 12px;display:grid;gap:6px}
 .cardopt legend{font-weight:700;padding:0 4px}
+.ref-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.ref-row input{flex:1;min-width:12rem}
 .trial-banner{display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:#fff7e8;border:1px solid #e6d3a1;border-radius:10px;padding:8px 12px;margin:0 0 12px;font-size:14px}
 .signup{max-width:460px}
 .signup h3{margin:8px 0 0;font-size:15px}

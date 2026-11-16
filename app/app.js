@@ -41,6 +41,7 @@ import {
 import {
   canViewTake5, hasTake5, shouldPromptTake5, take5Enabled, take5FormHtml, take5IdFor, take5JobHtml, take5ListHtml, take5Payload, take5PhotoPath,
 } from "./features/take5.js";
+import { captureReferralParam, clearStoredReferral, referralGiveUp, storedReferralCode } from "./features/referral.js";
 import { PRODUCT_NAME, POWERED_BY, clearSavedOrg, orgSettings, saveOrgSettings, setActiveCompany } from "./org-settings.js";
 import {
   buildCompanyCreate, buildFriendCompany, buildTestCompany, companyAccess, companyDetailPatch, companyIdFromName, demoBundle,
@@ -49,7 +50,7 @@ import {
   builderSignoff, clientDocId, companyClientNames, companyJobPrefix, companyMailbox, companyStdClients, timesheetMailParts,
   supervisorsPath, docCompanyId, isHeartwoodCompany,
 } from "./features/company.js";
-import { adminViewBannerHtml, bootCompanyView, clearedCompanySession, companyHistoryState, historyStepOnEnter, historyStepOnMasterReturn, IN_COMPANY_VIEW_KEY, masterHistoryState, RETURN_MASTER_KEY, takeReturnMasterFlag, urlMarksCompanyView, withCompanyViewParam, companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, pausedAdminHtml, pausedOwnerHtml, pausedStaffHtml, signupFormHtml, trialBannerHtml } from "./features/company-ui.js";
+import { adminViewBannerHtml, bootCompanyView, clearedCompanySession, companyHistoryState, historyStepOnEnter, historyStepOnMasterReturn, IN_COMPANY_VIEW_KEY, masterHistoryState, RETURN_MASTER_KEY, takeReturnMasterFlag, urlMarksCompanyView, withCompanyViewParam, companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, pausedAdminHtml, pausedOwnerHtml, pausedStaffHtml, referralBoxHtml, signupFormHtml, trialBannerHtml } from "./features/company-ui.js";
 import {
   addTitle, companyTradesDoc, jobTypeMap, normalizeTrade, readTradeList, removeTitle, renameTitle, resolveCompanySetup,
   sanitizeSkills, sanitizeTitles, sanitizeTradeList, setTitleLevel, skillsEditorHtml,
@@ -141,6 +142,7 @@ const ALEX_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";      // Alex has no users/{uid}
 const ui = { view: "list", staffF: "", typeF: "", photoLists: {}, photoUrls: {}, photoBlobs: {}, photoThumbs: {}, photoThumbTasks: {}, photoErrors: {}, photoJobs: {}, photoPaint: 0 };
 
 // ------------------------------------------------------------------ auth
+try { captureReferralParam(location.search, localStorage); } catch { /* private mode */ }
 $("#logout").onclick = () => signOut(auth);
 onAuthStateChanged(auth, async user => {
   if (signingUp) return;
@@ -400,6 +402,10 @@ async function loadCompanyBrand() {
     return;
   }
   await loadTradeSetup(loaded || { companyId: id });
+  if (me && me.role === "admin" && loaded) {
+    if (loaded.referredBy) clearStoredReferral(localStorage);
+    else await rememberSignupReferral(id);
+  }
   // Depot for quotes and run sheets: the company's address from settings (Heartwood: Chuwar unless changed there).
   const depot = orgSettings().address;
   setRouteDepot(depot, { heartwood: id === "heartwood" }); setDefaultDepot(depot, { heartwood: id === "heartwood" });
@@ -623,6 +629,48 @@ async function callAuthed(name, data) {
     throw err;
   }
   return body.result || {};
+}
+async function rememberSignupReferral(companyId) {
+  const code = storedReferralCode(localStorage);
+  if (!code || !companyId) return;
+  try {
+    await callAuthed("attachSignupReferral", { companyId, code });
+    clearStoredReferral(localStorage);
+  } catch (err) {
+    const message = err && err.message;
+    if (referralGiveUp(message)) clearStoredReferral(localStorage);
+    else console.warn("referral", message || err);
+  }
+}
+function bindReferralCopy(box) {
+  const btn = box && box.querySelector("#refcopy");
+  const input = box && box.querySelector("#reflink");
+  if (!btn || !input || btn.dataset.bound) return;
+  btn.dataset.bound = "1";
+  btn.onclick = async () => {
+    const value = input.value;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(value);
+      else throw new Error("clipboard");
+      toast("Referral link copied");
+    } catch {
+      input.focus();
+      input.select();
+      toast("Select the link and copy it");
+    }
+  };
+}
+async function loadReferralBox(root) {
+  const box = root && root.querySelector && root.querySelector("#referralbox");
+  if (!box || !me || me.role !== "admin") return;
+  try {
+    const result = await callAuthed("ensureReferralCode", { companyId: myCompanyId(), origin: location.origin });
+    box.outerHTML = referralBoxHtml(result);
+    bindReferralCopy(root.querySelector("#referralbox"));
+  } catch {
+    const status = box.querySelector("#referralstatus");
+    if (status) status.textContent = "Referral link isn't available yet.";
+  }
 }
 async function callInvite(name, data) {
   const projectId = useEmulator ? "demo-heartwood" : firebaseConfig.projectId;
@@ -862,6 +910,7 @@ function renderSignup(friendCode = "") {
       try {
         await setDoc(doc(db, "companyTrades", companyId), { ...companyTradesDoc(companyId, trades, cred.user.uid), updatedAt: serverTimestamp() });
       } catch (err) { console.warn("trade catalog", err && (err.code || err.message)); }
+      if (!friendCodeOk(friendCode)) await rememberSignupReferral(companyId);
       const logoFile = f.logoFile && f.logoFile.files && f.logoFile.files[0];
       if (logoFile && logoFileOk(logoFile).ok) {
         try {
@@ -964,6 +1013,7 @@ function bindTradeList(A) {
 }
 function bindSettings(A) {
   bindTradeList(A);
+  loadReferralBox(A);
   if (canEditPerformanceSettings(me)) ensurePerfWatch();
   const take5Form = A.querySelector("#take5set");
   if (take5Form) take5Form.onsubmit = async ev => {

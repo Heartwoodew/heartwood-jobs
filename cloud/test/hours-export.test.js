@@ -213,7 +213,7 @@ test("hours buttons do not call an undefined rerender, and list errors stay visi
   assert.match(app, /hxg\.onclick/);
   assert.match(sw, /u\.protocol === "blob:"/);
 
-  assert.match(sw, /callup-shell-v121-price50/);
+  assert.match(sw, /callup-shell-v123-price50/);
 
   const slice = (text, a, b) => text.slice(text.indexOf(a), text.indexOf(b) + b.length);
   assert.equal(

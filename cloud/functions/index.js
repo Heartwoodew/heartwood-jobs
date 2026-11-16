@@ -33,6 +33,10 @@
  * It refuses Heartwood and the caller's own company. When the company has a Stripe
  * subscription id, it cancels that subscription (invoice_now false, prorate false)
  * and does not create a charge, invoice, or Checkout session.
+ *
+ * Referral bonus: ensureReferralCode mints a company's share code on first use.
+ * attachSignupReferral records referredBy at signup. stripeWebhook grants the
+ * referrer 2 months free on the referred company's first paid invoice.
  */
 import { onDocumentCreated, onDocumentWritten } from "firebase-functions/v2/firestore";
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
@@ -57,6 +61,8 @@ import { createModelProvider, helperLiveEnabled } from "./helper/provider.js";
 import { firestoreHelperStore } from "./helper/apply.js";
 import {
   assertKeyForMode,
+  authorizeCompanyAdmin,
+  billingOrigin,
   handleCheckoutCall,
   stripeMode,
   STRIPE_API_VERSION,
@@ -68,6 +74,16 @@ import {
   mergeBilling,
   cancelSubscriptionOnCompanyDeletion,
 } from "./billing/stripe-billing.js";
+import {
+  REFERRAL_COUPON_ID,
+  allocateCompanyCode,
+  attachSignupReferral as saveSignupReferral,
+  ensureReferralCoupon,
+  handleEnsureReferralCode,
+  handleReferralWebhookEvent,
+  oldestEarned,
+  referralStore,
+} from "./billing/referrals.js";
 import { deleteCompanyAccountData } from "./owner-company.js";
 import { deletionErrorMessage } from "./billing/owner-company.js";
 export { pauseRetentionSweep } from "./pause-retention.js";
@@ -419,6 +435,13 @@ function billingFailure(result) {
   throw new HttpsError(code, (result && result.reason) || "billing-failed");
 }
 
+function referralFailure(result) {
+  const code = result && (result.code === "unauthenticated" || result.code === "permission-denied" || result.code === "not-found" || result.code === "invalid-argument")
+    ? result.code
+    : "failed-precondition";
+  throw new HttpsError(code, (result && result.reason) || "referral-failed");
+}
+
 async function stripeClient() {
   try {
     return await testStripe();
@@ -428,19 +451,103 @@ async function stripeClient() {
   }
 }
 
+export const ensureReferralCode = onCall(
+  { region: INVITE_REGION, invoker: "public", cors: true },
+  async request => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "sign-in");
+    ensureAdmin();
+    const companyId = String(request.data?.companyId || "");
+    const ctx = await billingContext(request.auth.uid, companyId);
+    const store = referralStore(getFirestore());
+    const result = await handleEnsureReferralCode({
+      uid: request.auth.uid,
+      companyId,
+      profile: ctx.profile,
+      company: ctx.company,
+      existingCode: ctx.company && ctx.company.referralCode,
+      origin: billingOrigin(request.data?.origin, companyId),
+      loadCounts: () => store.countsFor(companyId),
+      allocate: () => allocateCompanyCode({ store, companyId, uid: request.auth.uid }),
+    });
+    if (!result.ok) referralFailure(result);
+    if (result.created) {
+      await store.audit({
+        action: "code-created",
+        referrerCompanyId: companyId,
+        code: result.code,
+        fromStatus: "",
+        toStatus: "code",
+        at: new Date().toISOString(),
+        by: request.auth.uid,
+      });
+    }
+    return { code: result.code, link: result.link, pending: result.pending, earned: result.earned };
+  },
+);
+
+export const attachSignupReferral = onCall(
+  { region: INVITE_REGION, invoker: "public", cors: true },
+  async request => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "sign-in");
+    ensureAdmin();
+    const result = await saveSignupReferral({
+      uid: request.auth.uid,
+      companyId: String(request.data?.companyId || ""),
+      code: request.data?.code,
+      now: Date.now(),
+      store: referralStore(getFirestore()),
+    });
+    if (!result.ok) referralFailure(result);
+    return { ok: true, referredBy: result.referredBy };
+  },
+);
+
 export const createBillingCheckout = onCall(
   { region: INVITE_REGION, secrets: STRIPE_KEY_SECRETS },
   async request => {
     if (!request.auth) throw new HttpsError("unauthenticated", "sign-in");
-    const result = await handleCheckoutCall({
+    ensureAdmin();
+    const companyId = String(request.data?.companyId || "");
+    const ctx = await billingContext(request.auth.uid, companyId);
+    const authz = authorizeCompanyAdmin({ uid: request.auth.uid, profile: ctx.profile, company: ctx.company, companyId });
+    if (!authz.ok) billingFailure(authz);
+    const stripe = await stripeClient();
+    let referralCoupon = "";
+    let referralFor = "";
+    if (stripe) {
+      try {
+        const store = referralStore(getFirestore());
+        const reward = oldestEarned(await store.listByReferrer(companyId));
+        if (reward) {
+          await ensureReferralCoupon(stripe);
+          referralCoupon = REFERRAL_COUPON_ID;
+          referralFor = reward.referredCompanyId;
+        }
+      } catch (err) {
+        console.warn("referral checkout", err && err.message);
+        referralCoupon = "";
+        referralFor = "";
+      }
+    }
+    const checkoutArgs = {
       uid: request.auth.uid,
-      companyId: String(request.data?.companyId || ""),
+      companyId,
       origin: request.data?.origin,
-      getContext: billingContext,
-      stripe: await stripeClient(),
+      getContext: async () => ctx,
+      stripe,
       prices: currentPrices(),
       preserveTrial: request.data?.preserveTrial === true,
-    });
+      referralCoupon,
+      referralFor,
+    };
+    let result;
+    try {
+      result = await handleCheckoutCall(checkoutArgs);
+    } catch (err) {
+      if (!referralCoupon) throw err;
+      console.warn("referral discount skipped", err && err.message);
+      result = await handleCheckoutCall({ ...checkoutArgs, referralCoupon: "", referralFor: "" });
+    }
     if (!result.ok) billingFailure(result);
     return { url: result.url };
   },
@@ -492,6 +599,31 @@ export const stripeWebhook = onRequest(
             billing: merged.billing,
           });
           return {};
+        });
+      },
+      onReferral: async ({ event, companyId, paid }) => {
+        let stripe = null;
+        const getStripe = async () => {
+          if (!stripe) stripe = await testStripe();
+          return stripe;
+        };
+        const lazy = {
+          coupons: {
+            retrieve: async (...args) => (await getStripe()).coupons.retrieve(...args),
+            create: async (...args) => (await getStripe()).coupons.create(...args),
+          },
+          subscriptions: {
+            retrieve: async (...args) => (await getStripe()).subscriptions.retrieve(...args),
+            update: async (...args) => (await getStripe()).subscriptions.update(...args),
+          },
+        };
+        await handleReferralWebhookEvent({
+          event,
+          paid,
+          companyId,
+          now: new Date().toISOString(),
+          store: referralStore(db),
+          stripe: lazy,
         });
       },
     });
