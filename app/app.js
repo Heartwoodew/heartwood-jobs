@@ -1428,8 +1428,37 @@ function b64ToBlob(b64, type) {
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return new Blob([bytes], { type });
 }
+// Job photos go to Storage first, so a phone with no signal must not sit silently on "Saving photos" for the
+// SDK's 10-minute retry window. Offline skips straight to the email fallback. Each photo uploads resumably with a
+// progress toast and is cancelled if no bytes move for PHOTO_STALL_MS. One failed photo no longer fails the batch:
+// stored photos stay stored and only the failed ones are offered for email.
+const PHOTO_STALL_MS = 45000;
+function uploadJobPhoto(target, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const task = uploadBytesResumable(storageRef(storage, target.path), file, { contentType: target.contentType, customMetadata: target.metadata });
+    let timer = null, settled = false;
+    const fail = e => { if (settled) return; settled = true; clearTimeout(timer); reject(e); };
+    const arm = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { fail(Object.assign(new Error("upload-stalled"), { code: "upload-stalled" })); try { task.cancel(); } catch {} }, PHOTO_STALL_MS);
+    };
+    arm();
+    task.on("state_changed", snap => {
+      arm();
+      if (onProgress && snap.totalBytes) onProgress(snap.bytesTransferred / snap.totalBytes);
+    }, fail, () => { if (settled) return; settled = true; clearTimeout(timer); resolve(); });
+  });
+}
+function photoFailReason(e) {
+  const code = e && (e.code || e.message);
+  if (code === "upload-stalled" || code === "photo-file-missing") return code;
+  return storageErrorCode(e);
+}
 async function mirrorJobPhotos(j, files) {
   const at = galleryNow();
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    return { ok: false, reason: "offline", uploaded: [], skipped: files.map((f, sourceIndex) => ({ sourceIndex, name: f && f.name, reason: "offline" })) };
+  }
   let plan = planJobPhotoMirrors({
     membership: cloudMembership(), job: j,
     files: files.map((f, i) => ({
@@ -1439,18 +1468,44 @@ async function mirrorJobPhotos(j, files) {
   });
   if (!plan.ok) { console.warn("cloud photo mirror skipped", (plan.skipped || []).map(s => s.reason).join(",") || "none"); return { ok: false, reason: (plan.skipped || []).map(s => s.reason).join(",") || "none", uploaded: [], skipped: plan.skipped || [] }; }
   plan = stampExpiresAfter(plan, j, at);
-  await putPlanned(plan, target => {
+  const total = (plan.uploads || []).length, failed = [];
+  let at1 = 0, signalLost = "", lastMsg = "", lastMove = Date.now();
+  const say = pct => {
+    lastMove = Date.now();
+    lastMsg = total > 1 ? `Saving photo ${at1} of ${total}… ${Math.round(pct * 100)}%` : `Saving photo… ${Math.round(pct * 100)}%`;
+    toast(lastMsg);
+  };
+  // Keep the status on screen while bytes are not moving, so a weak signal does not look like nothing happened.
+  const keepUp = setInterval(() => { if (lastMsg) toast(Date.now() - lastMove > 5000 ? `${lastMsg} · weak signal, still trying` : lastMsg); }, 2000);
+  try { await putPlanned(plan, async target => {
     const file = files[target.sourceIndex];
-    if (!file) throw Object.assign(new Error("photo-file-missing"), { code: "photo-file-missing" });
-    return uploadBytes(storageRef(storage, target.path), file, { contentType: target.contentType, customMetadata: target.metadata });
-  });
+    at1++;
+    try {
+      if (!file) throw Object.assign(new Error("photo-file-missing"), { code: "photo-file-missing" });
+      // Once the signal has gone, don't make the rest wait out their own stall timers.
+      if (!signalLost && typeof navigator !== "undefined" && navigator.onLine === false) signalLost = "offline";
+      if (signalLost) throw Object.assign(new Error(signalLost), { code: signalLost });
+      say(0);
+      await uploadJobPhoto(target, file, say);
+      return target;
+    } catch (e) {
+      const reason = e && e.code === "offline" ? "offline" : photoFailReason(e);
+      if (["offline", "upload-stalled", "storage/retry-limit-exceeded"].includes(reason)) signalLost = signalLost || reason;
+      console.warn("cloud photo upload", reason);
+      failed.push({ sourceIndex: target.sourceIndex, name: file && file.name, reason });
+      return null;
+    }
+  }); } finally { clearInterval(keepUp); }
+  const uploaded = (plan.uploads || []).filter(u => !failed.some(f => f.sourceIndex === u.sourceIndex));
+  const skipped = [...(plan.skipped || []), ...failed];
+  if (!uploaded.length) return { ok: false, reason: (failed[0] && failed[0].reason) || "mirror-failed", uploaded: [], skipped };
   // Not a retention anchor, including on a completed job. Listing still uses the
   // job's completion or existing activity date. This only asks other open phones to list again.
   // Staff can't write cloudPhotosAt (rules). Their upload already bumps photosEmailedAt, which photoMark also watches.
   if (me && me.role === "admin") updateDoc(doc(db, "jobs", j.id), { cloudPhotosAt: at.toISOString() }).catch(e => console.warn("cloud photo stamp not saved", e.code || e.message));
-  await ensurePhotoList(j, true);
-  paintPhotoSlots();
-  return { ok: true, uploaded: plan.uploads || [], skipped: plan.skipped || [] };
+  // Refresh the gallery in the background. Listing every photo's metadata must not hold up "Photos saved".
+  ensurePhotoList(j, true).then(paintPhotoSlots);
+  return { ok: true, uploaded, skipped };
 }
 function galleryNow() {
   const pin = typeof window !== "undefined" ? window.HW_TODAY : "";
@@ -5652,9 +5707,21 @@ async function afterPhotosPrepared(j, files, infos, o = {}) {
   const idx = decision.fileIndexes;
   const emailFiles = idx ? idx.map(i => files[i]).filter(Boolean) : files;
   const emailInfos = idx ? idx.map(i => infos[i]) : infos;
+  const why = (mirror && mirror.skipped || []).map(x => x && x.reason).find(Boolean) || decision.reason;
   const captured = j.photosEmailedCount || 0;
   const jobForDialog = decision.storedCount ? { ...j, photosEmailedCount: captured + decision.storedCount } : j;
-  emailDialog(jobForDialog, emailFiles, emailInfos, o);
+  emailDialog(jobForDialog, emailFiles, emailInfos, { ...o, saveFail: why });
+}
+function photoFailText(reason) {
+  const r = String(reason || "");
+  if (r === "offline") return "no signal on this phone";
+  if (r === "upload-stalled") return "the upload stopped moving (weak signal)";
+  if (r === "storage/retry-limit-exceeded") return "the upload kept failing (weak signal)";
+  if (r === "storage/unauthorized" || r === "storage/unauthenticated") return `the app was not allowed to save them (${r})`;
+  if (r === "mime-not-allowed") return "this photo type can't be saved (for example HEIC)";
+  if (r === "too-large") return "a photo is bigger than 15 MB";
+  if (r === "too-many-files") return "more than 10 photos at once";
+  return r;
 }
 function emailDialog(j, files, infos, o = {}) {
   const subj = o.subject || emailSubject(j), body = o.body || emailBody;
@@ -5664,7 +5731,7 @@ function emailDialog(j, files, infos, o = {}) {
   const canShare = !!(navigator.canShare && navigator.canShare({ files }));
   const mailto = `mailto:${officeEmail()}?subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(body(j, infos, false))}`;
   const v = document.createElement("div"); v.className = "emdlg";
-  v.innerHTML = `<div class="embox"><h3>📧 Email ${n} photo${n > 1 ? "s" : ""}</h3>${!o.coll || o.coll === "jobs" ? `<p class="sub">These photos could not be saved to the job, so they still need to be emailed to the office.</p>` : ""}
+  v.innerHTML = `<div class="embox"><h3>📧 Email ${n} photo${n > 1 ? "s" : ""}</h3>${!o.coll || o.coll === "jobs" ? `<p class="sub">These photos could not be saved to the job, so they still need to be emailed to the office.</p>${o.saveFail ? `<p class="sub muted">Why: ${esc(photoFailText(o.saveFail))}</p>` : ""}` : ""}
     <div class="emthumbs">${files.map(f => `<img src="${URL.createObjectURL(f)}" alt="">`).join("")}</div>
     <p class="sub muted">${o.coll ? esc(j.reportNo) : "Job #" + esc(jobNo(j))} · ${esc(j.address || "")} · ${mb.toFixed(1)} MB${mb > 24 ? " — may be too big for one email, send fewer at a time" : ""}</p>
     ${canShare ? `<button type="button" class="mbtn complete" data-a="share">Send via email app</button>

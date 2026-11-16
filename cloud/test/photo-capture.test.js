@@ -53,3 +53,19 @@ test("the app waits for the cloud mirror before offering email, and still stamps
   assert.equal(app.split("photosEmailedAt:").length - 1, 1);
   assert.match(app, /const jobPhotosIcon = \(\) => ""/);
 });
+
+test("job photo upload gives feedback and falls back fast with no signal (Patrick, 16 Nov)", () => {
+  const app = readFileSync(new URL("../../app/app.js", import.meta.url), "utf8");
+  const mirror = app.slice(app.indexOf("async function mirrorJobPhotos"), app.indexOf("function galleryNow"));
+  assert.match(mirror, /navigator\.onLine === false/);
+  assert.match(mirror, /reason: "offline"/);
+  assert.match(mirror, /uploadJobPhoto\(target, file, say\)/);
+  assert.match(mirror, /failed\.push\(/, "one failed photo does not fail the whole batch");
+  assert.doesNotMatch(mirror, /await ensurePhotoList/, "the gallery refresh does not hold up Photos saved");
+  const upload = app.slice(app.indexOf("function uploadJobPhoto"), app.indexOf("function photoFailReason"));
+  assert.match(upload, /uploadBytesResumable\(/);
+  assert.match(upload, /upload-stalled/);
+  assert.match(upload, /task\.cancel\(\)/);
+  assert.match(app, /const PHOTO_STALL_MS = \d+/);
+  assert.match(app, /Why: \$\{esc\(photoFailText\(o\.saveFail\)\)\}/);
+});
