@@ -41,7 +41,7 @@ import {
 import {
   canViewTake5, hasTake5, shouldPromptTake5, take5Enabled, take5FormHtml, take5IdFor, take5JobHtml, take5ListHtml, take5Payload, take5PhotoPath,
 } from "./features/take5.js";
-import { PRODUCT_NAME, POWERED_BY, orgSettings, saveOrgSettings, setActiveCompany } from "./org-settings.js";
+import { PRODUCT_NAME, POWERED_BY, clearSavedOrg, orgSettings, saveOrgSettings, setActiveCompany } from "./org-settings.js";
 import {
   buildCompanyCreate, buildFriendCompany, buildTestCompany, companyAccess, companyDetailPatch, companyIdFromName, demoBundle,
   friendCodeOk, friendInviteLink, hoursBrand, isPlatformOwner, newFriendCode,
@@ -49,7 +49,7 @@ import {
   builderSignoff, clientDocId, companyClientNames, companyJobPrefix, companyMailbox, companyStdClients, timesheetMailParts,
   supervisorsPath, docCompanyId, isHeartwoodCompany,
 } from "./features/company.js";
-import { companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, pausedAdminHtml, pausedOwnerHtml, pausedStaffHtml, signupFormHtml, trialBannerHtml } from "./features/company-ui.js";
+import { adminViewBannerHtml, bootCompanyView, clearedCompanySession, companyHistoryState, historyStepOnEnter, historyStepOnMasterReturn, IN_COMPANY_VIEW_KEY, masterHistoryState, RETURN_MASTER_KEY, takeReturnMasterFlag, urlMarksCompanyView, withCompanyViewParam, companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, pausedAdminHtml, pausedOwnerHtml, pausedStaffHtml, signupFormHtml, trialBannerHtml } from "./features/company-ui.js";
 import {
   addTitle, companyTradesDoc, jobTypeMap, normalizeTrade, readTradeList, removeTitle, renameTitle, resolveCompanySetup,
   sanitizeSkills, sanitizeTitles, sanitizeTradeList, setTitleLevel, skillsEditorHtml,
@@ -186,10 +186,44 @@ onAuthStateChanged(auth, async user => {
     claims: token?.claims || {},
   });
   me.testCompanyId = "";
+  let sessionCompanyId = "";
+  let sessionStore = null;
+  try { sessionStore = sessionStorage; } catch { sessionStore = null; }
+  const returnMaster = takeReturnMasterFlag(sessionStore);
   if (me.platformOwner) {
     const sess = await getDoc(doc(db, "platformSessions", user.uid)).catch(() => null);
-    const cid = sess && sess.exists() ? String(sess.data().companyId || "").trim() : "";
-    if (cid) me.testCompanyId = cid;
+    sessionCompanyId = sess && sess.exists() ? String(sess.data().companyId || "").trim() : "";
+  }
+  const companyView = bootCompanyView({
+    platformOwner: !!me.platformOwner,
+    sessionCompanyId,
+    urlMarked: urlMarksCompanyView(location.search),
+    navType: navigationType(),
+    returnMaster,
+  });
+  let companyViewClearFailed = false;
+  if (companyView.clearSession) {
+    try { await setDoc(doc(db, "platformSessions", user.uid), clearedCompanySession()); }
+    catch (e) {
+      companyViewClearFailed = true;
+      console.warn("leave company view", e && (e.code || e.message));
+    }
+  }
+  if (companyView.action === "stay" || companyView.action === "stay-and-mark" || (companyViewClearFailed && sessionCompanyId)) {
+    me.testCompanyId = companyViewClearFailed ? sessionCompanyId : companyView.companyId;
+    try { sessionStorage.setItem(IN_COMPANY_VIEW_KEY, "1"); } catch { /* private mode: the session doc still restores this view */ }
+    if (companyView.action === "stay-and-mark" || companyViewClearFailed || !urlMarksCompanyView(location.search)) {
+      const marked = withCompanyViewParam(location.href, true);
+      try { history.pushState(companyHistoryState(me.testCompanyId), "", marked); } catch { /* the banner still leaves the company */ }
+    }
+  } else if (companyView.action === "master") {
+    try { sessionStorage.removeItem(IN_COMPANY_VIEW_KEY); } catch { /* the session doc is already clear */ }
+    clearSavedOrg();
+    setActiveCompany(null);
+    try { history.replaceState(masterHistoryState(), "", withCompanyViewParam(location.href, false)); } catch { /* Master still opens */ }
+    ui.landOnMaster = true;
+  } else if (companyView.action === "strip-mark") {
+    try { history.replaceState({ callupView: "home" }, "", withCompanyViewParam(location.href, false)); } catch { /* the param is only a marker */ }
   }
   await loadCompanyBrand();
   $("#who").textContent = `${me.name} · ${me.role}`; $("#logout").classList.remove("hidden");
@@ -209,6 +243,7 @@ onAuthStateChanged(auth, async user => {
     if (window.HW_PREVIEW_VIEW === "staff") ui.view = "staff";
     if (window.HW_PREVIEW_VIEW === "settings" || window.HW_PREVIEW_VIEW === "company") ui.view = "settings";
     if (window.HW_PREVIEW_VIEW === "master" && me.platformOwner) ui.view = "master";
+    if (ui.landOnMaster && me.platformOwner) ui.view = "master";
     const companyId = myCompanyId();
     const staffSnap = (companyId === "heartwood" && users) || await getDocs(query(collection(db, "users"), where("companyId", "==", companyId))).catch(() => null);
     // When the unscoped users list is denied, still know this company's own staff so legacy (no companyId) Heartwood sheets load.
@@ -541,10 +576,7 @@ function renderAccountPaused() {
   if (portal) portal.onclick = () => openBilling("createBillingPortal");
 }
 async function leavePausedSession() {
-  try {
-    await setDoc(doc(db, "platformSessions", me.uid), { companyId: "" });
-  } catch (e) { console.warn("leave paused", e && (e.code || e.message)); }
-  location.reload();
+  await returnToMasterPage();
 }
 function trialBannerNow() {
   const access = ui.companyAccess;
@@ -1199,14 +1231,112 @@ async function createFriendInvite(out) {
     if (out) out.textContent = msg;
   }
 }
+function navigationType() {
+  try {
+    const nav = performance.getEntriesByType("navigation")[0];
+    return (nav && nav.type) || "";
+  } catch { return ""; }
+}
+function companyViewBanner({ operator = false } = {}) {
+  return adminViewBannerHtml({
+    platformOwner: !!(me && me.platformOwner),
+    sessionCompanyId: (me && me.testCompanyId) || "",
+    companyName: orgSettings().name,
+    operatorAdmin: !!(operator && me && me.role === "admin"),
+  });
+}
+function bindMasterReturn(root) {
+  const scope = root && root.querySelector ? root : document;
+  const btn = scope.querySelector("#backmaster");
+  if (btn) btn.onclick = () => returnToMasterPage();
+}
+function dropViewedCompanyState() {
+  if (typeof unsub === "function") {
+    try { unsub(); } catch { /* listeners already stopped */ }
+    unsub = null;
+  }
+  jobs = [];
+  staff = [];
+  if (me) me.testCompanyId = "";
+  ui.undated = [];
+  ui.done = [];
+  ui.companyRecord = null;
+  ui.incidents = [];
+  ui.invites = [];
+  ui.staffLogins = [];
+  setActiveCompany(null);
+  clearSavedOrg();
+}
+let leavingCompanyView = false;
+async function returnToMasterPage({ fromPop = false } = {}) {
+  if (!me || !me.platformOwner || leavingCompanyView) return;
+  leavingCompanyView = true;
+  const companyId = me.testCompanyId || "";
+  try { sessionStorage.setItem(RETURN_MASTER_KEY, "1"); } catch { /* the session clear still runs */ }
+  try {
+    await setDoc(doc(db, "platformSessions", me.uid), clearedCompanySession());
+  } catch (e) {
+    leavingCompanyView = false;
+    try { sessionStorage.removeItem(RETURN_MASTER_KEY); } catch { /* the next tap tries again */ }
+    if (fromPop && companyId) {
+      try { history.pushState(companyHistoryState(companyId), "", withCompanyViewParam(location.href, true)); } catch { /* stay on this page */ }
+    }
+    toast((e && (e.message || e.code)) || "Could not leave this company.");
+    return;
+  }
+  try { sessionStorage.removeItem(IN_COMPANY_VIEW_KEY); } catch { /* reload opens Master from the return flag */ }
+  dropViewedCompanyState();
+  const bare = withCompanyViewParam(location.href, false);
+  if (!fromPop) {
+    const step = historyStepOnMasterReturn(history.state);
+    try {
+      if (step.action === "replace") history.replaceState(step.state, "", bare);
+      else history.pushState(step.state, "", bare);
+    } catch { /* reload still opens Master */ }
+  } else if (urlMarksCompanyView(location.search)) {
+    try { history.replaceState(masterHistoryState(), "", bare); } catch { /* the flag opens Master */ }
+  }
+  location.reload();
+}
 async function openTestCompany(companyId) {
-  await setDoc(doc(db, "platformSessions", me.uid), { companyId });
+  const step = historyStepOnEnter(history.state, companyId);
+  const marked = withCompanyViewParam(location.href, true);
+  const previous = location.pathname + location.search + location.hash;
+  try {
+    if (step.action === "push") history.pushState(step.state, "", marked);
+    else history.replaceState(companyHistoryState(companyId), "", marked);
+  } catch { /* the session still opens the company */ }
+  try { sessionStorage.setItem(IN_COMPANY_VIEW_KEY, "1"); } catch { /* the address mark is enough after reload */ }
+  try {
+    await setDoc(doc(db, "platformSessions", me.uid), { companyId });
+  } catch (e) {
+    try { sessionStorage.removeItem(IN_COMPANY_VIEW_KEY); } catch { /* the address is put back below */ }
+    try { history.replaceState({ callupView: "home" }, "", previous); } catch { /* stay on this page */ }
+    toast((e && (e.message || e.code)) || "Could not open this company.");
+    return;
+  }
   location.reload();
 }
 async function leaveTestCompany() {
-  await setDoc(doc(db, "platformSessions", me.uid), { companyId: "" });
+  try { await setDoc(doc(db, "platformSessions", me.uid), clearedCompanySession()); }
+  catch (e) { toast((e && (e.message || e.code)) || "Could not leave this company."); return; }
+  try { sessionStorage.removeItem(IN_COMPANY_VIEW_KEY); } catch { /* reload reads the cleared session */ }
+  dropViewedCompanyState();
+  try { history.replaceState({ callupView: "home" }, "", withCompanyViewParam(location.href, false)); } catch { /* reload leaves the company */ }
   location.reload();
 }
+window.addEventListener("popstate", () => {
+  if (!me || !me.platformOwner || !me.testCompanyId) return;
+  if (urlMarksCompanyView(location.search)) return;
+  returnToMasterPage({ fromPop: true });
+});
+window.addEventListener("pageshow", ev => {
+  if (!ev.persisted || !me || !me.platformOwner) return;
+  let flagged = false;
+  try { flagged = sessionStorage.getItem(IN_COMPANY_VIEW_KEY) === "1"; } catch { return; }
+  if (!flagged || urlMarksCompanyView(location.search)) return;
+  returnToMasterPage({ fromPop: true });
+});
 async function resetTestDemo(companyId) {
   if (!confirm("Put the sample jobs and staff names back? Nothing is deleted.")) return;
   try { await writeDemo(companyId); toast("Demo data reset"); }
@@ -1293,7 +1423,7 @@ function shell(inner) {
   const grp = ([g, ic, n, ks]) => { const has = ks.includes(ui.view), open = has || !ui.navCol[g];
     return `<div class="sm-grp ${open ? "open" : ""} ${has ? "has" : ""}"><button class="sm-gh" data-grp="${g}" aria-expanded="${open}"><span class="ic">${ic}</span><span class="lbl">${n}</span><span class="car">${open ? "▾" : "▸"}</span></button>
       <div class="sm-gi">${ks.map(item).join("")}</div></div>`; };
-  return `<div class="sm-layout ${ui.navOpen ? "navopen" : ""}"><div class="sm-burgerbar"><button class="sm-burger" id="burger" aria-label="Menu">☰</button><b>${esc(cur ? (NAV_LBL[cur[0]] || cur[2]) : "")}</b></div>
+  return `${companyViewBanner()}<div class="sm-layout ${ui.navOpen ? "navopen" : ""}"><div class="sm-burgerbar"><button class="sm-burger" id="burger" aria-label="Menu">☰</button><b>${esc(cur ? (NAV_LBL[cur[0]] || cur[2]) : "")}</b></div>
     <nav class="sm-side">${NAV_TOP.map(item).join("")}${NAV_GROUPS.map(grp).join("")}${NAV_FOOT.map(item).join("")}</nav>
     <section class="sm-main">${trialBannerNow()}${PUSH.bannerHtml()}${inner}</section></div>`;
 }
@@ -4081,7 +4211,7 @@ function renderAdmin() {
   const staffHtml = ui.view === "staff" ? staffPageHtml() : null;
   paintBrand();
   $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "master" ? masterView() : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "capacity" ? capacityScreen() : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : ui.view === "crew" ? crewMapScreen() : quotesHtml != null ? quotesHtml : jobsView(all));
-  const A = $("#app"); inboxBadge(); bindTrialBanner(A);
+  const A = $("#app"); inboxBadge(); bindTrialBanner(A); bindMasterReturn(A);
   CHAT.watch([...(jobs || []), ...(ui.undated || [])]);
   if (ui.view === "chat") CHAT.mount(A);
   if (ui.view === "invoices") bindInvoices(A);
@@ -5272,7 +5402,7 @@ const opTabs = on => {
   const tabs = [["today", "Today", ICO.today], ["week", "Jobs", ICO.jobs], ["chat", "Chat", ICO.chat], ["photos", "Photos", ICO.photos], ["more", "More", ICO.more]];
   return `<nav class="mob-tabs" aria-label="Sections">${tabs.map(([k, n, ic]) => `<button type="button" data-tab="${k}" class="${key === k ? "on" : ""}"${key === k ? ` aria-current="page"` : ""}><span class="mic">${ic}</span><span>${n}</span>${k === "chat" ? CHAT.badge("staff") : ""}</button>`).join("")}</nav>`;
 };
-const adminBack = () => me.role === "admin" ? `<button class="mback adminback" id="toadmin" type="button">Admin view</button>` : "";
+const adminBack = () => companyViewBanner({ operator: true });
 const opSeg = on => `<div class="seg mob-seg" role="group" aria-label="When">${[["today", "Today"], ["week", "Upcoming"]].map(([k, n]) => `<button type="button" data-tab="${k}" class="${on === k ? "on" : ""}">${n}</button>`).join("")}</div>`;
 // Quote amounts for the crew (rubbish / concrete / material amounts). Price-free by construction (quotes.js workAmounts).
 function workAmountsHtml(j, cls) {
@@ -5322,6 +5452,7 @@ function opCard(j) {
 }
 function bindOp(mine) {
   PUSH.mount($("#app"));
+  bindMasterReturn($("#app"));
   if ($("#toadmin")) $("#toadmin").onclick = () => { ui.myJobs = false; ui.opSel = null; renderAdmin(); };
   // A tab tap is a deliberate move: force the redraw, or an open Prestart/Compliance form keeps the screen (stuck until reload).
   $("#app").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { ui.opTab = b.dataset.tab; ui.forceRender = true; renderOperator(); window.scrollTo(0, 0); });
@@ -5565,7 +5696,7 @@ function renderOpDetail(j) {
   const type = jobTypeText(j) || TYPES[j.type] || "Job";
   const addrLine = [p.street, p.place].filter(Boolean).join(", ") || p.full || j.address || "";
   const onChat = ui.jobPane === "chat";
-  $("#app").innerHTML = `<div class="mob"><div class="mob-bar det ${QCLS[q]}"><button class="mback" id="back" type="button">${ICO.back}<span class="sr">Jobs</span></button>
+  $("#app").innerHTML = `<div class="mob">${companyViewBanner()}<div class="mob-bar det ${QCLS[q]}"><button class="mback" id="back" type="button">${ICO.back}<span class="sr">Jobs</span></button>
       <div class="mob-bar-txt"><div class="mob-title">Job details</div>${started ? ipTop(j, "onbar") : ""}<div class="mob-sub">${done ? "Completed" : started ? "In progress" : "Scheduled"} · #${esc(jobNo(j))}</div>
         <div class="mob-brandline"><span class="wordmark" aria-label="${esc(PRODUCT_NAME)}">Call<span>Up</span></span><span class="orgbit">${esc(orgSettings().name)}</span></div></div></div>
     <div class="job-switch" role="tablist" aria-label="Job sections">
@@ -5599,7 +5730,7 @@ function renderOpDetail(j) {
       <button type="button" class="mbtn mnote op-photo" id="emailph">${ICO.photos}<span>Add photos</span></button>
       <a class="mcard link mbtn outline" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener">${ICO.pin}<span>Get directions</span></a>
     </div></div>`;
-  rememberJob(j); $("#emailph").onclick = () => emailPhotos(j); wireJobReceipts(j); fillSupCard(j); watchJobPhotos(j); paintPhotoSlots();
+  rememberJob(j); bindMasterReturn($("#app")); $("#emailph").onclick = () => emailPhotos(j); wireJobReceipts(j); fillSupCard(j); watchJobPhotos(j); paintPhotoSlots();
   wireJobDocuments(document.querySelector("[data-job-docs]"), j);
   if (!hasTake5(ui.take5s, me.uid, j.id)) rememberOwnTake5(j);
   const showJobPane = which => {
