@@ -47,13 +47,14 @@ service cloud.firestore {
           ? data.tenantId
           : "heartwood");
     }
-    // Paused: the trial has ended and the company is not paying. One company lookup.
-    // Heartwood returns before the lookup, so Heartwood rules stay under the expression limit.
-    // A missing company document is not paused (legacy Heartwood data and tests). isTest is
-    // checked before the other fields so a test company does not pay for the rest.
-    // Billing writes from the webhook use the Admin SDK and bypass these rules.
+    // Paused: the trial has ended and the company is not paying, or the platform owner
+    // set ownerPaused. One company lookup. Heartwood returns before the lookup.
+    // A missing company document is not paused (legacy Heartwood data and tests).
+    // ownerPaused is checked first so a test or paying company can still be held.
+    // A missing ownerPaused field is not an owner pause. Billing writes use the Admin SDK.
     function companyRecordOpen(data) {
-      return data.get("isTest", false) == true || companyBillingOpen(data);
+      return data.get("ownerPaused", false) != true
+        && (data.get("isTest", false) == true || companyBillingOpen(data));
     }
     function companyBillingOpen(data) {
       let raw = data.get("billing", null);
@@ -283,6 +284,41 @@ service cloud.firestore {
         && next.jobCount >= resource.data.jobCount && next.jobCount <= resource.data.jobCount + 1
         && next.lastActivityAt == request.time;
     }
+    function profileCompany() {
+      return !hasProfile() ? ""
+        : (profile().get("companyId", "") is string && profile().get("companyId", "").size() > 0
+          ? profile().get("companyId", "")
+          : (profile().get("tenantId", "") is string && profile().get("tenantId", "").size() > 0
+            ? profile().get("tenantId", "")
+            : ""));
+    }
+    // Only the platform owner can set or clear an owner pause. Heartwood and the
+    // caller's own company are refused. The pause record (who, when) stays on reactivate.
+    function ownerPauseEdit(companyId) {
+      let next = request.resource.data;
+      let diff = next.diff(resource.data).affectedKeys();
+      return platformOwner()
+        && companyId != "heartwood"
+        && companyId != profileCompany()
+        && companyIdOk(companyId)
+        && next.billing == resource.data.billing
+        && next.plan == resource.data.plan
+        && next.status == resource.data.status
+        && next.get("isTest", false) == resource.data.get("isTest", false)
+        && (
+          (diff.hasOnly(["ownerPaused", "ownerPausedAt", "ownerPausedBy"])
+            && next.ownerPaused == true
+            && next.ownerPausedBy == request.auth.uid
+            && next.ownerPausedAt == request.time)
+          || (resource.data.get("ownerPaused", false) == true
+            && diff.hasOnly(["ownerPaused", "ownerReactivatedAt", "ownerReactivatedBy"])
+            && next.ownerPaused == false
+            && next.ownerReactivatedBy == request.auth.uid
+            && next.ownerReactivatedAt == request.time
+            && next.get("ownerPausedBy", "") == resource.data.get("ownerPausedBy", "")
+            && next.get("ownerPausedAt", null) == resource.data.get("ownerPausedAt", null))
+        );
+    }
     function ownerProfileCreate() {
       let d = request.resource.data;
       // jobTitle/jobTitleId: the signup screen labels the owner "Admin" under their first trade (PR 71).
@@ -307,10 +343,17 @@ service cloud.firestore {
       // Box sync account (Hubdoc filer, receipts worker) reads each company's Hubdoc address and test flag.
       allow read: if isSync();
       allow create: if companyOwnerCreate(companyId) || testCompanyCreate(companyId) || friendCompanyCreate(companyId);
-      allow update: if companyTradesEdit(companyId) || ownerPlanEdit(companyId) || testArchive(companyId) || testDemoCounts(companyId) || companyAdminEdit(companyId) || companyStatsBump(companyId);
+      allow update: if companyTradesEdit(companyId) || ownerPlanEdit(companyId) || testArchive(companyId) || testDemoCounts(companyId) || companyAdminEdit(companyId) || companyStatsBump(companyId) || ownerPauseEdit(companyId);
       allow delete: if false;
     }
 // END COMPANY RULES
+
+    // Deletion audit. Written by deleteCompanyAccount (Admin SDK). Kept outside the company
+    // that was deleted. Clients cannot write or delete it.
+    match /companyDeletions/{companyId} {
+      allow read: if platformOwner();
+      allow create, update, delete: if false;
+    }
 
     match /platformSessions/{uid} {
       allow get: if signedIn() && request.auth.uid == uid;

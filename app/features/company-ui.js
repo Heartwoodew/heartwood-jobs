@@ -146,6 +146,47 @@ export function pausedStaffHtml() {
   </form>`;
 }
 
+export function pausedOwnerHtml({ platformOwner = false } = {}) {
+  return `<form class="card login" id="paused">
+    <h2>Account paused</h2>
+    <p>This account has been paused.</p>
+    ${platformOwner ? `<button class="big primary" type="button" id="pausedhome">Back to Master</button>` : ""}
+    <button class="big ghost" type="button" id="pausedout">Sign out</button>
+  </form>`;
+}
+
+function accountBadgeHtml(row) {
+  const label = (row && row.accountBadge) || "Active";
+  const cls = label === "Paused (owner)" ? "co-owner-pause"
+    : label === "Paused (trial ended)" ? "co-trial-pause"
+    : label === "Trial" ? "co-trial"
+    : "co-active";
+  return `<span class="co-badge ${cls}">${esc(label)}</span>`;
+}
+
+function ownerActions(row, ownCompanyId) {
+  if (!row || row.id === "heartwood" || (ownCompanyId && row.id === ownCompanyId)) {
+    return `<p class="sub">This company cannot be paused or deleted.</p>`;
+  }
+  const pause = row.ownerPaused
+    ? `<button type="button" class="primary" id="ownerreactivate">Reactivate</button>`
+    : `<button type="button" class="primary" id="ownerpause">Pause</button>`;
+  const held = row.ownerPausedBy
+    ? `<p class="sub">Owner pause: ${row.ownerPaused ? "paused" : "reactivated"} by ${esc(row.ownerPausedBy)}${row.ownerPausedAt ? " · " + esc(when(row.ownerPausedAt)) : ""}. Data is kept.</p>`
+    : "";
+  return `<div class="btns owner-actions">${pause}<button type="button" class="ghost" id="ownerdeleteopen">Delete</button></div>
+    ${held}
+    <dialog class="owner-delete" id="ownerdelete">
+      <form id="ownerdeleteform">
+        <h3>Delete ${esc(row.name)}</h3>
+        <p>Type the company name exactly. This deletes the company and all of its data.</p>
+        <label>Company name<input name="confirmName" autocomplete="off" aria-label="Type the company name to confirm"></label>
+        <p id="ownerdeleteerr" class="err"></p>
+        <div class="btns"><button type="button" class="ghost" id="ownerdeletecancel">Cancel</button><button type="submit" class="primary" id="ownerdeletego">Delete company</button></div>
+      </form>
+    </dialog>`;
+}
+
 function badge(row) {
   if (row.isTest) return `<span class="co-badge co-test">TEST</span>`;
   if (row.plan === "friend") return `<span class="co-badge co-friend">FRIEND</span>`;
@@ -167,7 +208,7 @@ export function masterPageHtml(companies, filters = {}, invites = [], currentOri
       <td>${row.staffCount}</td>
       <td>${row.jobCount}</td>
       <td>${esc(when(row.lastActivityAt))}</td>
-      <td><span class="qpill ${row.status === "active" ? "q-comp" : "q-uns"}">${esc(row.status)}</span></td>
+      <td>${accountBadgeHtml(row)}${row.status !== "active" ? `<div class="sub">${esc(row.status)}</div>` : ""}</td>
     </tr>`).join("");
   const rank = status => status === "pending" ? 0 : status === "used" ? 1 : 2;
   const inviteRows = (invites || []).slice().sort((a, b) => rank(a.status) - rank(b.status) || String(a.id).localeCompare(String(b.id))).map(inv => {
@@ -217,7 +258,7 @@ export function masterPageHtml(companies, filters = {}, invites = [], currentOri
     <div id="masterdetail"></div>`;
 }
 
-export function masterDetailHtml(row) {
+export function masterDetailHtml(row, { ownCompanyId = "" } = {}) {
   if (!row) return "";
   const testActions = row.isTest && row.status !== "archived"
     ? `<div class="btns"><button type="button" id="testopen">Open as admin</button><button type="button" id="testreset">Reset demo data</button><button type="button" id="testarchive">Archive</button></div>`
@@ -227,8 +268,9 @@ export function masterDetailHtml(row) {
         <div class="btns"><button type="submit" name="act" value="extend">Save end date</button><button type="submit" name="act" value="trial">Convert to trial</button><button type="submit" name="act" value="paid">Convert to paid</button></div></form>`
     : "";
   return `<article class="card master-detail" id="mastercard">
-    <div class="sm-head"><h2>${esc(row.name)} ${badge(row)}</h2><button type="button" class="ghost" id="masterclose">Close</button></div>
+    <div class="sm-head"><h2>${esc(row.name)} ${badge(row)} ${accountBadgeHtml(row)}</h2><button type="button" class="ghost" id="masterclose">Close</button></div>
     <p class="sub">${row.isTest ? "Test company. Opening it does not show another company's jobs. Nothing is emailed or billed." : "Account details only. Job descriptions, photos and amounts are not shown."}</p>
+    ${ownerActions(row, ownCompanyId)}
     ${testActions}${friendActions}
     <dl class="master-dl">
       <div><dt>Legal name</dt><dd>${esc(row.legalName)}</dd></div>

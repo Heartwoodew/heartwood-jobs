@@ -309,10 +309,21 @@ export function companyPlanView(company, now = new Date()) {
   return { plan, status, trialActive, trialEnded, friendEnded, planLabel, trialEndsAt: end, friendEndsAt: friendEnd };
 }
 
+// Master-page badge. Owner pause wins over an ended trial. An open trial is Trial.
+// Everything else that can still sign in, including paying and Heartwood, is Active.
+export function accountBadgeLabel(access) {
+  if (access && access.ownerPaused) return "Paused (owner)";
+  if (access && access.paused) return "Paused (trial ended)";
+  if (access && access.trialActive) return "Trial";
+  return "Active";
+}
+
 // A company may use CallUp when it is Heartwood, a test company, a friend trial that has not ended,
 // still inside its 14-day trial, or paying (billing status active or trialing). past_due and canceled
 // after the trial are paused. A missing company document is not paused: the screen needs a loaded doc.
-// Keep this in step with companyOpen() in the Firestore rules and pauseRetentionPlan() in the functions.
+// ownerPaused is the platform owner's hold: same lock as a trial pause, no automatic deletion.
+// Heartwood is never paused. Keep this in step with companyOpen() in the Firestore rules
+// and pauseRetentionPlan() in the functions.
 export function companyAccess(company, companyId, now = new Date()) {
   const id = (typeof companyId === "string" && companyId) || (company && company.companyId) || "";
   const view = companyPlanView(company, now);
@@ -321,28 +332,33 @@ export function companyAccess(company, companyId, now = new Date()) {
   const paying = billingStatus === "active" || billingStatus === "trialing";
   const heartwood = id === HEARTWOOD_COMPANY_ID;
   const known = !!(company && typeof company === "object" && !heartwood);
+  const ownerPaused = !!(company && company.ownerPaused === true && !heartwood);
   const friendOpen = view.plan === "friend" && !view.friendEnded;
   // A trial with no end date has not ended. Signup always sets trialEndsAt; older docs without one stay open.
   const trialStillOpen = view.plan === "trial" && view.status === "active" && !(company && company.isTest === true)
     && (view.trialEndsAt == null || view.trialEndsAt > at);
-  const open = heartwood || !known || (company && company.isTest === true) || paying || friendOpen || trialStillOpen;
-  const paused = known && !open;
+  const open = !ownerPaused && (heartwood || !known || (company && company.isTest === true) || paying || friendOpen || trialStillOpen);
+  const paused = ownerPaused || (known && !open);
   const msLeft = view.trialEndsAt != null ? view.trialEndsAt - at : 0;
   const daysLeft = view.trialActive && msLeft > 0 ? Math.max(1, Math.ceil(msLeft / 86400000)) : 0;
   const remind = !!(view.trialActive && msLeft > 0 && msLeft <= TRIAL_REMINDER_DAYS * 86400000);
   const customer = !!(company && company.billing && company.billing.stripeCustomerId);
   const manageBilling = customer && (billingStatus === "past_due" || billingStatus === "canceled");
-  const deleteEligible = known && company.isTest !== true && view.plan !== "friend" && view.plan !== "paid" && !paying && view.trialEndsAt != null;
+  // An owner pause is kept indefinitely. The trial-deletion clock does not run while it is set.
+  const deleteEligible = !ownerPaused && known && company.isTest !== true && view.plan !== "friend" && view.plan !== "paid" && !paying && view.trialEndsAt != null;
   const deleteAt = deleteEligible ? view.trialEndsAt + PAUSE_GRACE_DAYS * 86400000 : null;
-  return {
-    ...view, open, paused, paying, daysLeft, remind, manageBilling, deleteAt,
+  const access = {
+    ...view, open, paused, ownerPaused, paying, daysLeft, remind, manageBilling, deleteAt,
     billingStatus: billingStatus || "not-configured",
   };
+  access.accountBadge = accountBadgeLabel(access);
+  return access;
 }
 
 // Account-level row only. Job text, photos and money are not copied onto it.
 export function masterRow(id, company, now = new Date()) {
   const view = companyPlanView(company, now);
+  const access = companyAccess(company, id, now);
   const signed = millis(company && (company.signedUpAt || company.createdAt));
   const activity = millis(company && company.lastActivityAt);
   return {
@@ -370,6 +386,11 @@ export function masterRow(id, company, now = new Date()) {
     isTest: company.isTest === true,
     paying: view.plan === "paid" && view.status === "active" && company.isTest !== true,
     billingStatus: billingStatusLabel(company, view),
+    ownerPaused: access.ownerPaused,
+    paused: access.paused,
+    accountBadge: access.accountBadge,
+    ownerPausedAt: millis(company && company.ownerPausedAt),
+    ownerPausedBy: typeof (company && company.ownerPausedBy) === "string" ? company.ownerPausedBy : "",
   };
 }
 
