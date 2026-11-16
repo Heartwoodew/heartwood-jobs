@@ -214,6 +214,11 @@ body.operator main{padding:0;max-width:560px}
 .embox .mbtn.complete{background:var(--q-comp);border-color:var(--q-comp);color:#fff}
 @media(min-width:700px){.emdlg{align-items:center}.embox{border-radius:14px}}
 .emthumbs{display:flex;gap:6px;overflow-x:auto}.emthumbs img{height:90px;border-radius:6px}
+.embox.jobemail{max-height:min(92dvh,760px);overflow:auto}
+.email-preview{white-space:pre-wrap;max-height:34vh;overflow:auto;background:#f6f1ea;border-radius:8px;padding:10px;margin:0;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}
+.jem-photos{display:grid;gap:2px;max-height:28vh;overflow:auto}
+.jem-photos .ck{min-height:44px;display:flex;align-items:center;gap:8px}
+.jem-subject{font-weight:700}
 /* ---- phone admin (<=760px): hamburger menu + one-day dispatch agenda */
 .sm-burgerbar{display:none}
 @media (max-width:760px){

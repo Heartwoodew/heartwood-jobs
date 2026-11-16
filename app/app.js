@@ -21,9 +21,13 @@ import {
 import { installRouteOrder, orderJobsForRun, runSheetId, geoPatch, setRouteDepot } from "./features/route-order.js";
 import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPlanned, jobPhotoPrefix, storageErrorCode, summarizePhotoListing } from "./features/cloud-storage.js";
 import { buildOperationalExport, retentionAdminText, retentionView } from "./features/cloud-retention.js";
+import {
+  buildJobEmail, compressImageBlob, deviceCanShareFiles, emailSendPlan, emailSheetHtml,
+  jpegName, mailtoHref, photoBudget, photosZip, selectEmailAttachments, shareText, suggestRecipient, uniqueNames,
+} from "./features/job-email.js";
 import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, lightboxHtml, photoFailureText } from "./features/photo-gallery.js";
 import { decidePhotoEmail } from "./features/photo-capture.js";
-import { mountDocuments, unmountDocuments, openDocumentBlob } from "./features/job-documents.js";
+import { mountDocuments, unmountDocuments, openDocumentBlob, canManageDocuments } from "./features/job-documents.js";
 import { installChatApp } from "./features/chat-ui.js";
 import { installPush } from "./features/push.js";
 import { installCompliance } from "./features/compliance.js";
@@ -4597,10 +4601,10 @@ function editJob(j) {
       ${!n ? `<h4>Photos</h4><button type="button" class="sm-btn" id="emailph">Add photos</button> <span data-photoslot="${esc(j.id)}" data-photorole="cloud" data-photovariant="sm"></span> ${emailedPhotosNote(j)} <button type="button" class="sm-btn incbtn" data-inc="${j.id}">⚠ Report incident</button>${companyHasSwms() ? ` <button type="button" class="sm-btn" data-swms="${j.id}">📋 View SWMS</button>` : ""}${jobReceiptsHtml(j)}${cloudRetentionHtml(j)}` : ""}
     </div></div>
     <p id="ferr" class="err"></p>
-    <div class="btns jc-foot"><button value="cancel" formnovalidate class="sm-btn">Close</button><button value="save" class="sm-btn primary">Save Job</button></div></form>`;
+    <div class="btns jc-foot">${n ? "" : `<button type="button" class="sm-btn" id="emailjob">Email job</button>`}<button value="cancel" formnovalidate class="sm-btn">Close</button><button value="save" class="sm-btn primary">Save Job</button></div></form>`;
   d.showModal();
   if (!n) jobTabs(d, j);
-  if (!n) { rememberJob(j); $("#emailph").onclick = () => emailPhotos(j); watchJobPhotos(j); paintPhotoSlots(); wireJobDocuments(d.querySelector("[data-job-docs]"), j); }
+  if (!n) { rememberJob(j); $("#emailph").onclick = () => emailPhotos(j); const emailJobBtn = $("#emailjob"); if (emailJobBtn) emailJobBtn.onclick = () => { openJobEmail(j).catch(e => toast(e.message || "Couldn't open the email")); }; watchJobPhotos(j); paintPhotoSlots(); wireJobDocuments(d.querySelector("[data-job-docs]"), j); }
   if (!n && $("#cloudexport")) $("#cloudexport").onclick = () => downloadGalleryCopy(j).catch(e => toast(e.message || "Download failed"));
   if (!n) { wireFindPo(j); supervisors(); wireJobReceipts(j); fillSupCard(j); }
   if (!n && $("#unschbtn")) $("#unschbtn").onclick = ev => { if (!armBtn(ev.currentTarget, "✕ Remove from dispatch board", "Tap again to remove from the board")) return;
@@ -5823,9 +5827,10 @@ function renderOpDetail(j) {
       `<button class="mbtn start" type="button" data-act="start" ${started ? "disabled" : ""}>${ICO.play}<span>${started ? "Started" : "Start job"}</span></button>
        <button class="mbtn complete" type="button" data-act="done">Complete job</button>`}
       <button type="button" class="mbtn mnote op-photo" id="emailph">${ICO.photos}<span>Add photos</span></button>
+      <button type="button" class="mbtn outline" id="emailjob">Email job</button>
       <a class="mcard link mbtn outline" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener">${ICO.pin}<span>Get directions</span></a>
     </div></div>`;
-  rememberJob(j); bindMasterReturn($("#app")); $("#emailph").onclick = () => emailPhotos(j); wireJobReceipts(j); fillSupCard(j); watchJobPhotos(j); paintPhotoSlots();
+  rememberJob(j); bindMasterReturn($("#app")); $("#emailph").onclick = () => emailPhotos(j); $("#emailjob").onclick = () => { openJobEmail(j).catch(e => toast(e.message || "Couldn't open the email")); }; wireJobReceipts(j); fillSupCard(j); watchJobPhotos(j); paintPhotoSlots();
   wireJobDocuments(document.querySelector("[data-job-docs]"), j);
   if (!hasTake5(ui.take5s, me.uid, j.id)) rememberOwnTake5(j);
   const showJobPane = which => {
@@ -5871,6 +5876,265 @@ async function opAction(j, act) {
     updateDoc(ref, u).then(() => toast(act === "done" ? "Marked done" : "Note saved")).catch(e => toast("Not saved: " + e.code));
     if (!navigator.onLine) toast("Offline — will sync when back in signal");
   };
+}
+
+function emailActorRole() {
+  if (!me) return "operator";
+  const profileRole = (me.cloudProfile && me.cloudProfile.role) || "";
+  if (canSeeMoney()) {
+    for (const role of [me.role, me.staffRole, profileRole]) {
+      if (role === "admin" || role === "manager" || role === "supervisor") return role;
+    }
+    return "supervisor";
+  }
+  return profileRole === "labourer" || me.role === "labourer" || me.staffRole === "labourer" ? "labourer" : "operator";
+}
+async function emailJobDocuments(job) {
+  const role = documentActorRole();
+  const col = collection(db, "jobs", job.id, "documents");
+  const src = canManageDocuments(role) ? col : query(col, where("visibility", "==", "crew"));
+  try {
+    const snap = await getDocs(src);
+    return snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(row => docCompanyId(row) === myCompanyId());
+  } catch {
+    return [];
+  }
+}
+async function emailJobReceipts(job) {
+  // Same read as the job card: Alex sees the job's receipts, everyone else only their own.
+  // Crew never reach this. Receipt images show dollar amounts.
+  if (!canSeeMoney() || !job || !job.id) return [];
+  const col = collection(db, "receipts");
+  const src = isOwner()
+    ? query(col, where("jobId", "==", job.id))
+    : query(col, where("jobId", "==", job.id), where("uid", "==", me.uid));
+  try {
+    const snap = await getDocs(src);
+    return snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(row => docCompanyId(row) === myCompanyId());
+  } catch {
+    return [];
+  }
+}
+async function emailQuote(job) {
+  if (!canSeeMoney() || !job || !job.quoteId) return null;
+  try {
+    const snap = await getDoc(doc(db, "quotes", job.quoteId));
+    if (!snap.exists()) return null;
+    const row = snap.data() || {};
+    return docCompanyId(row) === myCompanyId() ? row : null;
+  } catch {
+    return null;
+  }
+}
+async function copyEmailText(text) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* the field below still copies on older phones */ }
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.left = "-9999px";
+  document.body.appendChild(area);
+  area.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch { ok = false; }
+  area.remove();
+  return ok;
+}
+async function prepareEmailFiles(items, onProgress) {
+  const files = [];
+  for (let i = 0; i < items.length; i++) {
+    onProgress(i + 1, items.length);
+    // Same private getBlob the gallery uses. No download URL is created.
+    const blob = await blobForPhoto(items[i].path);
+    const compressed = await compressImageBlob(blob);
+    files.push(new File([compressed.blob], jpegName(items[i].name, i), { type: "image/jpeg" }));
+  }
+  const names = uniqueNames(files.map(file => file.name));
+  return files.map((file, i) => new File([file], names[i], { type: "image/jpeg" }));
+}
+async function downloadEmailZip(files) {
+  const rows = [];
+  for (const file of files) rows.push({ name: file.name, data: new Uint8Array(await file.arrayBuffer()) });
+  const packed = photosZip(rows);
+  if (!packed.ok) return false;
+  const url = URL.createObjectURL(new Blob([packed.zip], { type: "application/zip" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "job-photos.zip";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  return true;
+}
+async function openJobEmail(job) {
+  if (!job || !job.id) return;
+  if (docCompanyId(job) !== myCompanyId()) return toast("That job belongs to another company.");
+  await ensurePhotoList(job).catch(() => {});
+  await loadClients().catch(() => {});
+  const row = ui.photoLists[job.id];
+  const listing = row && row.gallery && row.gallery.ok ? row.gallery.photos : [];
+  const photoError = !!(row && row.status === "error");
+  const [documents, receiptRows, quote] = await Promise.all([emailJobDocuments(job), emailJobReceipts(job), emailQuote(job)]);
+  const role = emailActorRole();
+  const picked = selectEmailAttachments({
+    membership: cloudMembership(), job, companyId: myCompanyId(), role, listing, receipts: receiptRows,
+  });
+  if (!picked.ok) return toast("You can't email this job.");
+  const moneyJob = canSeeMoney() ? withMoney(job) : job;
+  const suggested = suggestRecipient(job, clientOf(job.client));
+  let shareOk = deviceCanShareFiles();
+  let allowLarge = false;
+  const chosen = () => {
+    const box = document.getElementById("jobemail");
+    if (!box) return picked.attachments;
+    const ids = [];
+    box.querySelectorAll("[data-jem-index]:checked").forEach(el => {
+      const index = Number(el.dataset.jemIndex);
+      const item = el.dataset.jemKind === "receipt" ? picked.receipts[index] : picked.photos[index];
+      if (item) ids.push(item.id);
+    });
+    const again = selectEmailAttachments({
+      membership: cloudMembership(), job, companyId: myCompanyId(), role, listing, receipts: receiptRows, pickedIds: ids,
+    });
+    return again.ok ? again.attachments : [];
+  };
+  const builtFor = items => buildJobEmail({
+    job: moneyJob,
+    company: orgSettings(),
+    companyId: myCompanyId(),
+    role,
+    documentRole: documentActorRole(),
+    typeLabels: TYPES,
+    documents,
+    photos: items.filter(item => item.kind === "photo"),
+    receipts: items.filter(item => item.kind === "dump-receipt"),
+    quote: canSeeMoney() ? quote : null,
+    recipient: (document.getElementById("jemto") || {}).value || suggested.email,
+  });
+  const first = builtFor(picked.attachments);
+  if (!first.ok) return toast("You can't email this job.");
+  const host = document.querySelector("dialog[open]") || document.body;
+  host.querySelectorAll("#jobemail").forEach(node => node.remove());
+  const v = document.createElement("div");
+  v.id = "jobemail";
+  v.className = "emdlg";
+  v.innerHTML = emailSheetHtml({
+    subject: first.subject, body: first.body, to: suggested.email, suggestion: suggested.email,
+    photos: picked.photos, receipts: picked.receipts, photoError,
+  });
+  host.appendChild(v);
+  const subjectEl = v.querySelector("#jemsubj");
+  const bodyEl = v.querySelector("#jembody");
+  const warnEl = v.querySelector("#jemwarn");
+  const progEl = v.querySelector("#jemprog");
+  const sendBtn = v.querySelector("#jemsend");
+  const mailLink = v.querySelector("#jemmail");
+  const zipBtn = v.querySelector("#jemzip");
+  const toInput = v.querySelector("#jemto");
+  const setProg = msg => { progEl.hidden = !msg; progEl.textContent = msg || ""; };
+  const paint = () => {
+    const items = chosen();
+    const built = builtFor(items);
+    if (!built.ok) return;
+    subjectEl.textContent = built.subject;
+    bodyEl.textContent = built.body;
+    const plan = emailSendPlan({ canShareFiles: shareOk, attachmentCount: items.length });
+    mailLink.href = mailtoHref({ to: toInput.value, subject: built.subject, body: built.body }).href;
+    mailLink.hidden = plan.channel !== "mailto";
+    sendBtn.hidden = plan.channel !== "share";
+    zipBtn.hidden = !plan.download;
+    if (!allowLarge) {
+      warnEl.hidden = true;
+      sendBtn.textContent = "Email job";
+      sendBtn.onclick = () => sendEmail(false);
+    }
+  };
+  async function sendEmail(force) {
+    const items = chosen();
+    const built = builtFor(items);
+    if (!built.ok || !items.length) return;
+    sendBtn.disabled = true;
+    try {
+      setProg(`Downloading file 1 of ${items.length}…`);
+      const files = await prepareEmailFiles(items, (n, total) => setProg(`Downloading file ${n} of ${total}…`));
+      const budget = photoBudget(files);
+      if (budget.over && !force) {
+        allowLarge = true;
+        warnEl.hidden = false;
+        warnEl.textContent = budget.message;
+        sendBtn.hidden = false;
+        sendBtn.textContent = "Send anyway";
+        sendBtn.onclick = () => sendEmail(true);
+        return;
+      }
+      if (navigator.canShare && navigator.canShare({ files })) {
+        await navigator.share({
+          files,
+          title: built.subject,
+          text: shareText({ to: toInput.value, subject: built.subject, body: built.body }),
+        });
+        v.remove();
+        return;
+      }
+      shareOk = false;
+      allowLarge = false;
+      paint();
+      toast("This device can't attach files. Use the mail app and download the photos.");
+    } catch (e) {
+      if (!e || e.name !== "AbortError") {
+        shareOk = false;
+        allowLarge = false;
+        paint();
+        toast("Couldn't open the share sheet. Use the mail app instead.");
+      }
+    } finally {
+      setProg("");
+      if (sendBtn.isConnected) sendBtn.disabled = false;
+    }
+  }
+  v.onclick = ev => { if (ev.target === v) v.remove(); };
+  v.querySelector("#jemx").onclick = () => v.remove();
+  const useBtn = v.querySelector("#jemuse");
+  if (useBtn) useBtn.onclick = () => { toInput.value = suggested.email; paint(); };
+  const noneBtn = v.querySelector("#jemnone");
+  if (noneBtn) noneBtn.onclick = () => {
+    v.querySelectorAll('[data-jem-kind="photo"]').forEach(el => { el.checked = false; });
+    allowLarge = false;
+    paint();
+  };
+  v.querySelectorAll("[data-jem-index]").forEach(el => el.addEventListener("change", () => { allowLarge = false; paint(); }));
+  toInput.addEventListener("input", paint);
+  v.querySelector("#jemcopy").onclick = async () => {
+    const built = builtFor(chosen());
+    if (!built.ok) return;
+    const ok = await copyEmailText(shareText({ to: toInput.value, subject: built.subject, body: built.body }));
+    toast(ok ? "Copied" : "Couldn't copy. Select the preview and copy it.");
+  };
+  zipBtn.onclick = async () => {
+    const items = chosen();
+    if (!items.length) return;
+    zipBtn.disabled = true;
+    try {
+      const files = await prepareEmailFiles(items, (n, total) => setProg(`Downloading file ${n} of ${total}…`));
+      const budget = photoBudget(files);
+      if (budget.over) { warnEl.hidden = false; warnEl.textContent = budget.message; }
+      const saved = await downloadEmailZip(files);
+      toast(saved ? "Photos downloaded. Attach them to the email." : "Couldn't build the download.");
+    } catch (e) {
+      toast("Couldn't download a file. Nothing was saved.");
+      console.warn("job email files", e && (e.code || e.message) || e);
+    } finally {
+      setProg("");
+      zipBtn.disabled = false;
+    }
+  };
+  paint();
 }
 
 // ------------------------------------------------------------------ email photos
