@@ -138,6 +138,16 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["trades"])
         && tradesListOk(request.resource.data.trades);
     }
+    // Referral code, referredBy and reward fields are written by Cloud Functions only.
+    // A client cannot set them at create, and cannot add or change a referral after the company exists.
+    function referralClientFieldsAbsent(data) {
+      return !("referredBy" in data) && !("referralCode" in data) && !("referralReward" in data);
+    }
+    function referralFieldsSame() {
+      return request.resource.data.get("referredBy", null) == resource.data.get("referredBy", null)
+        && request.resource.data.get("referralCode", null) == resource.data.get("referralCode", null)
+        && request.resource.data.get("referralReward", null) == resource.data.get("referralReward", null);
+    }
     function companyOwnerCreate(companyId) {
       let d = request.resource.data;
       return signedIn()
@@ -160,6 +170,7 @@ service cloud.firestore {
         && d.jobCount == 0
         && d.lastActivityAt == request.time
         && companyBillingLocked(d)
+        && referralClientFieldsAbsent(d)
         && !d.keys().hasAny(["platformOwner", "finance"]);
     }
     function companyAdminEdit(companyId) {
@@ -201,6 +212,7 @@ service cloud.firestore {
         && d.trialEndsAt == null
         && d.lastActivityAt == request.time
         && companyBillingLocked(d)
+        && referralClientFieldsAbsent(d)
         && (d.demoData == true ? (d.staffCount == 2 && d.jobCount == 2) : (d.staffCount == 0 && d.jobCount == 0));
     }
     function friendInvitePath(code) { return /databases/$(database)/documents/friendInvites/$(code); }
@@ -233,7 +245,8 @@ service cloud.firestore {
         && d.lastActivityAt == request.time
         && d.staffCount == 1
         && d.jobCount == 0
-        && companyBillingLocked(d);
+        && companyBillingLocked(d)
+        && referralClientFieldsAbsent(d);
     }
     function ownerPlanEdit(companyId) {
       let next = request.resource.data;
@@ -343,7 +356,7 @@ service cloud.firestore {
       // Box sync account (Hubdoc filer, receipts worker) reads each company's Hubdoc address and test flag.
       allow read: if isSync();
       allow create: if companyOwnerCreate(companyId) || testCompanyCreate(companyId) || friendCompanyCreate(companyId);
-      allow update: if companyTradesEdit(companyId) || ownerPlanEdit(companyId) || testArchive(companyId) || testDemoCounts(companyId) || companyAdminEdit(companyId) || companyStatsBump(companyId) || ownerPauseEdit(companyId);
+      allow update: if referralFieldsSame() && (companyTradesEdit(companyId) || ownerPlanEdit(companyId) || testArchive(companyId) || testDemoCounts(companyId) || companyAdminEdit(companyId) || companyStatsBump(companyId) || ownerPauseEdit(companyId));
       allow delete: if false;
     }
 // END COMPANY RULES
@@ -353,6 +366,21 @@ service cloud.firestore {
     match /companyDeletions/{companyId} {
       allow read: if platformOwner();
       allow create, update, delete: if false;
+    }
+
+    // Referral lookup, reward state and audit. Cloud Functions use the Admin SDK.
+    // Clients cannot read or write these, so a reward cannot be granted from the browser.
+    match /referralCodes/{code} {
+      allow read, write: if false;
+    }
+    match /referrals/{referredCompanyId} {
+      allow read, write: if false;
+    }
+    match /referralAudits/{id} {
+      allow read, write: if false;
+    }
+    match /referralLocks/{companyId} {
+      allow read, write: if false;
     }
 
     match /platformSessions/{uid} {

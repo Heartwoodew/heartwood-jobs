@@ -111,7 +111,7 @@ export function trialCheckoutFields(trialEndsAt, now = Date.now()) {
   return { trial_period_days: Math.max(2, Math.ceil((end - at) / 86400000)) };
 }
 
-export function checkoutParams({ companyId, company, staffCount, successUrl, cancelUrl, prices = stripePrices(), preserveTrial = false, now = Date.now() }) {
+export function checkoutParams({ companyId, company, staffCount, successUrl, cancelUrl, prices = stripePrices(), preserveTrial = false, now = Date.now(), referralCoupon = "", referralFor = "" }) {
   const skip = billingSkipped(company, companyId);
   if (skip) return { ok: false, reason: skip };
   const billing = company.billing || {};
@@ -139,6 +139,12 @@ export function checkoutParams({ companyId, company, staffCount, successUrl, can
       params.metadata = { companyId, preserveTrial: "1" };
       params.payment_method_collection = "always";
     }
+  }
+  // An earned referral reward rides on the new subscription. One coupon, the oldest reward.
+  if (referralCoupon) {
+    params.discounts = [{ coupon: referralCoupon }];
+    params.metadata = { ...(params.metadata || {}), referralFor: String(referralFor || "") };
+    params.subscription_data.metadata = { ...(params.subscription_data.metadata || {}), referralFor: String(referralFor || "") };
   }
   if (billing.stripeCustomerId) {
     params.customer = billing.stripeCustomerId;
@@ -186,6 +192,19 @@ function billingPatch(status, ids = {}) {
   if (ids.customer) billing.stripeCustomerId = ids.customer;
   if (ids.subscription) billing.stripeSubscriptionId = ids.subscription;
   return billing;
+}
+
+export function paidInvoiceSignal(event) {
+  if (!event || event.type !== "invoice.paid") return null;
+  const object = event.data && event.data.object;
+  if (!object) return null;
+  const amountPaid = Number(object.amount_paid || 0);
+  return {
+    companyId: companyIdOf(object),
+    amountPaid: Number.isFinite(amountPaid) ? amountPaid : 0,
+    invoiceId: String(object.id || ""),
+    subscriptionId: invoiceSubscription(object) || "",
+  };
 }
 
 export function applyStripeEvent(event, mode = "test") {
@@ -276,7 +295,7 @@ export async function syncStaffQuantity({ companyId, company, staffCount, stripe
   return { ok: true, change };
 }
 
-export async function handleCheckoutCall({ uid, companyId, origin, getContext, stripe, prices = stripePrices(), preserveTrial = false, now = Date.now() }) {
+export async function handleCheckoutCall({ uid, companyId, origin, getContext, stripe, prices = stripePrices(), preserveTrial = false, now = Date.now(), referralCoupon = "", referralFor = "" }) {
   origin = billingOrigin(origin, companyId);
   const ctx = await getContext(uid, companyId);
   const authz = authorizeCompanyAdmin({ uid, profile: ctx.profile, company: ctx.company, companyId });
@@ -293,6 +312,8 @@ export async function handleCheckoutCall({ uid, companyId, origin, getContext, s
     prices,
     preserveTrial: preserveTrial === true,
     now,
+    referralCoupon,
+    referralFor,
   });
   if (!built.ok) return built;
   const session = await stripe.checkout.sessions.create(built.params);
@@ -334,7 +355,7 @@ export function constructStripeEvent(rawBody, header, secret, now = Date.now()) 
   return event;
 }
 
-export async function handleStripeWebhook({ rawBody, signature, secret, loadCompany, saveBilling, now, mode = "test" }) {
+export async function handleStripeWebhook({ rawBody, signature, secret, loadCompany, saveBilling, now, mode = "test", onReferral }) {
   let event;
   try {
     event = constructStripeEvent(rawBody, signature, secret, now);
@@ -347,6 +368,16 @@ export async function handleStripeWebhook({ rawBody, signature, secret, loadComp
   const skip = billingSkipped(company, decision.companyId);
   if (skip) return { status: 200, body: { received: true, skipped: skip } };
   const saved = await saveBilling(decision.companyId, decision.patch, eventStamp(event));
+  const retryable = saved && (saved.skipped === "duplicate-event" || saved.skipped === "stale-event");
+  if (saved && saved.skipped && !retryable) return { status: 200, body: { received: true, skipped: saved.skipped } };
+  // A retried invoice.paid still has to finish a reward that the first delivery saved the billing for, then failed.
+  if (typeof onReferral === "function") {
+    try {
+      await onReferral({ event, companyId: decision.companyId, paid: paidInvoiceSignal(event), now });
+    } catch {
+      return { status: 500, body: { error: "referral-failed" } };
+    }
+  }
   if (saved && saved.skipped) return { status: 200, body: { received: true, skipped: saved.skipped } };
   return { status: 200, body: { received: true, companyId: decision.companyId } };
 }

@@ -5,6 +5,7 @@ import { POWERED_BY, PRODUCT_NAME } from "../org-settings.js";
 import { derivedJobPrefix, filterMaster, friendInviteLink, masterTotals } from "./company.js";
 import { LOGO_ACCEPT, acceptLogoValue, isLogoStoragePath } from "./company-logo.js";
 import { signupTradesHtml, tradeSettingsHtml } from "./trades.js";
+import { referralLink } from "./referral.js";
 
 const jobPrefixHint = org => derivedJobPrefix(org && org.name);
 
@@ -108,6 +109,27 @@ function billingCard(org, canEdit) {
     ${subscribed
       ? `<button type="button" class="primary" id="billportal">Manage billing</button>`
       : `<button type="button" class="primary" id="billsub">Subscribe</button>`}
+    ${referralBoxHtml()}
+  </div>`;
+}
+
+// Admin billing card only. Crew never receive this markup, so they never see the price or the code.
+export function referralBoxHtml(info) {
+  const origin = typeof location !== "undefined" && location.origin ? location.origin : "https://app.callupapp.com.au";
+  const link = info && info.link ? info.link : (info && info.code ? referralLink(info.code, origin) : "");
+  if (!info || !info.code) {
+    return `<div id="referralbox">
+      <p>Refer another business. When they start paying, you get 2 months free.</p>
+      <p class="sub" id="referralstatus">Loading your referral link…</p>
+    </div>`;
+  }
+  const pending = Number(info.pending) || 0;
+  const earned = Number(info.earned) || 0;
+  return `<div id="referralbox">
+    <p>Refer another business. When they start paying, you get 2 months free.</p>
+    <p>Your code: <b id="refcode">${esc(info.code)}</b></p>
+    <p class="ref-row"><input id="reflink" readonly value="${esc(link)}" aria-label="Referral link"> <button type="button" class="sm-btn" id="refcopy">Copy</button></p>
+    <p class="sub" id="refcount">${esc(pending)} pending · ${esc(earned)} earned</p>
   </div>`;
 }
 
