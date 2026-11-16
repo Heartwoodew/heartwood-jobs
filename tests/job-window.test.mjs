@@ -43,6 +43,6 @@ test("office app subscribes to older open jobs and merges them into the job list
   const sw = readFileSync(new URL("../app/sw.js", import.meta.url), "utf8");
   assert.match(sw, /"features\/job-window\.js"/);
 
-  assert.match(sw, /callup-shell-v116-trade-rates/);
+  assert.match(sw, /callup-shell-v117-photo-upload/);
 
 });
