@@ -188,18 +188,57 @@ export async function queueJobEmail(message, deps = {}) {
   return { ok: true, sent: true, reason: "queued-for-extension" };
 }
 
-async function measured(item, statObject) {
+function objectBytes(got) {
+  const bytes = got && got.bytes;
+  if (!bytes) return 0;
+  return bytes.byteLength || bytes.length || 0;
+}
+
+async function loadAttachment(item, deps) {
+  if (item && item._loaded) return item._loaded;
+  let got = null;
+  if (item && item.path && typeof deps.readObject === "function") {
+    try {
+      got = await deps.readObject(item.path);
+    } catch {
+      got = null;
+    }
+  }
+  if (objectBytes(got) > 0) {
+    got = { ...got, source: "storage" };
+  } else if (item && item.kind === "dump-receipt" && typeof deps.readReceiptChunks === "function") {
+    try {
+      got = await deps.readReceiptChunks(item.id, item.tenantId);
+    } catch {
+      got = null;
+    }
+    if (objectBytes(got) > 0) got = { ...got, source: "chunks" };
+    else got = null;
+  } else {
+    got = objectBytes(got) > 0 ? got : null;
+  }
+  if (item) item._loaded = got;
+  return got;
+}
+
+async function measured(item, statObject, deps) {
   let size = Number(item && item.size);
   let contentType = item && item.contentType || "";
   if (!Number.isFinite(size) || size <= 0) {
-    if (typeof statObject !== "function" || !item.path) return { ...item, size: 0, contentType };
-    try {
-      const stat = await statObject(item.path);
-      size = Number(stat && stat.size) || 0;
-      contentType = (stat && stat.contentType) || contentType;
-    } catch {
-      size = 0;
+    if (typeof statObject === "function" && item && item.path) {
+      try {
+        const stat = await statObject(item.path);
+        size = Number(stat && stat.size) || 0;
+        contentType = (stat && stat.contentType) || contentType;
+      } catch {
+        size = 0;
+      }
     }
+  }
+  if ((!Number.isFinite(size) || size <= 0) && item && item.kind === "dump-receipt") {
+    const got = await loadAttachment(item, deps || {});
+    size = objectBytes(got) || 0;
+    contentType = (got && got.contentType) || contentType;
   }
   return { ...item, size, contentType };
 }
@@ -276,21 +315,22 @@ export async function sendJobEmail({ callerUid, jobId, to, cc } = {}, deps = {})
   const receiptFiles = [];
   dumpRows.forEach((row, index) => {
     const path = receiptPath(membership.tenantId, row);
-    if (!path) return;
     receiptFiles.push({
       kind: "dump-receipt",
       id: row.id,
       name: dumpReceiptLabel(row, index),
       path,
-      contentType: "image/jpeg",
-      size: 0,
+      tenantId: membership.tenantId,
+      contentType: row.mime || "image/jpeg",
+      size: Number(row.bytes) || 0,
     });
   });
 
   let described = [];
   try {
     described = [];
-    for (const item of photoFiles.concat(receiptFiles)) described.push(await measured(item, deps.statObject));
+    // Receipts first so a tight photo budget cannot drop the tip dockets.
+    for (const item of receiptFiles.concat(photoFiles)) described.push(await measured(item, deps.statObject, deps));
   } catch {
     return fail("not-sent");
   }
@@ -300,19 +340,18 @@ export async function sendJobEmail({ callerUid, jobId, to, cc } = {}, deps = {})
   const attachments = [];
   const overflow = packed.linked.slice();
   const skipped = packed.skipped.slice();
-  if (packed.attach.length && typeof deps.readObject !== "function") return fail("not-sent");
+  const canRead = typeof deps.readObject === "function" || typeof deps.readReceiptChunks === "function";
+  if (packed.attach.length && !canRead) return fail("not-sent");
   for (let i = 0; i < packed.attach.length; i++) {
     const item = packed.attach[i];
-    let got = null;
-    try {
-      got = await deps.readObject(item.path);
-    } catch {
+    const got = await loadAttachment(item, deps);
+    const bytes = got && got.bytes;
+    const size = objectBytes(got);
+    if (!size) {
       skipped.push(item);
       continue;
     }
-    const bytes = got && got.bytes;
-    const size = bytes ? (bytes.byteLength || bytes.length || 0) : 0;
-    if (!size || attachments.reduce((sum, file) => sum + (file.bytes || 0), 0) + size > budget) {
+    if (attachments.reduce((sum, file) => sum + (file.bytes || 0), 0) + size > budget) {
       overflow.push(item);
       continue;
     }
@@ -322,6 +361,7 @@ export async function sendJobEmail({ callerUid, jobId, to, cc } = {}, deps = {})
       contentType: (got && got.contentType) || item.contentType || "image/jpeg",
       bytes: size,
       kind: item.kind,
+      source: got.source || "",
     });
   }
 
@@ -346,6 +386,22 @@ export async function sendJobEmail({ callerUid, jobId, to, cc } = {}, deps = {})
   });
   if (note && /tenants\/|firebasestorage|X-Goog-|token=/.test(note)) return fail("not-sent");
   const text = note ? `${built.body}\n${note}` : built.body;
+  const packedBytes = attachments.reduce((sum, file) => sum + (file.bytes || 0), 0);
+  const logLine = {
+    jobId: id,
+    companyId: membership.tenantId,
+    listed: (listing || []).length,
+    photos: picked.photos.length,
+    receipts: receiptFiles.length,
+    attached: attachments.length,
+    overflow: overflow.length,
+    skipped: skipped.length,
+    bytes: packedBytes,
+    receiptStorage: attachments.filter(file => file.kind === "dump-receipt" && file.source === "storage").length,
+    receiptChunks: attachments.filter(file => file.kind === "dump-receipt" && file.source === "chunks").length,
+  };
+  if (typeof deps.log === "function") deps.log("sendJobEmail packed", logLine);
+  else if (!process.env.NODE_TEST_CONTEXT) console.log("sendJobEmail packed", logLine);
 
   const now = typeof deps.now === "function" ? deps.now() : new Date();
   let claimed = { ok: false };
