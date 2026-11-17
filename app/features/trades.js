@@ -344,13 +344,62 @@ export function resolveCompanySetup(company, stored) {
   return { trade, extraTrades, enabled, titles, saved, companyId: (company && company.companyId) || (stored && stored.companyId) || "" };
 }
 
-export function jobTypeMap(setup) {
-  const out = {};
+/** Categories grouped by trade. A label that exists on two trades is shown as "Plumbing – Other". */
+export function jobCategoryGroups(setup) {
   const ids = setup && Array.isArray(setup.enabled) && setup.enabled.length ? setup.enabled : [DEFAULT_TRADE];
+  const seen = new Set();
+  const groups = [];
   for (const id of ids) {
     const row = quotePack(id);
-    if (!row) continue;
-    for (const [key, label] of row.jobTypes) out[key] = label;
+    const types = row && row.jobTypes ? row.jobTypes : (id === DEFAULT_TRADE ? EARTHWORKS_TYPES : []);
+    const categories = [];
+    for (const [key, label] of types) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+      categories.push({ id: key, label, tradeId: id, tradeLabel: (row && row.label) || tradeLabel(id) || id });
+    }
+    if (categories.length) groups.push({ tradeId: id, tradeLabel: (row && row.label) || tradeLabel(id) || id, categories });
+  }
+  if (!groups.length) {
+    groups.push({
+      tradeId: DEFAULT_TRADE,
+      tradeLabel: "Earthworks",
+      categories: EARTHWORKS_TYPES.map(([id, label]) => ({ id, label, tradeId: DEFAULT_TRADE, tradeLabel: "Earthworks" })),
+    });
+  }
+  const counts = new Map();
+  for (const group of groups) for (const cat of group.categories) counts.set(cat.label, (counts.get(cat.label) || 0) + 1);
+  return groups.map(group => ({
+    ...group,
+    categories: group.categories.map(cat => ({
+      ...cat,
+      optionLabel: (counts.get(cat.label) || 0) > 1 ? `${cat.tradeLabel} – ${cat.label}` : cat.label,
+    })),
+  }));
+}
+
+export function jobCategorySelectHtml(setup, selected = "", { blank = "Choose category" } = {}) {
+  const groups = jobCategoryGroups(setup);
+  const current = String(selected || "");
+  const multi = groups.length > 1;
+  const blankOpt = `<option value=""${current ? "" : " selected"}>${esc(blank)}</option>`;
+  const body = groups.map(group => {
+    const opts = group.categories.map(cat => `<option value="${esc(cat.id)}"${cat.id === current ? " selected" : ""}>${esc(cat.optionLabel)}</option>`).join("");
+    return multi ? `<optgroup label="${esc(group.tradeLabel)}">${opts}</optgroup>` : opts;
+  }).join("");
+  return blankOpt + body;
+}
+
+/** Earthworks-primary companies (Heartwood) keep Spoil removal. Any other primary trade starts blank. */
+export function defaultJobCategory(setup) {
+  const ids = setup && Array.isArray(setup.enabled) && setup.enabled.length ? setup.enabled : [DEFAULT_TRADE];
+  return ids[0] === DEFAULT_TRADE ? "spoil" : "";
+}
+
+export function jobTypeMap(setup) {
+  const out = {};
+  for (const group of jobCategoryGroups(setup)) {
+    for (const cat of group.categories) out[cat.id] = cat.optionLabel;
   }
   if (!Object.keys(out).length) {
     for (const [key, label] of EARTHWORKS_TYPES) out[key] = label;
@@ -441,7 +490,7 @@ export function companyTradesDoc(companyId, tradeOrList, uid) {
 }
 
 export function signupTradesHtml(selected = [DEFAULT_TRADE]) {
-  const on = new Set(sanitizeTradeList(selected).length ? sanitizeTradeList(selected) : [DEFAULT_TRADE]);
+  const on = new Set(selected == null ? [DEFAULT_TRADE] : sanitizeTradeList(selected));
   return `<fieldset class="tradepick"><legend>Trades</legend>
     <p class="sub">Choose every trade this company does. At least one. Every trade includes a quote pack. Earthworks uses the plant wizard. The first ticked trade is the one quotes open on.</p>
     ${TRADES.map(t => `<label class="ck"><input type="checkbox" name="trades" value="${esc(t.id)}"${on.has(t.id) ? " checked" : ""}> ${esc(t.label)}${quotePack(t.id) && quotePack(t.id).ready ? "" : " <span class=\"sub\">quote pack coming soon</span>"}</label>`).join("")}

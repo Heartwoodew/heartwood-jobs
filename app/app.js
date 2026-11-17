@@ -10,6 +10,7 @@ import { getStorage, ref as storageRef, uploadBytes, uploadBytesResumable, delet
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
 import { firebaseConfig, useEmulator, vapidKey } from "./firebase-config.js";
 import { installQuotes, adminViewRouter, quoteRatesSettingsBlurb, setDefaultDepot, noDollars, setQuoteTradeSetup, setQuoteFocus } from "./features/quotes.js";
+import { askHelp, helpAnswerHtml, helpPanelHtml, helpVisible } from "./features/help.js";
 import { capacityViewHtml, shiftWeek } from "./features/capacity.js";
 import { JOB_MONEY_COLLECTION, jobMoneyDoc, mergeJobMoney, splitJobMoney } from "./features/job-money.js";
 import { OPEN_STATUSES, staleOpenJobs, mergeJobLists, parseHoursInput } from "./features/job-window.js";
@@ -43,7 +44,7 @@ import {
   performancePanelHtml, performanceSettingsHtml, periodBounds, rankPerformance, sanitizeWeights, weightsFromForm,
 } from "./features/performance.js";
 import {
-  canViewTake5, hasTake5, shouldPromptTake5, take5Enabled, take5FormHtml, take5IdFor, take5JobHtml, take5ListHtml, take5Payload, take5PhotoPath,
+  canViewTake5, hasTake5, shouldPromptTake5, take5Enabled, take5EntryVisible, take5FormHtml, take5IdFor, take5JobHtml, take5ListHtml, take5Payload, take5PhotoPath, take5StartButtonHtml,
 } from "./features/take5.js";
 import { captureReferralParam, clearStoredReferral, referralGiveUp, storedReferralCode } from "./features/referral.js";
 import { PRODUCT_NAME, POWERED_BY, clearSavedOrg, orgSettings, saveOrgSettings, setActiveCompany } from "./org-settings.js";
@@ -52,11 +53,11 @@ import {
   friendCodeOk, friendInviteLink, hoursBrand, isPlatformOwner, newFriendCode,
   ownerProfile, scopeRecord, trialEnd, validateCompanyInput, masterRow, CARD_SETUP_LATER,
   builderSignoff, clientDocId, companyClientNames, companyJobPrefix, companyMailbox, companyStdClients, timesheetMailParts,
-  supervisorsPath, docCompanyId, isHeartwoodCompany,
+  supervisorsPath, docCompanyId, isHeartwoodCompany, buildClientCreate,
 } from "./features/company.js";
-import { adminViewBannerHtml, bootCompanyView, clearedCompanySession, companyHistoryState, historyStepOnEnter, historyStepOnMasterReturn, IN_COMPANY_VIEW_KEY, masterHistoryState, RETURN_MASTER_KEY, takeReturnMasterFlag, urlMarksCompanyView, withCompanyViewParam, companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, pausedAdminHtml, pausedOwnerHtml, pausedStaffHtml, referralBoxHtml, signupFormHtml, trialBannerHtml } from "./features/company-ui.js";
+import { adminViewBannerHtml, bootCompanyView, clearedCompanySession, companyHistoryState, historyStepOnEnter, historyStepOnMasterReturn, IN_COMPANY_VIEW_KEY, masterHistoryState, RETURN_MASTER_KEY, takeReturnMasterFlag, urlMarksCompanyView, withCompanyViewParam, clientFormHtml, companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, pausedAdminHtml, pausedOwnerHtml, pausedStaffHtml, referralBoxHtml, signupFieldErrors, signupFormHtml, trialBannerHtml } from "./features/company-ui.js";
 import {
-  addTitle, companyTradesDoc, jobTypeMap, normalizeTrade, readTradeList, removeTitle, renameTitle, resolveCompanySetup,
+  addTitle, companyTradesDoc, defaultJobCategory, jobCategorySelectHtml, jobTypeMap, normalizeTrade, readTradeList, removeTitle, renameTitle, resolveCompanySetup,
   sanitizeSkills, sanitizeTitles, sanitizeTradeList, setTitleLevel, skillsEditorHtml,
   titlesAfterTradeChange, titlesEditorHtml, tradeLabel, quotePack,
 } from "./features/trades.js";
@@ -123,6 +124,72 @@ function undoToast(msg, undo, ms = 7000) {
   clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.add("hidden"), ms);
 }
 function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.remove("hidden"); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.add("hidden"), 2500); }
+function showAccountChrome(on) {
+  $("#logout")?.classList.toggle("hidden", !on);
+  const signedIn = on && (me ? helpVisible(me) : true);
+  $("#helpbtn")?.classList.toggle("hidden", !signedIn);
+}
+function helpContext() {
+  return {
+    role: me && me.role,
+    staffRole: me && me.staffRole,
+    canSeeMoney: typeof canSeeMoney === "function" ? canSeeMoney() : false,
+    companyId: typeof myCompanyId === "function" ? myCompanyId() : "",
+  };
+}
+function paintHelpAnswer(answer) {
+  const log = $("#helplog");
+  if (!log || !answer) return;
+  log.insertAdjacentHTML("beforeend", helpAnswerHtml(answer));
+  log.scrollTop = log.scrollHeight;
+}
+async function submitHelpQuestion(question) {
+  const text = String(question || "").trim();
+  if (!text) return;
+  const log = $("#helplog");
+  if (log) log.insertAdjacentHTML("beforeend", `<p class="callup-help-ask"><b>You.</b> ${esc(text)}</p>`);
+  const answer = await askHelp(text, helpContext(), (name, data) => callAuthed(name, data));
+  paintHelpAnswer(answer);
+}
+function goHelp(view) {
+  const panel = $("#helppanel");
+  if (panel) panel.remove();
+  if (!me) return;
+  const admin = me.role === "admin" && !ui.myJobs;
+  if (admin) {
+    ui.view = view === "timesheet" ? "timesheet" : view;
+    ui.navOpen = false;
+    renderAdmin();
+    return;
+  }
+  const tabs = { jobs: "week", home: "today", timesheet: "hours", quotes: "quotes", staff: "staff", leave: "leave", prestart: "prestart", take5: "take5", settings: "settings", chat: "more", clients: "more" };
+  ui.opSel = null;
+  ui.opTab = tabs[view] || "more";
+  renderOperator();
+}
+function openHelp() {
+  if (!helpVisible(me || { uid: "signed-in" })) return;
+  let panel = $("#helppanel");
+  if (panel) { panel.remove(); return; }
+  document.body.insertAdjacentHTML("beforeend", helpPanelHtml());
+  panel = $("#helppanel");
+  $("#helpx").onclick = () => panel.remove();
+  panel.querySelectorAll("[data-help-q]").forEach(btn => btn.onclick = () => submitHelpQuestion(btn.dataset.helpQ));
+  $("#helpform").onsubmit = ev => {
+    ev.preventDefault();
+    const q = ev.target.q.value;
+    ev.target.q.value = "";
+    submitHelpQuestion(q);
+  };
+  panel.addEventListener("click", ev => {
+    const go = ev.target.closest && ev.target.closest("[data-help-go]");
+    if (go) goHelp(go.dataset.helpGo);
+  });
+}
+document.addEventListener("click", ev => {
+  const open = ev.target.closest && ev.target.closest("[data-open-help]");
+  if (open) { ev.preventDefault(); openHelp(); }
+});
 // Firestore retries a transaction, then fails with failed-precondition when someone else wrote first.
 function txFail(e) {
   const code = String((e && (e.code || e.message)) || "");
@@ -148,6 +215,7 @@ const ui = { view: "list", staffF: "", typeF: "", photoLists: {}, photoUrls: {},
 // ------------------------------------------------------------------ auth
 try { captureReferralParam(location.search, localStorage); } catch { /* private mode */ }
 $("#logout").onclick = () => signOut(auth);
+$("#helpbtn")?.addEventListener("click", () => openHelp());
 onAuthStateChanged(auth, async user => {
   if (signingUp) return;
   if (!user || (me && user && me.uid !== user.uid)) liveShareStop(false);
@@ -157,7 +225,7 @@ onAuthStateChanged(auth, async user => {
   COMP.stop();
   const inviteToken = new URLSearchParams(location.search).get("invite") || "";
   if (!user) {
-    me = null; setActiveCompany(null); $("#who").textContent = ""; $("#logout").classList.add("hidden");
+    me = null; setActiveCompany(null); $("#who").textContent = ""; showAccountChrome(false);
     if (inviteToken || window.HW_INVITE_PREVIEW) return renderInviteAccept(inviteToken);
     const friendCode = new URLSearchParams(location.search).get("friend") || "";
     if (friendCode) return renderSignup(friendCode);
@@ -232,7 +300,7 @@ onAuthStateChanged(auth, async user => {
     try { history.replaceState({ callupView: "home" }, "", withCompanyViewParam(location.href, false)); } catch { /* the param is only a marker */ }
   }
   await loadCompanyBrand();
-  $("#who").textContent = `${me.name} · ${me.role}`; $("#logout").classList.remove("hidden");
+  $("#who").textContent = `${me.name} · ${me.role}`; showAccountChrome(true);
   if (ui.companyAccess && ui.companyAccess.paused) {
     renderAccountPaused();
     return;
@@ -548,7 +616,7 @@ function inviteDisplayNow() {
 function renderInviteSignedIn() {
   paintBrand();
   $("#who").textContent = "";
-  $("#logout").classList.remove("hidden");
+  showAccountChrome(true);
   $("#app").innerHTML = `<form class="card login" id="invitebusy">
     <h2>Staff invite</h2>
     <p>This link creates a new login. Sign out, then open it again to set a password.</p>
@@ -571,7 +639,7 @@ function billingExtra() {
 function renderAccountPaused() {
   paintBrand();
   $("#who").textContent = `${me.name} · ${me.role}`;
-  $("#logout").classList.remove("hidden");
+  showAccountChrome(true);
   const access = ui.companyAccess || {};
   $("#app").innerHTML = access.ownerPaused
     ? pausedOwnerHtml({ platformOwner: !!(me && me.platformOwner) })
@@ -793,7 +861,7 @@ function holdOutbound(kind, text) {
 function renderNoAccess(user) {
   paintBrand();
   $("#who").textContent = user.email || "";
-  $("#logout").classList.remove("hidden");
+  showAccountChrome(true);
   $("#app").innerHTML = `<form class="card login" id="noaccess">
     <h2>No company yet</h2>
     <p>${esc(user.email)} is signed in, but it isn't linked to a company in ${esc(PRODUCT_NAME)}.</p>
@@ -875,20 +943,56 @@ function renderSignup(friendCode = "") {
     if (err) err.textContent = "That friend invite code is not valid.";
   }
   $("#signupback").onclick = () => renderLogin();
+  const tradeOrder = [];
+  $("#signup").querySelectorAll("input[name=trades]").forEach(el => {
+    el.addEventListener("change", () => {
+      const at = tradeOrder.indexOf(el.value);
+      if (el.checked && at < 0) tradeOrder.push(el.value);
+      if (!el.checked && at >= 0) tradeOrder.splice(at, 1);
+    });
+  });
+  const companyEmail = $("#signup").email;
+  const accountsEmail = $("#signup").accountsEmail;
+  if (companyEmail && accountsEmail) {
+    companyEmail.addEventListener("input", () => {
+      if (accountsEmail.dataset.touched !== "1") accountsEmail.value = companyEmail.value;
+    });
+    accountsEmail.addEventListener("input", () => { accountsEmail.dataset.touched = "1"; });
+  }
   $("#signup").onsubmit = async ev => {
     ev.preventDefault();
     const f = ev.target;
     const err = $("#signuperr");
-    const trades = sanitizeTradeList([...(f.querySelectorAll("input[name=trades]:checked") || [])].map(el => el.value));
+    const checkedIds = [...(f.querySelectorAll("input[name=trades]:checked") || [])].map(el => el.value);
+    const trades = sanitizeTradeList([...tradeOrder.filter(id => checkedIds.includes(id)), ...checkedIds]);
+    if (f.accountsEmail && !f.accountsEmail.value.trim() && f.email.value.trim()) f.accountsEmail.value = f.email.value.trim();
+    const problems = signupFieldErrors({
+      ownerName: f.ownerName.value, ownerEmail: f.ownerEmail.value, password: f.password.value, trades,
+      name: f.name.value, legalName: f.legalName.value, abn: f.abn.value, address: f.address.value,
+      phone: f.phone.value, email: f.email.value, accountsEmail: f.accountsEmail.value, hubdocAddress: f.hubdocAddress.value,
+    });
+    f.querySelectorAll("[data-err]").forEach(slot => { slot.hidden = true; slot.textContent = ""; });
+    f.querySelectorAll("[aria-invalid]").forEach(el => el.removeAttribute("aria-invalid"));
+    if (problems.length) {
+      for (const problem of problems) {
+        const slot = f.querySelector(`[data-err="${problem.field}"]`);
+        if (slot) { slot.hidden = false; slot.textContent = problem.message; }
+        const named = f.elements[problem.field];
+        const field = named && named.setAttribute ? named : f.querySelector(`[name="${problem.field}"]`);
+        if (field && field.setAttribute) field.setAttribute("aria-invalid", "true");
+      }
+      err.textContent = problems.length === 1 ? problems[0].message : `Check the ${problems.length} fields marked below.`;
+      const first = f.querySelector("[aria-invalid]") || err;
+      if (typeof first.scrollIntoView === "function") first.scrollIntoView({ block: "center" });
+      if (typeof first.focus === "function") first.focus();
+      return;
+    }
     const checked = validateCompanyInput({
       name: f.name.value, legalName: f.legalName.value, abn: f.abn.value, address: f.address.value,
       phone: f.phone.value, email: f.email.value, accountsEmail: f.accountsEmail.value,
       hubdocAddress: f.hubdocAddress.value, logoUrl: "", signoff: f.name.value,
     });
-    if (!trades.length) { err.textContent = "Choose at least one trade."; return; }
     if (!checked.ok) { err.textContent = companyFailure(checked.reason); return; }
-    if (!f.ownerName.value.trim()) { err.textContent = "Enter your name."; return; }
-    if (f.password.value.length < 8) { err.textContent = companyFailure("weak-password"); return; }
     signingUp = true;
     let cred = null;
     try {
@@ -1456,7 +1560,7 @@ function queueOf(j) {
 const jobNo = j => j.sm8JobNo ? j.sm8JobNo : companyJobPrefix(orgSettings()) + "-" + String(j.id || "").slice(-4).toUpperCase();
 const firstLine = s => String(s || "").split(/\n|\. /)[0];
 const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Unscheduled";
-const NAV = [["home", "⌂", "Home"], ["compliance", "🚐", "Compliance"], ["prestart", "☑", "Prestart"], ["chat", "💬", "Chat"], ["dispatch", "▦", "Dispatch Board"], ["capacity", "▦", "Capacity"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["crew", "⌖", "Crew map"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["staff", "👥", "Staff"], ["inbox", "✉", "Inbox", 0, 1],
+const NAV = [["home", "⌂", "Home"], ["compliance", "🚐", "Compliance"], ["prestart", "☑", "Prestart"], ["take5", "✋", "Take 5s"], ["chat", "💬", "Team chat"], ["dispatch", "▦", "Dispatch Board"], ["capacity", "▦", "Capacity"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["crew", "⌖", "Crew map"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["staff", "👥", "Staff"], ["inbox", "✉", "Inbox", 0, 1],
   ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["leave", "🌴", "Leave"], ["claims", "🧾", "Reimbursements"], ["reimb", "💵", "Receipt ledger", 0, 1], ["settings", "⚙", "Company"], ["master", "▣", "Master"]];
 ui.view = "home"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
 const PHONE = matchMedia("(max-width:760px)");
@@ -1465,12 +1569,12 @@ PHONE.addEventListener?.("change", () => { if (me && me.role === "admin") render
 // Grouped side menu: top items, then collapsible groups (open/closed remembered on this device; the group holding the current screen is always open).
 const NAV_TOP = ["home", "chat", "inbox", "clients", "staff", "master"];
 const NAV_FOOT = ["settings"];
-const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "capacity", "jobs", "unscheduled", "quotes", "completed", "myjobs", "crew"]], ["money", "$", "Money", ["invoices", "claims", "reimb", "timesheet", "leave"]], ["safety", "⚠", "Safety", ["safety", "swms", "prestart", "compliance"]]];
+const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "capacity", "jobs", "unscheduled", "quotes", "completed", "myjobs", "crew"]], ["money", "$", "Money", ["invoices", "claims", "reimb", "timesheet", "leave"]], ["safety", "⚠", "Safety", ["safety", "swms", "prestart", "take5", "compliance"]]];
 const NAV_LBL = { safety: "Incidents" };
 ui.navCol = (() => { try { return JSON.parse(localStorage.getItem("hwNavCol") || "{}"); } catch { return {}; } })();
 function shell(inner) {
   const cur = NAV.find(n => n[0] === ui.view);
-  const item = k => { const x = NAV.find(n => n[0] === k); if (!x || x[3] || (k === "inbox" ? !canImport() : (x[4] && !isOwner())) || (k === "invoices" && (!me || me.role !== "admin")) || (k === "staff" && !canInvite()) || (k === "quotes" && !canQuote()) || (k === "capacity" && !canSeeCapacity()) || (k === "compliance" && !COMP.canSee()) || (k === "prestart" && !COMP.canPrestart()) || (k === "crew" && !canSeeCrewMap(me))) return "";
+  const item = k => { const x = NAV.find(n => n[0] === k); if (!x || x[3] || (k === "inbox" ? !canImport() : (x[4] && !isOwner())) || (k === "invoices" && (!me || me.role !== "admin")) || (k === "staff" && !canInvite()) || (k === "quotes" && !canQuote()) || (k === "capacity" && !canSeeCapacity()) || (k === "compliance" && !COMP.canSee()) || (k === "prestart" && !COMP.canPrestart()) || (k === "take5" && !take5EntryVisible({ enabled: ui.take5On !== false })) || (k === "crew" && !canSeeCrewMap(me))) return "";
     const badge = k === "chat" ? CHAT.badge("staff") : "";
     if (k === "master" && !(me && me.platformOwner)) return "";
     return `<button class="sm-nav ${ui.view === k ? "on" : ""}" data-view="${k}" title="${esc(NAV_LBL[k] || x[2])}"><span class="ic">${x[1]}</span><span class="lbl">${esc(NAV_LBL[k] || x[2])}</span>${badge}</button>`; };
@@ -1542,7 +1646,7 @@ function jobsView(all) {
     <div class="qtabs"><button data-q="All" class="${ui.queue === "All" ? "on" : ""}">All open <span>${open.length}</span></button>
       ${QUEUES.map(q => `<button data-q="${q}" class="${QCLS[q]} ${ui.queue === q ? "on" : ""}"><span class="qdot ${QCLS[q]}"></span>${q} <span>${cnt(q)}</span></button>`).join("")}</div>
     <div class="filters"><select id="fs"><option value="">All staff</option>${staff.map(s => `<option value="${esc(skey(s))}" ${ui.staffF === skey(s) ? "selected" : ""}>${esc(label(s.name))}</option>`).join("")}<option value="_none" ${ui.staffF === "_none" ? "selected" : ""}>Unallocated</option></select>
-      <select id="ft"><option value="">All categories</option>${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${ui.typeF === k ? "selected" : ""}>${v}</option>`).join("")}</select>
+      <select id="ft">${jobCategorySelectHtml(ui.tradeSetup, ui.typeF, { blank: "All categories" })}</select>
       <span class="muted sub">Showing 2 weeks back to 4 weeks ahead, plus older jobs still open (unscheduled jobs: see Unscheduled)</span></div>
     <table class="jt"><thead><tr><th></th><th>Job #</th><th>Client / Site</th><th>Description</th><th>Scheduled</th><th>Staff</th><th>Status</th></tr></thead>
     <tbody>${groupByDate(list).map(([d, js]) => `<tr class="dayhdr"><td colspan="7">${esc(d ? dayLabel(d) : "Unscheduled")} <span class="cnt">${js.length}</span></td></tr>${js.map(jobRow).join("")}`).join("") || `<tr><td colspan="7" class="muted pad">No jobs in this queue for ${esc(orgSettings().name)}.</td></tr>`}</tbody></table>`;
@@ -4277,6 +4381,12 @@ function bindProfileExtras(A) {
     sync();
   }
 }
+function take5Page() {
+  if (ui.take5On === false && !(ui.take5s || []).length) {
+    return `<div class="sm-head"><h1>Take 5s</h1></div><p class="pad">Take 5s are off. An admin can turn them on under Company.</p>`;
+  }
+  return `<div class="sm-head"><h1>Take 5s</h1></div><p class="pad sub">A Take 5 is the five-step check before work starts. Open a job and tap Start Take 5. It is also in this menu.</p>${take5ListHtml(ui.take5s || [], { empty: "No Take 5s yet. Open a job and tap Start Take 5." })}`;
+}
 function renderAdmin() {
   donePill(); reimbPill(); inboxSub();
   if (!me || me.role !== "admin") return;
@@ -4304,7 +4414,7 @@ function renderAdmin() {
   const quotesHtml = ui.view === "quotes" ? adminViewRouter(ui.view, ui, { esc, $$, staff, jobs: all, todayStr, rerender: () => renderAdmin(), canEditQuoteRates }) : null;
   const staffHtml = ui.view === "staff" ? staffPageHtml() : null;
   paintBrand();
-  $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "master" ? masterView() : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "capacity" ? capacityScreen() : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : ui.view === "crew" ? crewMapScreen() : quotesHtml != null ? quotesHtml : jobsView(all));
+  $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "master" ? masterView() : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "capacity" ? capacityScreen() : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "take5" ? take5Page() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : ui.view === "crew" ? crewMapScreen() : quotesHtml != null ? quotesHtml : jobsView(all));
   const A = $("#app"); inboxBadge(); bindTrialBanner(A); bindMasterReturn(A);
   CHAT.watch([...(jobs || []), ...(ui.undated || [])]);
   if (ui.view === "chat") CHAT.mount(A);
@@ -4543,7 +4653,7 @@ function wireJobDocuments(el, job) {
 function editJob(j) {
   const importing = !!(j && j._import);
   const n = !j || !j.id;
-  j = j || { date: todayStr(), time: "07:00", durationHrs: 4, status: "Scheduled", type: "spoil", assigned: [], client: CLIENTS[0] };
+  j = j || { date: todayStr(), time: "07:00", durationHrs: 4, status: "Scheduled", type: defaultJobCategory(ui.tradeSetup), assigned: [], client: CLIENTS[0] };
   const d = $("#dlg");
   // One id per New Job form, so a second tap (or a retry after no signal) cannot make a second job.
   const newRef = n ? doc(collection(db, "jobs")) : null, guard = saveGuard();
@@ -4573,7 +4683,7 @@ function editJob(j) {
         <button type="button" id="splitbtn" class="btn">✂ Split into new job</button></div>` : ""}
       ${!n && j.splitTo && !j.splitSynced ? `<div class="splitbox">Split into a new job (${esc(j.splitTo)}). <button type="button" id="splitundo" class="btn">↩ Undo split</button></div>` : ""}
       <p class="hint">Spoil removal is always its own job — never add spoil to a backslab job.</p>
-      <div class="row"><label>Category<select name="type">${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${j.type === k ? "selected" : ""}>${v}</option>`).join("")}</select></label>
+      <div class="row"><label>Category<select name="type">${jobCategorySelectHtml(ui.tradeSetup, j.type || "", { blank: "Choose category" })}</select></label>
         ${Array.isArray(j.types) && j.types.length > 1 ? `<p class="hint">Categories on this job: ${esc(jobTypeText(j))}.</p>` : ""}
         <label>Purchase Order #<input name="po" value="${esc(j.po)}"></label>
         <label>Loads<input type="number" min="0" name="loads" value="${esc(j.loads ?? "")}"></label></div>
@@ -4601,7 +4711,7 @@ function editJob(j) {
       ${!n ? `<h4>Photos</h4><button type="button" class="sm-btn" id="emailph">Add photos</button> <span data-photoslot="${esc(j.id)}" data-photorole="cloud" data-photovariant="sm"></span> ${emailedPhotosNote(j)} <button type="button" class="sm-btn incbtn" data-inc="${j.id}">⚠ Report incident</button>${companyHasSwms() ? ` <button type="button" class="sm-btn" data-swms="${j.id}">📋 View SWMS</button>` : ""}${jobReceiptsHtml(j)}${cloudRetentionHtml(j)}` : ""}
     </div></div>
     <p id="ferr" class="err"></p>
-    <div class="btns jc-foot">${n ? "" : `<button type="button" class="sm-btn" id="emailjob">Email job</button>`}<button value="cancel" formnovalidate class="sm-btn">Close</button><button value="save" class="sm-btn primary">Save Job</button></div></form>`;
+    <div class="btns jc-foot">${n ? "" : `<button type="button" class="sm-btn" id="emailjob">Email job</button>`}${!n && take5EntryVisible({ enabled: ui.take5On !== false }) ? take5StartButtonHtml({ enabled: true, done: hasTake5(ui.take5s, me && me.uid, j.id) }) : ""}${canQuote() ? `<button type="button" class="sm-btn" id="quotethis">Quote this job</button>` : ""}<button value="cancel" formnovalidate class="sm-btn">Close</button><button value="save" class="sm-btn primary">Save Job</button></div></form>`;
   d.showModal();
   if (!n) jobTabs(d, j);
   if (!n) { rememberJob(j); $("#emailph").onclick = () => emailPhotos(j); const emailJobBtn = $("#emailjob"); if (emailJobBtn) emailJobBtn.onclick = () => { openJobEmail(j).catch(e => toast(e.message || "Couldn't open the email")); }; watchJobPhotos(j); paintPhotoSlots(); wireJobDocuments(d.querySelector("[data-job-docs]"), j); }
@@ -4619,7 +4729,22 @@ function editJob(j) {
   if (!n && $("#splitundo")) $("#splitundo").onclick = () => undoSplit(j).catch(e => toast("Undo failed: " + (e.code || e.message)));
   const f = $("#jf");
   if (f.time) f.time.addEventListener("input", () => { f.time.dataset.touched = "1"; });
-  f.description.oninput = () => { if (n && !importing) f.type.value = guessType(f.description.value); };
+  f.description.oninput = () => {
+    if (!(n && !importing)) return;
+    const guessed = guessType(f.description.value);
+    const primary = (ui.tradeSetup && ui.tradeSetup.enabled && ui.tradeSetup.enabled[0]) || "earthworks";
+    if (guessed === "other" && primary !== "earthworks") return;
+    if (TYPES[guessed]) f.type.value = guessed;
+  };
+  const startTake = $("#starttake5");
+  if (startTake) startTake.onclick = () => openTake5(j);
+  const quoteThis = $("#quotethis");
+  if (quoteThis) quoteThis.onclick = () => {
+    const drafted = { ...j, client: f.client.value.trim(), address: f.address.value.trim(), type: f.type.value, description: f.description.value.trim() };
+    d.onclose = null;
+    d.close();
+    queueMicrotask(() => QG.openQuoteWizard && QG.openQuoteWizard(null, { job: drafted }));
+  };
   if (importing) wireImportForm(j, f);
   f.addEventListener("change", () => refreshJobLeaveWarn(f));
   refreshJobLeaveWarn(f);
@@ -4627,6 +4752,7 @@ function editJob(j) {
     if (ev.submitter?.value !== "save") return;
     ev.preventDefault();
     const typ = f.type.value, ds = f.description.value.toLowerCase();
+    if (!typ) { $("#ferr").textContent = "Choose a category."; f.type.focus(); return; }
     if (typ === "backslab" && ds.includes("spoil")) { $("#ferr").textContent = "Spoil removal must be a separate job. Remove it from this backslab and create a Spoil removal job."; return; }
     if (typ === "spoil" && /back ?slab|slab clean|back blade/.test(ds)) { $("#ferr").textContent = "Backslab work must be a separate job from spoil removal."; return; }
     const picked = [...f.querySelectorAll("[name=assigned]:checked")].map(x => staff.find(s => skey(s) === x.value)).filter(Boolean);
@@ -4983,7 +5109,6 @@ function inboxReview(all) {
   const card = id => {
     const row = ui.ibDraft[id];
     if (!row) return "";
-    const opt = (v, label) => `<option value="${v}" ${row.type === v ? "selected" : ""}>${label}</option>`;
     const kind = [row.costCode ? "Cost code " + row.costCode : "", row.typeLabel].filter(Boolean).join(" · ");
     return `<div class="irow ireview"><div class="imain">
       <div class="itop"><b>${esc(row.subject || row.address || "Email")}</b></div>
@@ -4998,7 +5123,7 @@ function inboxReview(all) {
         <label>Suburb<input data-iid="${esc(id)}" data-field="suburb" value="${esc(row.suburb)}"></label>
       </div>
       <div class="row">
-        <label>Category<select data-iid="${esc(id)}" data-field="type">${Object.entries(TYPES).map(([k, v]) => opt(k, v)).join("")}</select></label>
+        <label>Category<select data-iid="${esc(id)}" data-field="type">${jobCategorySelectHtml(ui.tradeSetup, row.type || "", { blank: "Choose category" })}</select></label>
         <label>Required date<input type="date" data-iid="${esc(id)}" data-field="date" value="${esc(row.date)}"></label>
         <label>PO<input data-iid="${esc(id)}" data-field="po" value="${esc(row.po)}"></label>
       </div>
@@ -5148,11 +5273,43 @@ function clientsView() {
 function bindClients(A) {
   const qi = A.querySelector("#cq2"); if (qi) qi.oninput = () => { ui.cq2 = qi.value; const p = qi.selectionStart; renderAdmin(); const n = $("#cq2"); n.focus(); n.setSelectionRange(p, p); };
   A.querySelectorAll("[data-ced]").forEach(b => b.onclick = () => { const [id, i] = b.dataset.ced.split(":"); editContact(CLI.find(c => c.id === id), i === "new" ? -1 : +i); });
-  const nb = A.querySelector("[data-cnew]"); if (nb) nb.onclick = async () => {
-    const name = (prompt("Client (company) name:") || "").trim(); if (!name) return;
-    const cid = myCompanyId(), id = clientDocId(cid, name);
-    const scope = cid === "heartwood" ? {} : { companyId: cid, tenantId: cid };
-    try { await setDoc(doc(db, "clients", id), { name, office: {}, contacts: [], updatedAt: serverTimestamp(), ...scope }, { merge: true }); await loadClients(true); renderAdmin(); } catch (e) { toast("Not saved: " + (e.code || e.message)); }
+  const nb = A.querySelector("[data-cnew]"); if (nb) nb.onclick = () => openClientForm();
+}
+function openClientForm() {
+  const d = $("#dlg"); d.className = ""; d.onclose = null;
+  d.innerHTML = clientFormHtml();
+  d.showModal();
+  const form = $("#clientnew");
+  form.onsubmit = async ev => {
+    if (ev.submitter?.value === "cancel") return;
+    ev.preventDefault();
+    const built = buildClientCreate({
+      companyId: myCompanyId(),
+      name: form.name.value,
+      contactName: form.contactName.value,
+      phone: form.phone.value,
+      email: form.email.value,
+      address: form.address.value,
+      notes: form.notes.value,
+    });
+    form.querySelectorAll("[data-err]").forEach(slot => { slot.hidden = true; slot.textContent = ""; });
+    const err = $("#clienterr");
+    if (!built.ok) {
+      const message = built.reason === "email" ? "Check the email address." : built.reason === "phone" ? "Check the phone number." : "Enter the company or client name.";
+      err.textContent = message;
+      const slot = form.querySelector(`[data-err="${built.reason === "name" ? "name" : built.reason}"]`);
+      if (slot) { slot.hidden = false; slot.textContent = message; }
+      const field = form.elements[built.reason] || form.name;
+      if (field) { field.setAttribute("aria-invalid", "true"); field.focus(); }
+      return;
+    }
+    try {
+      await setDoc(doc(db, "clients", built.id), { ...built.data, updatedAt: serverTimestamp(), updatedBy: me.uid }, { merge: true });
+      d.close();
+      await loadClients(true);
+      renderAdmin();
+      toast("Client saved");
+    } catch (e) { err.textContent = "Not saved: " + (e.code || e.message); }
   };
 }
 function editContact(c, i) {
@@ -5668,9 +5825,12 @@ function renderOperator() {
     return;
   }
   if (ui.opTab === "fleet") ui.opTab = "more";
-  if (ui.opTab === "take5" && canViewTake5(me) && !ui.opSel) {
+  if (ui.opTab === "take5" && take5EntryVisible({ enabled: ui.take5On !== false }) && !ui.opSel) {
+    const body = canViewTake5(me)
+      ? take5ListHtml(ui.take5s || [], { empty: "No Take 5s yet. Open a job and tap Start Take 5." })
+      : `<p class="pad">A Take 5 is the five-step check before you start work: stop, look, assess, control, proceed. Open a job and tap <b>Start Take 5</b>.</p>`;
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Take 5s</div><div class="mob-sub">Stop, look, assess, control, proceed</div></div>
-      <div class="pad">${take5ListHtml(ui.take5s || [])}</div>${opTabs("more")}</div>`;
+      <div class="pad">${body}</div>${opTabs("more")}</div>`;
     bindOp(mine); return;
   }
   if (ui.opTab === "take5") ui.opTab = "more";
@@ -5724,7 +5884,7 @@ function renderOperator() {
         ${COMP.canPrestart() ? `<button type="button" class="mob-more" data-go="prestart"><b>Prestart</b><small>Any machine, before you use it</small></button>` : ""}
         ${fleetBtn}
         <button type="button" class="mob-more incbtn" data-inc=""><b>Report incident</b><small>Safety report</small></button>
-        ${canViewTake5(me) && (ui.take5On !== false || (ui.take5s || []).length) ? `<button type="button" class="mob-more" data-go="take5"><b>Take 5s</b><small>Checks done at the start of a job</small></button>` : ""}
+        ${take5EntryVisible({ enabled: ui.take5On !== false }) ? `<button type="button" class="mob-more" data-go="take5"><b>Take 5</b><small>Five-step check before you start a job</small></button>` : ""}
         ${capBtn}
         ${quoteBtn}
         ${staffBtn}
@@ -5820,7 +5980,7 @@ function renderOpDetail(j) {
       <div class="mcard"><div class="mlbl">Photos</div><div data-photoslot="${esc(j.id)}" data-photorole="cloud"></div>${emailedPhotosNote(j)}<div class="muted sub">Cloud photos are the private copies stored for this job.</div></div>
       <div class="mcard job-docs" data-job-docs="${esc(j.id)}"></div>
       <div class="mcard safecard"><div class="mlbl">Safety</div>${companyHasSwms() ? `<button type="button" class="mnote" data-swms="${j.id}">View SWMS</button>` : ""}<button type="button" class="mnote incbtn" data-inc="${j.id}">Report incident</button>
-        ${ui.take5On !== false || (ui.take5s || []).some(row => row.jobId === j.id) ? `<div id="take5slot">${take5JobHtml(ui.take5s || [], j.id, { ownUid: me.uid, canView: canViewTake5(me) })}</div>` : ""}</div>
+        ${take5EntryVisible({ enabled: ui.take5On !== false }) || (ui.take5s || []).some(row => row.jobId === j.id) ? `<div id="take5slot">${take5StartButtonHtml({ enabled: ui.take5On !== false, done: hasTake5(ui.take5s, me.uid, j.id) })}${take5JobHtml(ui.take5s || [], j.id, { ownUid: me.uid, canView: canViewTake5(me) })}</div>` : ""}</div>
       <div class="mcard">${jobReceiptsHtml(j)}</div>
     </div>
     <div class="mactions"${onChat ? " hidden" : ""}>${done ? `<div class="donebar">Completed${j.loads ? ` · ${esc(j.loads)} loads` : ""}</div>` :
@@ -5830,7 +5990,7 @@ function renderOpDetail(j) {
       <button type="button" class="mbtn outline" id="emailjob">Email job</button>
       <a class="mcard link mbtn outline" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener">${ICO.pin}<span>Get directions</span></a>
     </div></div>`;
-  rememberJob(j); bindMasterReturn($("#app")); $("#emailph").onclick = () => emailPhotos(j); $("#emailjob").onclick = () => { openJobEmail(j).catch(e => toast(e.message || "Couldn't open the email")); }; wireJobReceipts(j); fillSupCard(j); watchJobPhotos(j); paintPhotoSlots();
+  rememberJob(j); bindMasterReturn($("#app")); $("#emailph").onclick = () => emailPhotos(j); $("#emailjob").onclick = () => { openJobEmail(j).catch(e => toast(e.message || "Couldn't open the email")); }; const startTake = $("#starttake5"); if (startTake) startTake.onclick = () => openTake5(j); wireJobReceipts(j); fillSupCard(j); watchJobPhotos(j); paintPhotoSlots();
   wireJobDocuments(document.querySelector("[data-job-docs]"), j);
   if (!hasTake5(ui.take5s, me.uid, j.id)) rememberOwnTake5(j);
   const showJobPane = which => {
@@ -6051,7 +6211,7 @@ async function openJobEmail(job) {
     zipBtn.hidden = !plan.download;
     if (!allowLarge) {
       warnEl.hidden = true;
-      sendBtn.textContent = "Email job";
+      sendBtn.textContent = "Share";
       sendBtn.onclick = () => sendEmail(false);
     }
   };

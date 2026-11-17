@@ -1261,3 +1261,15 @@ dialog.comp-alert h2 { margin: 0 0 8px; font-size: 1.1rem; }
 .take5{display:flex;flex-direction:column;gap:8px}
 .take5-step{display:flex;gap:8px;align-items:center;min-height:40px}
 .take5 fieldset{border:1px solid var(--sm-line);border-radius:8px;padding:8px}
+.field-err{color:#9b2c2c;font-size:13px;margin:0 0 8px}
+abbr.req{color:#9b2c2c;text-decoration:none;font-weight:700}
+.callup-help{position:fixed;right:12px;bottom:12px;z-index:80;width:min(420px,calc(100vw - 24px));max-height:min(70vh,640px);display:flex;flex-direction:column;gap:8px;padding:12px;background:#fffdf8;color:#2b2118;border:1px solid #d9cbb8;border-radius:12px;box-shadow:0 12px 40px rgba(40,24,8,.2)}
+.callup-help-bar{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.callup-help-bar h2{margin:0;font-size:18px}
+.callup-help-ideas{display:flex;flex-wrap:wrap;gap:6px}
+.callup-help-log{overflow:auto;display:flex;flex-direction:column;gap:8px;min-height:80px}
+.callup-help-ask,.callup-help-answer{margin:0}
+.callup-help-form{display:flex;gap:8px}
+.callup-help-form input{flex:1;min-width:0}
+.callup-help-card{margin:8px;padding:10px;background:#f7f1e8;border-radius:8px}
+#helpbtn{min-width:40px;font-weight:700}

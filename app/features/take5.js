@@ -55,6 +55,17 @@ export function shouldPromptTake5(me, enabled) {
   return role === "labourer" || role === "operator";
 }
 
+// Take 5s are on for every company until an admin switches them off.
+// The menu entry is for every role, not only people who can read other people's checks.
+export function take5EntryVisible({ enabled = true } = {}) {
+  return enabled !== false;
+}
+
+export function take5StartButtonHtml({ enabled = true, done = false } = {}) {
+  if (!take5EntryVisible({ enabled }) || done) return "";
+  return `<button type="button" class="mbtn" id="starttake5">Start Take 5</button>`;
+}
+
 export function canViewTake5(me) {
   if (!me) return false;
   if (me.role === "admin") return true;

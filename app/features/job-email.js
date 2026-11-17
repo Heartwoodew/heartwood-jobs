@@ -543,19 +543,20 @@ export function emailSheetHtml({ subject = "", body = "", to = "", suggestion = 
   const receiptBlock = receipts.length
     ? `<div class="jem-photos"><p class="sub">Tip dockets</p><p class="sub">Company-account dump receipts. Reimbursements are not listed.</p>${checkRows(receipts, "receipt", "receipt")}</div>`
     : "";
+  const filled = esc(to || "");
   return `<div class="embox jobemail"><h3>Email job</h3>
     <p class="sub">Nothing is sent until you send it from your mail app.</p>
-    <label>To<input type="email" id="jemto" inputmode="email" autocomplete="email" placeholder="Optional" value="${esc(to || "")}"></label>
-    ${suggestion ? `<p class="sub">Suggested client contact <button type="button" class="sm-btn" id="jemuse">${esc(suggestion)}</button></p>` : ""}
+    <label>To<input type="email" id="jemto" inputmode="email" autocomplete="email" placeholder="Optional – add the client’s email" value="${filled}"></label>
+    ${suggestion && suggestion !== to ? `<p class="sub">Client contact <button type="button" class="sm-btn" id="jemuse">${esc(suggestion)}</button></p>` : ""}
     <p class="sub jem-subject" id="jemsubj">${esc(subject)}</p>
     <pre class="email-preview" id="jembody">${esc(body)}</pre>
     ${photoBlock}
     ${receiptBlock}
     <p class="sub" id="jemprog" hidden></p>
     <p class="err" id="jemwarn" hidden></p>
-    <button type="button" class="mbtn complete" id="jemsend">Email job</button>
-    <a class="mbtn complete" id="jemmail" hidden>Email job</a>
-    <button type="button" class="mbtn" id="jemcopy">Copy to clipboard</button>
+    <button type="button" class="mbtn complete" id="jemsend" hidden>Share</button>
+    <a class="mbtn complete" id="jemmail" hidden>Open in mail app</a>
+    <button type="button" class="mbtn" id="jemcopy">Copy</button>
     <button type="button" class="mbtn" id="jemzip" hidden>Download photos</button>
     <button type="button" class="mbtn ghost" id="jemx">Cancel</button></div>`;
 }

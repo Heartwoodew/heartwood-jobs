@@ -281,7 +281,12 @@ test("share attaches files, otherwise mailto plus a download, and photos shrink 
     photos: [{ name: "Photo 1.jpg" }], receipts: [{ name: "Remondis tip docket" }],
   });
   assert.match(html, /Email job/);
-  assert.match(html, /Copy to clipboard/);
+  assert.match(html, /Open in mail app/);
+  assert.match(html, /Share/);
+  assert.match(html, />Copy</);
+  assert.match(html, /Optional – add the client/);
+  assert.match(html, /value="jo@orbit.example"/);
+  assert.doesNotMatch(html, /Copy to clipboard/);
   assert.match(html, /Download photos/);
   assert.match(html, /No photos/);
   assert.match(html, /checked/);
@@ -299,6 +304,6 @@ test("the job screen opens the mail sheet without a download URL or a cloud func
   assert.match(fn, /canSeeMoney\(\)/);
   assert.doesNotMatch(fn, /getDownloadURL|httpsCallable|functions\(/);
   assert.ok(app.split('id="emailjob"').length - 1 >= 2);
-  assert.match(sw, /callup-shell-v124-emailjob/);
+  assert.match(sw, /callup-shell-v125-usability/);
   assert.match(sw, /features\/job-email\.js/);
 });

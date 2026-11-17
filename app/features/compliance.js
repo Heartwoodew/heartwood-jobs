@@ -307,19 +307,26 @@ function options(list, selected) {
   return list.map(([id, label]) => `<option value="${esc(id)}"${id === selected ? " selected" : ""}>${esc(label)}</option>`).join("");
 }
 
+export function prestartEmptyHtml({ canAdd = false } = {}) {
+  if (canAdd) {
+    return `<div class="comp-empty pad"><h3>No machines yet</h3><p>A prestart is a short check of a machine before anyone uses it — lights, leaks, guards, and anything that would make it unsafe. Add your first machine and the checklist for that type is ready.</p><div class="comp-actions"><button type="button" class="sm-btn primary comp-add" data-comp-add="asset">Add your first machine</button></div></div>`;
+  }
+  return `<div class="comp-empty pad"><h3>No machines yet</h3><p>A prestart is a short check of a machine before anyone uses it. Ask a supervisor or admin to add the first machine, then you can complete the checklist here.</p></div>`;
+}
+
 function assetFormHtml(asset, editableId, canRemove = true) {
   const a = asset || {};
   return `<form id="compform" class="comp-form" data-kind="asset" data-comp-id="${esc(editableId || "")}">
     <h2>${editableId ? "Edit machine" : "Add machine"}</h2>
-    <p class="comp-help">Registration and Queensland certificate of inspection (COI) for heavy vehicles and trailers. COI is not insurance. Photos of the paper are not stored in the app.</p>
-    <label>Name<input name="name" required maxlength="80" value="${esc(a.name || "")}" autocomplete="off"></label>
-    <label>Type<select name="prestartKind">${options(PRESTART_KINDS.map(kind => [kind.id, kind.label]), asset ? assetKind(a) : "excavator")}</select></label>
+    <p class="comp-help">Only the name and type are required. Registration and the Queensland certificate of inspection (COI) are optional. COI is for some heavy vehicles and trailers. It is not insurance. Photos of the paper are not stored in the app.</p>
+    <label>Name <abbr class="req" title="required">*</abbr><input name="name" required maxlength="80" value="${esc(a.name || "")}" autocomplete="off"></label>
+    <label>Type <abbr class="req" title="required">*</abbr><select name="prestartKind" required>${options(PRESTART_KINDS.map(kind => [kind.id, kind.label]), asset ? assetKind(a) : "excavator")}</select></label>
     <p class="comp-help">The type picks the prestart checklist.</p>
-    <label>Rego / serial<input name="rego" maxlength="20" value="${esc(a.rego || "")}" autocomplete="off"></label>
-    <label>Hours / odometer<input name="reading" type="number" inputmode="numeric" min="0" max="10000000" step="1" value="${a.reading ? esc(String(a.reading)) : ""}" placeholder="Engine hours, or km for road vehicles"></label>
-    <label>Rego expiry<input name="regoExpiry" type="date" value="${esc(a.regoExpiry || "")}"></label>
-    <label class="comp-check"><input name="coiRequired" type="checkbox" ${a.coiRequired ? "checked" : ""}> COI required</label>
-    <p class="comp-help">COI is the Queensland certificate of inspection. Leave this off for a light vehicle that does not need one.</p>
+    <label>Rego / serial<span class="sub">Optional.</span><input name="rego" maxlength="20" value="${esc(a.rego || "")}" autocomplete="off"></label>
+    <label>Hours / odometer<span class="sub">Optional.</span><input name="reading" type="number" inputmode="numeric" min="0" max="10000000" step="1" value="${a.reading ? esc(String(a.reading)) : ""}" placeholder="Engine hours, or km for road vehicles"></label>
+    <label>Rego expiry<span class="sub">Optional.</span><input name="regoExpiry" type="date" value="${esc(a.regoExpiry || "")}"></label>
+    <label class="comp-check"><input name="coiRequired" type="checkbox" ${a.coiRequired ? "checked" : ""}> Certificate of inspection (COI) – optional</label>
+    <p class="comp-help">COI is the Queensland certificate of inspection for some heavy vehicles and trailers. It is not insurance. Leave this off for a light vehicle that does not need one.</p>
     <label data-coi-date ${a.coiRequired ? "" : "hidden"}>COI expiry<input name="coiExpiry" type="date" value="${esc(a.coiExpiry || "")}"></label>
     <label>Notes<textarea name="notes" rows="3" maxlength="2000">${esc(a.notes || "")}</textarea></label>
     <div class="comp-actions"><button class="sm-btn primary" type="submit">Save</button><button class="sm-btn" type="button" data-comp-cancel>Cancel</button>${editableId && canRemove ? `<button class="sm-btn" type="button" data-comp-delete>Remove</button>` : ""}</div>
@@ -611,8 +618,7 @@ export function installCompliance(deps) {
       return templateFormHtml(type, itemsFor(type, state.templates));
     }
     if (!state.assets.length) {
-      const help = editFleet() ? "No machines yet. Add one to start a prestart." : "No machines yet. Ask a supervisor or admin to add one.";
-      return `${err}<p class="muted pad comp-empty">${help}</p>${editFleet() ? `<div class="comp-actions">${addMachineBtn()}</div>` : ""}`;
+      return `${err}${prestartEmptyHtml({ canAdd: editFleet() })}`;
     }
     const ui = deps.getUi() || {};
     const wantedId = state.prestartAsset || ui.prestartAsset || "";

@@ -13,6 +13,7 @@ import {
   newChatFileId, orderedMessages, planChatPhoto, readSeenMap, shouldStickToBottom, threadJobId, unreadCount,
   writeSeenMap,
 } from "./chat.js";
+import { teamChatHelpCard } from "./help.js";
 
 const urls = new Map();
 const state = {
@@ -111,6 +112,7 @@ function paintLog(log) {
     log.innerHTML = messagesHtml(state.messages[threadId] || [], {
       myUid: state.me?.uid,
       canDelete: message => canDeleteMessage(state.membership, message),
+      helpCard: threadId === STAFF_THREAD ? teamChatHelpCard() : "",
     });
   }
   log.dataset.booted = "1";
