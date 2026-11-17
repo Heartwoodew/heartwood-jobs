@@ -958,16 +958,38 @@ service cloud.firestore {
       let hasT = d.keys().hasAny(["tonnes"]) && d.tonnes is number && d.tonnes > 0;
       return amtOk && tOk && (hasAmt || hasT);
     }
+    // Veolia (any site, any case) is on the company account. paidPersonally true is rejected.
+    // An update that already had that pair still succeeds, so filing an old docket is unchanged.
+    function supplierIsVeolia(d) {
+      return d.get("supplier", "") is string
+        && d.get("supplier", "").matches(".*[Vv][Ee][Oo][Ll][Ii][Aa].*");
+    }
+    function veoliaPaidPersonally(d) {
+      return supplierIsVeolia(d) && d.get("paidPersonally", false) == true;
+    }
+    function linkedReceiptVeolia(rid) {
+      return rid is string && rid.size() > 0 && rid.size() <= 200
+        && exists(/databases/$(database)/documents/receipts/$(rid))
+        && get(/databases/$(database)/documents/receipts/$(rid)).data.get("supplier", "") is string
+        && get(/databases/$(database)/documents/receipts/$(rid)).data.get("supplier", "").matches(".*[Vv][Ee][Oo][Ll][Ii][Aa].*");
+    }
+    function reimbIsVeolia(id, d) {
+      return supplierIsVeolia(d) || linkedReceiptVeolia(d.get("receiptId", "")) || linkedReceiptVeolia(id);
+    }
     match /receipts/{rid} {
       allow create: if isWorker() && notOtherCompany() && docCompany(request.resource.data) == "heartwood"
         && request.resource.data.uid == request.auth.uid && request.resource.data.status == "queued"
-        && receiptMeasureOk(request.resource.data);
+        && receiptMeasureOk(request.resource.data)
+        && !veoliaPaidPersonally(request.resource.data);
       allow create: if companyStaff() && request.resource.data.uid == request.auth.uid
         && request.resource.data.status == "queued" && request.resource.data.companyId == callerCompany()
-        && receiptMeasureOk(request.resource.data);
+        && receiptMeasureOk(request.resource.data)
+        && !veoliaPaidPersonally(request.resource.data);
       allow read: if isOwner() || isSync() || (signedIn() && resource.data.uid == request.auth.uid);
       allow read: if companyStaff() && resource.data.uid == request.auth.uid && docCompany(resource.data) == callerCompany();
-      allow update, delete: if isOwner() || isSync();
+      allow update: if (isOwner() || isSync())
+        && (!veoliaPaidPersonally(request.resource.data) || veoliaPaidPersonally(resource.data));
+      allow delete: if isOwner() || isSync();
     }
     match /receiptChunks/{cid} {
       allow create: if isWorker() && notOtherCompany() && docCompany(request.resource.data) == "heartwood"
@@ -977,7 +999,15 @@ service cloud.firestore {
       allow read, update, delete: if isOwner() || isSync();
     }
     // Reimbursements ledger + owner settings (Hubdoc email-in address): ALEX ONLY (+ the box). Patrick (admin) cannot read.
-    match /reimbursements/{id} { allow read, write: if isOwner() || isSync(); }
+    // New Veolia reimbursements are refused. A row that is already Veolia can still be updated
+    // (Hubdoc status, mark paid) so existing ledger writes keep working.
+    match /reimbursements/{id} {
+      allow read: if isOwner() || isSync();
+      allow create: if (isOwner() || isSync()) && !reimbIsVeolia(id, request.resource.data);
+      allow update: if (isOwner() || isSync())
+        && (!reimbIsVeolia(id, request.resource.data) || reimbIsVeolia(id, resource.data));
+      allow delete: if isOwner() || isSync();
+    }
     match /ownerSettings/{id} { allow read, write: if isOwner() || isSync(); }
     // Timesheets: timesheets/{uid}_{weekStartYYYY-MM-DD}. A worker reads/writes only docs whose id starts with their own uid
     // (works for not-yet-created docs) and can't set the "sent" fields; Alex (owner) + the box read all, and Alex marks sent.

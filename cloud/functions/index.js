@@ -34,6 +34,10 @@
  * It does not delete anything unless PAUSE_DELETE_DRY_RUN=false.
  * An owner-paused company is never selected. That pause is not an automatic deletion.
  *
+ * veoliaReceiptGuard clears paidPersonally on a Veolia receipt.
+ * veoliaReimbursementGuard deletes a reimbursement created from a Veolia receipt.
+ * Veolia dump fees are on the company account and are never paid back to staff.
+ *
  * deleteCompanyAccount is the platform-owner callable that deletes one CallUp company.
  * It refuses Heartwood and the caller's own company. When the company has a Stripe
  * subscription id, it cancels that subscription (invoice_now false, prorate false)
@@ -93,6 +97,7 @@ import {
 } from "./billing/referrals.js";
 import { deleteCompanyAccountData } from "./owner-company.js";
 import { deletionErrorMessage } from "./billing/owner-company.js";
+import { applyVeoliaReceiptWrite, applyVeoliaReimbursementCreate } from "./receipt-reimburse.js";
 export { pauseRetentionSweep } from "./pause-retention.js";
 
 const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
@@ -832,6 +837,29 @@ export const deleteCompanyAccount = onCall(
       throw new HttpsError(code, deletionErrorMessage(result));
     }
     return { ok: true, companyId: result.companyId, counts: result.counts, stripe: result.stripe };
+  },
+);
+
+export const veoliaReceiptGuard = onDocumentWritten(
+  { document: "receipts/{rid}", region: "australia-southeast1" },
+  async (event) => {
+    const after = event.data?.after;
+    if (!after) return;
+    await applyVeoliaReceiptWrite(after);
+  },
+);
+
+export const veoliaReimbursementGuard = onDocumentCreated(
+  { document: "reimbursements/{id}", region: "australia-southeast1" },
+  async (event) => {
+    const snap = event.data;
+    if (!snap) return;
+    ensureAdmin();
+    const db = getFirestore();
+    await applyVeoliaReimbursementCreate(snap, async (id) => {
+      const row = await db.collection("receipts").doc(String(id)).get();
+      return row.exists ? (row.data() || null) : null;
+    });
   },
 );
 

@@ -358,3 +358,25 @@ test("receipts are accepted with a dollar amount or tonnes, not neither", async 
   await assertFails(setDoc(doc(bo, "receipts/bt1"), { uid: "bravoOp2", status: "queued", supplier: "Tip", tonnes: 2 }));
   await assertSucceeds(setDoc(doc(bo, "receipts/bt2"), { uid: "bravoOp2", status: "queued", supplier: "Tip", tonnes: 2, companyId: "bravo", tenantId: "bravo" }));
 });
+
+test("Veolia receipts cannot be marked paid personally, and old ones can still be filed", async () => {
+  const op = db(OP);
+  const alex = db(ALEX);
+  const sync = db("38SU5waAy4f9UI9N6JTqDMaYpQg2");
+  const base = { uid: OP, status: "queued", workerName: "Sam", tonnes: 2.5 };
+  await assertFails(setDoc(doc(op, "receipts/vpaid"), { ...base, supplier: "Veolia wattleglen - tip fees", paidPersonally: true }));
+  await assertFails(setDoc(doc(op, "receipts/vcase"), { ...base, supplier: "VEOLIA Sunshine", paidPersonally: true }));
+  await assertSucceeds(setDoc(doc(op, "receipts/vaccount"), { ...base, supplier: "Veolia wattleglen - tip fees", paidPersonally: false }));
+  await assertSucceeds(setDoc(doc(op, "receipts/vlower"), { ...base, supplier: "veolia clayton - tip fees", amountInc: 40, paidPersonally: false }));
+  await assertSucceeds(updateDoc(doc(sync, "receipts/vaccount"), { status: "filed" }));
+  await assertFails(updateDoc(doc(alex, "receipts/vaccount"), { paidPersonally: true }));
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), "receipts/vlegacy"), { ...base, supplier: "Veolia wattleglen - tip fees", paidPersonally: true });
+    await setDoc(doc(ctx.firestore(), "reimbursements/vlegacy"), { supplier: "Veolia wattleglen - tip fees", paid: false, receiptId: "vlegacy" });
+  });
+  await assertSucceeds(updateDoc(doc(sync, "receipts/vlegacy"), { status: "filed" }));
+  await assertSucceeds(updateDoc(doc(alex, "reimbursements/vlegacy"), { hubdocStatus: "filed" }));
+  await assertFails(setDoc(doc(alex, "reimbursements/vnew"), { supplier: "Veolia wattleglen - tip fees", receiptId: "vaccount", paid: false }));
+  await assertFails(setDoc(doc(alex, "reimbursements/vaccount"), { supplier: "Tip fees", paid: false }));
+  await assertSucceeds(setDoc(doc(alex, "reimbursements/rbnew"), { supplier: "Caltex", paid: false, uid: OP }));
+});
