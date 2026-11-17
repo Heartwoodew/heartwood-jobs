@@ -1785,6 +1785,13 @@ service cloud.firestore {
     match /passwordResetRate/{uid} {
       allow read, write: if false;
     }
+    // Job-email rate limit and send audit. Written by sendJobEmail only. Clients cannot read the message.
+    match /jobEmailRate/{uid} {
+      allow read, write: if false;
+    }
+    match /jobMail/{id} {
+      allow read, write: if false;
+    }
     // Written by inviteEmailWorker only: whether the invite email went out. Readable by that company's office.
     match /inviteStatus/{id} {
       allow get: if (isAdmin() && docCompany(resource.data) == "heartwood")

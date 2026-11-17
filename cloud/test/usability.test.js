@@ -119,10 +119,11 @@ test("prestart explains itself and Take 5 can be started from a job and the menu
 
 test("email job has one primary action, a copy button, and a client recipient", () => {
   const html = emailSheetHtml({ subject: "Job", body: "Hello", to: "jo@creek.example", suggestion: "jo@creek.example" });
-  assert.match(html, /Open in mail app/);
-  assert.match(html, /Share/);
+  assert.match(html, /Other mail app/);
+  assert.match(html, />Send</);
+  assert.match(html, /id="jemcc"/);
   assert.match(html, />Copy</);
-  assert.match(html, /Optional – add the client/);
+  assert.match(html, /Client’s email/);
   assert.match(html, /value="jo@creek.example"/);
   assert.equal((html.match(/id="jemsend"/g) || []).length, 1);
   assert.equal((html.match(/id="jemmail"/g) || []).length, 1);
@@ -161,6 +162,6 @@ test("help answers every role from the knowledge list and hides money from crew"
   const officeAnswer = await askHelp("How do I add a job?", office, async () => ({ enabled: true, reply: "Open Jobs and tap New Job." }));
   assert.equal(officeAnswer.source, "helper");
   assert.equal(helpVisible({ uid: "owner", role: "admin", companyId: "brand-new" }), true);
-  assert.match(sw, /callup-shell-v125-usability/);
+  assert.match(sw, /callup-shell-v127-sendemail/);
   assert.match(sw, /features\/help\.js/);
 });

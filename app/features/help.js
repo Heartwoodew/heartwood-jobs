@@ -107,8 +107,8 @@ const TOPICS = Object.freeze([
     keywords: ["email a job", "email job", "mail the job", "send the job", "share the job"],
     go: "jobs",
     goLabel: "Take me to Jobs",
-    office: "Open the job and tap Email job. The sheet has one main button: Share, or Open in mail app. Copy and Download photos are separate. The recipient is filled from the client contact when there is one. If it is empty, add the client's email. Nothing is sent until you send it from your mail app.",
-    crew: "Open the job and tap Email job. Use Share or Open in mail app. Add the client's email if the box is empty. Copy and Download photos are there if you need them. Nothing is sent until you send it yourself.",
+    office: "Open the job and tap Email job. The client's email is filled in when there is one. Add a Cc if you want one, then tap Send. CallUp sends the email. Other mail app opens your own mail app instead. Nothing is sent until you tap Send.",
+    crew: "Open the job and tap Email job. Add the client's email if the box is empty, then tap Send. CallUp sends the email. Other mail app is there if you want your own mail app. Nothing is sent until you tap Send.",
   },
   {
     id: "billing",

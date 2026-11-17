@@ -18,6 +18,11 @@
  * adminSendPasswordReset emails a password reset link to a staff login in the
  * caller's own company. The link is never returned to the browser.
  *
+ * sendJobEmail emails one job from the CallUp sending address. It reuses
+ * RESEND_API_KEY and INVITE_EMAIL_ENABLED. No new secret. Photos and dump
+ * receipts are read with the Admin SDK. The message is not sent unless
+ * INVITE_EMAIL_ENABLED is the string "true".
+ *
  * helperAsk stays deployed and refuses every request. HELPER_ENABLED defaults
  * to "false", and HELPER_HARD_OFF returns before Auth, Firestore, or Vertex.
  * An environment change cannot turn it back on. See helper/DEPLOY.md.
@@ -44,6 +49,7 @@ import { defineSecret } from "firebase-functions/params";
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
+import { getStorage } from "firebase-admin/storage";
 import { handlePhotoIntake } from "./lib/photo-intake.js";
 import {
   acceptStaffInvite as acceptInvite,
@@ -55,6 +61,7 @@ import {
   profileFromInvite,
 } from "./shared/staff-invites.js";
 import { adminSendPasswordReset as sendPasswordReset, rateDecision, resetFailureText } from "./password-reset.js";
+import { jobEmailFailureText, jobEmailRateDecision, sendJobEmail as deliverJobEmail } from "./job-email.js";
 import { authorizeCallable, handleHelperAsk } from "./helper/ask.js";
 import { adminReader } from "./helper/reader.js";
 import { createModelProvider, helperLiveEnabled } from "./helper/provider.js";
@@ -341,6 +348,135 @@ export const adminSendPasswordReset = onCall(
       throw new HttpsError(code, resetFailureText(reason));
     }
     return { ok: true };
+  },
+);
+
+function jobTenantId(job) {
+  const tenant = job && typeof job.tenantId === "string" ? job.tenantId.trim() : "";
+  if (tenant) return tenant;
+  const company = job && typeof job.companyId === "string" ? job.companyId.trim() : "";
+  return company || "heartwood";
+}
+
+export const sendJobEmail = onCall(
+  { region: INVITE_REGION, secrets: [RESEND_API_KEY] },
+  async request => {
+    if (!request.auth || !request.auth.uid) throw new HttpsError("unauthenticated", jobEmailFailureText("unauthenticated"));
+    if (process.env.NODE_TEST_CONTEXT) throw new HttpsError("failed-precondition", jobEmailFailureText("not-sent"));
+    ensureAdmin();
+    const db = getFirestore();
+    const bucket = getStorage().bucket();
+    const result = await deliverJobEmail({
+      callerUid: request.auth.uid,
+      jobId: request.data && request.data.jobId,
+      to: request.data && request.data.to,
+      cc: request.data && request.data.cc,
+    }, {
+      now: () => new Date(),
+      env: process.env,
+      allowLiveMail: process.env.INVITE_EMAIL_ENABLED === "true",
+      async getCaller(uid) {
+        const [snap, grant, authUser] = await Promise.all([
+          db.collection("users").doc(uid).get(),
+          db.collection("heartwoodAdmins").doc(uid).get(),
+          getAuth().getUser(uid).catch(err => (err && err.code === "auth/user-not-found" ? null : Promise.reject(err))),
+        ]);
+        return {
+          profile: snap.exists ? (snap.data() || null) : null,
+          heartwoodGrant: grant.exists && (grant.data() || {}).role === "admin",
+          email: authUser && authUser.email || "",
+          name: (snap.exists && (snap.data() || {}).name) || (authUser && authUser.displayName) || "",
+        };
+      },
+      async getJob(jobId) {
+        const snap = await db.collection("jobs").doc(jobId).get();
+        if (!snap.exists) return null;
+        return { id: snap.id, ...(snap.data() || {}) };
+      },
+      async getCompany(companyId) {
+        const snap = await db.collection("companies").doc(companyId).get();
+        const fallback = companyId === "heartwood" ? "Heartwood Earthworx" : "";
+        if (!snap.exists) return fallback ? { name: fallback, email: "" } : null;
+        const c = snap.data() || {};
+        return { name: c.name || fallback, email: c.email || "" };
+      },
+      async listPhotos(job) {
+        const prefix = `tenants/${jobTenantId(job)}/jobs/${job.id}/photos/`;
+        const [files] = await bucket.getFiles({ prefix });
+        const rows = [];
+        for (const file of files || []) {
+          if (!file.name || file.name.endsWith("/")) continue;
+          const [meta] = await file.getMetadata();
+          rows.push({
+            path: file.name,
+            contentType: meta.contentType || "",
+            customMetadata: (meta && meta.metadata) || {},
+            size: Number(meta.size) || 0,
+          });
+        }
+        return rows;
+      },
+      async listReceipts(job) {
+        const snap = await db.collection("receipts").where("jobId", "==", job.id).get();
+        return snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+      },
+      async listDocuments(job) {
+        const snap = await db.collection("jobs").doc(job.id).collection("documents").get();
+        return snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+      },
+      async getQuote(job) {
+        if (!job || !job.quoteId) return null;
+        const snap = await db.collection("quotes").doc(String(job.quoteId)).get();
+        if (!snap.exists) return null;
+        return snap.data() || null;
+      },
+      async statObject(path) {
+        const [meta] = await bucket.file(path).getMetadata();
+        return { size: Number(meta.size) || 0, contentType: meta.contentType || "" };
+      },
+      async readObject(path) {
+        const file = bucket.file(path);
+        const [meta] = await file.getMetadata();
+        const [buf] = await file.download();
+        return { bytes: buf, contentType: meta.contentType || "", size: buf.length };
+      },
+      async claimRate({ uid, companyId, now }) {
+        const ref = db.collection("jobEmailRate").doc(uid);
+        return db.runTransaction(async tx => {
+          const snap = await tx.get(ref);
+          const prev = snap.exists ? (snap.data() || {}).stamps : [];
+          const decision = jobEmailRateDecision(prev, now);
+          if (!decision.ok) return { ok: false };
+          tx.set(ref, {
+            companyId,
+            stamps: decision.stamps,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+          return { ok: true };
+        });
+      },
+      sendResend: (payload, idempotencyKey) => sendViaResend({
+        apiKey: INVITE_MAIL_ON ? RESEND_API_KEY.value() : "",
+        payload,
+        fetchImpl: globalThis.fetch,
+        idempotencyKey,
+      }),
+      writeMail: (collectionName, body) => db.collection(collectionName).add({
+        ...body,
+        createdAt: FieldValue.serverTimestamp(),
+      }),
+    });
+    if (!result || !result.ok) {
+      const reason = result && result.reason;
+      const code = reason === "rate-limited" ? "resource-exhausted"
+        : reason === "unauthenticated" ? "unauthenticated"
+        : reason === "invalid-recipient" ? "invalid-argument"
+        : reason === "not-sent" ? "failed-precondition"
+        : "permission-denied";
+      throw new HttpsError(code, jobEmailFailureText(reason));
+    }
+    const tooBig = result.overflowCount || 0;
+    return { ok: true, attached: result.attached || 0, overflow: tooBig, skipped: result.skipped || 0, to: result.to || [] };
   },
 );
 
