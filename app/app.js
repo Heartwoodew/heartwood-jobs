@@ -64,9 +64,9 @@ import {
 import { acceptLogoValue, compressLogo, isLogoStoragePath, logoFailureText, logoFileOk, logoUploadPlan } from "./features/company-logo.js";
 import { exportAllowed, hoursCsv, invoiceCsv, jobsCsv, reimbursementsCsv } from "./features/company-exports.js";
 import {
-  formatReceiptMeasure, parseReceiptMeasures, receiptDupKey, receiptHasMoney,
-  receiptMeasureFields, receiptNeedsAmount, receiptOwedTotal,
-  validateReceiptUpload,
+  formatReceiptMeasure, isVeoliaSupplier, nextPaidPersonallyControl, parseReceiptMeasures, receiptDupKey, receiptHasMoney,
+  receiptMeasureFields, receiptNeedsAmount, receiptOwedTotal, receiptPaidPersonally, reimbursementFromReceipt,
+  validateReceiptUpload, VEOLIA_PAID_NOTE,
 } from "./features/receipts.js";
 import {
   accuracyText, brisbaneHM, captureFix, coordText, daysForSheet, editList, entryList, locationConsent,
@@ -2141,7 +2141,8 @@ async function downloadCloudCopy(j, photos) {
 }
 // ---- Receipts: worker photo + amount -> receipts/{id} + receiptChunks (base64 JPEG, kept until cutover).
 // The box (tools/receipts_worker.py, cron every 2 min) emails it from Alex's account to his Hubdoc email-in address,
-// records personally-paid ones in reimbursements/ (owner only) and notifies Alex. Workers only see their own Queued/Filed.
+// records personally-paid ones in reimbursements/ (owner only) and notifies Alex. A Veolia supplier is on account:
+// reimbursementFromReceipt returns null, and that row must not be written. Workers only see their own Queued/Filed.
 const OWNER_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";
 const isOwner = () => me && me.uid === OWNER_UID;
 // Who sees anything Xero (profit chart, Send to Xero, Xero labels/wording). Explicit list, NOT the admin role, so future
@@ -2206,14 +2207,38 @@ function receiptDialog(j) {
       <label>Tonnes<input name="tonnes" type="number" step="0.001" min="0" inputmode="decimal"></label></div>
     <p class="sub">Enter a dollar amount or the tonnes (or both). Tip dockets can be uploaded with just the weight.</p>
     <label>Job # (optional)<input name="job" inputmode="numeric" placeholder="e.g. 697" value="${esc(jn)}" ${j ? "readonly" : ""}></label>
-    <label>Supplier / what it was for<input name="sup" required placeholder="e.g. Bunnings - silt fence"></label>
-    <label class="ck"><input type="checkbox" name="mine" checked> I paid for this myself (reimburse me)</label>
-    <p class="sub">Uncheck if this went on the company account (for example a Remondis tip docket).</p>
+    <label>Supplier / what it was for<input name="sup" required placeholder="e.g. Bunnings - silt fence" autocomplete="organization"></label>
+    <label class="ck" id="rpaidbox"><input type="checkbox" name="mine" checked> I paid for this myself (reimburse me)</label>
+    <p class="sub" id="rveolianote" hidden>${VEOLIA_PAID_NOTE}</p>
+    <p class="sub" id="rpaidhint">Uncheck if this went on the company account (for example a Remondis tip docket).</p>
     <p id="rerr" class="err"></p>
     <div class="btns"><button value="cancel" formnovalidate class="sm-btn">Close</button><button value="send" class="sm-btn primary" id="rsend">Upload</button></div>
     <h4>My recent receipts</h4><div id="rmine" class="sub">Loading…</div></form>`;
   d.showModal();
   const f = $("#rf"), mine = $("#rmine");
+  const syncPaid = () => {
+    const label = f.querySelector("#rpaidbox");
+    const note = f.querySelector("#rveolianote");
+    const hint = f.querySelector("#rpaidhint");
+    const next = nextPaidPersonallyControl({ supplier: f.sup.value, checkboxVisible: !label.hidden, checked: f.mine.checked });
+    label.hidden = !next.checkboxVisible;
+    f.mine.checked = next.checked;
+    note.hidden = !next.note;
+    if (hint) hint.hidden = !!next.note;
+  };
+  f.sup.addEventListener("input", syncPaid);
+  f.sup.addEventListener("change", syncPaid);
+  const supValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+  if (supValue && supValue.set) {
+    try {
+      Object.defineProperty(f.sup, "value", {
+        configurable: true, enumerable: supValue.enumerable,
+        get() { return supValue.get.call(this); },
+        set(v) { supValue.set.call(this, v); syncPaid(); },
+      });
+    } catch { /* typed and picked values still come through input and change */ }
+  }
+  syncPaid();
   getDocs(query(collection(db, "receipts"), where("uid", "==", me.uid))).then(sn => {
     const L = sn.docs.map(x => ({ id: x.id, ...x.data() })).sort((a, b) => String(b.createdAtIso || "").localeCompare(String(a.createdAtIso || ""))).slice(0, 8);
     mine.innerHTML = L.map(r => `<div class="rrow"><span>${esc(String(r.createdAtIso || "").slice(0, 10))} · ${esc(r.supplier || "")}${(() => { const m = formatReceiptMeasure(r, $$); const need = isOwner() && receiptNeedsAmount(r) ? " · needs $" : ""; return (m ? " · " + esc(m) : "") + need; })()}</span>
@@ -2232,7 +2257,9 @@ function receiptDialog(j) {
       const rco = myCompanyId() === "heartwood" ? {} : { companyId: myCompanyId(), tenantId: myCompanyId() };
       for (let i = 0; i < n; i++) await setDoc(doc(db, "receiptChunks", `${ref.id}_${i}`), { rid: ref.id, i, uid: me.uid, data: b64.slice(i * CH, (i + 1) * CH), ...rco });
       const written = { id: ref.id, uid: me.uid, jobId: j ? j.id : null, status: "queued" };
-      await setDoc(ref, { uid: me.uid, workerName: me.name, ...receiptMeasureFields(checked.measures), supplier: f.sup.value.trim(), paidPersonally: f.mine.checked,
+      const supplier = f.sup.value.trim();
+      const paidPersonally = receiptPaidPersonally(supplier, f.mine.checked);
+      await setDoc(ref, { uid: me.uid, workerName: me.name, ...receiptMeasureFields(checked.measures), supplier, paidPersonally,
         jobNo: f.job.value.trim().replace(/^#/, "") || null, jobId: written.jobId, address: j ? (j.address || null) : null, chunks: n, mime: "image/jpeg", bytes: Math.round(b64.length * 0.75),
         status: "queued", createdAt: serverTimestamp(), createdAtIso: new Date().toISOString(), ...rco });
       d.close(); toast(myCompanyId() === "heartwood" ? "Receipt uploaded - queued for Hubdoc" : "Receipt uploaded"); if (j) loadJobReceipts(j);
@@ -3689,18 +3716,21 @@ function reimbSubs() {
   onSnapshot(query(collection(db, "receipts"), where("paidPersonally", "==", true)), s => { ui.rqueued = s.docs.map(x => ({ id: x.id, ...x.data() })).filter(r => docCompanyId(r) === "heartwood"); reimbPill(); }, () => {});
 }
 function owedList() {
-  const led = ui.reimb || [], ids = new Set(led.map(r => r.receiptId || r.id));
-  const L = [...led.filter(r => !r.paid), ...(ui.rqueued || []).filter(r => r.status === "queued" && !ids.has(r.id)).map(r => ({ ...r, date: r.createdAtIso, pending: true }))];
+  const led = (ui.reimb || []).filter(r => !isVeoliaSupplier(r.supplier)), ids = new Set(led.map(r => r.receiptId || r.id));
+  const L = [...led.filter(r => !r.paid), ...(ui.rqueued || []).filter(r => r.status === "queued" && !ids.has(r.id) && !isVeoliaSupplier(r.supplier)).map(r => ({ ...r, date: r.createdAtIso, pending: true }))];
   return L.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
 }
 // "Done" on a pill line: paid back to the worker. Ledger entry reimbursements/{receiptId} gets paid/reimbursed + who/when
 // (created from the receipt if the box hasn't written it yet; the box keeps an existing entry and skips its "you owe" text).
 // Nothing is deleted; Undo (5 s) puts paid back to false.
 async function markReimbursed(r) {
+  if (isVeoliaSupplier(r && r.supplier)) { toast(VEOLIA_PAID_NOTE); return; }
   if (receiptNeedsAmount(r)) { toast("Add the dollar amount before marking this paid back."); return; }
   const id = r.receiptId || r.id, ref = doc(db, "reimbursements", id), at = new Date().toISOString();
-  const base = r.pending ? { receiptId: id, uid: r.uid || null, workerName: r.workerName || null, date: r.createdAtIso || r.date || null, supplier: r.supplier || null,
-    amountInc: receiptHasMoney(r) ? +r.amountInc : null, tonnes: r.tonnes || null, jobNo: r.jobNo || null, jobId: r.jobId || null, hubdocStatus: "queued", createdFrom: "pill" } : {};
+  // Pending rows are created here when the box has not written the ledger yet. Veolia never gets one.
+  const ledger = r.pending ? reimbursementFromReceipt({ ...r, id, receiptId: id, paidPersonally: true }) : null;
+  if (r.pending && !ledger) { toast(VEOLIA_PAID_NOTE); return; }
+  const base = ledger ? { ...ledger, supplier: r.supplier || null, amountInc: receiptHasMoney(r) ? +r.amountInc : null, tonnes: r.tonnes || null, hubdocStatus: "queued", createdFrom: "pill" } : {};
   await setDoc(ref, { ...base, paid: true, reimbursed: true, paidAt: at, reimbursedAt: at, reimbursedBy: me.uid, reimbursedByName: me.name }, { merge: true });
   undoToast(`Reimbursed ${r.workerName || ""} ${$$(+r.amountInc || 0)} (${r.supplier || "receipt"})`, () =>
     setDoc(ref, { paid: false, reimbursed: false, paidAt: null, reimbursedAt: null, reimbursedBy: null, reimbursedByName: null, undoneAt: new Date().toISOString() }, { merge: true }), 5000);

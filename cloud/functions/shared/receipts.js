@@ -2,6 +2,57 @@
 // Tip dockets (e.g. Remondis on account) often have only a weight. Tonnes is not a price.
 // Personally paid receipts with no dollar amount need an amount before they can be paid back.
 // Account dockets (not paid personally) with only tonnes are normal — no warning, not owed money.
+// Veolia dump receipts (any site) are paid by the company on account, never reimbursed to staff.
+
+export const VEOLIA_SUPPLIER = /veolia/i;
+export const VEOLIA_PAID_NOTE = "Veolia is paid on account, not reimbursed.";
+
+/** True when the supplier or vendor text is any Veolia site. Case-insensitive. */
+export function isVeoliaSupplier(supplier) {
+  return VEOLIA_SUPPLIER.test(String(supplier ?? ""));
+}
+
+/**
+ * Next state of the "I paid for this myself" control.
+ * Veolia hides and unticks it. Leaving Veolia shows the box again, unticked.
+ * A non-Veolia supplier leaves a visible tick as the person set it.
+ */
+export function nextPaidPersonallyControl({ supplier, checkboxVisible, checked } = {}) {
+  if (isVeoliaSupplier(supplier)) {
+    return { checkboxVisible: false, checked: false, note: VEOLIA_PAID_NOTE };
+  }
+  if (!checkboxVisible) return { checkboxVisible: true, checked: false, note: "" };
+  return { checkboxVisible: true, checked: checked === true, note: "" };
+}
+
+/** Value stored on the receipt. Veolia is always false, even if the checkbox was ticked. */
+export function receiptPaidPersonally(supplier, paidPersonally) {
+  if (isVeoliaSupplier(supplier)) return false;
+  return paidPersonally === true;
+}
+
+/**
+ * Ledger row for a personally-paid receipt, or null when no reimbursement may be created.
+ * A Veolia receipt never produces one, including when paidPersonally was forced true.
+ */
+export function reimbursementFromReceipt(receipt) {
+  if (!receipt || typeof receipt !== "object") return null;
+  if (isVeoliaSupplier(receipt.supplier)) return null;
+  if (receipt.paidPersonally !== true) return null;
+  const id = receipt.receiptId || receipt.id;
+  if (!id) return null;
+  return {
+    receiptId: id,
+    uid: receipt.uid || null,
+    workerName: receipt.workerName || null,
+    date: receipt.createdAtIso || receipt.date || null,
+    supplier: String(receipt.supplier || "").trim(),
+    amountInc: receipt.amountInc ?? null,
+    tonnes: receipt.tonnes ?? null,
+    jobNo: receipt.jobNo || null,
+    jobId: receipt.jobId || null,
+  };
+}
 
 export function receiptAmount(row) {
   const n = Number(row && row.amountInc);
@@ -52,6 +103,7 @@ export function validateReceiptUpload({ hasPhoto, supplier, amount, tonnes } = {
  */
 export function receiptNeedsAmount(row) {
   if (!row || receiptHasMoney(row)) return false;
+  if (isVeoliaSupplier(row.supplier)) return false;
   if (row.paidPersonally) return true;
   if (row.needsAmount) return true;
   if (row.pending || row.createdFrom === "pill") return true;

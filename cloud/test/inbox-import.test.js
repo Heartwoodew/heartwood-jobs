@@ -203,7 +203,7 @@ test("the shell keeps inbox off the staff menu and bumps the cache for this scre
   assert.match(app, /Bulk import/);
   assert.match(sw, /features\/inbox-import\.js/);
 
-  assert.match(sw, /callup-shell-v128-emailreceipts/);
+  assert.match(sw, /callup-shell-v129-veolia/);
 
   assert.match(readFileSync(new URL("../emulator/firestore.rules", import.meta.url), "utf8"), /match \/inbox\/\{id\}/);
   assert.match(readFileSync(new URL("../production/firestore.inbox.rules", import.meta.url), "utf8"), /BEGIN INBOX IMPORT RULES/);

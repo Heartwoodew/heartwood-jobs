@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   parseReceiptMeasures, validateReceiptUpload, receiptHasMoney, receiptNeedsAmount,
   formatReceiptMeasure, receiptOwedTotal, receiptDupKey, receiptHubdocLines,
   receiptMeasureFields, receiptAmount, receiptTonnes,
+  isVeoliaSupplier, nextPaidPersonallyControl, receiptPaidPersonally, VEOLIA_PAID_NOTE,
 } from "../../app/features/receipts.js";
 
 test("a receipt is accepted with dollars, tonnes, or both, but not neither", () => {
@@ -71,4 +73,52 @@ test("display, CSV money totals and duplicate keys never treat missing dollars a
   assert.equal(receiptAmount({ amountInc: "0" }), 0);
   assert.equal(receiptTonnes({ tonnes: "0.5" }), 0.5);
   assert.deepEqual(receiptMeasureFields({ amountInc: null, tonnes: 2.25 }), { amountInc: null, tonnes: 2.25 });
+});
+
+test("Veolia suppliers match any site, ignoring case", () => {
+  for (const name of ["Veolia", "VEOLIA", "veolia", "Veolia wattleglen - tip fees", "veolia sunshine", "  VEOLIA Clayton tip fees"]) {
+    assert.equal(isVeoliaSupplier(name), true, name);
+  }
+  for (const name of ["", "Remondis", "Bunnings", "Caltex", "viola", "Marvel", null, undefined]) {
+    assert.equal(isVeoliaSupplier(name), false, String(name));
+  }
+});
+
+test("the paid-myself box hides for Veolia and comes back unticked", () => {
+  const open = { checkboxVisible: true, checked: true };
+  assert.deepEqual(nextPaidPersonallyControl({ ...open, supplier: "" }), { ...open, note: "" });
+  assert.deepEqual(nextPaidPersonallyControl({ ...open, supplier: "Bunnings - silt fence" }), { ...open, note: "" });
+  const hidden = nextPaidPersonallyControl({ ...open, supplier: "Veolia wattleglen - tip fees" });
+  assert.deepEqual(hidden, { checkboxVisible: false, checked: false, note: VEOLIA_PAID_NOTE });
+  assert.deepEqual(nextPaidPersonallyControl({ supplier: "VEOLIA", checkboxVisible: true, checked: true }).note, VEOLIA_PAID_NOTE);
+  const back = nextPaidPersonallyControl({ supplier: "Remondis", checkboxVisible: false, checked: false });
+  assert.deepEqual(back, { checkboxVisible: true, checked: false, note: "" });
+  assert.deepEqual(nextPaidPersonallyControl({ supplier: "Caltex", checkboxVisible: true, checked: false }), {
+    checkboxVisible: true, checked: false, note: "",
+  });
+});
+
+test("saving a Veolia receipt forces paidPersonally false", () => {
+  assert.equal(receiptPaidPersonally("Veolia wattleglen - tip fees", true), false);
+  assert.equal(receiptPaidPersonally("veolia", true), false);
+  assert.equal(receiptPaidPersonally("VEOLIA Sunshine", false), false);
+  assert.equal(receiptPaidPersonally("Bunnings", true), true);
+  assert.equal(receiptPaidPersonally("Bunnings", false), false);
+  const veolia = { supplier: "Veolia wattleglen - tip fees", tonnes: 4, paidPersonally: true, status: "queued" };
+  assert.equal(receiptNeedsAmount(veolia), false);
+  assert.equal(receiptNeedsAmount({ supplier: "Tip docket", tonnes: 2, paidPersonally: true }), true);
+});
+
+test("the receipt dialog re-checks the supplier and does not trust the checkbox for Veolia", () => {
+  const app = readFileSync(new URL("../../app/app.js", import.meta.url), "utf8");
+  const dialog = app.slice(app.indexOf("function receiptDialog"), app.indexOf("const jobReceiptsHtml"));
+  assert.match(dialog, /\$\{VEOLIA_PAID_NOTE\}/);
+  assert.equal(VEOLIA_PAID_NOTE, "Veolia is paid on account, not reimbursed.");
+  assert.match(dialog, /nextPaidPersonallyControl\(/);
+  assert.match(dialog, /receiptPaidPersonally\(supplier, f\.mine\.checked\)/);
+  assert.match(dialog, /addEventListener\("input", syncPaid\)/);
+  assert.doesNotMatch(dialog, /paidPersonally: f\.mine\.checked/);
+  assert.match(dialog, /name="mine" checked/);
+  const css = readFileSync(new URL("../../app/styles.css", import.meta.url), "utf8");
+  assert.match(css, /#rpaidbox\[hidden\].*display:\s*none\s*!important/);
 });
