@@ -185,8 +185,8 @@ function reimbursementSignal(row) {
 export function receiptEmailKind(row) {
   if (!row || typeof row !== "object") return AMBIGUOUS_RECEIPT;
   if (reimbursementSignal(row)) return REIMBURSEMENT_RECEIPT;
-  // needsAmount / pill rows are payback, even if the personal flag was left off.
-  if (row[DUMP_RECEIPT_FIELD] === DUMP_RECEIPT_VALUE && row.needsAmount !== true && row.pending !== true && row.createdFrom !== "pill") {
+  // Company-account dockets, including tonnes-only / queued tip tickets with no dollar amount.
+  if (row[DUMP_RECEIPT_FIELD] === DUMP_RECEIPT_VALUE) {
     return DUMP_RECEIPT;
   }
   return AMBIGUOUS_RECEIPT;

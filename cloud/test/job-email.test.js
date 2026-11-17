@@ -113,8 +113,15 @@ test("dump receipts are paidPersonally false; claims and blank flags are not", (
   assert.equal(receiptEmailKind({ purpose: "reimbursement-receipt", paidPersonally: false }), REIMBURSEMENT_RECEIPT);
   assert.equal(receiptEmailKind({ reimbursed: true, supplier: "Bunnings" }), REIMBURSEMENT_RECEIPT);
   assert.equal(receiptEmailKind(ambiguous), AMBIGUOUS_RECEIPT);
-  assert.equal(receiptEmailKind({ paidPersonally: false, needsAmount: true }), AMBIGUOUS_RECEIPT);
+  assert.equal(receiptEmailKind({ paidPersonally: false, needsAmount: true }), DUMP_RECEIPT);
   assert.equal(receiptEmailKind({}), AMBIGUOUS_RECEIPT);
+  const veolia = {
+    id: "JsZW", jobId: "YIYNzDnlc6tfDXz5YbAl", supplier: "Veolia wattleglen - tip fees",
+    paidPersonally: false, amountInc: null, tonnes: 2.45, status: "queued", bytes: 99552, mime: "image/jpeg",
+  };
+  assert.equal(receiptEmailKind(veolia), DUMP_RECEIPT);
+  assert.equal(emailDumpReceipts({ role: "admin", job: { id: "YIYNzDnlc6tfDXz5YbAl", companyId: "heartwood" }, receipts: [veolia] }).length, 1);
+  assert.equal(emailDumpReceipts({ role: "operator", job: { id: "YIYNzDnlc6tfDXz5YbAl", companyId: "heartwood" }, receipts: [veolia] }).length, 0);
 });
 
 test("the subject and body carry the job, and not storage links", () => {
@@ -333,6 +340,6 @@ test("addresses are checked, overflow files are named without a public storage l
   assert.match(fn, /Other mail app|jemmail/);
   assert.doesNotMatch(fn, /getDownloadURL|httpsCallable|functions\(/);
   assert.ok(app.split('id="emailjob"').length - 1 >= 2);
-  assert.match(sw, /callup-shell-v127-sendemail/);
+  assert.match(sw, /callup-shell-v128-emailreceipts/);
   assert.match(sw, /features\/job-email\.js/);
 });

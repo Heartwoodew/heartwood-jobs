@@ -359,7 +359,9 @@ function jobTenantId(job) {
 }
 
 export const sendJobEmail = onCall(
-  { region: INVITE_REGION, secrets: [RESEND_API_KEY] },
+  // 256MiB and the default concurrency of 80 is too small: a Heartwood send
+  // of 16 job photos was killed at 274MiB on 17 Nov 2026 (9:56pm Brisbane).
+  { region: INVITE_REGION, secrets: [RESEND_API_KEY], memory: "1GiB", concurrency: 1, timeoutSeconds: 120 },
   async request => {
     if (!request.auth || !request.auth.uid) throw new HttpsError("unauthenticated", jobEmailFailureText("unauthenticated"));
     if (process.env.NODE_TEST_CONTEXT) throw new HttpsError("failed-precondition", jobEmailFailureText("not-sent"));
@@ -419,6 +421,25 @@ export const sendJobEmail = onCall(
       async listReceipts(job) {
         const snap = await db.collection("receipts").where("jobId", "==", job.id).get();
         return snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+      },
+      async readReceiptChunks(receiptId, tenantId) {
+        const id = String(receiptId || "");
+        if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) return null;
+        const want = String(tenantId || "heartwood").trim() || "heartwood";
+        const snap = await db.collection("receiptChunks").where("rid", "==", id).get();
+        const parts = snap.docs
+          .map(d => d.data() || {})
+          .filter(row => {
+            const company = String(row.companyId || row.tenantId || "heartwood").trim() || "heartwood";
+            return company === want;
+          })
+          .sort((a, b) => (Number(a.i) || 0) - (Number(b.i) || 0));
+        if (!parts.length) return null;
+        const b64 = parts.map(row => String(row.data || "")).join("");
+        if (!b64) return null;
+        const bytes = Buffer.from(b64, "base64");
+        if (!bytes.length) return null;
+        return { bytes, contentType: "image/jpeg", size: bytes.length };
       },
       async listDocuments(job) {
         const snap = await db.collection("jobs").doc(job.id).collection("documents").get();

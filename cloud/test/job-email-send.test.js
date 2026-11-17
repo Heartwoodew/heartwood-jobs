@@ -172,12 +172,15 @@ test("an admin sends photos and the dump receipt, never a reimbursement or an un
   assert.equal(names.some(name => /Remondis/.test(name)), true);
   assert.equal(names.some(name => /Caltex|Mystery|claim/.test(name)), false);
   assert.deepEqual(calls.reads, [
-    "tenants/heartwood/jobs/job1/photos/pSite01",
     "tenants/heartwood/receipts/dump1/original",
+    "tenants/heartwood/jobs/job1/photos/pSite01",
   ]);
   assert.equal(calls.reads.includes(dump.path), false);
-  assert.equal(payload.attachments[0].content, Buffer.from(PHOTO).toString("base64"));
-  assert.equal(JSON.stringify(calls.mail).includes(payload.attachments[0].content), false);
+  const docket = payload.attachments.find(file => /Remondis/.test(file.filename));
+  const photo = payload.attachments.find(file => !/Remondis/.test(file.filename));
+  assert.equal(docket.content, Buffer.from(DOCKET).toString("base64"));
+  assert.equal(photo.content, Buffer.from(PHOTO).toString("base64"));
+  assert.equal(JSON.stringify(calls.mail).includes(docket.content), false);
   assert.equal(calls.mail[0].col, "jobMail");
   assert.equal(calls.mail[0].doc.kind, "job-email");
   assert.equal(calls.mail[0].doc.text, undefined);
@@ -312,6 +315,12 @@ test("the callable reuses the invite mail secret and the rate collection is clos
   const index = readFileSync(new URL("../functions/index.js", import.meta.url), "utf8");
   const handler = index.slice(index.indexOf("export const sendJobEmail = onCall"), index.indexOf("export const inviteEmailWorker"));
   assert.match(handler, /secrets: \[RESEND_API_KEY\]/);
+  // Default onCall memory is 256MiB with concurrency 80. A Heartwood job
+  // email with 16 photos was killed in production at 274MiB, so the email
+  // never went out and the photos were not attached.
+  assert.match(handler, /memory:\s*"1GiB"/);
+  assert.match(handler, /concurrency:\s*1/);
+  assert.match(handler, /timeoutSeconds:\s*120/);
   assert.match(handler, /INVITE_EMAIL_ENABLED/);
   assert.match(handler, /jobEmailRate/);
   assert.match(handler, /NODE_TEST_CONTEXT/);
@@ -325,4 +334,156 @@ test("the callable reuses the invite mail secret and the rate collection is clos
   assert.match(prod, /match \/jobMail\/\{id\} \{\s*allow read, write: if false;/);
   const storage = readFileSync(new URL("../emulator/storage.rules", import.meta.url), "utf8");
   assert.doesNotMatch(storage, /allow read: if true/);
+});
+
+test("sixteen job photos that fit the budget are all attached as base64 Resend content", async () => {
+  const files = [];
+  const blobs = new Map();
+  for (let i = 1; i <= 16; i++) {
+    const id = `p${String(i).padStart(2, "0")}`;
+    const path = `tenants/heartwood/jobs/job1/photos/${id}`;
+    const bytes = Buffer.from(`photo-${id}-${"x".repeat(20)}`);
+    files.push({
+      path,
+      contentType: "image/jpeg",
+      size: bytes.length,
+      customMetadata: { purpose: "job-photo" },
+    });
+    blobs.set(path, bytes);
+  }
+  const { deps, calls } = world({ photos: files, receipts: [] });
+  const logs = [];
+  deps.log = (...args) => logs.push(args);
+  deps.readObject = async path => {
+    calls.reads.push(path);
+    const bytes = blobs.get(path);
+    if (!bytes) throw new Error("missing " + path);
+    return { bytes, contentType: "image/jpeg", size: bytes.length };
+  };
+  const result = await sendJobEmail({ callerUid: ALEX_UID, jobId: "job1", to: "jo@orbit.example" }, deps);
+  assert.equal(result.ok, true);
+  assert.equal(result.attached, 16);
+  assert.equal(result.overflowCount, 0);
+  const payload = payloadOf(calls);
+  assert.equal(payload.attachments.length, 16);
+  assert.equal(calls.reads.length, 16);
+  for (let i = 0; i < 16; i++) {
+    const file = payload.attachments[i];
+    const path = files[i].path;
+    assert.equal(file.content, blobs.get(path).toString("base64"));
+    assert.equal(file.content_type, "image/jpeg");
+    assert.match(file.filename, /\.jpe?g$/i);
+  }
+  const packed = logs.find(row => row[0] === "sendJobEmail packed");
+  assert.ok(packed);
+  assert.equal(packed[1].attached, 16);
+  assert.equal(packed[1].photos, 16);
+  assert.equal(packed[1].listed, 16);
+  assert.equal("to" in packed[1], false);
+});
+
+test("the default 256MiB function is too small for a real job-photo send", () => {
+  // Reproduce the 17 Nov 2026 11:56:12Z production kill:
+  // "Memory limit of 256 MiB exceeded with 274 MiB used."
+  const used = 274 * 1024 * 1024;
+  const defaultLimit = 256 * 1024 * 1024;
+  assert.ok(used > defaultLimit);
+  const budget = 20 * 1024 * 1024;
+  const encoded = Math.ceil(budget / 3) * 4;
+  assert.ok(encoded > 26 * 1024 * 1024);
+  const index = readFileSync(new URL("../functions/index.js", import.meta.url), "utf8");
+  const handler = index.slice(index.indexOf("export const sendJobEmail = onCall"), index.indexOf("export const inviteEmailWorker"));
+  assert.match(handler, /memory:\s*"1GiB"/);
+  assert.match(handler, /concurrency:\s*1/);
+});
+
+test("a tonnes-only Veolia docket is attached for an admin, from receiptChunks when Storage is missing", async () => {
+  const veolia = {
+    id: "zaeXl7JYtyfALNEy56Se",
+    uid: "crew1",
+    jobId: "job1",
+    supplier: "Veolia wattleglen - tip fees",
+    paidPersonally: false,
+    amountInc: null,
+    tonnes: 2.45,
+    status: "queued",
+    bytes: 99552,
+    mime: "image/jpeg",
+  };
+  const chunk = Buffer.from("veolia-tip-docket");
+  const { deps, calls } = world({ receipts: [veolia, personal] });
+  const logs = [];
+  deps.log = (...args) => logs.push(args);
+  deps.statObject = async path => {
+    calls.stats.push(path);
+    if (path.endsWith("/original")) throw new Error("missing object");
+    const row = (await deps.listPhotos(job())).find(item => item.path === path);
+    return { size: row ? row.size : 0, contentType: "image/jpeg" };
+  };
+  deps.readObject = async path => {
+    calls.reads.push(path);
+    if (path.endsWith("/original")) throw new Error("missing object");
+    return { bytes: PHOTO, contentType: "image/jpeg", size: PHOTO.length };
+  };
+  deps.readReceiptChunks = async (receiptId, tenantId) => {
+    calls.chunks = calls.chunks || [];
+    calls.chunks.push({ receiptId, tenantId });
+    if (receiptId !== veolia.id || tenantId !== "heartwood") return null;
+    return { bytes: chunk, contentType: "image/jpeg", size: chunk.length };
+  };
+  const result = await sendJobEmail({ callerUid: ALEX_UID, jobId: "job1", to: "jo@orbit.example" }, deps);
+  assert.equal(result.ok, true);
+  const payload = payloadOf(calls);
+  const names = payload.attachments.map(file => file.filename);
+  assert.equal(names.some(name => /Veolia/i.test(name)), true);
+  assert.equal(names.some(name => /Caltex/.test(name)), false);
+  const docket = payload.attachments.find(file => /Veolia/i.test(file.filename));
+  assert.equal(docket.content, chunk.toString("base64"));
+  assert.deepEqual(calls.chunks, [{ receiptId: veolia.id, tenantId: "heartwood" }]);
+  const packed = logs.find(row => row[0] === "sendJobEmail packed");
+  assert.equal(packed[1].receipts, 1);
+  assert.equal(packed[1].receiptChunks, 1);
+  assert.equal(packed[1].receiptStorage, 0);
+  assert.match(payload.text, /Veolia wattleglen - tip fees tip docket \(2\.45 t\)/);
+  assert.doesNotMatch(payload.text, /Caltex/);
+});
+
+test("when the budget is tight, receipts are attached before extra photos", async () => {
+  const photos = [{
+    path: "tenants/heartwood/jobs/job1/photos/pSite01",
+    contentType: "image/jpeg",
+    size: 8,
+    customMetadata: { purpose: "job-photo" },
+  }, {
+    path: "tenants/heartwood/jobs/job1/photos/pSite02",
+    contentType: "image/jpeg",
+    size: 8,
+    customMetadata: { purpose: "job-photo" },
+  }];
+  const { deps, calls } = world({ photos, receipts: [dump, personal], budget: 12 });
+  const result = await sendJobEmail({ callerUid: ALEX_UID, jobId: "job1", to: "jo@orbit.example" }, deps);
+  assert.equal(result.ok, true);
+  const payload = payloadOf(calls);
+  const names = payload.attachments.map(file => file.filename);
+  assert.equal(names.some(name => /Remondis/.test(name)), true);
+  assert.equal(payload.attachments.length, 2);
+  assert.equal(result.overflowCount, 1);
+  assert.match(payload.text, /Remondis/);
+  assert.match(payload.text, /Photo 2/);
+});
+
+test("crew still get no receipts when a job has a tonnes-only docket", async () => {
+  const veolia = {
+    id: "JsZWqaWNVOgp3KptZwgi", uid: "crew1", jobId: "job1",
+    supplier: "Veolia Wattleglen - Concrete and Brick tip fees",
+    paidPersonally: false, amountInc: null, tonnes: 4.38, status: "queued", bytes: 69897,
+  };
+  const { deps, calls, jobs } = world({ receipts: [veolia] });
+  jobs.job1 = job({ assigned: ["crew1"] });
+  const result = await sendJobEmail({ callerUid: "crew1", jobId: "job1", to: "jo@orbit.example" }, deps);
+  assert.equal(result.ok, true);
+  const payload = payloadOf(calls);
+  assert.equal(payload.attachments.length, 1);
+  assert.doesNotMatch(payload.text, /Veolia|Dump receipts|4\.38/);
+  assert.equal(calls.reads.some(path => /receipts/.test(path)), false);
 });
