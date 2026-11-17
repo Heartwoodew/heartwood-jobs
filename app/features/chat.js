@@ -216,9 +216,9 @@ export function badgeMarkup(threadId, count) {
   return `<span class="nav-badge" data-badge-thread="${esc(threadId)}" ${label ? "" : "hidden"}>${label}</span>`;
 }
 
-export function messagesHtml(messages, { myUid, canDelete } = {}) {
+export function messagesHtml(messages, { myUid, canDelete, helpCard = "" } = {}) {
   const rows = orderedMessages(messages);
-  if (!rows.length) return `<p class="chat-empty">No messages yet.</p>`;
+  if (!rows.length) return `${helpCard || ""}<p class="chat-empty">No messages yet.</p>`;
   return rows.map(m => {
     const mine = m.senderUid === myUid;
     const when = formatChatTime(messageDate(m));

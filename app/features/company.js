@@ -101,6 +101,64 @@ export function validateCompanyInput(input = {}) {
   };
 }
 
+/** Every company-field problem, not only the first. ABN stays required: the company record needs one. */
+export function companyFieldErrors(input = {}) {
+  const name = clip(input.name, 80);
+  const legalName = clip(input.legalName || "", 120);
+  const abn = clip(input.abn, 20);
+  const address = clip(input.address, 160);
+  const phone = clip(input.phone, 40);
+  const email = clip(input.email, 120).toLowerCase();
+  const accountsEmail = clip(input.accountsEmail || input.email, 120).toLowerCase();
+  const hubdocAddress = clip(input.hubdocAddress, 120).toLowerCase();
+  const logoUrl = safeLogo(input.logoUrl, input.companyId);
+  const errors = [];
+  if (!name) errors.push("name");
+  if (!legalName) errors.push("legalName");
+  if (!abn || !/^[0-9 ]{1,20}$/.test(abn)) errors.push("abn");
+  if (!address) errors.push("address");
+  if (phone && !/^[0-9+() ./-]{3,40}$/.test(phone)) errors.push("phone");
+  if (!EMAIL_RE.test(email)) errors.push("email");
+  if (!EMAIL_RE.test(accountsEmail)) errors.push("accountsEmail");
+  if (hubdocAddress && !HUBDOC_RE.test(hubdocAddress)) errors.push("hubdoc");
+  if (input.logoUrl && String(input.logoUrl).trim() && !logoUrl) errors.push("logo");
+  return errors;
+}
+
+const CLIENT_EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+/** One client plus an optional contact. Heartwood keeps its unscoped client docs. */
+export function buildClientCreate({ companyId, name, contactName, phone, email, address, notes } = {}) {
+  const clean = clip(name, 120).replace(/ +/g, " ");
+  if (!clean) return { ok: false, reason: "name" };
+  const contact = clip(contactName, 80);
+  const tel = clip(phone, 40);
+  const mail = clip(email, 120);
+  const addr = clip(address, 160);
+  const note = clip(notes, 500);
+  if (mail && !CLIENT_EMAIL.test(mail)) return { ok: false, reason: "email" };
+  if (tel && !/^[0-9+() ./-]{3,40}$/.test(tel)) return { ok: false, reason: "phone" };
+  const contacts = [];
+  if (contact || mail || tel) {
+    contacts.push({
+      kind: "admin",
+      name: contact || clean,
+      role: "",
+      mobile: tel,
+      phone: "",
+      email: mail,
+      source: note,
+      default: true,
+    });
+  }
+  const data = { name: clean, office: { address: addr, phone: tel }, contacts, notes: note };
+  if (!isHeartwoodCompany(companyId)) {
+    data.companyId = companyId;
+    data.tenantId = companyId;
+  }
+  return { ok: true, id: clientDocId(companyId, clean), data };
+}
+
 export function trialEnd(from) {
   const start = from instanceof Date ? from : new Date(from || Date.now());
   return new Date(start.getTime() + TRIAL_DAYS * 24 * 60 * 60 * 1000);

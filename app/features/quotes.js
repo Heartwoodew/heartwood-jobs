@@ -134,6 +134,53 @@ export function activeQuoteTradeId() {
   return enabled[0] || "earthworks";
 }
 
+function tradeReady(id) {
+  const row = quotePack(id);
+  return !!(row && row.ready);
+}
+
+/** Trade of a job's category, when that trade is on the company. */
+export function quoteTradeForJob(job, setup) {
+  if (!job || typeof job !== "object") return "";
+  const enabled = setup && Array.isArray(setup.enabled) ? setup.enabled : [];
+  const ids = Array.isArray(job.types) && job.types.length ? job.types : [job.type];
+  for (const id of ids) {
+    const info = typeInfo(id);
+    if (!info) continue;
+    if (!enabled.length || enabled.includes(info.packId)) return info.packId;
+  }
+  return "";
+}
+
+/**
+ * New quotes start on the job's trade, otherwise the company's primary trade.
+ * No category is selected here.
+ */
+export function startingQuoteTrade(setup, job) {
+  const fromJob = quoteTradeForJob(job, setup);
+  if (fromJob && tradeReady(fromJob)) return fromJob;
+  const enabled = setup && Array.isArray(setup.enabled) && setup.enabled.length ? setup.enabled : ["earthworks"];
+  if (tradeReady(enabled[0])) return enabled[0];
+  return enabled.find(tradeReady) || enabled[0] || "";
+}
+
+export function quoteTradeIdOf(quote) {
+  const q = quote && typeof quote === "object" ? quote : {};
+  if (q.packId && q.packId !== "multi") return q.packId;
+  const first = Array.isArray(q.sections) ? q.sections.find(s => s && s.packId) : null;
+  if (first) return first.packId;
+  const info = typeInfo(q.type);
+  return (info && info.packId) || "";
+}
+
+/** List cell when a draft has no total. Explains the next step and links to that trade's rates. */
+export function ratesNeededHtml(quote, esc) {
+  const e = typeof esc === "function" ? esc : (s => String(s ?? ""));
+  const trade = quoteTradeIdOf(quote);
+  const label = tradeLabel(trade) || "this trade";
+  return `<span class="unal">Rates needed.</span> <span class="sub">Enter the ${e(label)} prices under Quote rates. Nothing is filled in for you.</span> <button type="button" class="sm-btn" data-rates-trade="${e(trade)}">Open ${e(label)} quote rates</button>`;
+}
+
 let xSeq = 0;
 function newItemId() {
   xSeq = (xSeq + 1) % 1000;
@@ -608,7 +655,7 @@ export function quotesViewHtml(ui, esc, $$, helpers = {}) {
   const row = q => `<tr class="jr" data-qid="${esc(q.id)}"><td><span class="qpill ${q.quoteStatus === "Draft" ? "q-quote" : "q-wo"}">${esc(q.quoteStatus)}</span>${q.revisionCount ? `<div class="sub">Rev ${esc(q.revisionCount)}${q.acceptedRevision ? ` · accepted ${esc(q.acceptedRevision)}` : ""}</div>` : ""}</td>
     <td><b>${esc(q.client || "")}</b><div class="sub">${esc(q.address || "")}</div>${mach(q)}</td>
     <td>${esc(q.description || q.type || "")}</td>
-    <td>${q.totalEx != null ? money(q.totalEx) : `<span class="unal">rates needed</span>`}</td>
+    <td>${q.totalEx != null ? money(q.totalEx) : ratesNeededHtml(q, esc)}</td>
     <td>${q.quoteStatus === "Draft" ? `<button type="button" class="sm-btn primary qaccept" data-qaccept="${esc(q.id)}">Quote accepted</button>` : `<span class="sub">Job ${esc(q.jobId || "—")}</span>`}</td></tr>`;
   return `<div class="sm-head"><h1>Quotes</h1>
     <div class="row gap"><button type="button" class="sm-btn primary" id="newquote">＋ New quote</button>
@@ -637,6 +684,10 @@ function bindAdminExtras(ctx) {
   ensureRates(false);
   A.querySelector("#newquote")?.addEventListener("click", () => openQuoteWizard(null));
   A.querySelector("#editrates")?.addEventListener("click", () => openRatesEditor());
+  A.querySelectorAll("[data-rates-trade]").forEach(b => b.addEventListener("click", ev => {
+    ev.stopPropagation();
+    openRatesEditor(b.dataset.ratesTrade);
+  }));
   A.querySelector("#quotetrade")?.addEventListener("change", ev => {
     setQuoteFocus(ev.target.value);
     if (typeof api.renderAdmin === "function") api.renderAdmin();
@@ -815,7 +866,7 @@ function rememberRates(previous, fields, tradeRates) {
   return next;
 }
 
-function openRatesEditor() {
+function openRatesEditor(focusTrade) {
   if (!canEditRates()) return api.toast("Only an admin or a manager can change quote rates");
   const { $, esc, toast, db, doc, setDoc, updateDoc, serverTimestamp, getUi, renderAdmin, getMe } = api;
   const me = getMe();
@@ -824,6 +875,9 @@ function openRatesEditor() {
     d.innerHTML = `<form method="dialog" id="qrf" class="jf">${ratesEditorHtml(rates, quoteTradeSetup(), esc)}
       <div class="btns"><button value="cancel" formnovalidate class="ghost">Cancel</button><button value="save" class="primary">Save</button></div></form>`;
     d.showModal();
+    const focus = String(focusTrade || "").replace(/[^a-z0-9-]/g, "");
+    const target = focus && d.querySelector(`[data-rates-trade="${focus}"]`);
+    if (target && typeof target.scrollIntoView === "function") target.scrollIntoView({ block: "start" });
     $("#qrf").onsubmit = async ev => {
       if (ev.submitter?.value !== "save") return;
       ev.preventDefault(); const f = ev.target;
@@ -1108,17 +1162,19 @@ function hydrateSection(raw, used) {
   return section;
 }
 
-/** Saved quote → sections. No `sections` array means the old single-category quote. */
+/** Saved quote → sections. No `sections` array means the old single-category quote. An explicit empty list stays empty. */
 export function normalizeQuoteSections(quote) {
   const q = quote && typeof quote === "object" ? quote : {};
-  if (Array.isArray(q.sections) && q.sections.length) {
+  if (Array.isArray(q.sections)) {
+    if (!q.sections.length) return [];
     const used = new Set();
     const out = [];
     for (const raw of q.sections) {
+      if (!raw || !raw.type) continue;
       if (out.length >= MAX_QUOTE_SECTIONS) break;
       out.push(hydrateSection(raw, used));
     }
-    if (out.length) return out;
+    return out;
   }
   return [hydrateSection({ ...q, id: "s1", legacy: true }, new Set())];
 }
@@ -1465,18 +1521,19 @@ function openQuoteWizard(existing, opts = {}) {
     if (existing?.jobId && existing?.quoteStatus === "Accepted" && opts.jumpToPrice) {
       toast("Already accepted — job kept as " + existing.jobId);
     }
+    const job = opts.job && typeof opts.job === "object" ? opts.job : null;
+    const startTrade = startingQuoteTrade(quoteTrade, job);
+    if (!existing && startTrade) setQuoteFocus(startTrade);
     const state = Object.assign({
-      quoteStatus: "Draft", client: CLIENTS[0], address: "", description: "",
+      quoteStatus: "Draft", client: job && job.client ? job.client : (CLIENTS[0] || ""), address: job && job.address || "", description: job && job.description || "",
     }, existing || {});
     state.addressPlace = sanitizePlace(state.addressPlace);
     if (!existing) {
-      const focus = quotePack(activeQuoteTradeId());
-      const firstType = focus && focus.jobTypes[0] ? focus.jobTypes[0][0] : "spoil";
-      state.sections = [blankSection(firstType)];
+      state.sections = [];
     } else {
-      state.sections = normalizeQuoteSections(existing);
+      state.sections = normalizeQuoteSections(existing).filter(s => s && s.type);
     }
-    state.type = state.sections[0] ? state.sections[0].type : "spoil";
+    state.type = state.sections[0] ? state.sections[0].type : "";
     let step = opts.jumpToPrice ? 2 : 0;
     const locked = existing?.quoteStatus === "Accepted";
     let revisions = [];
@@ -1526,7 +1583,6 @@ function openQuoteWizard(existing, opts = {}) {
     const toggleCategory = type => {
       const on = state.sections.some(s => s.type === type);
       if (on) {
-        if (state.sections.length === 1) { holdErr = "Keep at least one category."; return; }
         state.sections = state.sections.filter(s => s.type !== type);
       } else {
         if (state.sections.length >= MAX_QUOTE_SECTIONS) { holdErr = `Up to ${MAX_QUOTE_SECTIONS} categories on one quote.`; return; }
@@ -1631,6 +1687,11 @@ function openQuoteWizard(existing, opts = {}) {
         syncFormToState();
         paint();
       }));
+      d.querySelector("#qwtrade")?.addEventListener("change", ev => {
+        syncFormToState();
+        setQuoteFocus(ev.target.value);
+        paint();
+      });
       d.querySelectorAll("[data-type]").forEach(b => b.onclick = () => {
         syncFormToState();
         toggleCategory(b.dataset.type);
@@ -2013,6 +2074,7 @@ function openQuoteWizard(existing, opts = {}) {
         return;
       }
       const data = state;
+      data.sections = (data.sections || []).filter(s => s && s.type);
       if (!validateStep(0, data)) return;
       if (accept && !validateStep(1, data)) { step = 1; paint(); return; }
       const calc = calcSections(data, rates);
@@ -2162,7 +2224,12 @@ function activePack() {
 function categoryStepHtml(d, esc, CLIENTS) {
   const picked = new Set((d.sections || []).map(s => s.type));
   const groups = categoryChoices(quoteTrade);
-  const blocks = groups.map(g => `<fieldset class="qw-sec"><legend>${esc(g.tradeLabel)}</legend>
+  const focus = activeQuoteTradeId();
+  const ordered = [...groups.filter(g => g.tradeId === focus), ...groups.filter(g => g.tradeId !== focus)];
+  const picker = groups.length > 1
+    ? `<label>Which trade is this quote for?<select id="qwtrade" aria-label="Quote trade">${groups.map(g => `<option value="${esc(g.tradeId)}"${g.tradeId === focus ? " selected" : ""}>${esc(g.tradeLabel)}</option>`).join("")}</select></label>`
+    : "";
+  const blocks = ordered.map(g => `<fieldset class="qw-sec"><legend>${esc(g.tradeLabel)}</legend>
     <div class="qw-types" role="group" aria-label="${esc(g.tradeLabel)} categories">${g.categories.map(c => {
       const on = picked.has(c.type);
       return `<button type="button" class="qw-type ${on ? "on" : ""}" data-type="${esc(c.type)}" aria-pressed="${on ? "true" : "false"}"><span class="qw-tick" aria-hidden="true"></span><span>${esc(c.label)}</span></button>`;
@@ -2171,7 +2238,8 @@ function categoryStepHtml(d, esc, CLIENTS) {
     <label>Client<input name="client" list="qclients" value="${esc(d.client || "")}" required autocomplete="organization"><datalist id="qclients">${CLIENTS.map(c => `<option value="${esc(c)}">`).join("")}</datalist></label>
     <label class="plc-wrap">Job address<input name="address" value="${esc(d.address || "")}" required autocomplete="street-address" placeholder="${placesEnabled() ? "Start typing to search Google Maps" : "Lot and street"}"></label>
     <p class="sub plc-tag" id="qaddrtag" ${d.addressPlace ? "" : "hidden"}>📍 Matched on Google Maps — travel uses this exact spot.</p>
-    <p class="sub">Tick every category this quote covers. Each one is a section, priced by that trade's pack. Hours sit on the next step. They are optional for the crew and are not written to a timesheet.</p>
+    ${picker}
+    <p class="sub">Tick every category this quote covers. Nothing is added until you tick it, and an empty section is not saved. Each ticked category is priced by that trade's pack. Hours sit on the next step. They are optional for the crew and are not written to a timesheet.</p>
     ${blocks || `<p class="sub">Quote pack coming soon for this company. Add a trade with a ready pack to price a quote.</p>`}
     <label>Scope / notes<textarea name="description" rows="2">${esc(d.description || "")}</textarea></label>
   </div>`;

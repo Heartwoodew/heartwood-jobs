@@ -2,7 +2,7 @@
 // Master rows are account-level only. This file does not read jobs, photos, or money.
 
 import { POWERED_BY, PRODUCT_NAME } from "../org-settings.js";
-import { derivedJobPrefix, filterMaster, friendInviteLink, masterTotals } from "./company.js";
+import { companyFieldErrors, derivedJobPrefix, filterMaster, friendInviteLink, masterTotals } from "./company.js";
 import { LOGO_ACCEPT, acceptLogoValue, isLogoStoragePath } from "./company-logo.js";
 import { signupTradesHtml, tradeSettingsHtml } from "./trades.js";
 import { referralLink } from "./referral.js";
@@ -38,28 +38,50 @@ export function logoFieldHtml(org = {}, { canEdit = false, signup = false } = {}
   </div>`;
 }
 
+function req(label) {
+  return `${label} <abbr class="req" title="required">*</abbr>`;
+}
+
+function fieldErr(name) {
+  return `<p class="field-err" data-err="${name}" hidden></p>`;
+}
+
 export function signupFormHtml({ friend = false } = {}) {
-  return `<form id="signup" class="card login signup">
+  return `<form id="signup" class="card login signup" novalidate>
     <div class="login-brand"><div class="wordmark" aria-label="${esc(PRODUCT_NAME)}">Call<span>Up</span></div>
       <p class="orgline">${friend ? "Friend trial" : "New company"}</p></div>
     <h2>${friend ? "Start your friend trial" : "Create your company"}</h2>
     <p class="sub">${friend
       ? "You become the admin of your own company. Your emails work as usual. This friend trial is not billed."
       : "You become the admin. Staff join only this company, from an invite. A 14-day trial starts today. Payments are not taken on this screen."}</p>
+    <p class="sub">Fields marked <abbr class="req" title="required">*</abbr> are required.</p>
+    <p id="signuperr" class="err" role="alert" tabindex="-1"></p>
     <h3>Your login</h3>
-    <label>Your name<input name="ownerName" required maxlength="80" autocomplete="name"></label>
-    <label>Email<input name="ownerEmail" type="email" required maxlength="120" autocomplete="username"></label>
-    <label>Password<input name="password" type="password" required minlength="8" maxlength="128" autocomplete="new-password"></label>
+    <label>${req("Your name")}<input name="ownerName" required maxlength="80" autocomplete="name"></label>
+    ${fieldErr("ownerName")}
+    <label>${req("Email")}<input name="ownerEmail" type="email" required maxlength="120" autocomplete="username"></label>
+    ${fieldErr("ownerEmail")}
+    <label>${req("Password")}<span class="sub">At least 8 characters.</span><input name="password" type="password" required minlength="8" maxlength="128" autocomplete="new-password"></label>
+    ${fieldErr("password")}
     <h3>Company</h3>
-    ${signupTradesHtml(["earthworks"])}
-    <label>Company name<input name="name" required maxlength="80"></label>
-    <label>Legal name<input name="legalName" required maxlength="120"></label>
-    <label>ABN<input name="abn" required maxlength="20" inputmode="numeric" placeholder="00 000 000 000"></label>
-    <label>Address<input name="address" required maxlength="160"></label>
-    <label>Phone<input name="phone" maxlength="40" inputmode="tel"></label>
-    <label>Email<input name="email" type="email" required maxlength="120"></label>
-    <label>Accounts email<span class="sub">Hours spreadsheets are sent here.</span><input name="accountsEmail" type="email" required maxlength="120"></label>
+    ${signupTradesHtml([])}
+    ${fieldErr("trades")}
+    <label>${req("Company name")}<input name="name" required maxlength="80"></label>
+    ${fieldErr("name")}
+    <label>${req("Legal name")}<input name="legalName" required maxlength="120"></label>
+    ${fieldErr("legalName")}
+    <label>${req("ABN")}<span class="sub">Required, including on a trial. Digits, spaces allowed (for example 00 000 000 000). The company record needs an ABN.</span><input name="abn" required maxlength="20" inputmode="numeric" placeholder="00 000 000 000"></label>
+    ${fieldErr("abn")}
+    <label>${req("Address")}<input name="address" required maxlength="160"></label>
+    ${fieldErr("address")}
+    <label>Phone<span class="sub">Optional.</span><input name="phone" maxlength="40" inputmode="tel"></label>
+    ${fieldErr("phone")}
+    <label>${req("Email")}<input name="email" type="email" required maxlength="120"></label>
+    ${fieldErr("email")}
+    <label>${req("Accounts email")}<span class="sub">Hours spreadsheets are sent here. This starts as the company email. Change it if accounts should go somewhere else.</span><input name="accountsEmail" type="email" required maxlength="120"></label>
+    ${fieldErr("accountsEmail")}
     <label>Hubdoc address<span class="sub">Optional. Must end in @app.hubdoc.com.</span><input name="hubdocAddress" maxlength="120" placeholder="name@app.hubdoc.com"></label>
+    ${fieldErr("hubdocAddress")}
     ${logoFieldHtml({}, { signup: true })}
     ${friend ? "" : `<fieldset class="cardopt">
       <legend>Card details, optional</legend>
@@ -68,8 +90,57 @@ export function signupFormHtml({ friend = false } = {}) {
     </fieldset>`}
     <button class="big primary" type="submit">Create company</button>
     <button class="big ghost" type="button" id="signupback">Back to sign in</button>
-    <p id="signuperr" class="err"></p>
     <p class="powered">${esc(POWERED_BY)}</p>
+  </form>`;
+}
+
+const SIGNUP_FIELD_TEXT = {
+  ownerName: "Enter your name.",
+  ownerEmail: "Enter the email you will use to sign in.",
+  password: "Use a password of at least 8 characters.",
+  trades: "Choose at least one trade.",
+};
+
+/** Every problem on the sign-up form. Accounts email may fall back to the company email. */
+export function signupFieldErrors(input = {}) {
+  const errors = [];
+  const add = (field, message) => {
+    if (!errors.some(row => row.field === field)) errors.push({ field, message });
+  };
+  const ownerName = String(input.ownerName || "").trim();
+  const ownerEmail = String(input.ownerEmail || "").trim();
+  if (!ownerName) add("ownerName", SIGNUP_FIELD_TEXT.ownerName);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ownerEmail)) add("ownerEmail", SIGNUP_FIELD_TEXT.ownerEmail);
+  if (String(input.password || "").length < 8) add("password", SIGNUP_FIELD_TEXT.password);
+  const trades = Array.isArray(input.trades) ? input.trades.filter(Boolean) : [];
+  if (!trades.length) add("trades", SIGNUP_FIELD_TEXT.trades);
+  const email = String(input.email || "").trim();
+  const accountsEmail = String(input.accountsEmail || "").trim() || email;
+  for (const code of companyFieldErrors({ ...input, legalName: input.legalName, accountsEmail, signoff: input.name })) {
+    const field = code === "hubdoc" ? "hubdocAddress" : code;
+    const message = code === "abn"
+      ? "Enter the ABN as digits, with or without spaces. A trial company still needs an ABN."
+      : failureText(code);
+    add(field, message);
+  }
+  return errors;
+}
+
+export function clientFormHtml() {
+  return `<form method="dialog" id="clientnew" class="jf" novalidate>
+    <h2>Add client</h2>
+    <p class="sub">The company or client name is required. Contact details are saved with it.</p>
+    <p id="clienterr" class="err" role="alert" tabindex="-1"></p>
+    <label>Company / client name <abbr class="req" title="required">*</abbr><input name="name" required maxlength="120" autocomplete="organization"></label>
+    <p class="field-err" data-err="name" hidden></p>
+    <label>Contact name<input name="contactName" maxlength="80" autocomplete="name"></label>
+    <label>Phone<input name="phone" maxlength="40" inputmode="tel" autocomplete="tel"></label>
+    <p class="field-err" data-err="phone" hidden></p>
+    <label>Email<input name="email" type="email" maxlength="120" autocomplete="email"></label>
+    <p class="field-err" data-err="email" hidden></p>
+    <label>Address<input name="address" maxlength="160" autocomplete="street-address"></label>
+    <label>Notes<textarea name="notes" rows="3" maxlength="500"></textarea></label>
+    <div class="btns"><button value="cancel" formnovalidate class="ghost big">Cancel</button><button value="ok" class="primary big">Save client</button></div>
   </form>`;
 }
 
