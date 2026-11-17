@@ -18,8 +18,11 @@
  * adminSendPasswordReset emails a password reset link to a staff login in the
  * caller's own company. The link is never returned to the browser.
  *
- * sendJobEmail emails one job from the CallUp sending address. It reuses
- * RESEND_API_KEY and INVITE_EMAIL_ENABLED. No new secret. Photos and dump
+ * sendJobEmail emails one job. The default From is "<Company> via CallUp
+ * <noreply@callupapp.com.au>". A per-company override is the non-secret env var
+ * JOB_EMAIL_FROM_OVERRIDES, used only when that address's domain is in
+ * JOB_EMAIL_VERIFIED_DOMAINS. Invites and password resets ignore both.
+ * It reuses RESEND_API_KEY and INVITE_EMAIL_ENABLED. No new secret. Photos and dump
  * receipts are read with the Admin SDK. The message is not sent unless
  * INVITE_EMAIL_ENABLED is the string "true".
  *

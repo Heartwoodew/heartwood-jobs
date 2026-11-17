@@ -5,15 +5,29 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { ALEX_UID } from "../../app/features/cloud-storage.js";
 import {
+  DEFAULT_JOB_EMAIL_VERIFIED_DOMAINS,
   JOB_EMAIL_HOURLY_LIMIT,
   jobEmailAppUrl,
   jobEmailFailureText,
   jobEmailFrom,
   jobEmailRateDecision,
   jobEmailReplyTo,
+  jobEmailVerifiedDomains,
+  parseJobEmailFromOverrides,
   queueJobEmail,
+  resolveJobEmailSender,
   sendJobEmail,
 } from "../functions/job-email.js";
+import { buildPasswordResetEmail } from "../functions/password-reset.js";
+import {
+  CALLUP_INVITE_FROM,
+  HEARTWOOD_RESEND_FROM,
+  HEARTWOOD_TENANT,
+  buildInviteDraft,
+  buildInviteEmail,
+  inviteEmailConfig,
+  planInviteDelivery,
+} from "../functions/shared/staff-invites.js";
 
 const NOW = new Date("2026-11-16T01:00:00.000Z");
 const PHOTO = Uint8Array.from([1, 2, 3]);
@@ -139,6 +153,17 @@ function payloadOf(calls) {
   return calls.send[0].payload;
 }
 
+// Heartwood's company id is "heartwood" (HEARTWOOD_TENANT). Same id on companies/heartwood.
+const HEARTWOOD_FROM = { from: "alex@heartwoodew.com", name: "Alex Daly - Heartwood Earthworx" };
+
+function overrideEnv(extra = {}, domains = "callupapp.com.au,heartwoodew.com") {
+  return {
+    INVITE_EMAIL_ENABLED: "true",
+    JOB_EMAIL_FROM_OVERRIDES: JSON.stringify({ [HEARTWOOD_TENANT]: HEARTWOOD_FROM, ...extra }),
+    JOB_EMAIL_VERIFIED_DOMAINS: domains,
+  };
+}
+
 test("from name is the company via CallUp, and reply-to is the company then the sender", () => {
   assert.equal(jobEmailFrom("Bravo Civil"), "Bravo Civil via CallUp <noreply@callupapp.com.au>");
   assert.equal(jobEmailFrom("Heartwood Earthworx"), "Heartwood Earthworx via CallUp <noreply@callupapp.com.au>");
@@ -150,6 +175,144 @@ test("from name is the company via CallUp, and reply-to is the company then the 
   assert.equal(jobEmailAppUrl("bravo"), "https://app.callupapp.com.au/app/");
   assert.match(jobEmailFailureText("rate-limited"), /Wait an hour/);
   assert.equal(JOB_EMAIL_HOURLY_LIMIT, 20);
+  assert.equal(HEARTWOOD_TENANT, "heartwood");
+  assert.equal(DEFAULT_JOB_EMAIL_VERIFIED_DOMAINS, "callupapp.com.au");
+  assert.deepEqual(jobEmailVerifiedDomains({}), ["callupapp.com.au"]);
+  assert.deepEqual(jobEmailVerifiedDomains({ JOB_EMAIL_VERIFIED_DOMAINS: " callupapp.com.au, HeartwoodEW.com " }), ["callupapp.com.au", "heartwoodew.com"]);
+});
+
+test("a verified job-email override uses that from address, and reply-to unless one is set", async () => {
+  const applied = world();
+  applied.deps.env = overrideEnv();
+  const sent = await sendJobEmail({ callerUid: ALEX_UID, jobId: "job1", to: "jo@orbit.example" }, applied.deps);
+  assert.equal(sent.ok, true);
+  const payload = payloadOf(applied.calls);
+  assert.equal(payload.from, "Alex Daly - Heartwood Earthworx <alex@heartwoodew.com>");
+  assert.equal(payload.reply_to, "alex@heartwoodew.com");
+
+  const named = resolveJobEmailSender({
+    companyId: "heartwood",
+    companyName: "Heartwood Earthworx",
+    companyEmail: "accounts@heartwoodew.com",
+    senderEmail: "sam@heartwoodew.com",
+    env: overrideEnv({
+      heartwood: {
+        from: "Alex@HeartwoodEW.com",
+        name: "Alex\r\nBcc: <evil@x.com>",
+        replyTo: "Office@HeartwoodEW.com",
+      },
+    }),
+  });
+  assert.equal(named.from, "Alex Bcc: evil@x.com <alex@heartwoodew.com>");
+  assert.equal(named.replyTo, "office@heartwoodew.com");
+  const display = named.from.slice(0, named.from.lastIndexOf("<")).trim();
+  assert.equal(display, "Alex Bcc: evil@x.com");
+  assert.doesNotMatch(display, /[\r\n<>"]/);
+});
+
+test("an override whose domain is not verified falls back to the CallUp sender", async () => {
+  const held = world();
+  held.deps.env = {
+    INVITE_EMAIL_ENABLED: "true",
+    JOB_EMAIL_FROM_OVERRIDES: JSON.stringify({
+      heartwood: { ...HEARTWOOD_FROM, replyTo: "office@heartwoodew.com" },
+    }),
+  };
+  const sent = await sendJobEmail({ callerUid: ALEX_UID, jobId: "job1", to: "jo@orbit.example" }, held.deps);
+  assert.equal(sent.ok, true);
+  const payload = payloadOf(held.calls);
+  assert.equal(payload.from, "Heartwood Earthworx via CallUp <noreply@callupapp.com.au>");
+  assert.equal(payload.reply_to, "alex@heartwoodew.com");
+  assert.notEqual(payload.reply_to, "office@heartwoodew.com");
+
+  const garbage = resolveJobEmailSender({
+    companyId: "heartwood",
+    companyName: "Heartwood Earthworx",
+    companyEmail: "alex@heartwoodew.com",
+    env: { JOB_EMAIL_FROM_OVERRIDES: "{not json", JOB_EMAIL_VERIFIED_DOMAINS: "heartwoodew.com" },
+  });
+  assert.equal(garbage.from, jobEmailFrom("Heartwood Earthworx"));
+  assert.equal(parseJobEmailFromOverrides({ JOB_EMAIL_FROM_OVERRIDES: JSON.stringify({
+    heartwood: { from: "not-an-email", name: "Alex Daly - Heartwood Earthworx" },
+    bravo: { from: "boss@bravo.test", name: "" },
+  }) }).heartwood, undefined);
+
+  const subdomain = resolveJobEmailSender({
+    companyId: "heartwood",
+    companyName: "Heartwood Earthworx",
+    env: overrideEnv({
+      heartwood: { from: "alex@mail.heartwoodew.com", name: "Alex Daly - Heartwood Earthworx" },
+    }),
+  });
+  assert.equal(subdomain.from, jobEmailFrom("Heartwood Earthworx"));
+});
+
+test("other companies stay on the CallUp sender when only Heartwood is overridden", async () => {
+  const bravo = world({ photos: [], receipts: [] });
+  bravo.jobs.job1 = job({ companyId: "bravo", tenantId: "bravo", quoteId: "" });
+  bravo.deps.env = overrideEnv();
+  const sent = await sendJobEmail({ callerUid: "bravoAdmin", jobId: "job1", to: "jo@orbit.example" }, bravo.deps);
+  assert.equal(sent.ok, true);
+  const payload = payloadOf(bravo.calls);
+  assert.equal(payload.from, "Bravo Civil via CallUp <noreply@callupapp.com.au>");
+  assert.equal(payload.reply_to, "office@bravo.test");
+
+  const unverifiedBravo = resolveJobEmailSender({
+    companyId: "bravo",
+    companyName: "Bravo Civil",
+    companyEmail: "office@bravo.test",
+    env: overrideEnv({ bravo: { from: "boss@bravo.test", name: "Bravo Desk" } }),
+  });
+  assert.equal(unverifiedBravo.from, "Bravo Civil via CallUp <noreply@callupapp.com.au>");
+  assert.equal(unverifiedBravo.replyTo, "office@bravo.test");
+});
+
+test("invites and password resets ignore the job email sender override", () => {
+  const env = overrideEnv();
+  const config = inviteEmailConfig({ ...env, INVITE_EMAIL_HEARTWOOD: "true" });
+  const invite = buildInviteDraft({
+    name: "Casey Nguyen",
+    email: "casey.nguyen@example.com",
+    role: "operator",
+    createdBy: "admin-1",
+    now: NOW,
+    token: "a".repeat(43),
+    tenantId: "heartwood",
+  }).invite;
+  const heartwoodInvite = buildInviteEmail(invite, config);
+  assert.equal(heartwoodInvite.from, HEARTWOOD_RESEND_FROM);
+  assert.equal(heartwoodInvite.from, "Heartwood Jobs <noreply@callupapp.com.au>");
+  assert.equal(planInviteDelivery(invite, config).resend.from, HEARTWOOD_RESEND_FROM);
+
+  const other = buildInviteEmail(
+    buildInviteDraft({
+      name: "Casey Nguyen",
+      email: "casey.nguyen@example.com",
+      role: "operator",
+      createdBy: "admin-1",
+      now: NOW,
+      token: "b".repeat(43),
+      tenantId: "bravo",
+    }).invite,
+    { ...config, companyName: "Bravo Civil", companyEmail: "office@bravo.test" },
+  );
+  assert.equal(other.from, CALLUP_INVITE_FROM);
+
+  const reset = buildPasswordResetEmail({
+    name: "Sam",
+    email: "sam@heartwoodew.com",
+    link: "https://jobs.heartwoodew.com/app/?oobCode=reset",
+    companyId: "heartwood",
+    companyName: "Heartwood Earthworx",
+    config,
+  });
+  assert.equal(reset.from, "Heartwood Jobs <noreply@callupapp.com.au>");
+  assert.doesNotMatch(reset.from, /alex@heartwoodew\.com/);
+
+  const invites = readFileSync(new URL("../functions/shared/staff-invites.js", import.meta.url), "utf8");
+  const resets = readFileSync(new URL("../functions/password-reset.js", import.meta.url), "utf8");
+  assert.doesNotMatch(invites, /JOB_EMAIL_FROM_OVERRIDES|JOB_EMAIL_VERIFIED_DOMAINS/);
+  assert.doesNotMatch(resets, /JOB_EMAIL_FROM_OVERRIDES|JOB_EMAIL_VERIFIED_DOMAINS/);
 });
 
 test("an admin sends photos and the dump receipt, never a reimbursement or an unclear docket", async () => {
@@ -313,10 +476,13 @@ test("the callable reuses the invite mail secret and the rate collection is clos
   const handler = index.slice(index.indexOf("export const sendJobEmail = onCall"), index.indexOf("export const inviteEmailWorker"));
   assert.match(handler, /secrets: \[RESEND_API_KEY\]/);
   assert.match(handler, /INVITE_EMAIL_ENABLED/);
+  assert.match(handler, /env: process\.env/);
   assert.match(handler, /jobEmailRate/);
   assert.match(handler, /NODE_TEST_CONTEXT/);
   assert.doesNotMatch(handler, /nodemailer|smtp|createTransport|defineSecret\(/);
   assert.doesNotMatch(index, /defineSecret\("JOB_EMAIL/);
+  assert.match(index, /JOB_EMAIL_FROM_OVERRIDES/);
+  assert.match(index, /JOB_EMAIL_VERIFIED_DOMAINS/);
   const rules = readFileSync(new URL("../emulator/firestore.rules", import.meta.url), "utf8");
   const prod = readFileSync(new URL("../firestore.production.rules", import.meta.url), "utf8");
   assert.match(rules, /match \/jobEmailRate\/\{uid\} \{\s*allow read, write: if false;/);
