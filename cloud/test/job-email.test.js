@@ -9,8 +9,9 @@ import { ALEX_UID, resolveMembership } from "../../app/features/cloud-storage.js
 import {
   AMBIGUOUS_RECEIPT, DUMP_RECEIPT, DUMP_RECEIPT_FIELD, DUMP_RECEIPT_VALUE, MAILTO_URL_LIMIT,
   NOTES_TRIM_NOTE, PHOTO_BUDGET_BYTES, REIMBURSEMENT_RECEIPT,
-  buildJobEmail, emailSendPlan, emailSheetHtml, fitEdge, formatJobDate, mailtoHref, moneyText,
-  photoBudget, photosZip, receiptEmailKind, selectEmailAttachments, suggestRecipient,
+  buildJobEmail, emailDumpReceipts, emailSendPlan, emailSheetHtml, fitEdge, formatJobDate, mailtoHref, moneyText,
+  packEmailAttachments, parseEmailRecipients, photoBudget, photosZip, receiptEmailKind, selectEmailAttachments,
+  suggestRecipient, unattachedFileNote, JOB_EMAIL_MAX_RECIPIENTS,
 } from "../../app/features/job-email.js";
 
 const app = readFileSync(new URL("../../app/app.js", import.meta.url), "utf8");
@@ -281,10 +282,10 @@ test("share attaches files, otherwise mailto plus a download, and photos shrink 
     photos: [{ name: "Photo 1.jpg" }], receipts: [{ name: "Remondis tip docket" }],
   });
   assert.match(html, /Email job/);
-  assert.match(html, /Open in mail app/);
-  assert.match(html, /Share/);
+  assert.match(html, /Other mail app/);
+  assert.match(html, />Send</);
   assert.match(html, />Copy</);
-  assert.match(html, /Optional – add the client/);
+  assert.match(html, /id="jemcc"/);
   assert.match(html, /value="jo@orbit.example"/);
   assert.doesNotMatch(html, /Copy to clipboard/);
   assert.match(html, /Download photos/);
@@ -294,16 +295,44 @@ test("share attaches files, otherwise mailto plus a download, and photos shrink 
   assert.doesNotMatch(html, /firebasestorage|tenants\/|Caltex/);
 });
 
-test("the job screen opens the mail sheet without a download URL or a cloud function", () => {
+test("addresses are checked, overflow files are named without a public storage link, and the sheet sends", () => {
+  assert.equal(parseEmailRecipients({ to: "Jo@Orbit.example", cc: "accounts@orbit.example" }).ok, true);
+  assert.deepEqual(parseEmailRecipients({ to: "jo@orbit.example", cc: "jo@orbit.example,  " }).cc, []);
+  assert.equal(parseEmailRecipients({ to: "" }).reason, "invalid-recipient");
+  assert.equal(parseEmailRecipients({ to: "not-an-email" }).ok, false);
+  const many = Array.from({ length: JOB_EMAIL_MAX_RECIPIENTS + 1 }, (_, i) => `p${i}@orbit.example`).join(", ");
+  assert.equal(parseEmailRecipients({ to: many }).ok, false);
+  assert.equal(parseEmailRecipients({ to: "a@orbit.example, b@orbit.example", cc: "c@orbit.example, d@orbit.example, e@orbit.example" }).ok, true);
+  const packed = packEmailAttachments([{ name: "a.jpg", size: 8 }, { name: "b.jpg", size: 6 }, { name: "c.jpg", size: 0 }], 10);
+  assert.equal(packed.attach.length, 1);
+  assert.equal(packed.linked.length, 1);
+  assert.equal(packed.skipped.length, 1);
+  const note = unattachedFileNote({
+    photos: ["Photo 4.jpg"],
+    receipts: ["Remondis tip docket"],
+    url: "https://jobs.heartwoodew.com/app/",
+  });
+  assert.match(note, /Photos:/);
+  assert.match(note, /Dump receipts:/);
+  assert.match(note, /https:\/\/jobs\.heartwoodew\.com\/app\//);
+  assert.match(note, /signed in/);
+  assert.doesNotMatch(note, /tenants\/|firebasestorage|token=/);
+  assert.equal(unattachedFileNote({ photos: [], receipts: [] }), "");
+  assert.equal(emailDumpReceipts({ role: "operator", job: job(), receipts: [dump] }).length, 0);
+  assert.equal(emailDumpReceipts({ role: "admin", job: job(), receipts: [dump, personal, claim, ambiguous] }).length, 1);
+  assert.equal(emailDumpReceipts({ role: "supervisor", job: job(), receipts: [dump, personal] })[0].id, "dump1");
   const fn = app.slice(app.indexOf("function emailActorRole"), app.indexOf("// ------------------------------------------------------------------ email photos"));
   assert.match(fn, /selectEmailAttachments/);
-  assert.match(fn, /blobForPhoto/);
+  assert.match(fn, /parseEmailRecipients/);
+  assert.match(fn, /callAuthed\("sendJobEmail"/);
   assert.match(fn, /navigator\.share/);
   assert.match(fn, /mailtoHref/);
   assert.match(fn, /emailJobReceipts/);
   assert.match(fn, /canSeeMoney\(\)/);
+  assert.match(fn, /Sending…/);
+  assert.match(fn, /Other mail app|jemmail/);
   assert.doesNotMatch(fn, /getDownloadURL|httpsCallable|functions\(/);
   assert.ok(app.split('id="emailjob"').length - 1 >= 2);
-  assert.match(sw, /callup-shell-v125-usability/);
+  assert.match(sw, /callup-shell-v127-sendemail/);
   assert.match(sw, /features\/job-email\.js/);
 });

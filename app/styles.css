@@ -219,6 +219,8 @@ body.operator main{padding:0;max-width:560px}
 .jem-photos{display:grid;gap:2px;max-height:28vh;overflow:auto}
 .jem-photos .ck{min-height:44px;display:flex;align-items:center;gap:8px}
 .jem-subject{font-weight:700}
+.jem-other{margin:0}
+.jem-other a{color:inherit}
 /* ---- phone admin (<=760px): hamburger menu + one-day dispatch agenda */
 .sm-burgerbar{display:none}
 @media (max-width:760px){

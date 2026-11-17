@@ -24,7 +24,7 @@ import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPla
 import { buildOperationalExport, retentionAdminText, retentionView } from "./features/cloud-retention.js";
 import {
   buildJobEmail, compressImageBlob, deviceCanShareFiles, emailSendPlan, emailSheetHtml,
-  jpegName, mailtoHref, photoBudget, photosZip, selectEmailAttachments, shareText, suggestRecipient, uniqueNames,
+  jpegName, mailtoHref, parseEmailRecipients, photoBudget, photosZip, selectEmailAttachments, shareText, suggestRecipient, uniqueNames,
 } from "./features/job-email.js";
 import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, lightboxHtml, photoFailureText } from "./features/photo-gallery.js";
 import { decidePhotoEmail } from "./features/photo-capture.js";
@@ -6192,12 +6192,15 @@ async function openJobEmail(job) {
   const subjectEl = v.querySelector("#jemsubj");
   const bodyEl = v.querySelector("#jembody");
   const warnEl = v.querySelector("#jemwarn");
+  const stateEl = v.querySelector("#jemstate");
   const progEl = v.querySelector("#jemprog");
   const sendBtn = v.querySelector("#jemsend");
   const mailLink = v.querySelector("#jemmail");
   const zipBtn = v.querySelector("#jemzip");
   const toInput = v.querySelector("#jemto");
+  const ccInput = v.querySelector("#jemcc");
   const setProg = msg => { progEl.hidden = !msg; progEl.textContent = msg || ""; };
+  const setState = msg => { stateEl.hidden = !msg; stateEl.textContent = msg || ""; };
   const paint = () => {
     const items = chosen();
     const built = builtFor(items);
@@ -6206,20 +6209,46 @@ async function openJobEmail(job) {
     bodyEl.textContent = built.body;
     const plan = emailSendPlan({ canShareFiles: shareOk, attachmentCount: items.length });
     mailLink.href = mailtoHref({ to: toInput.value, subject: built.subject, body: built.body }).href;
-    mailLink.hidden = plan.channel !== "mailto";
-    sendBtn.hidden = plan.channel !== "share";
     zipBtn.hidden = !plan.download;
-    if (!allowLarge) {
-      warnEl.hidden = true;
-      sendBtn.textContent = "Share";
-      sendBtn.onclick = () => sendEmail(false);
-    }
+    if (!allowLarge && sendBtn.dataset.sent !== "1") warnEl.hidden = true;
   };
-  async function sendEmail(force) {
+  function sentLine(result, fallbackTo) {
+    const who = (result.to && result.to.length ? result.to : fallbackTo).join(", ");
+    let line = `Sent to ${who}.`;
+    const attached = Number(result.attached) || 0;
+    const linked = Number(result.overflow) || 0;
+    if (attached) line += ` ${attached} file${attached === 1 ? "" : "s"} attached.`;
+    if (linked) line += ` ${linked} file${linked === 1 ? " was" : "s were"} too large and ${linked === 1 ? "is" : "are"} linked in the email for people signed in to this company.`;
+    return line;
+  }
+  async function sendViaCallUp() {
+    if (sendBtn.dataset.sent === "1") return;
+    const recipients = parseEmailRecipients({ to: toInput.value, cc: ccInput ? ccInput.value : "" });
+    if (!recipients.ok) {
+      warnEl.hidden = false;
+      warnEl.textContent = "Enter a valid email address. You can send to 5 addresses at most.";
+      return;
+    }
+    sendBtn.disabled = true;
+    warnEl.hidden = true;
+    setState("Sending…");
+    try {
+      const result = await callAuthed("sendJobEmail", { jobId: job.id, to: toInput.value, cc: ccInput ? ccInput.value : "" });
+      if (!result || result.ok !== true) throw new Error("Couldn't send that email. Try again in a minute.");
+      setState(sentLine(result, recipients.to));
+      sendBtn.dataset.sent = "1";
+      sendBtn.textContent = "Sent";
+    } catch (e) {
+      setState("");
+      warnEl.hidden = false;
+      warnEl.textContent = (e && e.message) || "Couldn't send that email. Try again in a minute.";
+      if (sendBtn.isConnected) sendBtn.disabled = false;
+    }
+  }
+  async function shareOther(force) {
     const items = chosen();
     const built = builtFor(items);
     if (!built.ok || !items.length) return;
-    sendBtn.disabled = true;
     try {
       setProg(`Downloading file 1 of ${items.length}…`);
       const files = await prepareEmailFiles(items, (n, total) => setProg(`Downloading file ${n} of ${total}…`));
@@ -6228,9 +6257,6 @@ async function openJobEmail(job) {
         allowLarge = true;
         warnEl.hidden = false;
         warnEl.textContent = budget.message;
-        sendBtn.hidden = false;
-        sendBtn.textContent = "Send anyway";
-        sendBtn.onclick = () => sendEmail(true);
         return;
       }
       if (navigator.canShare && navigator.canShare({ files })) {
@@ -6239,23 +6265,21 @@ async function openJobEmail(job) {
           title: built.subject,
           text: shareText({ to: toInput.value, subject: built.subject, body: built.body }),
         });
-        v.remove();
         return;
       }
       shareOk = false;
       allowLarge = false;
       paint();
-      toast("This device can't attach files. Use the mail app and download the photos.");
+      toast("This device can't attach files. Use the mail link and download the photos.");
     } catch (e) {
       if (!e || e.name !== "AbortError") {
         shareOk = false;
         allowLarge = false;
         paint();
-        toast("Couldn't open the share sheet. Use the mail app instead.");
+        toast("Couldn't open the share sheet. Use the mail link instead.");
       }
     } finally {
       setProg("");
-      if (sendBtn.isConnected) sendBtn.disabled = false;
     }
   }
   v.onclick = ev => { if (ev.target === v) v.remove(); };
@@ -6270,6 +6294,28 @@ async function openJobEmail(job) {
   };
   v.querySelectorAll("[data-jem-index]").forEach(el => el.addEventListener("change", () => { allowLarge = false; paint(); }));
   toInput.addEventListener("input", paint);
+  if (ccInput) ccInput.addEventListener("input", () => { if (sendBtn.dataset.sent !== "1") warnEl.hidden = true; });
+  sendBtn.onclick = () => { sendViaCallUp().catch(e => toast(e.message || "Couldn't send that email")); };
+  mailLink.onclick = async ev => {
+    const plan = emailSendPlan({ canShareFiles: shareOk, attachmentCount: chosen().length });
+    if (plan.channel === "share") {
+      ev.preventDefault();
+      await shareOther(allowLarge);
+      return;
+    }
+    if (!plan.download) return;
+    const items = chosen();
+    if (!items.length) return;
+    try {
+      const files = await prepareEmailFiles(items, (n, total) => setProg(`Downloading file ${n} of ${total}…`));
+      const saved = await downloadEmailZip(files);
+      if (!saved) toast("Couldn't build the download. The mail app is still opening.");
+    } catch {
+      toast("Couldn't download a file. The mail app is still opening.");
+    } finally {
+      setProg("");
+    }
+  };
   v.querySelector("#jemcopy").onclick = async () => {
     const built = builtFor(chosen());
     if (!built.ok) return;

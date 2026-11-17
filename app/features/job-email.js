@@ -1,5 +1,6 @@
-// Plain-text "Email job" for one job. The phone opens the mail app (mailto) or the
-// share sheet with photo files. Nothing is sent from a server.
+// Plain-text "Email job" for one job. CallUp sends it from the app. "Other mail app"
+// still opens the phone's share sheet or a mailto link. The text rules live here so
+// the send function and the preview stay the same.
 //
 // Dump receipts vs reimbursement receipts:
 // A job receipt is a dump / tip docket only when receipts.paidPersonally is false.
@@ -9,15 +10,14 @@
 // parts, tools, consumables, other — tip-fees there means the staff member paid),
 // the reimbursements ledger, or a file marked purpose reimbursement-receipt.
 // Anything else, including a missing paidPersonally, is ambiguous and is left out.
-// Dump receipts are offered only when this person can already read that receipt image.
+// The phone's Other mail app only offers a dump receipt image that person can already open.
+// Send includes every clear dump receipt when the sender can see prices.
 // Crew cannot: a receipt shows a dollar amount, and crew never see prices.
 
 import { CLAIM_CATEGORIES, PAID_WITH } from "./claims.js";
-import { docCompanyId } from "./company.js";
 import { buildZip } from "./cloud-retention.js";
 import { canReadObject, canSeeJob, jobTenantOf, listedJobPhoto } from "./cloud-storage.js";
 import { visibleDocuments } from "./job-documents.js";
-import { noDollars } from "./quotes.js";
 import { receiptAmount, receiptTonnes } from "./receipts.js";
 import { seesMoney } from "./staff-invites.js";
 
@@ -26,6 +26,7 @@ export const PHOTO_JPEG_QUALITY = 0.82;
 export const PHOTO_BUDGET_BYTES = 20 * 1024 * 1024;
 export const MAILTO_URL_LIMIT = 1900;
 export const NOTES_TRIM_NOTE = "see app for full notes";
+export const JOB_EMAIL_MAX_RECIPIENTS = 5;
 
 export const DUMP_RECEIPT = "dump";
 export const REIMBURSEMENT_RECEIPT = "reimbursement";
@@ -40,6 +41,21 @@ const PRIVATE_URL = /https?:\/\/\S*(?:firebasestorage\.googleapis\.com|storage\.
 const STORAGE_PATH = /tenants\/[A-Za-z0-9_-]+\/(?:jobs|receipts|documents|reimbursements)\S*/gi;
 const EMAIL_RE = /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i;
 
+// Same company id as company.docCompanyId. Inlined so the mail worker can share this
+// file without importing the company module.
+function docCompanyId(data) {
+  if (!data || typeof data !== "object") return "heartwood";
+  const company = typeof data.companyId === "string" ? data.companyId.trim() : "";
+  if (company) return company;
+  const tenant = typeof data.tenantId === "string" ? data.tenantId.trim() : "";
+  return tenant || "heartwood";
+}
+
+// Same replacement as quotes.noDollars. Inlined so the mail worker does not import the quote builder.
+function noDollars(text) {
+  return String(text == null ? "" : text).replace(/(?:A|AU)?\$\s?\d[\d,]*(?:\.\d+)?(?:\s?(?:ex|inc|incl)\.?\s?GST)?/gi, "[price removed]").replace(/\$/g, "");
+}
+
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
@@ -47,6 +63,34 @@ function esc(value) {
 export function cleanEmail(value) {
   const email = String(value || "").trim().toLowerCase();
   return EMAIL_RE.test(email) ? email : "";
+}
+
+function splitAddresses(value) {
+  return String(value || "").split(/[,;\s]+/).map(part => part.trim()).filter(Boolean);
+}
+
+/** To plus Cc, deduped. At least one To. At most JOB_EMAIL_MAX_RECIPIENTS altogether. */
+export function parseEmailRecipients({ to = "", cc = "" } = {}) {
+  const toParts = splitAddresses(to);
+  const ccParts = splitAddresses(cc);
+  if (!toParts.length || toParts.some(part => !cleanEmail(part)) || ccParts.some(part => !cleanEmail(part))) {
+    return { ok: false, reason: "invalid-recipient", to: [], cc: [] };
+  }
+  const tos = [];
+  for (const part of toParts) {
+    const email = cleanEmail(part);
+    if (!tos.includes(email)) tos.push(email);
+  }
+  const ccs = [];
+  for (const part of ccParts) {
+    const email = cleanEmail(part);
+    if (tos.includes(email) || ccs.includes(email)) continue;
+    ccs.push(email);
+  }
+  if (tos.length + ccs.length > JOB_EMAIL_MAX_RECIPIENTS) {
+    return { ok: false, reason: "invalid-recipient", to: tos, cc: ccs };
+  }
+  return { ok: true, to: tos, cc: ccs };
 }
 
 export function sameCompany(record, companyId) {
@@ -431,6 +475,23 @@ export function selectEmailAttachments({ membership, job, companyId, role, listi
   };
 }
 
+/**
+ * Dump receipts a money-viewer may include. Crew get none.
+ * Reimbursements and ambiguous rows (including a missing paidPersonally) are left out.
+ * This does not decide Storage reads for the phone; the send function loads the bytes.
+ */
+export function emailDumpReceipts({ role, job, receipts } = {}) {
+  if (!seesMoney(role) || !job || !job.id) return [];
+  const out = [];
+  for (const row of receipts || []) {
+    if (receiptEmailKind(row) !== DUMP_RECEIPT) continue;
+    if (!row || !row.id || row.jobId !== job.id) continue;
+    if (!sameCompany(row, docCompanyId(job))) continue;
+    out.push(row);
+  }
+  return out;
+}
+
 export function emailSendPlan({ canShareFiles, attachmentCount } = {}) {
   const count = Number(attachmentCount) || 0;
   if (count > 0 && canShareFiles) return { channel: "share", download: false };
@@ -456,6 +517,51 @@ export function fitEdge(width, height, max = PHOTO_MAX_EDGE) {
   if (edge <= max) return { width: w, height: h, scale: 1 };
   const scale = max / edge;
   return { width: Math.max(1, Math.round(w * scale)), height: Math.max(1, Math.round(h * scale)), scale };
+}
+
+/** Attach files in order while they fit. The rest are named in the email, not attached. A missing size is not attached. */
+export function packEmailAttachments(files, budget = PHOTO_BUDGET_BYTES) {
+  const attach = [];
+  const linked = [];
+  const skipped = [];
+  let used = 0;
+  const limit = Number(budget) > 0 ? Number(budget) : PHOTO_BUDGET_BYTES;
+  for (const file of files || []) {
+    const size = Number(file && file.size);
+    if (!Number.isFinite(size) || size <= 0) {
+      skipped.push(file);
+      continue;
+    }
+    if (used + size <= limit) {
+      attach.push(file);
+      used += size;
+    } else {
+      linked.push(file);
+    }
+  }
+  return { attach, linked, skipped, bytes: used, budget: limit };
+}
+
+/** Names and one app link for files that did not fit. No storage path and no download token. */
+export function unattachedFileNote({ photos = [], receipts = [], url = "" } = {}) {
+  const pics = (photos || []).map(name => String(name || "").trim()).filter(Boolean);
+  const dumps = (receipts || []).map(name => String(name || "").trim()).filter(Boolean);
+  if (!pics.length && !dumps.length) return "";
+  const link = String(url || "").trim();
+  const lines = [
+    "",
+    "These files were too large to attach. Open the job in CallUp while signed in to this company. The link does not make the files public.",
+  ];
+  if (link) lines.push(link);
+  if (pics.length) {
+    lines.push("", "Photos:");
+    for (const name of pics) lines.push(`- ${name}`);
+  }
+  if (dumps.length) {
+    lines.push("", "Dump receipts:");
+    for (const name of dumps) lines.push(`- ${name}`);
+  }
+  return lines.join("\n");
 }
 
 export function photoBudget(files, budget = PHOTO_BUDGET_BYTES) {
@@ -545,17 +651,20 @@ export function emailSheetHtml({ subject = "", body = "", to = "", suggestion = 
     : "";
   const filled = esc(to || "");
   return `<div class="embox jobemail"><h3>Email job</h3>
-    <p class="sub">Nothing is sent until you send it from your mail app.</p>
-    <label>To<input type="email" id="jemto" inputmode="email" autocomplete="email" placeholder="Optional – add the client’s email" value="${filled}"></label>
+    <p class="sub">CallUp sends this email. Nothing goes until you tap Send.</p>
+    <label>To<input type="email" id="jemto" inputmode="email" autocomplete="email" placeholder="Client’s email" value="${filled}"></label>
+    <label>Cc<input type="text" id="jemcc" inputmode="email" autocomplete="off" placeholder="Optional" value=""></label>
     ${suggestion && suggestion !== to ? `<p class="sub">Client contact <button type="button" class="sm-btn" id="jemuse">${esc(suggestion)}</button></p>` : ""}
     <p class="sub jem-subject" id="jemsubj">${esc(subject)}</p>
     <pre class="email-preview" id="jembody">${esc(body)}</pre>
     ${photoBlock}
     ${receiptBlock}
+    <p class="sub">Send attaches the job photos and, when you can see prices, the company tip dockets. Unticked files apply only to Other mail app.</p>
+    <p class="sub" id="jemstate" hidden></p>
     <p class="sub" id="jemprog" hidden></p>
     <p class="err" id="jemwarn" hidden></p>
-    <button type="button" class="mbtn complete" id="jemsend" hidden>Share</button>
-    <a class="mbtn complete" id="jemmail" hidden>Open in mail app</a>
+    <button type="button" class="mbtn complete" id="jemsend">Send</button>
+    <p class="sub jem-other"><a id="jemmail" href="">Other mail app</a></p>
     <button type="button" class="mbtn" id="jemcopy">Copy</button>
     <button type="button" class="mbtn" id="jemzip" hidden>Download photos</button>
     <button type="button" class="mbtn ghost" id="jemx">Cancel</button></div>`;

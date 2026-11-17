@@ -726,6 +726,13 @@ service cloud.firestore {
     match /passwordResetRate/{uid} {
       allow read, write: if false;
     }
+    // Job-email rate limit and send audit. Written by sendJobEmail only.
+    match /jobEmailRate/{uid} {
+      allow read, write: if false;
+    }
+    match /jobMail/{id} {
+      allow read, write: if false;
+    }
 
 // BEGIN CHAT RULES
     function chatSignedIn() { return request.auth != null; }
