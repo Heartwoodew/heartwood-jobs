@@ -6246,8 +6246,14 @@ async function openJobEmail(job) {
     const who = (result.to && result.to.length ? result.to : fallbackTo).join(", ");
     let line = `Sent to ${who}.`;
     const attached = Number(result.attached) || 0;
-    const linked = Number(result.overflow) || 0;
+    const linked = Number(result.overflowCount != null ? result.overflowCount : result.overflow) || 0;
+    const compressed = Number(result.compressed) || 0;
+    const dockets = Number(result.compressedReceipts) || 0;
+    const skipped = Number(result.skipped) || 0;
     if (attached) line += ` ${attached} file${attached === 1 ? "" : "s"} attached.`;
+    if (compressed) line += ` ${compressed} photo${compressed === 1 ? "" : "s"} compressed to fit.`;
+    if (dockets) line += ` ${dockets} tip docket${dockets === 1 ? "" : "s"} compressed to fit.`;
+    if (skipped) line += ` ${skipped} file${skipped === 1 ? "" : "s"} skipped.`;
     if (linked) line += ` ${linked} file${linked === 1 ? " was" : "s were"} too large and ${linked === 1 ? "is" : "are"} linked in the email for people signed in to this company.`;
     return line;
   }
