@@ -126,7 +126,10 @@ test("the Windows workflow builds both installers and only drafts a release for 
   assert.match(yml, /workflow_dispatch:/);
   assert.match(yml, /releaseDraft: true/);
   assert.match(yml, /--bundles nsis,msi/);
-  assert.match(yml, /uploadWorkflowArtifacts: true/);
+  assert.match(yml, /actions\/upload-artifact@v4/);
+  assert.match(yml, /callup-windows/);
+  assert.match(yml, /bundle\/nsis\/\*\.exe/);
+  assert.match(yml, /bundle\/msi\/\*\.msi/);
   assert.match(yml, /tagName: \$\{\{ github\.ref_type == 'tag'/);
   assert.doesNotMatch(yml, /releaseDraft:\s*false/);
   const conf = JSON.parse(readFileSync(join(ROOT, "desktop/src-tauri/tauri.conf.json"), "utf8"));
