@@ -4,6 +4,15 @@
 // No new secret: RESEND_API_KEY, INVITE_EMAIL_ENABLED and INVITE_EMAIL_ALLOW_TO are the
 // ones inviteEmailWorker already uses. Nothing is sent unless INVITE_EMAIL_ENABLED is
 // the string "true". This file does not open an SMTP connection.
+//
+// Job email only: JOB_EMAIL_FROM_OVERRIDES is a non-secret env var (not a company
+// setting, not a secret). It is JSON mapping companyId to {from, name, replyTo?}.
+// Heartwood's company id is "heartwood" (HEARTWOOD_TENANT in shared/staff-invites.js
+// and app/features/cloud-storage.js; the same id is used for companies/heartwood).
+// The override is used only when the from-address domain is listed in
+// JOB_EMAIL_VERIFIED_DOMAINS (comma-separated; default callupapp.com.au). Any other
+// domain, or JSON that does not parse, keeps the CallUp sender. Invites and password
+// resets do not read these variables.
 import { rateDecision } from "./password-reset.js";
 import { canSeeJob, jobTenantOf, resolveMembership } from "./shared/cloud-storage.js";
 import {
@@ -25,9 +34,14 @@ import {
 
 export const JOB_EMAIL_HOURLY_LIMIT = 20;
 export const JOB_EMAIL_WINDOW_MS = 60 * 60 * 1000;
+// Used when JOB_EMAIL_VERIFIED_DOMAINS is unset or blank. An unverified domain never sends.
+export const DEFAULT_JOB_EMAIL_VERIFIED_DOMAINS = "callupapp.com.au";
 
 const SENDING_ADDRESS = (/<([^>]+)>/.exec(CALLUP_INVITE_FROM) || [])[1] || "noreply@callupapp.com.au";
 const JOB_ID = /^[A-Za-z0-9_-]{1,128}$/;
+const EMAIL_RE = /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i;
+const DOMAIN_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
+const SKIP_OVERRIDE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
 function companyOf(record) {
   if (!record || typeof record !== "object") return "heartwood";
@@ -49,18 +63,99 @@ export function jobEmailFailureText(reason) {
   return "You can't email this job.";
 }
 
+function cleanSenderName(value) {
+  return String(value || "").replace(/[\r\n<>"]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+}
+
+function isEmail(value) {
+  return EMAIL_RE.test(String(value || "").trim());
+}
+
+function emailDomain(address) {
+  const email = String(address || "").trim().toLowerCase();
+  const at = email.lastIndexOf("@");
+  if (at < 1) return "";
+  return email.slice(at + 1);
+}
+
 export function jobEmailFrom(companyName) {
-  const name = String(companyName || "CallUp").replace(/[\r\n<>"]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80) || "CallUp";
+  const name = cleanSenderName(companyName) || "CallUp";
   return `${name} via CallUp <${SENDING_ADDRESS}>`;
 }
 
 export function jobEmailReplyTo({ companyEmail, senderEmail } = {}) {
   const company = String(companyEmail || "").trim().toLowerCase();
   const sender = String(senderEmail || "").trim().toLowerCase();
-  const email = /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i;
-  if (email.test(company)) return company;
-  if (email.test(sender)) return sender;
+  if (isEmail(company)) return company;
+  if (isEmail(sender)) return sender;
   return "";
+}
+
+/** Comma-separated domains allowed to appear in a job-email From override. */
+export function jobEmailVerifiedDomains(env = {}) {
+  const raw = env && env.JOB_EMAIL_VERIFIED_DOMAINS;
+  const source = raw == null || String(raw).trim() === "" ? DEFAULT_JOB_EMAIL_VERIFIED_DOMAINS : String(raw);
+  const seen = [];
+  for (const part of source.split(",")) {
+    const domain = part.trim().toLowerCase().replace(/^\.+/, "").replace(/\.+$/, "");
+    if (!DOMAIN_RE.test(domain) || seen.includes(domain)) continue;
+    seen.push(domain);
+  }
+  return seen;
+}
+
+/**
+ * companyId -> { from, name, replyTo? }. Bad JSON, or an entry without a real
+ * address and a display name, is dropped. Companies cannot write this map.
+ */
+export function parseJobEmailFromOverrides(env = {}) {
+  const raw = env && env.JOB_EMAIL_FROM_OVERRIDES;
+  if (raw == null || String(raw).trim() === "") return Object.create(null);
+  let parsed;
+  try {
+    parsed = JSON.parse(String(raw));
+  } catch {
+    return Object.create(null);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return Object.create(null);
+  const out = Object.create(null);
+  for (const key of Object.keys(parsed)) {
+    if (SKIP_OVERRIDE_KEYS.has(key)) continue;
+    const id = key.trim();
+    if (!id || SKIP_OVERRIDE_KEYS.has(id)) continue;
+    const value = parsed[key];
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const from = String(value.from || "").trim().toLowerCase();
+    const name = cleanSenderName(value.name);
+    if (!isEmail(from) || !name) continue;
+    const entry = { from, name };
+    const replyTo = String(value.replyTo || "").trim().toLowerCase();
+    if (replyTo && isEmail(replyTo)) entry.replyTo = replyTo;
+    out[id] = entry;
+  }
+  return out;
+}
+
+/**
+ * From and Reply-To for one job email. An override applies only when its
+ * from-address domain is on the verified-domain list. Otherwise the CallUp
+ * sender and the company (then sender) reply-to are unchanged.
+ */
+export function resolveJobEmailSender({ companyId, companyName, companyEmail, senderEmail, env } = {}) {
+  const fallback = {
+    from: jobEmailFrom(companyName),
+    replyTo: jobEmailReplyTo({ companyEmail, senderEmail }),
+  };
+  const id = String(companyId || "").trim();
+  if (!id) return fallback;
+  const override = parseJobEmailFromOverrides(env)[id];
+  if (!override) return fallback;
+  const domain = emailDomain(override.from);
+  if (!domain || !jobEmailVerifiedDomains(env).includes(domain)) return fallback;
+  return {
+    from: `${override.name} <${override.from}>`,
+    replyTo: override.replyTo || override.from,
+  };
 }
 
 export function jobEmailAppUrl(companyId) {
@@ -366,6 +461,13 @@ export async function sendJobEmail({ callerUid, jobId, to, cc } = {}, deps = {})
   }
 
   const companyName = displayCompanyName(membership.tenantId, company);
+  const sender = resolveJobEmailSender({
+    companyId: membership.tenantId,
+    companyName,
+    companyEmail: company && company.email,
+    senderEmail: callerUser && callerUser.email,
+    env,
+  });
   const built = buildJobEmail({
     job,
     company: { companyId: membership.tenantId, name: companyName },
@@ -415,13 +517,10 @@ export async function sendJobEmail({ callerUid, jobId, to, cc } = {}, deps = {})
   if (!claimed || !claimed.ok) return fail("rate-limited");
 
   const message = {
-    from: jobEmailFrom(companyName),
+    from: sender.from,
     to: recipients.to,
     cc: recipients.cc,
-    replyTo: jobEmailReplyTo({
-      companyEmail: company && company.email,
-      senderEmail: callerUser && callerUser.email,
-    }),
+    replyTo: sender.replyTo,
     subject: built.subject,
     text,
     attachments: attachments.map(({ filename, content, contentType }) => ({ filename, content, contentType })),
