@@ -1,0 +1,92 @@
+name: Desktop Windows
+
+# Builds the CallUp Windows installers.
+# A desktop-v* tag also uploads them to a draft GitHub Release. Publishing that draft is a separate step.
+# workflow_dispatch is available once this file is on the default branch.
+# Pull requests that change the desktop app also build an installer so it can be tried before a tag.
+
+on:
+  push:
+    tags:
+      - "desktop-v*"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop-windows.yml"
+
+concurrency:
+  group: desktop-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Windows installer
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+
+      - name: Ensure WiX 3 is on PATH
+        shell: pwsh
+        run: |
+          if (Get-Command light.exe -ErrorAction SilentlyContinue) {
+            Write-Host "WiX already installed"
+            exit 0
+          }
+          $zip = Join-Path $env:RUNNER_TEMP "wix314-binaries.zip"
+          $dest = Join-Path $env:RUNNER_TEMP "wix314"
+          Invoke-WebRequest -Uri "https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip" -OutFile $zip
+          Expand-Archive $zip -DestinationPath $dest
+          Add-Content $env:GITHUB_PATH $dest
+          Write-Host "WiX unpacked to $dest"
+
+      - name: Sign update packages when the updater key is configured
+        working-directory: desktop
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: node scripts/updater-artifacts.mjs
+
+      - name: Build installer
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        with:
+          projectPath: desktop
+          args: --bundles nsis,msi
+          releaseDraft: true
+          releaseName: CallUp ${{ github.ref_name }}
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          generateReleaseNotes: ${{ github.ref_type == 'tag' && 'true' || 'false' }}
+          updaterJsonPreferNsis: true
+
+      - name: Upload Windows installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: callup-windows
+          if-no-files-found: error
+          path: |
+            desktop/src-tauri/target/release/bundle/nsis/*.exe
+            desktop/src-tauri/target/release/bundle/msi/*.msi

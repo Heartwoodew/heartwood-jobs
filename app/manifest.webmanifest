@@ -5,7 +5,11 @@
   "description": "CallUp. Jobs, SWMS, timesheets and quotes for your crew.",
   "start_url": "/app/",
   "scope": "/app/",
+  "lang": "en-AU",
+  "dir": "ltr",
   "display": "standalone",
+  "display_override": ["standalone"],
+  "launch_handler": { "client_mode": "navigate-existing" },
   "background_color": "#f6f1ea",
   "theme_color": "#142033",
   "icons": [

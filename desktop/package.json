@@ -1,0 +1,15 @@
+{
+  "name": "callup-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "CallUp for Windows. Opens the live CallUp app.",
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

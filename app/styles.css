@@ -1283,3 +1283,10 @@ abbr.req{color:#9b2c2c;text-decoration:none;font-weight:700}
 .callup-help-form input{flex:1;min-width:0}
 .callup-help-card{margin:8px;padding:10px;background:#f7f1e8;border-radius:8px}
 #helpbtn{min-width:40px;font-weight:700}
+#desktopinstall{max-width:1150px;margin:0 auto;padding:8px 12px 0}
+#desktopinstall[hidden]{display:none}
+#desktopinstall .desktop-install-card{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;padding:10px 12px}
+#desktopinstall .desktop-install-card p{margin:0}
+#desktopinstall .btns{margin-left:auto}
+#desktopinstall a.ghost{display:inline-flex;align-items:center;min-height:40px;padding:7px 12px;border:1px solid var(--line);border-radius:8px;color:var(--ink);text-decoration:none}
+@media print{#desktopinstall{display:none!important}}

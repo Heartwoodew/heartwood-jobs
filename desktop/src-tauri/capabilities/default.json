@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The CallUp window. The live site is not given filesystem or shell commands.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
