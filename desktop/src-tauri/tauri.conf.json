@@ -1,0 +1,59 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "CallUp",
+  "version": "0.1.0",
+  "identifier": "com.callupapp.desktop",
+  "build": {
+    "frontendDist": "../frontend",
+    "devUrl": "https://app.callupapp.com.au/app/"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "createUpdaterArtifacts": false,
+    "publisher": "Heartwood Earthworx Pty Ltd",
+    "copyright": "Copyright Heartwood Earthworx Pty Ltd",
+    "category": "Business",
+    "shortDescription": "CallUp for Windows",
+    "longDescription": "CallUp for Windows opens the live CallUp app.",
+    "homepage": "https://app.callupapp.com.au/app/",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "http://timestamp.digicert.com",
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false
+      },
+      "wix": {
+        "language": "en-US"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDgxMERDODA0NEU0OERFQzAKUldUQTNraE9CTWdOZ2Z2aFVQS3EwR1MzY0FxUkhKK0syVFJCRDFNRkppSFRaWUZDN3MybnIvOUMK",
+      "endpoints": [
+        "https://github.com/Heartwoodew/heartwood-jobs/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

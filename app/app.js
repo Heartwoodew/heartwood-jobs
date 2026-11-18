@@ -100,6 +100,7 @@ import {
   addressWithSuburb, bulkCandidates, canImportInbox, composeAddress, defaultImportMode, duplicateWarning,
   findExistingJob, isImported, parseInboxEmail,
 } from "./features/inbox-import.js";
+import { startDesktopInstall } from "./features/desktop-install.js";
 
 const cfg = useEmulator ? { ...firebaseConfig, apiKey: "demo-key", projectId: "demo-heartwood" } : firebaseConfig;
 const fb = initializeApp(cfg);
@@ -204,6 +205,7 @@ window.addEventListener("offline", () => paintSync());
 if (navigator.serviceWorker) navigator.serviceWorker.addEventListener("message", ev => {
   if (ev.data && ev.data.type === "callup-sync") flushOffline().catch(() => {});
 });
+startDesktopInstall();
 
 // ------------------------------------------------------------------ constants / helpers
 // Client names for job/quote forms. Heartwood's builders by default; replaced in place per company (refreshClientLists).
