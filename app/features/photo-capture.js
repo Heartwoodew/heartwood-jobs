@@ -6,6 +6,10 @@ export function decidePhotoEmail({ collection, mirror, fileCount } = {}) {
   if (collection && collection !== "jobs") {
     return { email: true, reason: "not-job-photos" };
   }
+  // Queued files stay on the phone and upload later. They are not emailed.
+  if (mirror && mirror.reason === "queued") {
+    return { email: false, reason: "queued", storedCount: 0 };
+  }
   if (!mirror || mirror.ok !== true) {
     return { email: true, reason: (mirror && mirror.reason) || "mirror-failed" };
   }

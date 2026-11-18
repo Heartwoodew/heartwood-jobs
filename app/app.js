@@ -1,7 +1,7 @@
 // CallUp jobs app. Organisation name and logo come from org-settings.js.
 // This install's customer is Heartwood Earthworx. Firebase ids are unchanged.
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, signOut, connectAuthEmulator }
+import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, signOut, connectAuthEmulator, setPersistence, browserLocalPersistence }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator,
   collection, doc, getDoc, getDocFromCache, getDocs, query, where, orderBy, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, deleteField, serverTimestamp, arrayUnion, runTransaction, Timestamp }
@@ -32,7 +32,7 @@ import {
 } from "./features/autofill.js";
 import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, lightboxHtml, photoFailureText } from "./features/photo-gallery.js";
 import { decidePhotoEmail } from "./features/photo-capture.js";
-import { mountDocuments, unmountDocuments, openDocumentBlob, canManageDocuments } from "./features/job-documents.js";
+import { mountDocuments, unmountDocuments, openDocumentBlob, canManageDocuments, flushDocumentQueue, sharedQueue } from "./features/job-documents.js";
 import { installChatApp } from "./features/chat-ui.js";
 import { installPush } from "./features/push.js";
 import { installCompliance } from "./features/compliance.js";
@@ -43,6 +43,12 @@ import {
   canSendPasswordReset, forgotPasswordMessage, GOOGLE_ONLY_RESET,
 } from "./features/staff-invites.js";
 import { saveGuard, settleOrQueue } from "./features/pending-write.js";
+import {
+  SAVED_ON_PHONE, deviceOnline, needsSignal, actionForCall, emailOutboxAllowed,
+  jobsToWarm, warmReads, profileMiss, makeUpload, makeOutbox, classifyUploadError,
+  flushUploads, noteWrite, clearWrite, pendingEntries, indicatorModel, pendingListHtml,
+  sharedOfflineStore, registerUploadSync,
+} from "./features/offline.js";
 import {
   DEFAULT_WEIGHTS, canEditPerformanceSettings, canSeeStaffPerformance,
   performancePanelHtml, performanceSettingsHtml, periodBounds, rankPerformance, sanitizeWeights, weightsFromForm,
@@ -98,6 +104,8 @@ import {
 const cfg = useEmulator ? { ...firebaseConfig, apiKey: "demo-key", projectId: "demo-heartwood" } : firebaseConfig;
 const fb = initializeApp(cfg);
 const auth = getAuth(fb);
+// Stay signed in on this phone. A cold start with no signal must not ask for the password again.
+setPersistence(auth, browserLocalPersistence).catch(() => {});
 // Offline cache: jobs already loaded stay readable and writes queue until the phone is back online.
 const db = initializeFirestore(fb, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) });
 const storage = getStorage(fb);
@@ -107,6 +115,95 @@ if (useEmulator) {
   connectStorageEmulator(storage, "127.0.0.1", 9199);
 }
 if ("serviceWorker" in navigator && !useEmulator) navigator.serviceWorker.register("sw.js", { scope: "./" });
+const offlineStore = sharedOfflineStore();
+let localWrites = [];
+let syncPaint = 0;
+let flushBusy = false;
+function rememberWrite(item) { localWrites = noteWrite(localWrites, item); paintSync(); }
+function forgetWrite(id) { localWrites = clearWrite(localWrites, id); paintSync(); }
+// Firestore resolves a write only after the server answers. settleOrQueue lets the form close;
+// the original promise still settles later and drops the row from the pending list.
+function queueWrite(writePromise, item, doneToast, opts = {}) {
+  const announce = opts.announce !== false;
+  let pending = true;
+  let queued = false;
+  // Resolve either way so a late server refusal does not become an unhandled rejection
+  // after the form has already closed.
+  const tracked = Promise.resolve(writePromise).then(value => {
+    pending = false;
+    if (item && item.id) forgetWrite(item.id);
+    return { ok: true, value };
+  }, err => {
+    pending = false;
+    if (item && item.id) forgetWrite(item.id);
+    if (queued && !opts.quietFail) toast("Not saved: " + ((err && (err.code || err.message)) || "failed"));
+    return { ok: false, err };
+  });
+  return settleOrQueue(tracked, opts.ms).then(result => {
+    if (result.queued && pending && item && item.id) {
+      queued = true;
+      rememberWrite(item);
+      if (announce) toast(SAVED_ON_PHONE);
+      return { queued: true };
+    }
+    const body = result.value;
+    if (!body || body.ok === false) throw (body && body.err) || new Error("Not saved");
+    if (doneToast && announce) toast(doneToast);
+    paintSync();
+    return { queued: false, value: body.value };
+  });
+}
+function paintSync() {
+  const n = ++syncPaint;
+  pendingSnapshot().then(snap => {
+    if (n !== syncPaint) return;
+    const chip = $("#syncchip");
+    if (!chip) return;
+    const model = indicatorModel({ online: deviceOnline(), pendingCount: snap.items.length });
+    chip.hidden = false;
+    chip.className = "syncchip " + model.mode;
+    chip.textContent = model.text;
+    chip.setAttribute("aria-label", model.text);
+    chip.dataset.pending = String(model.pending);
+    const off = !deviceOnline();
+    document.querySelectorAll("#emailjob").forEach(btn => {
+      btn.disabled = off;
+      btn.title = off ? needsSignal("email-job", false).message : "";
+    });
+    document.querySelectorAll("#billsub, #billportal, #trialsub").forEach(btn => {
+      btn.disabled = off;
+      btn.title = off ? needsSignal("billing", false).message : "";
+    });
+  }).catch(() => {});
+}
+async function pendingSnapshot() {
+  const uid = me && me.uid;
+  const uploads = uid ? await offlineStore.listFiles(uid) : [];
+  const outbox = uid ? await offlineStore.listOutbox(uid) : [];
+  let documents = [];
+  if (uid) { try { documents = await sharedQueue().list(uid); } catch { documents = []; } }
+  const items = pendingEntries({ writes: localWrites, uploads, outbox, documents });
+  return { items, uploads, outbox, documents };
+}
+function openSyncList() {
+  pendingSnapshot().then(snap => {
+    document.querySelectorAll(".syncover").forEach(node => node.remove());
+    const model = indicatorModel({ online: deviceOnline(), pendingCount: snap.items.length });
+    const v = document.createElement("div");
+    v.className = "emdlg syncover";
+    v.innerHTML = `<div class="embox synclist"><h3>${esc(model.text)}</h3>${pendingListHtml(snap.items)}<p class="sub">Photos, receipts and documents stay on this phone until they upload. Job notes, clock times and forms sync through the app's saved copy.</p><button type="button" class="mbtn" data-x>Close</button></div>`;
+    document.body.appendChild(v);
+    v.querySelector("[data-x]").onclick = () => v.remove();
+    v.onclick = ev => { if (ev.target === v) v.remove(); };
+  }).catch(() => {});
+}
+const syncChip = $("#syncchip");
+if (syncChip) syncChip.onclick = () => openSyncList();
+window.addEventListener("online", () => { ui.warmKey = ""; paintSync(); flushOffline().catch(() => {}); warmUpcoming().catch(() => {}); });
+window.addEventListener("offline", () => paintSync());
+if (navigator.serviceWorker) navigator.serviceWorker.addEventListener("message", ev => {
+  if (ev.data && ev.data.type === "callup-sync") flushOffline().catch(() => {});
+});
 
 // ------------------------------------------------------------------ constants / helpers
 // Client names for job/quote forms. Heartwood's builders by default; replaced in place per company (refreshClientLists).
@@ -214,7 +311,8 @@ let COMP = { start() {}, stop() {}, bind() {}, abandon() {}, adminHtml() { retur
 let QG = { bindAdmin() {} }; // Quotes module; filled after helpers load
 let ROUTE = { open() {} };
 const ALEX_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";      // Alex has no users/{uid} profile doc; always staff
-const ui = { view: "list", staffF: "", typeF: "", photoLists: {}, photoUrls: {}, photoBlobs: {}, photoThumbs: {}, photoThumbTasks: {}, photoErrors: {}, photoJobs: {}, photoPaint: 0 };
+const ui = { view: "list", staffF: "", typeF: "", photoLists: {}, photoUrls: {}, photoBlobs: {}, photoThumbs: {}, photoThumbTasks: {}, photoErrors: {}, photoJobs: {}, photoPaint: 0, queuedThumbs: {} };
+paintSync();
 
 // ------------------------------------------------------------------ auth
 try { captureReferralParam(location.search, localStorage); } catch { /* private mode */ }
@@ -241,8 +339,18 @@ onAuthStateChanged(auth, async user => {
   // users/{uid}.role: "labourer" / "operator" (crew, no $, same access) | "supervisor" (staff shell + canSeeMoney)
   // | "manager" (supervisor, plus company rates, leave decisions and staff up to manager) | "admin".
   // A manager cannot change billing, the plan, company details, or an admin. A manager can change the trade list. Patrick is rules-admin with an operator profile (bookable).
-  const snap = await getDoc(doc(db, "users", user.uid)).catch(() => null);
+  let snap = null;
+  try { snap = await getDoc(doc(db, "users", user.uid)); }
+  catch {
+    try { snap = await getDocFromCache(doc(db, "users", user.uid)); }
+    catch { snap = null; }
+  }
   const prof = snap && snap.exists() ? snap.data() : null;
+  // No signal and no saved profile: stay signed in. Do not show the "no company" screen.
+  if (!prof && profileMiss({ online: deviceOnline(), cached: false }).action === "offline-hold") {
+    renderOfflineSignedIn(user);
+    return;
+  }
   // Heartwood admins list only Heartwood profiles (rules deny every other company's staff).
   // Other companies' admins/supervisors use their own profile role below, so this list is Heartwood-only.
   let users = null;
@@ -304,6 +412,7 @@ onAuthStateChanged(auth, async user => {
     try { history.replaceState({ callupView: "home" }, "", withCompanyViewParam(location.href, false)); } catch { /* the param is only a marker */ }
   }
   await loadCompanyBrand();
+  flushOffline().catch(() => {});
   $("#who").textContent = `${me.name} · ${me.role}`; showAccountChrome(true);
   if (ui.companyAccess && ui.companyAccess.paused) {
     renderAccountPaused();
@@ -343,7 +452,7 @@ onAuthStateChanged(auth, async user => {
     // Older jobs still open (Scheduled / In progress, dated before the window) stay in the office list and search.
     let windowJobs = [], staleJobs = [];
     const setJobs = () => { jobs = mergeJobLists(windowJobs, staleJobs).map(withMoney); addNameOnlyStaff(jobs); };
-    const u1 = onSnapshot(q, s => { windowJobs = s.docs.map(d => ({ id: d.id, ...d.data() })); setJobs(); renderAdmin(); queueDispatchPersist(jobs); }, e => { console.warn("jobs", e.code, e.message); windowJobs = []; setJobs(); renderAdmin(); });
+    const u1 = onSnapshot(q, s => { windowJobs = s.docs.map(d => ({ id: d.id, ...d.data() })); setJobs(); renderAdmin(); queueDispatchPersist(jobs); warmUpcoming(jobs).catch(() => {}); }, e => { console.warn("jobs", e.code, e.message); windowJobs = []; setJobs(); renderAdmin(); });
     const u5 = onSnapshot(companyJobs([where("status", "in", [...OPEN_STATUSES])]), s => {
       staleJobs = staleOpenJobs(s.docs.map(d => ({ id: d.id, ...d.data() })), todayStr()); setJobs(); renderAdmin(); queueDispatchPersist(jobs);
     }, e => console.warn("older open jobs", e.code, e.message));
@@ -364,7 +473,7 @@ onAuthStateChanged(auth, async user => {
   } else {
     // Operators may only list jobs assigned to them (enforced by firestore.rules).
     const q = companyJobs([where("assigned", "array-contains", user.uid)]);
-    const u1 = onSnapshot(q, s => { jobs = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); renderOperator(); });
+    const u1 = onSnapshot(q, s => { jobs = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); renderOperator(); warmUpcoming(jobs).catch(() => {}); });
     // Company supervisors are office (they already read quotes); crew never subscribe and the rules refuse them.
     moneyStart(renderOperator);
     const u3 = onSnapshot(query(collection(db, "incidents"), where("companyId", "==", myCompanyId()), where("reportedBy", "==", user.uid)), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); if (!ui.opSel && (ui.opTab || "today") === "today") renderOperator(); incRefresh(); }, e => console.warn("incidents", e.code));
@@ -695,6 +804,8 @@ function showBillingNote() {
   if (note) toast(note);
 }
 async function callAuthed(name, data) {
+  const gate = needsSignal(actionForCall(name), deviceOnline());
+  if (!gate.ok) throw new Error(gate.message);
   const projectId = useEmulator ? "demo-heartwood" : firebaseConfig.projectId;
   const url = useEmulator
     ? `http://127.0.0.1:5001/${projectId}/australia-southeast1/${name}`
@@ -868,6 +979,19 @@ function holdOutbound(kind, text) {
   alert("Test company. Nothing was sent.\n\n" + text);
 }
 // Signed in, but no users/{uid} profile: always leave a way out (sign out / try another login).
+function renderOfflineSignedIn(user) {
+  paintBrand();
+  $("#who").textContent = user.email || "Signed in";
+  showAccountChrome(true);
+  $("#app").innerHTML = `<form class="card login" id="offlinehold">
+    <h2>You're still signed in</h2>
+    <p>This phone has no signal, and your profile is not saved on it yet.</p>
+    <p class="sub">Open CallUp once with signal. After that, your jobs stay on the phone and you are not asked to sign in again.</p>
+    <button class="big ghost" type="button" id="offlineout">Sign out</button>
+  </form>`;
+  $("#offlineout").onclick = () => signOut(auth);
+  paintSync();
+}
 function renderNoAccess(user) {
   paintBrand();
   $("#who").textContent = user.email || "";
@@ -1793,6 +1917,141 @@ function b64ToBlob(b64, type) {
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return new Blob([bytes], { type });
 }
+async function warmUpcoming(list) {
+  if (!me || !deviceOnline()) return;
+  const today = todayStr();
+  const source = (list && list.length ? list : jobs) || [];
+  if (!source.length) return;
+  const office = me.role === "admin" || me.role === "manager" || me.role === "supervisor" || canSeeMoney();
+  const picked = jobsToWarm(source, { today, uid: me.uid, office });
+  const key = myCompanyId() + ":" + me.uid + ":" + today + ":" + picked.length + ":" + source.length;
+  if (ui.warmKey === key) return;
+  ui.warmKey = key;
+  const swmsIds = companyHasSwms() ? companySwms(myCompanyId()).map(row => row[0]) : [];
+  const reads = warmReads({ jobs: picked, companyId: myCompanyId(), uid: me.uid, swmsIds, today });
+  for (const read of reads) {
+    try {
+      if (read.kind === "documents") {
+        const col = collection(db, "jobs", read.jobId, "documents");
+        const src = canManageDocuments(documentActorRole()) ? col : query(col, where("visibility", "==", "crew"));
+        await getDocs(src);
+      } else if (read.kind === "run-sheet") {
+        const id = runSheetId(read.uid, read.date);
+        if (id) await getDoc(doc(db, "runSheets", id));
+      } else if (read.kind === "company") {
+        await getDoc(doc(db, "companies", read.companyId));
+      } else if (read.kind === "prestart-templates") {
+        await getDocs(collection(db, "tenants", read.companyId, "prestartTemplates"));
+      } else if (read.kind === "fleet") {
+        await getDocs(collection(db, "tenants", read.companyId, "fleet"));
+      } else if (read.kind === "take5-settings") {
+        await getDoc(doc(db, "take5Settings", read.companyId));
+      } else if (read.kind === "swms") {
+        await getDocs(query(collection(db, "swmsChunks"), where("file", "==", read.id)));
+      } else if (read.kind === "swms-signatures") {
+        const sigs = read.companyId === "heartwood"
+          ? query(collection(db, "swmsSignatures"), where("uid", "==", read.uid))
+          : query(collection(db, "swmsSignatures"), where("uid", "==", read.uid), where("companyId", "==", read.companyId));
+        await getDocs(sigs);
+      }
+    } catch { /* a rule or a missing document must not stop the rest of the warm */ }
+  }
+}
+function rememberQueuedThumb(jobId, file) {
+  if (!jobId || !file || typeof URL === "undefined" || !URL.createObjectURL) return;
+  const type = file.type || "";
+  if (!type.startsWith("image/")) return;
+  ui.queuedThumbs[jobId] = ui.queuedThumbs[jobId] || [];
+  ui.queuedThumbs[jobId].push(URL.createObjectURL(file));
+  paintPhotoSlots();
+}
+async function enqueueUpload(row) {
+  const built = makeUpload(row);
+  if (!built.ok) return false;
+  await offlineStore.putFile(built.row);
+  if (built.row.kind === "photo" && built.row.extra && built.row.extra.jobId) rememberQueuedThumb(built.row.extra.jobId, built.row.file);
+  paintSync();
+  registerUploadSync().catch(() => {});
+  return true;
+}
+async function flushOffline() {
+  if (flushBusy || !me || !deviceOnline()) return;
+  flushBusy = true;
+  try {
+    const uid = me.uid;
+    const files = await offlineStore.listFiles(uid);
+    const result = await flushUploads(files, { online: true, upload: row => sendQueuedFile(row) });
+    for (const row of result.uploaded) await offlineStore.removeFile(row.id);
+    for (const row of [...result.kept, ...result.refused]) await offlineStore.putFile(row);
+    const box = await offlineStore.listOutbox(uid);
+    for (const item of box) {
+      if (item.hold) continue;
+      try {
+        if (item.kind === "incident") await replayIncident(item.payload);
+        else continue;
+        await offlineStore.removeOutbox(item.id);
+      } catch (error) {
+        const next = { ...item, attempts: (item.attempts || 0) + 1, lastError: String((error && (error.code || error.message)) || "retry"), hold: classifyUploadError(error) === "refused" };
+        await offlineStore.putOutbox(next);
+      }
+    }
+    try {
+      await flushDocumentQueue({
+        queue: sharedQueue(), uid, online: true,
+        upload: row => uploadBytes(storageRef(storage, row.path), row.file, { contentType: row.contentType, customMetadata: row.metadata || {} }),
+        writeDoc: row => setDoc(doc(db, "jobs", row.firestore.jobId, "documents", row.id), { ...row.firestore, createdAt: serverTimestamp(), updatedAt: serverTimestamp() }),
+      });
+    } catch { /* the document queue retries on the next open */ }
+  } finally {
+    flushBusy = false;
+    paintSync();
+  }
+}
+async function sendQueuedFile(row) {
+  // Receipt bytes are allowed only after the receipt document exists. Write that first.
+  if (row.kind === "receipt" && row.extra && !row.extra.firestoreWritten) await writeQueuedReceipt(row);
+  await uploadBytes(storageRef(storage, row.path), row.file, { contentType: row.contentType || "application/octet-stream", customMetadata: row.metadata || {} });
+  if (row.kind === "photo" && row.extra && row.extra.jobId) {
+    const label = row.label || "Photo";
+    updateDoc(doc(db, "jobs", row.extra.jobId), { log: arrayUnion(logEntry(`Photo saved from this phone (${label})`)), updatedAt: serverTimestamp(), updatedBy: me.uid }).catch(() => {});
+  }
+}
+async function writeQueuedReceipt(row) {
+  const extra = row.extra || {};
+  const b64 = await blobToB64(row.file);
+  const CH = 700000;
+  const n = Math.ceil(b64.length / CH) || 1;
+  const rco = extra.companyId && extra.companyId !== "heartwood" ? { companyId: extra.companyId, tenantId: extra.companyId } : {};
+  for (let i = 0; i < n; i++) {
+    await setDoc(doc(db, "receiptChunks", `${row.id}_${i}`), { rid: row.id, i, uid: me.uid, data: b64.slice(i * CH, (i + 1) * CH), ...rco });
+  }
+  await setDoc(doc(db, "receipts", row.id), {
+    uid: me.uid, workerName: extra.workerName || me.name, ...extra.measures, supplier: extra.supplier, paidPersonally: extra.paidPersonally,
+    jobNo: extra.jobNo || null, jobId: extra.jobId || null, address: extra.address || null, chunks: n, mime: "image/jpeg",
+    bytes: row.bytes || Math.round(b64.length * 0.75), status: "queued", createdAt: serverTimestamp(), createdAtIso: extra.createdAtIso || new Date().toISOString(), ...rco,
+  });
+  row.extra.firestoreWritten = true;
+}
+function blobToB64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || "").split(",")[1] || "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+async function replayIncident(data) {
+  return runTransaction(db, async tx => {
+    const cref = doc(db, "incidentCounter", myCompanyId() === "heartwood" ? "main" : myCompanyId());
+    const c = await tx.get(cref);
+    const n = (c.exists() ? c.data().n : 0) + 1;
+    const reportNo = incPad(n);
+    const id = myCompanyId() === "heartwood" ? reportNo : myCompanyId() + "_" + reportNo;
+    tx.set(cref, { n });
+    tx.set(doc(db, "incidents", id), { ...data, createdAt: data.createdAt || serverTimestamp(), seq: n, reportNo });
+    return { id, reportNo };
+  });
+}
 // Job photos go to Storage first, so a phone with no signal must not sit silently on "Saving photos" for the
 // SDK's 10-minute retry window. Offline skips straight to the email fallback. Each photo uploads resumably with a
 // progress toast and is cancelled if no bytes move for PHOTO_STALL_MS. One failed photo no longer fails the batch:
@@ -1819,11 +2078,23 @@ function photoFailReason(e) {
   if (code === "upload-stalled" || code === "photo-file-missing") return code;
   return storageErrorCode(e);
 }
+async function queuePlannedPhotos(j, files, plan) {
+  let queued = 0;
+  for (const target of plan.uploads || []) {
+    const file = files[target.sourceIndex];
+    if (!file) continue;
+    const id = (target.path || "").split("/").pop() || ("p" + queued + Date.now());
+    const ok = await enqueueUpload({
+      id, kind: "photo", uid: me.uid, companyId: myCompanyId(), path: target.path,
+      contentType: target.contentType, metadata: target.metadata, label: file.name || ("Photo " + jobNo(j)),
+      file, extra: { jobId: j.id },
+    });
+    if (ok) queued += 1;
+  }
+  return queued;
+}
 async function mirrorJobPhotos(j, files) {
   const at = galleryNow();
-  if (typeof navigator !== "undefined" && navigator.onLine === false) {
-    return { ok: false, reason: "offline", uploaded: [], skipped: files.map((f, sourceIndex) => ({ sourceIndex, name: f && f.name, reason: "offline" })) };
-  }
   let plan = planJobPhotoMirrors({
     membership: cloudMembership(), job: j,
     files: files.map((f, i) => ({
@@ -1833,7 +2104,12 @@ async function mirrorJobPhotos(j, files) {
   });
   if (!plan.ok) { console.warn("cloud photo mirror skipped", (plan.skipped || []).map(s => s.reason).join(",") || "none"); return { ok: false, reason: (plan.skipped || []).map(s => s.reason).join(",") || "none", uploaded: [], skipped: plan.skipped || [] }; }
   plan = stampExpiresAfter(plan, j, at);
-  const total = (plan.uploads || []).length, failed = [];
+  if (!deviceOnline()) {
+    const queued = await queuePlannedPhotos(j, files, plan);
+    if (queued) return { ok: false, reason: "queued", uploaded: [], skipped: plan.skipped || [], queued };
+    return { ok: false, reason: "offline", uploaded: [], skipped: files.map((f, sourceIndex) => ({ sourceIndex, name: f && f.name, reason: "offline" })) };
+  }
+  const total = (plan.uploads || []).length, failed = [], queuedIndexes = new Set();
   let at1 = 0, signalLost = "", lastMsg = "", lastMove = Date.now();
   const say = pct => {
     lastMove = Date.now();
@@ -1857,13 +2133,25 @@ async function mirrorJobPhotos(j, files) {
       const reason = e && e.code === "offline" ? "offline" : photoFailReason(e);
       if (["offline", "upload-stalled", "storage/retry-limit-exceeded"].includes(reason)) signalLost = signalLost || reason;
       console.warn("cloud photo upload", reason);
+      if (["offline", "upload-stalled", "storage/retry-limit-exceeded"].includes(reason) && file) {
+        const id = (target.path || "").split("/").pop() || ("p" + target.sourceIndex);
+        const saved = await enqueueUpload({
+          id, kind: "photo", uid: me.uid, companyId: myCompanyId(), path: target.path,
+          contentType: target.contentType, metadata: target.metadata, label: file.name || ("Photo " + jobNo(j)),
+          file, extra: { jobId: j.id },
+        });
+        if (saved) { queuedIndexes.add(target.sourceIndex); return null; }
+      }
       failed.push({ sourceIndex: target.sourceIndex, name: file && file.name, reason });
       return null;
     }
   }); } finally { clearInterval(keepUp); }
-  const uploaded = (plan.uploads || []).filter(u => !failed.some(f => f.sourceIndex === u.sourceIndex));
+  const uploaded = (plan.uploads || []).filter(u => !failed.some(f => f.sourceIndex === u.sourceIndex) && !queuedIndexes.has(u.sourceIndex));
   const skipped = [...(plan.skipped || []), ...failed];
-  if (!uploaded.length) return { ok: false, reason: (failed[0] && failed[0].reason) || "mirror-failed", uploaded: [], skipped };
+  if (!uploaded.length && queuedIndexes.size && !failed.length && !(plan.skipped || []).length) {
+    return { ok: false, reason: "queued", uploaded: [], skipped: [], queued: queuedIndexes.size };
+  }
+  if (!uploaded.length && !queuedIndexes.size) return { ok: false, reason: (failed[0] && failed[0].reason) || "mirror-failed", uploaded: [], skipped };
   // Not a retention anchor, including on a completed job. Listing still uses the
   // job's completion or existing activity date. This only asks other open phones to list again.
   // Staff can't write cloudPhotosAt (rules). Their upload already bumps photosEmailedAt, which photoMark also watches.
@@ -1941,7 +2229,9 @@ function paintPhotoSlots() {
       failed: !!ui.photoErrors?.[p.path],
       error: ui.photoErrors?.[p.path] || "",
     }));
-    el.innerHTML = photoSlotHtml({
+    const queued = ui.queuedThumbs[id] || [];
+    const queuedHtml = queued.length ? `<div class="qthumbs">${queued.map(src => `<img src="${esc(src)}" alt="">`).join("")}<p class="sub">${esc(SAVED_ON_PHONE)}</p></div>` : "";
+    el.innerHTML = queuedHtml + photoSlotHtml({
       jobId: id, status: row?.status || "loading", count: row?.count || 0,
       role: el.dataset.photorole || "both", variant: el.dataset.photovariant === "sm" ? "sm" : "phone",
       iconHtml: el.dataset.photovariant === "sm" ? "" : ICO.photos,
@@ -2265,21 +2555,68 @@ function receiptDialog(j) {
     if (!checked.ok) { $("#rerr").textContent = checked.reason; return; }
     $("#rsend").disabled = true; $("#rsend").textContent = "Uploading…";
     try {
-      const b64 = await shrinkImage(file), CH = 700000, n = Math.ceil(b64.length / CH);
+      const b64 = await shrinkImage(file);
+      const blob = b64ToBlob(b64, "image/jpeg");
       const ref = doc(collection(db, "receipts"));
-      // Other companies' receipts carry their companyId, so the Heartwood Hubdoc worker never files them.
-      const rco = myCompanyId() === "heartwood" ? {} : { companyId: myCompanyId(), tenantId: myCompanyId() };
-      for (let i = 0; i < n; i++) await setDoc(doc(db, "receiptChunks", `${ref.id}_${i}`), { rid: ref.id, i, uid: me.uid, data: b64.slice(i * CH, (i + 1) * CH), ...rco });
-      const written = { id: ref.id, uid: me.uid, jobId: j ? j.id : null, status: "queued" };
       const supplier = f.sup.value.trim();
       const paidPersonally = receiptPaidPersonally(supplier, f.mine.checked);
-      await setDoc(ref, { uid: me.uid, workerName: me.name, ...receiptMeasureFields(checked.measures), supplier, paidPersonally,
-        jobNo: f.job.value.trim().replace(/^#/, "") || null, jobId: written.jobId, address: j ? (j.address || null) : null, chunks: n, mime: "image/jpeg", bytes: Math.round(b64.length * 0.75),
-        status: "queued", createdAt: serverTimestamp(), createdAtIso: new Date().toISOString(), ...rco });
+      const measures = receiptMeasureFields(checked.measures);
+      const extra = {
+        measures, supplier, paidPersonally, workerName: me.name, companyId: myCompanyId(),
+        jobNo: f.job.value.trim().replace(/^#/, "") || null, jobId: j ? j.id : null, address: j ? (j.address || null) : null,
+        createdAtIso: new Date().toISOString(), firestoreWritten: false,
+      };
+      const tenant = (cloudMembership().ok && cloudMembership().tenantId) || myCompanyId();
+      const path = `tenants/${tenant}/receipts/${ref.id}/original`;
+      const metadata = { tenantId: tenant, receiptId: ref.id, uploaderUid: me.uid, purpose: "receipt" };
+      const holdReceipt = async () => {
+        const ok = await enqueueUpload({
+          id: ref.id, kind: "receipt", uid: me.uid, companyId: myCompanyId(), path, contentType: "image/jpeg",
+          metadata, label: supplier || "Receipt", file: blob, extra,
+        });
+        if (!ok) throw new Error("queue");
+        rememberQueuedThumb(j ? j.id : "receipts", blob);
+        d.close();
+        toast(SAVED_ON_PHONE);
+      };
+      if (!deviceOnline()) { await holdReceipt(); return; }
+      const task = (async () => {
+        const CH = 700000, n = Math.ceil(b64.length / CH);
+        // Other companies' receipts carry their companyId, so the Heartwood Hubdoc worker never files them.
+        const rco = myCompanyId() === "heartwood" ? {} : { companyId: myCompanyId(), tenantId: myCompanyId() };
+        for (let i = 0; i < n; i++) await setDoc(doc(db, "receiptChunks", `${ref.id}_${i}`), { rid: ref.id, i, uid: me.uid, data: b64.slice(i * CH, (i + 1) * CH), ...rco });
+        const written = { id: ref.id, uid: me.uid, jobId: extra.jobId, status: "queued" };
+        await setDoc(ref, { uid: me.uid, workerName: me.name, ...measures, supplier, paidPersonally,
+          jobNo: extra.jobNo, jobId: written.jobId, address: extra.address, chunks: n, mime: "image/jpeg", bytes: Math.round(b64.length * 0.75),
+          status: "queued", createdAt: serverTimestamp(), createdAtIso: extra.createdAtIso, ...rco });
+        return written;
+      })();
+      const result = await settleOrQueue(task);
       rememberEntries({ supplier });
+      if (result.queued) { d.close(); toast(SAVED_ON_PHONE); return; }
       d.close(); toast(myCompanyId() === "heartwood" ? "Receipt uploaded - queued for Hubdoc" : "Receipt uploaded"); if (j) loadJobReceipts(j);
-      mirrorReceipt(ref.id, b64, j || null, written).catch(e => console.warn("cloud receipt mirror", e && (e.code || e.message) || e));
-    } catch (e) { $("#rerr").textContent = "Not uploaded: " + (e.code || e.message); $("#rsend").disabled = false; $("#rsend").textContent = "Upload"; }
+      mirrorReceipt(ref.id, b64, j || null, result.value).catch(e => console.warn("cloud receipt mirror", e && (e.code || e.message) || e));
+    } catch (e) {
+      if (classifyUploadError(e) === "retry") {
+        try {
+          const b64 = await shrinkImage(file);
+          const blob = b64ToBlob(b64, "image/jpeg");
+          const ref = doc(collection(db, "receipts"));
+          const supplier = f.sup.value.trim();
+          const tenant = (cloudMembership().ok && cloudMembership().tenantId) || myCompanyId();
+          await enqueueUpload({
+            id: ref.id, kind: "receipt", uid: me.uid, companyId: myCompanyId(),
+            path: `tenants/${tenant}/receipts/${ref.id}/original`, contentType: "image/jpeg",
+            metadata: { tenantId: tenant, receiptId: ref.id, uploaderUid: me.uid, purpose: "receipt" },
+            label: supplier || "Receipt", file: blob,
+            extra: { measures: receiptMeasureFields(checked.measures), supplier, paidPersonally: receiptPaidPersonally(supplier, f.mine.checked), workerName: me.name, companyId: myCompanyId(), jobNo: f.job.value.trim().replace(/^#/, "") || null, jobId: j ? j.id : null, address: j ? (j.address || null) : null, createdAtIso: new Date().toISOString(), firestoreWritten: false },
+          });
+          rememberQueuedThumb(j ? j.id : "receipts", blob);
+          d.close(); toast(SAVED_ON_PHONE); return;
+        } catch { /* show the error below */ }
+      }
+      $("#rerr").textContent = "Not uploaded: " + (e.code || e.message); $("#rsend").disabled = false; $("#rsend").textContent = "Upload";
+    }
   };
 }
 // Job card: Upload receipt + that job's receipts. Workers see their own; Alex sees all (rules enforce the same).
@@ -3037,14 +3374,21 @@ function bindLeave(A) {
       if (file.size > 8 * 1024 * 1024) { if (err) err.textContent = "The certificate must be 8 MB or smaller."; return; }
       certificatePath = certificateStoragePath(me.uid, id, objectName);
       certificateName = String(file.name || objectName).slice(0, 120);
-      try {
-        await uploadBytes(storageRef(storage, certificatePath), file, {
-          contentType,
-          customMetadata: { purpose: "leave-certificate", uploaderUid: me.uid, requestId: id },
-        });
-      } catch (e) {
-        if (err) err.textContent = "The certificate was not saved (" + (e.code || "storage") + "). Nothing was requested.";
-        return;
+      const certMeta = { purpose: "leave-certificate", uploaderUid: me.uid, requestId: id };
+      if (!deviceOnline()) {
+        const ok = await enqueueUpload({ id, kind: "leave-cert", uid: me.uid, companyId: myCompanyId(), path: certificatePath, contentType, metadata: certMeta, label: certificateName, file });
+        if (!ok) { if (err) err.textContent = "The certificate could not be kept on this phone."; return; }
+      } else {
+        try {
+          await uploadBytes(storageRef(storage, certificatePath), file, { contentType, customMetadata: certMeta });
+        } catch (e) {
+          if (classifyUploadError(e) !== "retry") {
+            if (err) err.textContent = "The certificate was not saved (" + (e.code || "storage") + "). Nothing was requested.";
+            return;
+          }
+          const ok = await enqueueUpload({ id, kind: "leave-cert", uid: me.uid, companyId: myCompanyId(), path: certificatePath, contentType, metadata: certMeta, label: certificateName, file });
+          if (!ok) { if (err) err.textContent = "The certificate was not saved (" + (e.code || "storage") + "). Nothing was requested."; return; }
+        }
       }
     }
     const built = leaveCreateBody({
@@ -3053,10 +3397,10 @@ function bindLeave(A) {
     });
     if (!built.ok) { if (err) err.textContent = built.reason; return; }
     try {
-      await setDoc(lvDoc(id), { ...built.data, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+      const saved = await queueWrite(setDoc(lvDoc(id), { ...built.data, createdAt: serverTimestamp(), updatedAt: serverTimestamp() }), { id: "leave:" + id, kind: "leave", label: "Leave request" }, "", { announce: false });
       form.reset();
-      if (err) err.textContent = "";
-      toast("Leave request sent");
+      if (err) err.textContent = saved && saved.queued ? SAVED_ON_PHONE : "";
+      toast(saved && saved.queued ? SAVED_ON_PHONE : "Leave request sent");
       redrawAfterSave();
     } catch (e) {
       if (err) err.textContent = "Not saved: " + (e.code || e.message);
@@ -3070,8 +3414,8 @@ function bindLeave(A) {
       const msg = decide.querySelector(".lv-msg");
       if (!built.ok) { if (msg) msg.textContent = built.reason; return; }
       try {
-        await updateDoc(lvDoc(decide.dataset.id), { ...built.data, decidedAt: serverTimestamp(), updatedAt: serverTimestamp() });
-        toast(status === "approved" ? "Leave approved" : "Leave declined");
+        const saved = await queueWrite(updateDoc(lvDoc(decide.dataset.id), { ...built.data, decidedAt: serverTimestamp(), updatedAt: serverTimestamp() }), { id: "leave-decision:" + decide.dataset.id, kind: "leave", label: status === "approved" ? "Approve leave" : "Decline leave" }, "", { announce: false });
+        toast(saved && saved.queued ? SAVED_ON_PHONE : (status === "approved" ? "Leave approved" : "Leave declined"));
         redrawAfterSave();
       } catch (e) {
         if (msg) msg.textContent = "Not saved: " + (e.code || e.message);
@@ -3167,20 +3511,25 @@ function bindClaims(A, rerender) {
     form.dataset.busy = "1";
     try {
       if (file) {
-        try {
-          await uploadBytes(storageRef(storage, draft.receiptPath), file, {
-            contentType: receiptContentType(file.type),
-            customMetadata: { purpose: "reimbursement-receipt", uploaderUid: me.uid, claimId: id },
-          });
-        } catch (e) {
-          return say("The receipt was not saved (" + (e.code || "storage") + "). Nothing was claimed.");
+        const contentType = receiptContentType(file.type);
+        const metadata = { purpose: "reimbursement-receipt", uploaderUid: me.uid, claimId: id };
+        if (!deviceOnline()) {
+          const ok = await enqueueUpload({ id, kind: "claim-receipt", uid: me.uid, companyId: myCompanyId(), path: draft.receiptPath, contentType, metadata, label: draft.receiptName || "Receipt", file });
+          if (!ok) return say("The receipt could not be kept on this phone. Nothing was claimed.");
+        } else {
+          try {
+            await uploadBytes(storageRef(storage, draft.receiptPath), file, { contentType, customMetadata: metadata });
+          } catch (e) {
+            if (classifyUploadError(e) !== "retry") return say("The receipt was not saved (" + (e.code || "storage") + "). Nothing was claimed.");
+            const ok = await enqueueUpload({ id, kind: "claim-receipt", uid: me.uid, companyId: myCompanyId(), path: draft.receiptPath, contentType, metadata, label: draft.receiptName || "Receipt", file });
+            if (!ok) return say("The receipt was not saved (" + (e.code || "storage") + "). Nothing was claimed.");
+          }
         }
       }
-      await setDoc(rcDoc(id), { ...built.data, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+      const saved = await queueWrite(setDoc(rcDoc(id), { ...built.data, createdAt: serverTimestamp(), updatedAt: serverTimestamp() }), { id: "claim:" + id, kind: "claim", label: "Reimbursement" }, "Claim submitted");
       rememberEntries({ supplier: built.data.supplier || form.supplier.value });
       form.reset();
-      say("");
-      toast("Claim submitted");
+      say(saved && saved.queued ? SAVED_ON_PHONE : "");
     } catch (e) {
       say("Not saved: " + (e.code || e.message));
     } finally {
@@ -3194,10 +3543,9 @@ function bindClaims(A, rerender) {
       const built = claimDecisionBody({ from: decide.dataset.from, status, note: decide.note.value, uid: me.uid, name: me.name, receiptPath: decide.dataset.receipt || "" });
       if (!built.ok) { toast(built.reason); return; }
       try {
-        await updateDoc(rcDoc(decide.dataset.id), {
+        await queueWrite(updateDoc(rcDoc(decide.dataset.id), {
           ...built.data, decidedAt: serverTimestamp(), paidAt: status === "paid" ? serverTimestamp() : null, updatedAt: serverTimestamp(),
-        });
-        toast(status === "approved" ? "Claim approved" : status === "paid" ? "Marked paid" : "Claim declined");
+        }), { id: "claim-decision:" + decide.dataset.id, kind: "claim", label: "Reimbursement decision" }, status === "approved" ? "Claim approved" : status === "paid" ? "Marked paid" : "Claim declined");
       } catch (e) {
         toast("Not saved: " + (e.code || e.message));
       }
@@ -3244,12 +3592,12 @@ async function tsWrite(ws, sheet, entries, lastEntryId, opts = {}) {
   if (sheet) {
     if (opts.fields && opts.fields.length) for (const k of opts.fields) data[`entries.${lastEntryId}.${k}`] = entries[lastEntryId][k];
     else data[`entries.${lastEntryId}`] = entries[lastEntryId];
-    return settleOrQueue(tsLate(updateDoc(ref, data)));
+    return queueWrite(tsLate(updateDoc(ref, data)), { id: "timesheet:" + ws + ":" + lastEntryId, kind: "timesheet", label: "Clock time" }, "", { announce: false, quietFail: true });
   }
   data.entries = { [lastEntryId]: entries[lastEntryId] };
-  return settleOrQueue(tsLate(setDoc(ref, data)));
+  return queueWrite(tsLate(setDoc(ref, data)), { id: "timesheet:" + ws + ":" + lastEntryId, kind: "timesheet", label: "Clock time" }, "", { announce: false, quietFail: true });
 }
-const tsQueuedNote = r => (r && r.queued ? " · saved on this phone, sends when there's signal" : "");
+const tsQueuedNote = r => (r && r.queued ? " · " + SAVED_ON_PHONE : "");
 function tsFixAt(fix) { return { ...locationMap(fix), at: serverTimestamp() }; }
 function tsDiffSummary(prev, next) {
   const bits = [];
@@ -3633,7 +3981,10 @@ async function tsSaveManual(ev) {
         edits: { ...(existing.edits || {}), [editId]: { at: serverTimestamp(), by: me.uid, byName: String(me.name || "Staff").slice(0, 80), summary } },
         lastEditId: editId,
       };
-      await tsWrite(ws, sheet, entries, existing.id, {});
+      const edited = await tsWrite(ws, sheet, entries, existing.id, {});
+      ui.tsEdit = null; ui.tsDirty = false;
+      toast(edited && edited.queued ? SAVED_ON_PHONE : "Shift saved");
+      return;
     } else {
       const id = newTsId();
       entries[id] = {
@@ -3641,10 +3992,10 @@ async function tsSaveManual(ev) {
         enteredBy: me.uid, enteredByName: String(me.name || "Staff").slice(0, 80), enteredAt: serverTimestamp(),
         edits: {}, lastEditId: "",
       };
-      await tsWrite(ws, sheet, entries, id, {});
+      const created = await tsWrite(ws, sheet, entries, id, {});
+      ui.tsEdit = null; ui.tsDirty = false;
+      toast(created && created.queued ? SAVED_ON_PHONE : "Shift saved");
     }
-    ui.tsEdit = null; ui.tsDirty = false;
-    toast("Shift saved");
   } catch (err) {
     toast("Not saved: " + (err.code || err.message));
   } finally {
@@ -3723,7 +4074,12 @@ function bindTs(A, rerender) {
   f.onsubmit = async ev => { ev.preventDefault(); const days = read();
     for (const [ds, d] of Object.entries(days)) if ((d.start && !d.finish) || (!d.start && d.finish)) { const m = $("#tsmsg"); if (m) m.textContent = `${dmy(ds).slice(0, 5)}: enter both start and finish`; return; }
     const data = { uid: me.uid, name: String(me.name || "Staff").slice(0, 80), weekStart: ws, weekEnd: addDays(ws, 6), days, totalHrs: tsTotal(days), updatedAt: serverTimestamp(), updatedAtIso: new Date().toISOString() , ...tsCompanyField() };
-    try { await setDoc(doc(db, "timesheets", `${me.uid}_${ws}`), data, { merge: true }); ui.tsMine = { ...(ui.tsMine || {}), ...data, weekStart: ws }; ui.tsDirty = false; const m = $("#tsmsg"); if (m) m.textContent = "Saved ✓"; toast("Hours saved"); }
+    try {
+      const saved = await queueWrite(setDoc(doc(db, "timesheets", `${me.uid}_${ws}`), data, { merge: true }), { id: "hours:" + ws, kind: "timesheet", label: "Hours" }, "", { announce: false });
+      ui.tsMine = { ...(ui.tsMine || {}), ...data, weekStart: ws }; ui.tsDirty = false; const m = $("#tsmsg");
+      if (m) m.textContent = saved && saved.queued ? SAVED_ON_PHONE : "Saved ✓";
+      toast(saved && saved.queued ? SAVED_ON_PHONE : "Hours saved");
+    }
     catch (e) { const m = $("#tsmsg"); if (m) m.textContent = "Not saved: " + (e.code || e.message); } };
 }
 // ---- Owner-only amber "to reimburse" pill (same look/behaviour as the done-today pill). Ledger + queued personally-paid
@@ -4189,11 +4545,27 @@ function openTake5(job, after) {
     const id = take5IdFor(me.uid, job.id);
     let photoPath = "";
     const file = form.photo && form.photo.files && form.photo.files[0];
-    if (file && navigator.onLine !== false) {
+    if (file) {
       try {
         const blob = await fileToJpeg(file);
         photoPath = take5PhotoPath(myCompanyId(), me.uid, id);
-        if (blob) await uploadBytes(storageRef(storage, photoPath), blob, { contentType: "image/jpeg", customMetadata: { purpose: "take5", uploaderUid: me.uid, companyId: myCompanyId() } });
+        const metadata = { purpose: "take5", uploaderUid: me.uid, companyId: myCompanyId() };
+        if (blob && !deviceOnline()) {
+          const ok = await enqueueUpload({ id, kind: "take5", uid: me.uid, companyId: myCompanyId(), path: photoPath, contentType: "image/jpeg", metadata, label: "Take 5 photo", file: blob });
+          if (!ok) photoPath = "";
+          else rememberQueuedThumb(job.id, blob);
+        } else if (blob) {
+          try {
+            await uploadBytes(storageRef(storage, photoPath), blob, { contentType: "image/jpeg", customMetadata: metadata });
+          } catch (e) {
+            if (classifyUploadError(e) !== "retry") photoPath = "";
+            else {
+              const ok = await enqueueUpload({ id, kind: "take5", uid: me.uid, companyId: myCompanyId(), path: photoPath, contentType: "image/jpeg", metadata, label: "Take 5 photo", file: blob });
+              if (!ok) photoPath = "";
+              else rememberQueuedThumb(job.id, blob);
+            }
+          }
+        }
       } catch { photoPath = ""; }
     }
     const built = take5Payload({
@@ -4203,10 +4575,10 @@ function openTake5(job, after) {
     });
     if (!built.ok) { if (btn) btn.disabled = false; return toast(built.reason); }
     try {
-      const result = await settleOrQueue(setDoc(doc(db, "take5s", id), { ...built.data, createdAt: serverTimestamp() }));
+      const result = await queueWrite(setDoc(doc(db, "take5s", id), { ...built.data, createdAt: serverTimestamp() }), { id: "take5:" + id, kind: "take5", label: "Take 5" }, "", { announce: false });
       ui.take5s = [...(ui.take5s || []).filter(row => row.id !== id), { id, ...built.data }];
       v.remove();
-      toast(result.queued ? "Take 5 saved on this phone. It sends when you are back in range." : "Take 5 saved");
+      toast(result.queued ? SAVED_ON_PHONE : "Take 5 saved");
       if (after) await after();
     } catch (e) {
       const existing = await getDoc(doc(db, "take5s", id)).catch(() => null);
@@ -4232,8 +4604,7 @@ function rememberOwnTake5(job) {
   }).catch(() => {});
 }
 async function startJobDoc(job) {
-  await updateDoc(doc(db, "jobs", job.id), { updatedAt: serverTimestamp(), updatedBy: me.uid, status: "In progress", startedAt: serverTimestamp() });
-  toast("Started");
+  await queueWrite(updateDoc(doc(db, "jobs", job.id), { updatedAt: serverTimestamp(), updatedBy: me.uid, status: "In progress", startedAt: serverTimestamp() }), { id: "job-start:" + job.id, kind: "status", label: "Start job " + jobNo(job) }, "Started");
 }
 function staffPageHtml() {
   const setup = ui.tradeSetup || resolveCompanySetup({ companyId: myCompanyId() }, null);
@@ -4247,6 +4618,7 @@ function staffPageHtml() {
     + skillsEditorHtml((me && me.cloudProfile && me.cloudProfile.skills) || [], { canEdit: true });
 }
 async function saveInvite(fields) {
+  if (!deviceOnline()) return "offline";
   const draft = buildInviteDraft({ ...fields, createdBy: me.uid, now: new Date(), token: newInviteToken(), tenantId: myTenant() });
   if (!draft.ok) return draft.reason;
   if (!myInviteRoles().includes(draft.invite.role)) return "role";
@@ -4334,7 +4706,7 @@ function bindStaff(A) {
       name: form.name.value, email: form.email.value, role,
       jobTitle: picked && picked.dataset.name || "", jobTitleId: picked && picked.value || "",
     });
-    if (reason) { if (err) err.textContent = inviteFailureText(reason); return; }
+    if (reason) { if (err) err.textContent = reason === "offline" ? needsSignal("invite", false).message : inviteFailureText(reason); return; }
     form.reset();
     toast(inviteMailShown() ? "Invite saved. The list shows whether it was emailed." : "Invite saved. Copy the link. Mail was not sent.");
     redrawAfterSave();
@@ -4344,10 +4716,12 @@ function bindStaff(A) {
     catch { toast(inviteMailShown() ? "Select the link to copy it." : "Select the link to copy it. Mail was not sent."); }
   });
   A.querySelectorAll("[data-invite-resend]").forEach(b => b.onclick = async () => {
+    if (!deviceOnline()) { toast(needsSignal("invite", false).message); return; }
     try { await resendInvite(b.dataset.inviteResend); toast(inviteMailShown() ? "Invite resent with a new link. The list shows whether it was emailed." : "Invite resent. Copy the new link. Mail was not sent."); }
     catch (e) { toast("Couldn't resend (" + txFail(e) + ")."); }
   });
   A.querySelectorAll("[data-invite-cancel]").forEach(b => b.onclick = async () => {
+    if (!deviceOnline()) { toast(needsSignal("invite", false).message); return; }
     if (!confirm("Cancel this invite? The link will stop working.")) return;
     try { await cancelInvite(b.dataset.inviteCancel); toast("Invite cancelled."); }
     catch (e) { toast("Couldn't cancel (" + txFail(e) + ")."); }
@@ -6290,8 +6664,7 @@ async function opAction(j, act) {
     if (act === "done") Object.assign(u, { status: "Done", completedAt: serverTimestamp(), completedBy: me.uid, completedByName: me.name,
       loads: f.loads.value === "" ? null : +f.loads.value });
     d.close();
-    updateDoc(ref, u).then(() => toast(act === "done" ? "Marked done" : "Note saved")).catch(e => toast("Not saved: " + e.code));
-    if (!navigator.onLine) toast("Offline — will sync when back in signal");
+    queueWrite(updateDoc(ref, u), { id: "job-" + act + ":" + j.id, kind: act === "done" ? "status" : "note", label: act === "done" ? "Complete job " + jobNo(j) : "Job note" }, act === "done" ? "Marked done" : "Note saved").catch(e => toast("Not saved: " + (e.code || e.message)));
   };
 }
 
@@ -6470,6 +6843,11 @@ async function openJobEmail(job) {
     mailLink.href = mailtoHref({ to: toInput.value, subject: built.subject, body: built.body }).href;
     zipBtn.hidden = !plan.download;
     if (!allowLarge && sendBtn.dataset.sent !== "1") warnEl.hidden = true;
+    if (!deviceOnline() && sendBtn.dataset.sent !== "1") {
+      sendBtn.disabled = true;
+      warnEl.hidden = false;
+      warnEl.textContent = needsSignal("email-job", false).message;
+    }
   };
   function sentLine(result, fallbackTo) {
     const who = (result.to && result.to.length ? result.to : fallbackTo).join(", ");
@@ -6488,6 +6866,12 @@ async function openJobEmail(job) {
   }
   async function sendViaCallUp() {
     if (sendBtn.dataset.sent === "1") return;
+    // Not queued: the callable's idempotency key includes the send time, so a later retry could email twice.
+    if (!emailOutboxAllowed() && !deviceOnline()) {
+      warnEl.hidden = false;
+      warnEl.textContent = needsSignal("email-job", false).message;
+      return;
+    }
     const recipients = parseEmailRecipients({ to: toInput.value, cc: ccInput ? ccInput.value : "" });
     if (!recipients.ok) {
       warnEl.hidden = false;
@@ -6722,6 +7106,11 @@ async function afterPhotosPrepared(j, files, infos, o = {}) {
     }
   }
   const decision = decidePhotoEmail({ collection: o.coll, mirror, fileCount: files.length });
+  if (decision.reason === "queued") {
+    toast(SAVED_ON_PHONE);
+    paintPhotoSlots();
+    return;
+  }
   if (!decision.email) {
     recordPhotosCaptured(j, files.length, o);
     const n = files.length;
@@ -6926,6 +7315,22 @@ function incidentForm(j) {
       reportedBy: me.uid, reportedByName: me.name, reportedAt: new Date().toISOString(), createdAt: serverTimestamp(), status: "Open",
       companyId: myCompanyId(), ...(myCompanyId() === "heartwood" ? {} : { tenantId: myCompanyId() }),
       rootCause: "", actions: [], history: [{ at: stamp(), by: me.name, text: "Reported" }] };
+    const holdIncident = async () => {
+      const payload = { ...data };
+      delete payload.createdAt;
+      const built = makeOutbox({
+        id: "incq_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+        uid: me.uid, kind: "incident", companyId: myCompanyId(), label: "Incident report", payload,
+      });
+      if (!built.ok) throw new Error("queue");
+      await offlineStore.putOutbox(built.row);
+      paintSync();
+      registerUploadSync().catch(() => {});
+      toast(SAVED_ON_PHONE + ". The report number is assigned when this phone is back in signal.");
+      v.remove();
+    };
+    // The report number comes from a transaction, which the server has to see. The form is kept on the phone until then.
+    if (!deviceOnline()) { try { await holdIncident(); } catch { btn.disabled = false; toast("Not saved: offline"); } return; }
     try {
       const no = await runTransaction(db, async tx => {
         const cref = doc(db, "incidentCounter", myCompanyId() === "heartwood" ? "main" : myCompanyId()), c = await tx.get(cref);
@@ -6936,7 +7341,10 @@ function incidentForm(j) {
       });
       toast(`${no.reportNo} saved`); v.remove();
       incidentDetail({ id: no.id, reportNo: no.reportNo, seq: 0, ...data });
-    } catch (e) { btn.disabled = false; toast("Not saved: " + txFail(e)); }
+    } catch (e) {
+      if (classifyUploadError(e) === "retry") { try { await holdIncident(); return; } catch { /* fall through */ } }
+      btn.disabled = false; toast("Not saved: " + txFail(e));
+    }
   };
 }
 function incRefresh() {   // keep an open detail view in sync with Firestore
@@ -6977,7 +7385,12 @@ function incidentDetail(r) {
     if (rc !== (r.rootCause || "")) hist.push({ at: stamp(), by: me.name, text: "Root cause updated" });
     if (note) hist.push({ at: stamp(), by: me.name, text: note });
     const u = { rootCause: rc, history: hist, updatedAt: serverTimestamp(), updatedBy: me.uid, ...extra };
-    try { await updateDoc(ref, u); Object.assign(r, u); toast("Saved"); incidentDetail(r); } catch (e) { toast("Not saved: " + (e.code || e.message)); }
+    try {
+      const saved = await queueWrite(updateDoc(ref, u), { id: "incident:" + r.id, kind: "incident", label: "Incident " + (r.reportNo || "") }, "", { announce: false });
+      Object.assign(r, u);
+      toast(saved && saved.queued ? SAVED_ON_PHONE : "Saved");
+      if (!(saved && saved.queued)) incidentDetail(r);
+    } catch (e) { toast("Not saved: " + (e.code || e.message)); }
   };
   v.querySelector("#iaadd").onclick = () => { const t = v.querySelector("#iat").value.trim(); if (!t) return toast("Type the action first");
     const a = { text: t, owner: v.querySelector("#iao").value, due: v.querySelector("#iad").value, done: false };
@@ -7172,9 +7585,11 @@ function signSwms(id, jobId) {
     const jid = v.querySelector("#swjob").value, j = jid && jobs.find(x => x.id === jid), now = swNow();
     const rec = { ...swmsSignatureData({ uid: me.uid, name: v.querySelector("#swnm").value, swmsId: id, swmsTitle: title, jobId: jid, jobLabel: j ? jl(j) : "", sig, now, device: navigator.userAgent }), signedAt: serverTimestamp(), companyId: myCompanyId() };
     try {
-      const r = await addDoc(collection(db, "swmsSignatures"), rec);
-      ui.mySigs = [...(ui.mySigs || []).filter(x => x.id !== r.id), { id: r.id, ...rec }];
-      v.remove(); toast(`✔ Signed ${title} · valid to ${swD(rec.expiresAtMs)}`); swmsRefresh();
+      const saved = await queueWrite(addDoc(collection(db, "swmsSignatures"), rec), { id: "swms:" + id + ":" + me.uid, kind: "swms", label: "SWMS " + title }, "", { announce: false });
+      if (!saved.queued && saved.value) ui.mySigs = [...(ui.mySigs || []).filter(x => x.id !== saved.value.id), { id: saved.value.id, ...rec }];
+      v.remove();
+      toast(saved.queued ? SAVED_ON_PHONE : `✔ Signed ${title} · valid to ${swD(rec.expiresAtMs)}`);
+      swmsRefresh();
     } catch (e) { v.querySelector("#swerr").textContent = "Could not save: " + (e.code || e.message); go.disabled = false; go.textContent = "Sign SWMS"; }
   };
 }
@@ -7458,6 +7873,7 @@ PUSH = installPush({
 });
 COMP = installCompliance({
   db, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp,
+  queueWrite, savedOnPhone: SAVED_ON_PHONE,
   getJobs: () => [...(jobs || []), ...(ui.undated || []), ...(ui.done || [])],
   getMe: () => me, getUi: () => ui, today: todayStr, toast,
   canSeeMoney,

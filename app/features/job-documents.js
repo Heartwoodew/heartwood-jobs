@@ -199,7 +199,7 @@ export function documentsBodyHtml({ docs = [], role, queued = [], progress = [],
   const rows = visibleDocuments(docs, role);
   const waiting = (queued || []).filter(row => !(progress || []).some(p => p.id === row.id));
   const bars = (progress || []).map(p => `<div class="doc-progress" data-doc-progress="${esc(p.id)}"><span>${esc(p.name || "Document")}</span><progress value="${Math.max(0, Math.min(100, Number(p.pct) || 0))}" max="100"></progress><span>${Math.round(Number(p.pct) || 0)}%</span></div>`).join("");
-  const held = waiting.map(row => `<div class="doc-wait" data-doc-queued="${esc(row.id)}">${esc(row.name || row.fileName || "Document")} · Waiting to upload</div>`).join("");
+  const held = waiting.map(row => `<div class="doc-wait" data-doc-queued="${esc(row.id)}">${row.preview ? `<img class="qthumb" src="${esc(row.preview)}" alt="">` : ""}${esc(row.name || row.fileName || "Document")} · Waiting to upload</div>`).join("");
   const list = rows.map(row => {
     const kind = documentKind(row.contentType, row.fileName || row.name);
     const when = formatDocWhen(row.createdAt);
@@ -428,8 +428,13 @@ export function mountDocuments(root, ctx) {
     });
   };
   const reloadQueue = async () => {
+    for (const row of state.queued || []) if (row.preview) URL.revokeObjectURL(row.preview);
     const rows = await queue.list(ctx.uid);
-    state.queued = rows.filter(row => row.jobId === ctx.job.id);
+    state.queued = rows.filter(row => row.jobId === ctx.job.id).map(row => {
+      const type = (row.file && row.file.type) || row.contentType || "";
+      if (!type.startsWith("image/") || !row.file || typeof URL === "undefined" || !URL.createObjectURL) return row;
+      return { ...row, preview: URL.createObjectURL(row.file) };
+    });
     paint();
   };
   const unsub = ctx.listen(crewMustFilter(ctx.role), rows => {

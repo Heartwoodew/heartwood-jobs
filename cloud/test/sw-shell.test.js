@@ -54,5 +54,7 @@ test("every Firebase SDK file the page imports is precached", () => {
 });
 
 test("offline, only a page load falls back to index.html", () => {
-  assert.match(sw, /e\.request\.mode === "navigate" \? caches\.match\("index\.html"\) : Response\.error\(\)/);
+  assert.match(sw, /e\.request\.mode === "navigate"/);
+  assert.match(sw, /caches\.match\("index\.html"\)/);
+  assert.match(sw, /return Response\.error\(\)/);
 });

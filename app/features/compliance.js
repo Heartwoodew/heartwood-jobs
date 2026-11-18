@@ -726,14 +726,20 @@ export function installCompliance(deps) {
     if (!built.ok) return deps.toast(built.reason);
     state.saving = true;
     try {
-      await deps.setDoc(deps.doc(deps.db, "tenants", tenant(), "prestarts", newId()), { ...built.data, signedAt: deps.serverTimestamp() });
+      const prestartWrite = deps.setDoc(deps.doc(deps.db, "tenants", tenant(), "prestarts", newId()), { ...built.data, signedAt: deps.serverTimestamp() });
+      const saved = deps.queueWrite
+        ? await deps.queueWrite(prestartWrite, { id: "prestart:" + (asset && asset.id || "machine"), kind: "prestart", label: "Prestart" + (asset && asset.name ? " · " + asset.name : "") }, "", { announce: false })
+        : await prestartWrite;
       form.reset();
-      deps.toast(built.data.doNotOperate ? "Do not operate. The defect is flagged." : built.data.defect ? "Submitted. Defect — check before use." : "Prestart submitted.");
+      const done = built.data.doNotOperate ? "Do not operate. The defect is flagged." : built.data.defect ? "Submitted. Defect — check before use." : "Prestart submitted.";
+      deps.toast(saved && saved.queued ? (deps.savedOnPhone || "Saved on phone — will sync") : done);
       const move = fleetReadingUpdate(asset, built.data, me().uid, built.data.signerName);
       if (move.warn) deps.toast(move.warn);
       if (move.update) {
         try {
-          await deps.updateDoc(deps.doc(deps.db, "tenants", tenant(), "fleet", asset.id), { ...move.update, readingAt: deps.serverTimestamp() });
+          const reading = deps.updateDoc(deps.doc(deps.db, "tenants", tenant(), "fleet", asset.id), { ...move.update, readingAt: deps.serverTimestamp() });
+          if (deps.queueWrite) await deps.queueWrite(reading, { id: "fleet-reading:" + asset.id, kind: "prestart", label: "Machine reading" }, "", { announce: false });
+          else await reading;
         } catch (err) {
           console.warn("fleet reading", err && (err.code || err.message));
         }

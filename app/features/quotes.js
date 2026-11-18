@@ -16,6 +16,7 @@ import { calcConcreteCutting } from "./packs/concrete-cutting.js";
 import { companyRatesForTrade, defaultMeasures, gstFromEx, packRateInputs, prettyUnit, roundMoney, sanitizeQuotePrices, sanitizeTradeRates, savedTradeRate, splitCalcKey, tradeMapFromLegacy, writeTradeRate } from "./packs/money.js";
 import { measureReviewHtml, measureSetupHtml } from "./packs/form.js";
 import { changeLines, compareHtml, commercialSnapshot, diffRevisions, revisionBody, revisionDocId, revisionNeeded, revisionsPanelHtml } from "./quote-revisions.js";
+import { deviceOnline, needsSignal } from "./offline.js";
 // Rates from meta/quoteRates only — never invent business rates.
 // Draft/Accepted are explicit quoteStatus fields.
 // Admins, managers and supervisors (canQuote / canSeeMoney). Rate edits: admin or manager (canEditQuoteRates).
@@ -611,6 +612,7 @@ async function geocodeAu(address) {
 
 /** One-way road distance in km via OSRM, or null if routing unavailable. Never uses straight-line. */
 export async function roadDistanceKm(fromAddress, toAddress, toCoords) {
+  if (!deviceOnline()) return { km: null, error: needsSignal("quote-price", false).message };
   const a = await geocodeAu(fromAddress);
   // A Google-picked site already has exact coordinates, so it skips the Nominatim lookup.
   const picked = sanitizePlace(toCoords);
