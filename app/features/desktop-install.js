@@ -3,7 +3,7 @@
 // (the GitHub release page, or the installer file) when that download should be offered.
 // Phones, an installed window, and the CallUp Windows program do not show this.
 
-export const WINDOWS_DOWNLOAD_URL = "";
+export const WINDOWS_DOWNLOAD_URL = "https://github.com/Heartwoodew/heartwood-jobs/releases/download/desktop-v0.1.0/CallUp_0.1.0_x64-setup.exe";
 
 const HTTPS = /^https:\/\//i;
 
