@@ -508,8 +508,18 @@ export const sendJobEmail = onCall(
         : "permission-denied";
       throw new HttpsError(code, jobEmailFailureText(reason));
     }
-    const tooBig = result.overflowCount || 0;
-    return { ok: true, attached: result.attached || 0, overflow: tooBig, skipped: result.skipped || 0, to: result.to || [], senderFallback: !!result.senderFallback };
+    const tooBig = result.overflowCount || result.overflow || 0;
+    return {
+      ok: true,
+      attached: result.attached || 0,
+      overflow: tooBig,
+      overflowCount: tooBig,
+      compressed: result.compressed || 0,
+      compressedReceipts: result.compressedReceipts || 0,
+      skipped: result.skipped || 0,
+      to: result.to || [],
+      senderFallback: !!result.senderFallback,
+    };
   },
 );
 

@@ -564,6 +564,26 @@ export function unattachedFileNote({ photos = [], receipts = [], url = "" } = {}
   return lines.join("\n");
 }
 
+/** Names files left out because the stored copy is missing. No storage path and no download token. */
+export function missingObjectNote({ photos = [], receipts = [] } = {}) {
+  const pics = (photos || []).map(name => String(name || "").trim()).filter(Boolean);
+  const dumps = (receipts || []).map(name => String(name || "").trim()).filter(Boolean);
+  if (!pics.length && !dumps.length) return "";
+  const lines = [
+    "",
+    "These files are missing in CallUp, so they are not attached.",
+  ];
+  if (pics.length) {
+    lines.push("", "Photos:");
+    for (const name of pics) lines.push(`- ${name}`);
+  }
+  if (dumps.length) {
+    lines.push("", "Dump receipts:");
+    for (const name of dumps) lines.push(`- ${name}`);
+  }
+  return lines.join("\n");
+}
+
 export function photoBudget(files, budget = PHOTO_BUDGET_BYTES) {
   const total = (files || []).reduce((sum, file) => {
     if (typeof file === "number") return sum + (Number.isFinite(file) ? file : 0);

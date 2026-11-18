@@ -447,7 +447,12 @@ test("files over 20 MB are named as CallUp links, not public storage urls", asyn
   assert.match(payload.text, /https:\/\/jobs\.heartwoodew\.com\/app\//);
   assert.match(payload.text, /signed in to this company/);
   assert.doesNotMatch(payload.text, /tenants\/|firebasestorage|token=|X-Goog-/);
-  assert.deepEqual(calls.reads, ["tenants/heartwood/jobs/job1/photos/small"]);
+  // The wide file is opened so it can be re-encoded. These bytes are not an
+  // image, so it still falls back to the signed-in link.
+  assert.deepEqual(calls.reads, [
+    "tenants/heartwood/jobs/job1/photos/small",
+    "tenants/heartwood/jobs/job1/photos/wide",
+  ]);
 });
 
 test("mail stays off unless invite email is enabled, and a test cannot send live", async () => {
@@ -636,6 +641,104 @@ test("when the budget is tight, receipts are attached before extra photos", asyn
   assert.equal(result.overflowCount, 1);
   assert.match(payload.text, /Remondis/);
   assert.match(payload.text, /Photo 2/);
+});
+
+test("a photo that does not fit is re-encoded just enough and still attached", async () => {
+  const steps = [];
+  const { deps, calls } = world({
+    budget: 1000,
+    photos: [{
+      path: "tenants/heartwood/jobs/job1/photos/wide",
+      contentType: "image/jpeg",
+      size: 1500,
+      customMetadata: { purpose: "job-photo" },
+      fileName: "Wide shot.jpg",
+    }],
+    receipts: [],
+  });
+  deps.encodeJpeg = async (_bytes, step) => {
+    steps.push(step);
+    if (step.longEdge == null && step.quality === 85) return Buffer.from("mild-jpeg");
+    return Buffer.alloc(1200);
+  };
+  const result = await sendJobEmail({ callerUid: ALEX_UID, jobId: "job1", to: "jo@orbit.example" }, deps);
+  assert.equal(result.ok, true);
+  assert.equal(result.attached, 1);
+  assert.equal(result.overflowCount, 0);
+  assert.equal(result.overflow, 0);
+  assert.equal(result.compressed, 1);
+  assert.equal(steps.length, 1);
+  assert.deepEqual(steps[0], { longEdge: null, quality: 85 });
+  const file = payloadOf(calls).attachments[0];
+  assert.equal(file.filename, "Wide shot.jpg");
+  assert.equal(file.content, Buffer.from("mild-jpeg").toString("base64"));
+  assert.equal(file.content_type, "image/jpeg");
+  assert.equal(calls.reads.length, 1);
+});
+
+test("a photo that cannot fit even at the smallest JPEG becomes a link", async () => {
+  const steps = [];
+  const { deps, calls } = world({
+    budget: 1000,
+    photos: [{
+      path: "tenants/heartwood/jobs/job1/photos/wide",
+      contentType: "image/jpeg",
+      size: 1500,
+      customMetadata: { purpose: "job-photo" },
+      fileName: "Wide shot.jpg",
+    }],
+    receipts: [],
+  });
+  deps.encodeJpeg = async (_bytes, step) => {
+    steps.push(`${step.longEdge}:${step.quality}`);
+    return Buffer.alloc(1200);
+  };
+  const result = await sendJobEmail({ callerUid: ALEX_UID, jobId: "job1", to: "jo@orbit.example" }, deps);
+  assert.equal(result.ok, true);
+  assert.equal(result.attached, 0);
+  assert.equal(result.overflowCount, 1);
+  assert.equal(result.compressed, 0);
+  assert.equal(steps.at(-1), "1280:60");
+  const payload = payloadOf(calls);
+  assert.equal(payload.attachments, undefined);
+  assert.match(payload.text, /Wide shot\.jpg/);
+  assert.match(payload.text, /too large to attach/);
+  assert.doesNotMatch(payload.text, /tenants\/|firebasestorage|token=/);
+});
+
+test("a missing photo is named in the email and counted, and is not a link", async () => {
+  const { deps, calls } = world({
+    photos: [{
+      path: "tenants/heartwood/jobs/job1/photos/kept",
+      contentType: "image/jpeg",
+      size: 4,
+      customMetadata: { purpose: "job-photo" },
+      fileName: "Kept.jpg",
+    }, {
+      path: "tenants/heartwood/jobs/job1/photos/gone",
+      contentType: "image/jpeg",
+      size: 4,
+      customMetadata: { purpose: "job-photo" },
+      fileName: "Gone.jpg",
+    }],
+    receipts: [],
+  });
+  deps.readObject = async path => {
+    calls.reads.push(path);
+    if (path.endsWith("/gone")) throw new Error("No such object: gone");
+    return { bytes: PHOTO, contentType: "image/jpeg", size: PHOTO.length };
+  };
+  const result = await sendJobEmail({ callerUid: ALEX_UID, jobId: "job1", to: "jo@orbit.example" }, deps);
+  assert.equal(result.ok, true);
+  assert.equal(result.attached, 1);
+  assert.equal(result.skipped, 1);
+  assert.equal(result.overflowCount, 0);
+  const payload = payloadOf(calls);
+  assert.equal(payload.attachments.length, 1);
+  assert.match(payload.text, /missing in CallUp/);
+  assert.match(payload.text, /Gone\.jpg/);
+  assert.doesNotMatch(payload.text, /tenants\/|firebasestorage|token=|X-Goog-/);
+  assert.doesNotMatch(payload.text, /too large to attach/);
 });
 
 test("crew still get no receipts when a job has a tonnes-only docket", async () => {

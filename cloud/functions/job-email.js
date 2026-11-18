@@ -13,6 +13,11 @@
 // JOB_EMAIL_VERIFIED_DOMAINS (comma-separated; default callupapp.com.au). Any other
 // domain, or JSON that does not parse, keeps the CallUp sender. Invites and password
 // resets do not read these variables.
+//
+// Photos that fit in the 20MB raw budget (about 26.7MB after Base64, under
+// Resend's 40MB encoded limit) are attached unchanged. Larger sets are
+// re-encoded one photo at a time until they fit. A photo that still does not
+// fit at 1280px / quality 60 is named in the email with a signed-in CallUp link.
 import { rateDecision } from "./password-reset.js";
 import { canSeeJob, jobTenantOf, resolveMembership } from "./shared/cloud-storage.js";
 import {
@@ -21,11 +26,17 @@ import {
   inviteEmailConfig,
 } from "./shared/staff-invites.js";
 import {
+  encodeJobJpeg,
+  effectiveRawBudget,
+  planJobEmailAttachments,
+} from "./job-email-compress.js";
+import {
   PHOTO_BUDGET_BYTES,
   buildJobEmail,
   dumpReceiptLabel,
   emailDumpReceipts,
-  packEmailAttachments,
+  jpegName,
+  missingObjectNote,
   parseEmailRecipients,
   selectEmailAttachments,
   uniqueNames,
@@ -208,6 +219,224 @@ function safeFileName(item, index) {
 function toBase64(bytes) {
   if (!bytes) return "";
   return Buffer.from(bytes).toString("base64");
+}
+
+function looksLikeImage(bytes) {
+  if (!bytes || bytes.length < 12) return false;
+  const b = Buffer.from(bytes);
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return true;
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return true;
+  if (b.slice(0, 3).toString("ascii") === "GIF") return true;
+  if (b.slice(0, 4).toString("ascii") === "RIFF" && b.slice(8, 12).toString("ascii") === "WEBP") return true;
+  const brand = b.slice(4, 8).toString("ascii");
+  if (brand === "ftyp") return true;
+  return false;
+}
+
+function fileKey(item) {
+  return `${item && item.kind || "file"}:${item && (item.path || item.id) || ""}`;
+}
+
+function stepMatches(step, decision) {
+  return !!step && !!decision && step.longEdge === decision.longEdge && step.quality === decision.quality;
+}
+
+// One file in memory at a time. Originals that already fit are not re-encoded.
+// A file that does not fit is stepped down the JPEG ladder until it does.
+// The original buffer is dropped before the next file is opened.
+async function assembleAttachments(described, deps, budget) {
+  const skipped = [];
+  const receipts = [];
+  const photos = [];
+  for (const item of described || []) {
+    const size = Number(item && item.size);
+    if (!Number.isFinite(size) || size <= 0) {
+      skipped.push(item);
+      continue;
+    }
+    if (item.kind === "dump-receipt") receipts.push(item);
+    else photos.push(item);
+  }
+
+  const slot = { item: null, got: null, lastOut: null, lastStep: null };
+  const prepared = new Map();
+  const parked = new Map();
+  const missingKeys = new Set();
+
+  function dropSlot() {
+    slot.item = null;
+    slot.got = null;
+    slot.lastOut = null;
+    slot.lastStep = null;
+  }
+
+  async function sizeAt(item, step) {
+    if (slot.item !== item) {
+      dropSlot();
+      slot.item = item;
+      const got = await loadAttachment(item, deps);
+      if (item) item._loaded = null;
+      if (!objectBytes(got)) {
+        missingKeys.add(fileKey(item));
+        slot.got = null;
+      } else {
+        slot.got = got;
+      }
+    }
+    if (!slot.got) return false;
+    if (typeof deps.encodeJpeg !== "function" && !looksLikeImage(slot.got.bytes)) {
+      parked.set(fileKey(item), slot.got);
+      return false;
+    }
+    let out = null;
+    try {
+      out = typeof deps.encodeJpeg === "function"
+        ? await deps.encodeJpeg(slot.got.bytes, step)
+        : await encodeJobJpeg(slot.got.bytes, step);
+    } catch {
+      out = null;
+    }
+    const length = out ? (out.length || out.byteLength || 0) : 0;
+    if (!length) return null;
+    slot.lastOut = out;
+    slot.lastStep = step;
+    return length;
+  }
+
+  function storePrepared(key, bytes, contentType, source, compressed) {
+    const length = bytes ? (bytes.length || bytes.byteLength || 0) : 0;
+    if (!length) return;
+    prepared.set(key, {
+      content: toBase64(bytes),
+      byteLength: length,
+      contentType: contentType || "image/jpeg",
+      source: source || "",
+      compressed: !!compressed,
+    });
+  }
+
+  async function onDecided(item, decision) {
+    const key = fileKey(item);
+    if (missingKeys.has(key)) {
+      parked.delete(key);
+      if (slot.item === item) dropSlot();
+      return;
+    }
+    if (decision.action === "compress" && slot.item === item && slot.lastOut && stepMatches(slot.lastStep, decision)) {
+      storePrepared(key, slot.lastOut, "image/jpeg", slot.got && slot.got.source, true);
+      dropSlot();
+      parked.delete(key);
+      return;
+    }
+    const held = parked.get(key);
+    if (decision.action === "original" && held && objectBytes(held)) {
+      storePrepared(key, held.bytes, held.contentType || item.contentType, held.source, false);
+    }
+    parked.delete(key);
+    if (slot.item === item) dropSlot();
+  }
+
+  const plan = await planJobEmailAttachments({
+    receipts,
+    photos,
+    budget,
+    sizeAt,
+    onDecided,
+  });
+  dropSlot();
+  parked.clear();
+
+  const kept = [];
+  const overflow = [];
+  for (const item of plan.receipts.concat(plan.photos)) {
+    if (missingKeys.has(fileKey(item))) {
+      prepared.delete(fileKey(item));
+      skipped.push(item);
+      continue;
+    }
+    kept.push(item);
+  }
+  for (const item of plan.linked) {
+    prepared.delete(fileKey(item));
+    if (missingKeys.has(fileKey(item))) skipped.push(item);
+    else overflow.push(item);
+  }
+
+  const canRead = typeof deps.readObject === "function" || typeof deps.readReceiptChunks === "function";
+  if (kept.length && !canRead) return { error: "not-sent" };
+
+  const names = uniqueNames(kept.map((item, index) => (
+    item.action === "compress" ? jpegName(item.name, index) : safeFileName(item, index)
+  )));
+  const attachments = [];
+  let used = 0;
+  let compressed = 0;
+  let compressedReceipts = 0;
+  for (let i = 0; i < kept.length; i++) {
+    const item = kept[i];
+    const key = fileKey(item);
+    let ready = prepared.get(key) || null;
+    prepared.delete(key);
+    if (!ready) {
+      const loaded = await loadAttachment(item, deps);
+      if (item) item._loaded = null;
+      if (!objectBytes(loaded)) {
+        skipped.push(item);
+        continue;
+      }
+      if (item.action === "compress") {
+        let out = null;
+        try {
+          out = typeof deps.encodeJpeg === "function"
+            ? await deps.encodeJpeg(loaded.bytes, item)
+            : await encodeJobJpeg(loaded.bytes, item);
+        } catch {
+          out = null;
+        }
+        const length = out ? (out.length || out.byteLength || 0) : 0;
+        if (!length) {
+          overflow.push(item);
+          continue;
+        }
+        ready = {
+          content: toBase64(out),
+          byteLength: length,
+          contentType: "image/jpeg",
+          source: loaded.source || "",
+          compressed: true,
+        };
+      } else {
+        const length = objectBytes(loaded);
+        ready = {
+          content: toBase64(loaded.bytes),
+          byteLength: length,
+          contentType: loaded.contentType || item.contentType || "image/jpeg",
+          source: loaded.source || "",
+          compressed: false,
+        };
+      }
+    }
+    const weight = ready.compressed ? ready.byteLength : Math.max(Number(item.size) || 0, ready.byteLength);
+    if (used + weight > budget) {
+      overflow.push(item);
+      continue;
+    }
+    if (ready.compressed && item.kind === "photo") compressed += 1;
+    if (ready.compressed && item.kind === "dump-receipt") compressedReceipts += 1;
+    attachments.push({
+      filename: names[i],
+      content: ready.content,
+      contentType: ready.contentType || "image/jpeg",
+      bytes: weight,
+      kind: item.kind,
+      source: ready.source || "",
+      compressed: !!ready.compressed,
+    });
+    used += weight;
+    ready.content = "";
+  }
+  prepared.clear();
+  return { attachments, overflow, skipped, compressed, compressedReceipts };
 }
 
 export function jobEmailResendPayload(message) {
@@ -499,36 +728,20 @@ export async function sendJobEmail({ callerUid, jobId, to, cc } = {}, deps = {})
   } catch {
     return fail("not-sent");
   }
-  const budget = Number(deps.attachmentBudget) > 0 ? Number(deps.attachmentBudget) : PHOTO_BUDGET_BYTES;
-  const packed = packEmailAttachments(described, budget);
-  const names = uniqueNames(packed.attach.map((item, index) => safeFileName(item, index)));
-  const attachments = [];
-  const overflow = packed.linked.slice();
-  const skipped = packed.skipped.slice();
-  const canRead = typeof deps.readObject === "function" || typeof deps.readReceiptChunks === "function";
-  if (packed.attach.length && !canRead) return fail("not-sent");
-  for (let i = 0; i < packed.attach.length; i++) {
-    const item = packed.attach[i];
-    const got = await loadAttachment(item, deps);
-    const bytes = got && got.bytes;
-    const size = objectBytes(got);
-    if (!size) {
-      skipped.push(item);
-      continue;
-    }
-    if (attachments.reduce((sum, file) => sum + (file.bytes || 0), 0) + size > budget) {
-      overflow.push(item);
-      continue;
-    }
-    attachments.push({
-      filename: names[i],
-      content: toBase64(bytes),
-      contentType: (got && got.contentType) || item.contentType || "image/jpeg",
-      bytes: size,
-      kind: item.kind,
-      source: got.source || "",
-    });
+  const requested = Number(deps.attachmentBudget) > 0 ? Number(deps.attachmentBudget) : PHOTO_BUDGET_BYTES;
+  const budget = effectiveRawBudget(requested);
+  let assembled;
+  try {
+    assembled = await assembleAttachments(described, deps, budget);
+  } catch {
+    return fail("not-sent");
   }
+  if (!assembled || assembled.error) return fail(assembled && assembled.error || "not-sent");
+  const attachments = assembled.attachments;
+  const overflow = assembled.overflow;
+  const skipped = assembled.skipped;
+  const compressed = assembled.compressed || 0;
+  const compressedReceipts = assembled.compressedReceipts || 0;
 
   const companyName = displayCompanyName(membership.tenantId, company);
   const sender = resolveJobEmailSender({
@@ -552,11 +765,18 @@ export async function sendJobEmail({ callerUid, jobId, to, cc } = {}, deps = {})
     recipient: recipients.to[0],
   });
   if (!built.ok) return fail("not-allowed");
-  const note = unattachedFileNote({
-    photos: overflow.filter(item => item.kind === "photo").map(item => safeFileName(item, 0)),
-    receipts: overflow.filter(item => item.kind === "dump-receipt").map(item => safeFileName(item, 0)),
-    url: jobEmailAppUrl(membership.tenantId),
-  });
+  const noteParts = [
+    unattachedFileNote({
+      photos: overflow.filter(item => item.kind === "photo").map(item => safeFileName(item, 0)),
+      receipts: overflow.filter(item => item.kind === "dump-receipt").map(item => safeFileName(item, 0)),
+      url: jobEmailAppUrl(membership.tenantId),
+    }),
+    missingObjectNote({
+      photos: skipped.filter(item => item.kind === "photo").map(item => safeFileName(item, 0)),
+      receipts: skipped.filter(item => item.kind === "dump-receipt").map(item => safeFileName(item, 0)),
+    }),
+  ].filter(Boolean);
+  const note = noteParts.join("\n");
   if (note && /tenants\/|firebasestorage|X-Goog-|token=/.test(note)) return fail("not-sent");
   const text = note ? `${built.body}\n${note}` : built.body;
   const packedBytes = attachments.reduce((sum, file) => sum + (file.bytes || 0), 0);
@@ -568,6 +788,8 @@ export async function sendJobEmail({ callerUid, jobId, to, cc } = {}, deps = {})
     receipts: receiptFiles.length,
     attached: attachments.length,
     overflow: overflow.length,
+    compressed,
+    compressedReceipts,
     skipped: skipped.length,
     bytes: packedBytes,
     receiptStorage: attachments.filter(file => file.kind === "dump-receipt" && file.source === "storage").length,
@@ -618,6 +840,9 @@ export async function sendJobEmail({ callerUid, jobId, to, cc } = {}, deps = {})
     senderFallback: !!queued.senderFallback,
     attached: attachments.length,
     overflowCount: overflow.length,
+    overflow: overflow.length,
+    compressed,
+    compressedReceipts,
     skipped: skipped.length,
     to: recipients.to,
   };
