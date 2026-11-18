@@ -198,7 +198,7 @@ function openSyncList() {
     v.onclick = ev => { if (ev.target === v) v.remove(); };
   }).catch(() => {});
 }
-const syncChip = $("#syncchip");
+const syncChip = document.querySelector("#syncchip");
 if (syncChip) syncChip.onclick = () => openSyncList();
 window.addEventListener("online", () => { ui.warmKey = ""; paintSync(); flushOffline().catch(() => {}); warmUpcoming().catch(() => {}); });
 window.addEventListener("offline", () => paintSync());
