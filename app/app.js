@@ -26,6 +26,10 @@ import {
   buildJobEmail, compressImageBlob, deviceCanShareFiles, emailSendPlan, emailSheetHtml,
   jpegName, mailtoHref, parseEmailRecipients, photoBudget, photosZip, selectEmailAttachments, shareText, suggestRecipient, uniqueNames,
 } from "./features/job-email.js";
+import {
+  bindDescriptionPicker, collectSuggestions, descriptionPickerHtml, detailsFromClient, emailsFromRecipientDoc,
+  inputAttrs, listsHtml, loadBook, matchClient, prefillPatch, pushRecentEmail, rememberBook, saveBook, unionEmails,
+} from "./features/autofill.js";
 import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, lightboxHtml, photoFailureText } from "./features/photo-gallery.js";
 import { decidePhotoEmail } from "./features/photo-capture.js";
 import { mountDocuments, unmountDocuments, openDocumentBlob, canManageDocuments } from "./features/job-documents.js";
@@ -309,7 +313,13 @@ onAuthStateChanged(auth, async user => {
   ui.staffLogins = [];
   ui.staffLoginsErr = "";
   CLI = null; refreshClientLists();
+  ui.emailRecipients = [];
+  ui.emailRecipientsFor = "";
+  ui.ownReceipts = [];
+  ui.jobReceiptRows = [];
   if (myCompanyId() !== "heartwood" && (me.role === "admin" || me.role === "manager" || me.role === "supervisor")) loadClients().catch(() => {});
+  else if (myCompanyId() === "heartwood") loadClients().catch(() => {});
+  loadEmailRecipients();
   watchOwnClock();
   CHAT.start();
   PUSH.start();
@@ -2207,13 +2217,14 @@ function receiptDialog(j) {
       <label>Tonnes<input name="tonnes" type="number" step="0.001" min="0" inputmode="decimal"></label></div>
     <p class="sub">Enter a dollar amount or the tonnes (or both). Tip dockets can be uploaded with just the weight.</p>
     <label>Job # (optional)<input name="job" inputmode="numeric" placeholder="e.g. 697" value="${esc(jn)}" ${j ? "readonly" : ""}></label>
-    <label>Supplier / what it was for<input name="sup" required placeholder="e.g. Bunnings - silt fence" autocomplete="organization"></label>
+    <label>Supplier / what it was for<input name="sup" required placeholder="e.g. Bunnings - silt fence" ${inputAttrs("supplier")}></label>
     <label class="ck" id="rpaidbox"><input type="checkbox" name="mine" checked> I paid for this myself (reimburse me)</label>
     <p class="sub" id="rveolianote" hidden>${VEOLIA_PAID_NOTE}</p>
     <p class="sub" id="rpaidhint">Uncheck if this went on the company account (for example a Remondis tip docket).</p>
     <p id="rerr" class="err"></p>
     <div class="btns"><button value="cancel" formnovalidate class="sm-btn">Close</button><button value="send" class="sm-btn primary" id="rsend">Upload</button></div>
     <h4>My recent receipts</h4><div id="rmine" class="sub">Loading…</div></form>`;
+  refreshAutofillLists();
   d.showModal();
   const f = $("#rf"), mine = $("#rmine");
   const syncPaid = () => {
@@ -2240,7 +2251,10 @@ function receiptDialog(j) {
   }
   syncPaid();
   getDocs(query(collection(db, "receipts"), where("uid", "==", me.uid))).then(sn => {
-    const L = sn.docs.map(x => ({ id: x.id, ...x.data() })).sort((a, b) => String(b.createdAtIso || "").localeCompare(String(a.createdAtIso || ""))).slice(0, 8);
+    const all = sn.docs.map(x => ({ id: x.id, ...x.data() })).filter(r => docCompanyId(r) === myCompanyId());
+    ui.ownReceipts = all;
+    refreshAutofillLists();
+    const L = all.sort((a, b) => String(b.createdAtIso || "").localeCompare(String(a.createdAtIso || ""))).slice(0, 8);
     mine.innerHTML = L.map(r => `<div class="rrow"><span>${esc(String(r.createdAtIso || "").slice(0, 10))} · ${esc(r.supplier || "")}${(() => { const m = formatReceiptMeasure(r, $$); const need = isOwner() && receiptNeedsAmount(r) ? " · needs $" : ""; return (m ? " · " + esc(m) : "") + need; })()}</span>
       <span class="qpill ${r.status === "filed" ? "q-comp" : ""}">${r.status === "filed" ? "Filed" : "Queued"}</span></div>`).join("") || "None yet.";
   }).catch(e => { mine.textContent = "Receipts not available yet (" + (e.code || e.message) + ")"; });
@@ -2262,6 +2276,7 @@ function receiptDialog(j) {
       await setDoc(ref, { uid: me.uid, workerName: me.name, ...receiptMeasureFields(checked.measures), supplier, paidPersonally,
         jobNo: f.job.value.trim().replace(/^#/, "") || null, jobId: written.jobId, address: j ? (j.address || null) : null, chunks: n, mime: "image/jpeg", bytes: Math.round(b64.length * 0.75),
         status: "queued", createdAt: serverTimestamp(), createdAtIso: new Date().toISOString(), ...rco });
+      rememberEntries({ supplier });
       d.close(); toast(myCompanyId() === "heartwood" ? "Receipt uploaded - queued for Hubdoc" : "Receipt uploaded"); if (j) loadJobReceipts(j);
       mirrorReceipt(ref.id, b64, j || null, written).catch(e => console.warn("cloud receipt mirror", e && (e.code || e.message) || e));
     } catch (e) { $("#rerr").textContent = "Not uploaded: " + (e.code || e.message); $("#rsend").disabled = false; $("#rsend").textContent = "Upload"; }
@@ -2274,6 +2289,8 @@ async function loadJobReceipts(j) {
   try {
     const qs = isOwner() ? query(collection(db, "receipts"), where("jobId", "==", j.id)) : query(collection(db, "receipts"), where("jobId", "==", j.id), where("uid", "==", me.uid));
     const L = (await getDocs(qs)).docs.map(x => ({ id: x.id, ...x.data() })).filter(r => docCompanyId(r) === myCompanyId()).sort((a, b) => String(b.createdAtIso || "").localeCompare(String(a.createdAtIso || "")));
+    ui.jobReceiptRows = L;
+    refreshAutofillLists();
     if ($("#jrc") !== box) return;
     box.innerHTML = L.map(r => `<div class="rrow"><span>🧾 ${esc(String(r.createdAtIso || "").slice(0, 10))}${(() => { const m = formatReceiptMeasure(r, $$); const need = isOwner() && receiptNeedsAmount(r) ? "needs $" : ""; const shown = [m, need].filter(Boolean).join(" · "); return shown ? ` · <b>${esc(shown)}</b>` : ""; })()} · ${esc(r.supplier || "")}${isOwner() ? ` · ${esc(r.workerName || "")}${r.paidPersonally ? (receiptNeedsAmount(r) ? " (to reimburse · needs $)" : " (to reimburse)") : ""}` : ""}</span>
       <span class="qpill ${r.status === "filed" ? "q-comp" : ""}">${r.status === "filed" ? "Filed" : "Queued"}</span></div>`).join("") || "No receipts on this job yet.";
@@ -3160,6 +3177,7 @@ function bindClaims(A, rerender) {
         }
       }
       await setDoc(rcDoc(id), { ...built.data, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+      rememberEntries({ supplier: built.data.supplier || form.supplier.value });
       form.reset();
       say("");
       toast("Claim submitted");
@@ -4444,6 +4462,7 @@ function renderAdmin() {
   const quotesHtml = ui.view === "quotes" ? adminViewRouter(ui.view, ui, { esc, $$, staff, jobs: all, todayStr, rerender: () => renderAdmin(), canEditQuoteRates }) : null;
   const staffHtml = ui.view === "staff" ? staffPageHtml() : null;
   paintBrand();
+  refreshAutofillLists();
   $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "master" ? masterView() : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "capacity" ? capacityScreen() : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "take5" ? take5Page() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : ui.view === "crew" ? crewMapScreen() : quotesHtml != null ? quotesHtml : jobsView(all));
   const A = $("#app"); inboxBadge(); bindTrialBanner(A); bindMasterReturn(A);
   CHAT.watch([...(jobs || []), ...(ui.undated || [])]);
@@ -4680,8 +4699,174 @@ function wireJobDocuments(el, job) {
     toast,
   });
 }
+function autofillStorage() {
+  try { return localStorage; } catch { return null; }
+}
+function suggestionReceipts() {
+  const cid = myCompanyId();
+  const rows = [];
+  for (const row of ui.ownReceipts || []) if (docCompanyId(row) === cid) rows.push(row);
+  for (const row of ui.jobReceiptRows || []) if (docCompanyId(row) === cid) rows.push(row);
+  if (isOwner() && cid === "heartwood") {
+    for (const row of [...(ui.rqueued || []), ...(ui.reimb || [])]) if (docCompanyId(row) === cid) rows.push(row);
+  }
+  return rows.map(row => ({ companyId: cid, supplier: row.supplier, createdAt: row.createdAtIso || row.createdAt || row.date }));
+}
+function currentSuggestions() {
+  const cid = myCompanyId();
+  const uid = me && me.uid || "";
+  const book = uid ? loadBook(autofillStorage(), cid, uid) : null;
+  const remote = ui.emailRecipientsFor === cid ? (ui.emailRecipients || []) : [];
+  return collectSuggestions({
+    companyId: cid,
+    uid,
+    jobs: typeof loadedJobs === "function" ? loadedJobs() : (jobs || []),
+    clients: CLI || [],
+    receipts: suggestionReceipts(),
+    claims: (ui.claims || []).filter(row => row && (!row.companyId && !row.tenantId || docCompanyId(row) === cid)).map(row => ({ companyId: cid, supplier: row.supplier, date: row.date })),
+    directoryNames: CLIENTS,
+    remembered: book,
+    remoteEmails: remote,
+    redactMoney: !canSeeMoney(),
+  });
+}
+function refreshAutofillLists() {
+  if (typeof document === "undefined" || !document.body || !me) return;
+  let host = document.getElementById("autofill-lists");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "autofill-lists";
+    host.hidden = true;
+    document.body.appendChild(host);
+  }
+  host.innerHTML = listsHtml(currentSuggestions());
+}
+function rememberEntries(entries) {
+  if (!me || !entries) return;
+  const cid = myCompanyId();
+  const book = rememberBook(loadBook(autofillStorage(), cid, me.uid), {
+    companyId: cid, uid: me.uid, entries, now: Date.now(),
+  });
+  saveBook(autofillStorage(), book);
+  refreshAutofillLists();
+}
+function loadEmailRecipients() {
+  if (!me || !canSeeMoney()) {
+    ui.emailRecipients = [];
+    ui.emailRecipientsFor = myCompanyId();
+    return Promise.resolve([]);
+  }
+  const cid = myCompanyId();
+  const uid = me.uid;
+  return getDoc(doc(db, "companies", cid, "autofill", "recipients")).then(snap => {
+    if (!me || myCompanyId() !== cid) return [];
+    const remote = emailsFromRecipientDoc(snap.exists() ? snap.data() : null, cid);
+    const book = loadBook(autofillStorage(), cid, uid);
+    const local = (book.fields && book.fields.email || []).slice().sort((a, b) => (b.lastUsed || 0) - (a.lastUsed || 0)).map(row => row.value);
+    const merged = unionEmails(remote, local);
+    ui.emailRecipients = merged;
+    ui.emailRecipientsFor = cid;
+    refreshAutofillLists();
+    if (merged.length !== remote.length || merged.some((email, i) => email !== remote[i])) {
+      setDoc(doc(db, "companies", cid, "autofill", "recipients"), {
+        companyId: cid, emails: merged, updatedAt: serverTimestamp(), updatedBy: uid,
+      }, { merge: true }).catch(() => {});
+    }
+    return merged;
+  }).catch(() => {
+    if (ui.emailRecipientsFor !== cid) ui.emailRecipients = [];
+    return ui.emailRecipientsFor === cid ? (ui.emailRecipients || []) : [];
+  });
+}
+function rememberSentEmails(addresses) {
+  rememberEntries({ email: addresses });
+  if (!me || !canSeeMoney()) return Promise.resolve();
+  const cid = myCompanyId();
+  let next = ui.emailRecipientsFor === cid ? (ui.emailRecipients || []).slice() : [];
+  for (const raw of addresses || []) next = pushRecentEmail(next, raw);
+  ui.emailRecipients = next;
+  ui.emailRecipientsFor = cid;
+  refreshAutofillLists();
+  return setDoc(doc(db, "companies", cid, "autofill", "recipients"), {
+    companyId: cid, emails: next, updatedAt: serverTimestamp(), updatedBy: me.uid,
+  }, { merge: true }).catch(() => {});
+}
+function wireClientPrefill(root) {
+  const form = root && root.tagName === "FORM" ? root : root && root.querySelector ? root.querySelector("form") : null;
+  if (!form || !form.elements) return;
+  const clientEl = form.elements.client || form.querySelector('[name="name"]');
+  if (!clientEl || clientEl.dataset.afPrefill) return;
+  clientEl.dataset.afPrefill = "1";
+  const apply = () => {
+    const client = matchClient(clientEl.value, (CLI || []).filter(row => docCompanyId(row) === myCompanyId()));
+    if (!client) return;
+    const read = (...names) => {
+      for (const name of names) {
+        const el = form.elements[name];
+        if (el) return el.value;
+      }
+      return "";
+    };
+    const patch = prefillPatch({
+      address: read("address"),
+      suburb: read("isuburb", "suburb"),
+      contactName: read("contactName", "isup"),
+      phone: read("contactPhone", "phone", "iphone"),
+      email: read("contactEmail", "email", "iemail"),
+    }, detailsFromClient(client));
+    const write = (key, names) => {
+      if (!patch[key]) return;
+      for (const name of names) {
+        const el = form.elements[name];
+        if (el && !String(el.value || "").trim()) el.value = patch[key];
+      }
+    };
+    write("address", ["address"]);
+    write("suburb", ["isuburb", "suburb"]);
+    write("contactName", ["contactName", "isup"]);
+    write("phone", ["contactPhone", "phone", "iphone"]);
+    write("email", ["contactEmail", "email", "iemail"]);
+  };
+  clientEl.addEventListener("change", apply);
+  clientEl.addEventListener("blur", apply);
+}
+function wireReviewPrefill(root) {
+  if (!root || !root.querySelectorAll) return;
+  root.querySelectorAll('[data-field="client"]').forEach(clientEl => {
+    if (clientEl.dataset.afPrefill) return;
+    clientEl.dataset.afPrefill = "1";
+    const id = clientEl.dataset.iid || "";
+    const apply = () => {
+      const client = matchClient(clientEl.value, (CLI || []).filter(row => docCompanyId(row) === myCompanyId()));
+      if (!client) return;
+      const field = name => root.querySelector(`[data-iid="${CSS.escape(id)}"][data-field="${name}"]`);
+      const valueOf = name => { const el = field(name); return el ? el.value : ""; };
+      const patch = prefillPatch({
+        address: valueOf("address"),
+        suburb: valueOf("suburb"),
+        contactName: valueOf("supervisorName"),
+        phone: valueOf("supervisorPhone"),
+        email: valueOf("supervisorEmail"),
+      }, detailsFromClient(client));
+      const set = (name, key) => {
+        if (!patch[key]) return;
+        const el = field(name);
+        if (el && !String(el.value || "").trim()) el.value = patch[key];
+      };
+      set("address", "address");
+      set("suburb", "suburb");
+      set("supervisorName", "contactName");
+      set("supervisorPhone", "phone");
+      set("supervisorEmail", "email");
+    };
+    clientEl.addEventListener("change", apply);
+    clientEl.addEventListener("blur", apply);
+  });
+}
 function editJob(j) {
   const importing = !!(j && j._import);
+  refreshAutofillLists();
+  const suggest = currentSuggestions();
   const n = !j || !j.id;
   j = j || { date: todayStr(), time: "07:00", durationHrs: 4, status: "Scheduled", type: defaultJobCategory(ui.tradeSetup), assigned: [], client: CLIENTS[0] };
   const d = $("#dlg");
@@ -4701,11 +4886,15 @@ function editJob(j) {
     <div class="jc-body"><div class="jc-col">
       ${importing ? importBanner(j) : ""}
       <h4>Client &amp; Site</h4>
-      <label>Client<input name="client" list="clients" value="${esc(j.client)}" required><datalist id="clients">${CLIENTS.map(c => `<option value="${esc(c)}">`).join("")}</datalist></label>
+      <label>Client<input name="client" ${inputAttrs("client")} value="${esc(j.client)}" required></label>
       ${n ? "" : `<div class="supcard" data-sup="${esc(j.id)}"></div>`}
-      <label>Job (site) address<input name="address" value="${esc(j.address)}" required></label>
+      <label>Job (site) address<input name="address" ${inputAttrs("address")} value="${esc(j.address)}" required></label>
+      ${importing ? "" : `<div class="row"><label>Contact name<input name="contactName" maxlength="80" ${inputAttrs("contactName")} value="${esc(j.contactName || j.supervisorName || "")}"></label>
+        <label>Phone<input name="contactPhone" maxlength="40" ${inputAttrs("phone")} value="${esc(j.contactPhone || j.supervisorPhone || "")}"></label>
+        <label>Email<input name="contactEmail" maxlength="120" ${inputAttrs("email")} value="${esc(j.contactEmail || j.clientEmail || j.supervisorEmail || "")}"></label></div>`}
       ${j.address ? `<a class="sub" href="${mapsUrl(j.address)}" target="_blank" rel="noopener">📍 Open in Maps</a>` : ""}
       <h4>Job Description</h4>
+      ${descriptionPickerHtml(suggest.description)}
       <textarea name="description" rows="4">${esc(j.description)}</textarea>
       ${Array.isArray(j.workAmounts) && j.workAmounts.length ? `<div class="hint"><b>Amounts from the quote</b>${workAmountsHtml(j, "det-amt")}</div>` : ""}
       ${!n && isMixed(j) ? `<div class="splitbox"><b>⚠ Mixed work:</b> ${esc(mixedKinds(j).map(k => TYPES[k] || k).join(" + "))}. Tick the lines to move to a new job:
@@ -4743,6 +4932,9 @@ function editJob(j) {
     <p id="ferr" class="err"></p>
     <div class="btns jc-foot">${n ? "" : `<button type="button" class="sm-btn" id="emailjob">Email job</button>`}${!n && take5EntryVisible({ enabled: ui.take5On !== false }) ? take5StartButtonHtml({ enabled: true, done: hasTake5(ui.take5s, me && me.uid, j.id) }) : ""}${canQuote() ? `<button type="button" class="sm-btn" id="quotethis">Quote this job</button>` : ""}<button value="cancel" formnovalidate class="sm-btn">Close</button><button value="save" class="sm-btn primary">Save Job</button></div></form>`;
   d.showModal();
+  bindDescriptionPicker(d);
+  wireClientPrefill(d);
+  loadClients().then(() => { if (document.getElementById("jf")) refreshAutofillLists(); }).catch(() => {});
   if (!n) jobTabs(d, j);
   if (!n) { rememberJob(j); $("#emailph").onclick = () => emailPhotos(j); const emailJobBtn = $("#emailjob"); if (emailJobBtn) emailJobBtn.onclick = () => { openJobEmail(j).catch(e => toast(e.message || "Couldn't open the email")); }; watchJobPhotos(j); paintPhotoSlots(); wireJobDocuments(d.querySelector("[data-job-docs]"), j); }
   if (!n && $("#cloudexport")) $("#cloudexport").onclick = () => downloadGalleryCopy(j).catch(e => toast(e.message || "Download failed"));
@@ -4794,6 +4986,13 @@ function editJob(j) {
       assigned, assignedNames: picked.map(s => s.name), status: f.status.value, notes: f.notes.value.trim(),
       loads: f.loads.value === "" ? null : +f.loads.value, editedInApp: true,
       ...(String(j.poAmount ?? "") !== f.poAmount.value ? { poAmount: f.poAmount.value === "" ? null : Math.round(+f.poAmount.value * 100) / 100, poAmountBasis: f.poAmount.value === "" ? null : "entered in app (ex GST)", poAmountSource: "app" } : {}), updatedAt: serverTimestamp(), updatedBy: me.uid };
+    if (f.contactName) Object.assign(data, {
+      contactName: f.contactName.value.trim(),
+      contactPhone: f.contactPhone.value.trim(),
+      contactEmail: f.contactEmail.value.trim(),
+      supervisorName: f.contactName.value.trim(),
+      supervisorEmail: f.contactEmail.value.trim(),
+    });
     if (data.status === "Done" && j.status !== "Done") Object.assign(data, { completedAt: serverTimestamp(), completedBy: me.uid });
     if (!confirmIfOnLeave(data.date, data.assignedNames)) return;
     if (!guard.start()) return;
@@ -4816,6 +5015,16 @@ function editJob(j) {
       } else write = writeJob(j.id, data);
       const r = await settleOrQueue(write);
       if (r.queued) write.catch(e => toast("Job not saved: " + (e.code || e.message)));
+      rememberEntries({
+        client: data.client,
+        address: data.address,
+        description: data.description,
+        contactName: f.contactName ? f.contactName.value : (f.isup && f.isup.value),
+        phone: f.contactPhone ? f.contactPhone.value : (f.iphone && f.iphone.value),
+        email: f.contactEmail ? f.contactEmail.value : (f.iemail && f.iemail.value),
+        supervisor: (f.isup && f.isup.value) || (f.contactName && f.contactName.value),
+        suburb: f.isuburb && f.isuburb.value,
+      });
       d.close(); toast(r.queued ? "Saved on this phone. It uploads when you have signal." : "Saved"); refreshAfterImport();
       const savedId = (j && j.id) || (newRef && newRef.id);
       queueDispatchPersist([...(jobs || []).filter(x => x.id !== savedId), { ...j, ...data, id: savedId }], [data.date, j && j.date].filter(Boolean));
@@ -4997,14 +5206,14 @@ function importBanner(j) {
     <span class="sub">Review and edit, then save. Nothing is created until you save.</span>
     ${p.subject ? `<div class="sub">${esc(p.subject)}</div>` : ""}
     <div class="row">
-      <label>Lot<input name="ilot" value="${esc(p.lot || "")}"></label>
-      <label>Street<input name="istreet" value="${esc(p.street || "")}"></label>
-      <label>Suburb<input name="isuburb" value="${esc(p.suburb || "")}"></label>
+      <label>Lot<input name="ilot" value="${esc(p.lot || "")}" autocomplete="off"></label>
+      <label>Street<input name="istreet" value="${esc(p.street || "")}" autocomplete="address-line1"></label>
+      <label>Suburb<input name="isuburb" ${inputAttrs("suburb")} value="${esc(p.suburb || "")}"></label>
     </div>
     <div class="row">
-      <label>Supervisor<input name="isup" value="${esc(p.supervisorName || "")}"></label>
-      <label>Phone<input name="iphone" value="${esc(p.supervisorPhone || "")}"></label>
-      <label>Email<input name="iemail" value="${esc(p.supervisorEmail || "")}"></label>
+      <label>Supervisor<input name="isup" maxlength="80" ${inputAttrs("supervisor")} value="${esc(p.supervisorName || "")}"></label>
+      <label>Phone<input name="iphone" maxlength="40" ${inputAttrs("phone")} value="${esc(p.supervisorPhone || "")}"></label>
+      <label>Email<input name="iemail" maxlength="120" ${inputAttrs("email")} value="${esc(p.supervisorEmail || "")}"></label>
     </div>
     <p class="sub">${p.costCode ? `Cost code ${esc(p.costCode)}${p.typeLabel ? " · " + esc(p.typeLabel) : ""}` : esc(p.typeLabel || "No cost code found")}</p>
     ${warn.map(w => `<p class="iwarn">${esc(w)}</p>`).join("")}
@@ -5148,9 +5357,9 @@ function inboxReview(all) {
         <label class="ck"><input type="radio" name="mode-${esc(id)}" data-iid="${esc(id)}" data-field="mode" value="create" ${row.mode !== "date" ? "checked" : ""}> Save as a new job</label>
         <label class="ck"><input type="radio" name="mode-${esc(id)}" data-iid="${esc(id)}" data-field="mode" value="date" ${row.mode === "date" ? "checked" : ""}> Update ${esc(row.existingLabel)}'s date</label>` : ""}
       <div class="row">
-        <label>Client<input data-iid="${esc(id)}" data-field="client" value="${esc(row.client)}"></label>
-        <label>Address<input data-iid="${esc(id)}" data-field="address" value="${esc(row.address)}"></label>
-        <label>Suburb<input data-iid="${esc(id)}" data-field="suburb" value="${esc(row.suburb)}"></label>
+        <label>Client<input data-iid="${esc(id)}" data-field="client" ${inputAttrs("client")} value="${esc(row.client)}"></label>
+        <label>Address<input data-iid="${esc(id)}" data-field="address" ${inputAttrs("address")} value="${esc(row.address)}"></label>
+        <label>Suburb<input data-iid="${esc(id)}" data-field="suburb" ${inputAttrs("suburb")} value="${esc(row.suburb)}"></label>
       </div>
       <div class="row">
         <label>Category<select data-iid="${esc(id)}" data-field="type">${jobCategorySelectHtml(ui.tradeSetup, row.type || "", { blank: "Choose category" })}</select></label>
@@ -5158,9 +5367,9 @@ function inboxReview(all) {
         <label>PO<input data-iid="${esc(id)}" data-field="po" value="${esc(row.po)}"></label>
       </div>
       <div class="row">
-        <label>Supervisor<input data-iid="${esc(id)}" data-field="supervisorName" value="${esc(row.supervisorName)}"></label>
-        <label>Phone<input data-iid="${esc(id)}" data-field="supervisorPhone" value="${esc(row.supervisorPhone)}"></label>
-        <label>Email<input data-iid="${esc(id)}" data-field="supervisorEmail" value="${esc(row.supervisorEmail)}"></label>
+        <label>Supervisor<input data-iid="${esc(id)}" data-field="supervisorName" maxlength="80" ${inputAttrs("supervisor")} value="${esc(row.supervisorName)}"></label>
+        <label>Phone<input data-iid="${esc(id)}" data-field="supervisorPhone" maxlength="40" ${inputAttrs("phone")} value="${esc(row.supervisorPhone)}"></label>
+        <label>Email<input data-iid="${esc(id)}" data-field="supervisorEmail" maxlength="120" ${inputAttrs("email")} value="${esc(row.supervisorEmail)}"></label>
       </div>
       <label>Notes<textarea data-iid="${esc(id)}" data-field="notes" rows="2">${esc(row.notes)}</textarea></label>
     </div></div>`;
@@ -5216,6 +5425,10 @@ async function saveBulkImport(A) {
         });
         await markInboxImported(id, ref.id);
       }
+      rememberEntries({
+        client: row.client, address, suburb: row.suburb, description: row.description,
+        supervisor: row.supervisorName, contactName: row.supervisorName, phone: row.supervisorPhone, email: row.supervisorEmail,
+      });
       saved += 1;
     } catch (e) { failed += 1; console.warn("import", id, e); }
   }
@@ -5248,6 +5461,7 @@ function bindInbox(A) {
     ui.ibReview = ids; ui.ibDraft = {}; ui.ibMode = "review"; go();
   };
   const save = A.querySelector("#isave"); if (save) save.onclick = () => saveBulkImport(A);
+  wireReviewPrefill(A);
 }
 // ---- Clients (clients/{id}: name, office{address,phone}, contacts[{kind,name,role,mobile,phone,email,source,default}]).
 // Workers read, admins edit. Contacts come from builders' emails (see data/clients_contacts.json).
@@ -5307,8 +5521,10 @@ function bindClients(A) {
 }
 function openClientForm() {
   const d = $("#dlg"); d.className = ""; d.onclose = null;
+  refreshAutofillLists();
   d.innerHTML = clientFormHtml();
   d.showModal();
+  wireClientPrefill(d);
   const form = $("#clientnew");
   form.onsubmit = async ev => {
     if (ev.submitter?.value === "cancel") return;
@@ -5335,6 +5551,13 @@ function openClientForm() {
     }
     try {
       await setDoc(doc(db, "clients", built.id), { ...built.data, updatedAt: serverTimestamp(), updatedBy: me.uid }, { merge: true });
+      rememberEntries({
+        client: built.data.name,
+        contactName: form.contactName.value,
+        phone: form.phone.value,
+        email: form.email.value,
+        address: form.address.value,
+      });
       d.close();
       await loadClients(true);
       renderAdmin();
@@ -5343,11 +5566,12 @@ function openClientForm() {
   };
 }
 function editContact(c, i) {
+  refreshAutofillLists();
   const x = i >= 0 ? c.contacts[i] : { kind: "supervisor" }, d = $("#dlg"); d.className = ""; d.onclose = null;
   d.innerHTML = `<form method="dialog" id="cf" class="jf"><h2>${i >= 0 ? "Edit" : "Add"} contact · ${esc(c.name)}</h2>
     <label>Type<select name="kind">${Object.entries(KIND).map(([k, t]) => `<option value="${k}" ${x.kind === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
-    <label>Name<input name="name" value="${esc(x.name)}" required></label><label>Role<input name="role" value="${esc(x.role)}"></label>
-    <label>Mobile<input name="mobile" type="tel" value="${esc(x.mobile)}"></label><label>Email<input name="email" type="email" value="${esc(x.email)}"></label>
+    <label>Name<input name="name" maxlength="80" ${inputAttrs("contactName")} value="${esc(x.name)}" required></label><label>Role<input name="role" value="${esc(x.role)}" autocomplete="organization-title"></label>
+    <label>Mobile<input name="mobile" maxlength="40" ${inputAttrs("phone")} value="${esc(x.mobile)}"></label><label>Email<input name="email" maxlength="120" ${inputAttrs("email")} value="${esc(x.email)}"></label>
     <label>Source / note<input name="source" value="${esc(x.source)}"></label>
     <div class="btns">${i >= 0 ? `<button value="del" formnovalidate class="ghost big" id="cdel">Remove</button>` : ""}<button value="cancel" formnovalidate class="ghost big">Cancel</button><button value="ok" class="primary big">Save</button></div></form>`;
   d.showModal();
@@ -5357,7 +5581,9 @@ function editContact(c, i) {
     const f = ev.target, cs = [...(c.contacts || [])];
     const nx = { ...x, kind: f.kind.value, name: f.name.value.trim(), role: f.role.value.trim(), mobile: f.mobile.value.trim(), email: f.email.value.trim(), source: f.source.value.trim() };
     if (v === "del") cs.splice(i, 1); else if (i >= 0) cs[i] = nx; else cs.push(nx);
-    try { await updateDoc(doc(db, "clients", c.id), { contacts: cs, updatedAt: serverTimestamp(), updatedBy: me.uid }); d.close(); await loadClients(true); renderAdmin(); toast("Saved"); }
+    try { await updateDoc(doc(db, "clients", c.id), { contacts: cs, updatedAt: serverTimestamp(), updatedBy: me.uid });
+      if (v !== "del") rememberEntries({ contactName: nx.name, phone: nx.mobile, email: nx.email, supervisor: nx.kind === "supervisor" ? nx.name : "" });
+      d.close(); await loadClients(true); renderAdmin(); toast("Saved"); }
     catch (e) { toast("Not saved: " + (e.code || e.message)); }
   };
 }
@@ -5788,6 +6014,7 @@ function withRunOrder(list) {
   return out;
 }
 function renderOperator() {
+  refreshAutofillLists();
   paintBrand();
   PUSH.settle();
   if (canImport()) inboxSub();
@@ -6167,6 +6394,7 @@ async function openJobEmail(job) {
   if (docCompanyId(job) !== myCompanyId()) return toast("That job belongs to another company.");
   await ensurePhotoList(job).catch(() => {});
   await loadClients().catch(() => {});
+  await loadEmailRecipients();
   const row = ui.photoLists[job.id];
   const listing = row && row.gallery && row.gallery.ok ? row.gallery.photos : [];
   const photoError = !!(row && row.status === "error");
@@ -6216,6 +6444,7 @@ async function openJobEmail(job) {
   v.className = "emdlg";
   v.innerHTML = emailSheetHtml({
     subject: first.subject, body: first.body, to: suggested.email, suggestion: suggested.email,
+    suggestions: currentSuggestions().email,
     photos: picked.photos, receipts: picked.receipts, photoError,
   });
   host.appendChild(v);
@@ -6274,6 +6503,7 @@ async function openJobEmail(job) {
       setState(sentLine(result, recipients.to));
       sendBtn.dataset.sent = "1";
       sendBtn.textContent = "Sent";
+      rememberSentEmails([...(recipients.to || []), ...(recipients.cc || [])]);
     } catch (e) {
       setState("");
       warnEl.hidden = false;
@@ -7293,6 +7523,10 @@ QG = installQuotes({
   $, esc, toast, $$, CLIENTS, TYPES, canSeeMoney, canQuote, canEditQuoteRates, todayStr, jobNo,
   openJob: openAcceptedJob,
   getMe: () => me, getUi: () => ui, getCompanyId: () => myCompanyId(),
+  suggestions: field => (currentSuggestions()[field] || []),
+  refreshAutofill: () => refreshAutofillLists(),
+  wireClientPrefill: root => wireClientPrefill(root),
+  remember: entries => rememberEntries(entries),
   isAdmin: () => !!(me && me.role === "admin"),
   saveExtraTrade: async (tradeId) => {
     const id = normalizeTrade(tradeId);

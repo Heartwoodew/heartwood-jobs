@@ -649,7 +649,16 @@ export function installCompliance(deps) {
     if (!edit) return "";
     if (edit.kind === "service") {
       const row = state.records.find(r => r.id === edit.id) || null;
-      return serviceFormHtml(row, state.assets, state.costs, { showCost: seeMoney(), presetAsset: edit.assetId || "" });
+      const places = [];
+      const seenPlaces = new Set();
+      for (const rec of state.records) {
+        const text = String(rec && rec.servicedBy || "").replace(/\s+/g, " ").trim();
+        const key = text.toLowerCase();
+        if (!text || seenPlaces.has(key)) continue;
+        seenPlaces.add(key);
+        places.push(text);
+      }
+      return serviceFormHtml(row, state.assets, state.costs, { showCost: seeMoney(), presetAsset: edit.assetId || "", previousPlaces: places });
     }
     if (edit.kind === "interval") {
       const asset = state.assets.find(a => a.id === edit.id);

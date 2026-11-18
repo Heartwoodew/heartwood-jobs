@@ -451,6 +451,36 @@ service cloud.firestore {
     }
 // END COMPANY RULES
 
+// BEGIN AUTOFILL RULES
+    // Emails this company has already sent a job to. Office only (admin, manager, supervisor,
+    // plus Alex and Patrick at Heartwood). Crew cannot read it: it can name people on jobs
+    // they are not assigned to. No price fields. No list, no delete.
+    function autofillOffice(companyId) {
+      return signedIn()
+        && companyId == callerCompany()
+        && companyOpen(companyId)
+        && (
+          (companyId == "heartwood" && (isAlex() || isPatrick()))
+          || (hasProfile() && profile().get("role", "") in ["admin", "supervisor", "manager"])
+        );
+    }
+    function autofillDocOk(companyId) {
+      let d = request.resource.data;
+      return d.keys().hasOnly(["companyId", "emails", "updatedAt", "updatedBy"])
+        && d.companyId == companyId
+        && d.emails is list
+        && d.emails.size() <= 40
+        && d.updatedBy == request.auth.uid
+        && d.updatedAt == request.time;
+    }
+    match /companies/{companyId}/autofill/{docId} {
+      allow get: if docId == "recipients" && autofillOffice(companyId) && (resource == null || resource.data.companyId == companyId);
+      allow list: if false;
+      allow create, update: if docId == "recipients" && autofillOffice(companyId) && autofillDocOk(companyId);
+      allow delete: if false;
+    }
+// END AUTOFILL RULES
+
     // Deletion audit. Written by deleteCompanyAccount (Admin SDK). Kept outside the company
     // that was deleted. Clients cannot write or delete it.
     match /companyDeletions/{companyId} {
