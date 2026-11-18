@@ -55,6 +55,8 @@ const HEARTWOOD_OK = new Set([
   "Optional. Heartwood receipts still use the address on the Receipts page.",
   "Heartwood cannot be deleted.", // platform-owner delete refusal, not shown to a client company
   "companies/heartwood", "tenants/heartwood", // deletion path guards, never shown
+  // CallUp for Windows installer on the public GitHub release (the updater feed and installer publisher are already there)
+  "https://github.com/Heartwoodew/heartwood-jobs/releases/download/desktop-v0.1.0/CallUp_0.1.0_x64-setup.exe",
 ]);
 test("every shipped string that mentions Heartwood is on the reviewed list", () => {
   const hits = shippedStrings().filter(s => !s.f.endsWith(".html") && !s.f.endsWith(".css") && !s.f.endsWith(".webmanifest"))

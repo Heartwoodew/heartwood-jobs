@@ -14,8 +14,13 @@ const desktopChrome = {
   maxTouchPoints: 0,
 };
 
+test("the Windows download link points at the signed v0.1.0 installer", () => {
+  assert.equal(WINDOWS_DOWNLOAD_URL, "https://github.com/Heartwoodew/heartwood-jobs/releases/download/desktop-v0.1.0/CallUp_0.1.0_x64-setup.exe");
+  assert.equal(safeDownloadUrl(WINDOWS_DOWNLOAD_URL), WINDOWS_DOWNLOAD_URL);
+});
+
 test("the Windows download link is hidden until an https URL is set", () => {
-  assert.equal(WINDOWS_DOWNLOAD_URL, "");
+
   assert.equal(safeDownloadUrl(""), "");
   assert.equal(safeDownloadUrl("http://example.com/CallUp.exe"), "");
   assert.equal(safeDownloadUrl("javascript:alert(1)"), "");
@@ -87,7 +92,7 @@ test("a phone keeps the browser install prompt, and the Windows program swallows
   assert.equal(program.host.hidden, true);
 });
 
-test("startDesktopInstall keeps the bar hidden until the browser fires beforeinstallprompt", () => {
+test("startDesktopInstall shows Download for Windows at once and adds Install on this PC after beforeinstallprompt", () => {
   const host = { hidden: true, innerHTML: "", querySelector() { return null; } };
   const listeners = {};
   const win = {
@@ -96,7 +101,9 @@ test("startDesktopInstall keeps the bar hidden until the browser fires beforeins
     addEventListener(type, fn) { listeners[type] = fn; },
   };
   startDesktopInstall({ getElementById: () => host }, win);
-  assert.equal(host.hidden, true);
+  assert.equal(host.hidden, false);
+  assert.match(host.innerHTML, /Download for Windows/);
+  assert.doesNotMatch(host.innerHTML, /Install on this PC/);
   let prevented = false;
   listeners.beforeinstallprompt({ preventDefault() { prevented = true; } });
   assert.equal(prevented, true);
@@ -104,7 +111,7 @@ test("startDesktopInstall keeps the bar hidden until the browser fires beforeins
   assert.match(host.innerHTML, /Install on this PC/);
 });
 
-test("the manifest can be installed on a desktop, and the shell is callup-shell-v133-desktop", () => {
+test("the manifest can be installed on a desktop, and the shell is callup-shell-v134-desktopdl", () => {
   const manifest = JSON.parse(readFileSync(join(ROOT, "app/manifest.webmanifest"), "utf8"));
   assert.equal(manifest.display, "standalone");
   assert.equal(manifest.start_url, "/app/");
@@ -113,7 +120,7 @@ test("the manifest can be installed on a desktop, and the shell is callup-shell-
   const sizes = manifest.icons.map(icon => icon.sizes);
   assert.ok(sizes.includes("192x192") && sizes.includes("512x512"));
   const sw = readFileSync(join(ROOT, "app/sw.js"), "utf8");
-  assert.match(sw, /callup-shell-v133-desktop/);
+  assert.match(sw, /callup-shell-v134-desktopdl/);
   assert.match(sw, /features\/desktop-install\.js/);
   const app = readFileSync(join(ROOT, "app/app.js"), "utf8");
   assert.match(app, /startDesktopInstall/);
