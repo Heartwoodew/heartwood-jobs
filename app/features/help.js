@@ -1,3 +1,5 @@
+import { deviceOnline, needsSignal } from "./offline.js";
+
 // Basic in-app Help for every CallUp company and every role.
 // Answers come from this knowledge list. helperAsk is tried only when a caller
 // is passed; if it is switched off, offline, or would show money to crew, the
@@ -185,6 +187,10 @@ export function replyShowsMoney(text) {
 
 export async function askHelp(question, ctx = {}, caller) {
   const local = matchHelp(question, ctx);
+  if (!deviceOnline()) {
+    const gate = needsSignal("helper", false);
+    return { ...local, text: local.text + " " + gate.message, source: "knowledge" };
+  }
   if (typeof caller !== "function") return local;
   try {
     const remote = await caller(HELP_CALL, {

@@ -32,6 +32,16 @@ test("a failed or skipped mirror keeps the email fallback so photos are not lost
   assert.equal(partial.storedCount, 2);
 });
 
+test("photos kept on the phone are not emailed", () => {
+  const queued = decidePhotoEmail({
+    collection: "jobs",
+    fileCount: 2,
+    mirror: { ok: false, reason: "queued", uploaded: [], skipped: [] },
+  });
+  assert.equal(queued.email, false);
+  assert.equal(queued.reason, "queued");
+});
+
 test("incident photos still email because they are not mirrored to job storage", () => {
   const decision = decidePhotoEmail({
     collection: "incidents",
