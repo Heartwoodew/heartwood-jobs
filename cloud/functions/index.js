@@ -501,11 +501,15 @@ export const sendJobEmail = onCall(
         : reason === "unauthenticated" ? "unauthenticated"
         : reason === "invalid-recipient" ? "invalid-argument"
         : reason === "not-sent" ? "failed-precondition"
+        : reason === "sender-not-authorised" ? "failed-precondition"
+        : reason === "too-large" ? "invalid-argument"
+        : reason === "mail-rejected" ? "invalid-argument"
+        : reason === "mail-unavailable" ? "unavailable"
         : "permission-denied";
       throw new HttpsError(code, jobEmailFailureText(reason));
     }
     const tooBig = result.overflowCount || 0;
-    return { ok: true, attached: result.attached || 0, overflow: tooBig, skipped: result.skipped || 0, to: result.to || [] };
+    return { ok: true, attached: result.attached || 0, overflow: tooBig, skipped: result.skipped || 0, to: result.to || [], senderFallback: !!result.senderFallback };
   },
 );
 

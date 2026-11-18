@@ -60,6 +60,10 @@ export function jobEmailFailureText(reason) {
   if (reason === "invalid-recipient") return "Enter a valid email address. You can send to 5 addresses at most.";
   if (reason === "rate-limited") return "Too many job emails. Wait an hour and try again.";
   if (reason === "not-sent") return "Couldn't send that email. Try again in a minute.";
+  if (reason === "sender-not-authorised") return "Couldn't send from your company email address yet. Ask CallUp support to check the email sender setup.";
+  if (reason === "too-large") return "That email is too big to send. Remove some photos and try again.";
+  if (reason === "mail-rejected") return "The mail service rejected that email. Check the addresses and try again.";
+  if (reason === "mail-unavailable") return "The mail service is busy. Try again in a minute.";
   return "You can't email this job.";
 }
 
@@ -226,6 +230,48 @@ export function jobEmailResendPayload(message) {
   return body;
 }
 
+// sendViaResend (shared/staff-invites.js, mirrored into the app) reports a failure as
+// reason "resend-<status>" with Resend's message in error. Read the status from there.
+function resendStatus(result) {
+  const direct = Number(result && result.status) || 0;
+  if (direct) return direct;
+  const m = /^resend-(\d{3})$/.exec(String((result && result.reason) || ""));
+  return m ? Number(m[1]) : 0;
+}
+
+function senderNotAuthorised(result) {
+  if (!result || result.ok) return false;
+  const text = String(result.error || "");
+  return resendStatus(result) === 403 && /not (?:authori[sz]ed to send|verified)|domain/i.test(text);
+}
+
+/** Map a failed Resend result to a job-email failure reason the app can show. */
+export function resendFailureReason(result) {
+  if (!result || result.ok) return "not-sent";
+  const status = resendStatus(result);
+  if (senderNotAuthorised(result)) return "sender-not-authorised";
+  if (status === 413 || /too large|size|exceed/i.test(String(result.error || ""))) return "too-large";
+  if (status === 422 || status === 400) return "mail-rejected";
+  if (status === 429 || status >= 500) return "mail-unavailable";
+  return "not-sent";
+}
+
+function logResendFailure(message, result, deps, attempt) {
+  // Never logs the API key, recipients or attachment content.
+  const line = {
+    jobId: message.jobId || "",
+    companyId: message.companyId || "",
+    attempt,
+    fromDomain: emailDomain((/<([^>]+)>/.exec(String(message.from || "")) || [])[1] || message.from),
+    status: resendStatus(result),
+    name: String((result && result.name) || "").slice(0, 80),
+    error: String((result && (result.error || result.reason)) || "").slice(0, 200),
+    attached: message.attachedCount || 0,
+  };
+  if (typeof deps.logError === "function") deps.logError("sendJobEmail resend failed", line);
+  else if (!(deps.env || {}).NODE_TEST_CONTEXT && !process.env.NODE_TEST_CONTEXT) console.error("sendJobEmail resend failed", line);
+}
+
 function auditDoc(message, delivery, extra = {}) {
   return {
     kind: "job-email",
@@ -254,13 +300,37 @@ export async function queueJobEmail(message, deps = {}) {
   const config = inviteEmailConfig(env);
   if (config.provider === "resend") {
     if (typeof deps.sendResend !== "function") return { ok: false, sent: false, reason: "not-sent" };
-    const result = await deps.sendResend(jobEmailResendPayload(message), message.idempotencyKey);
-    const doc = auditDoc(message, result && result.ok ? "sent" : "failed", {
+    let result = await deps.sendResend(jobEmailResendPayload(message), message.idempotencyKey);
+    let firstError = null;
+    if (!(result && result.ok)) logResendFailure(message, result, deps, "primary");
+    // A company From override whose domain the Resend key may not use (403
+    // "not authorized to send emails from <domain>") retries once from the
+    // CallUp sender, keeping the same reply-to, so the email still goes out.
+    if (!(result && result.ok) && senderNotAuthorised(result)
+      && message.fallbackFrom && message.fallbackFrom !== message.from) {
+      firstError = result;
+      const retry = { ...message, from: message.fallbackFrom };
+      result = await deps.sendResend(jobEmailResendPayload(retry), `${message.idempotencyKey}-callup`);
+      if (!(result && result.ok)) logResendFailure(retry, result, deps, "fallback");
+    }
+    const ok = !!(result && result.ok);
+    const doc = auditDoc(message, ok ? "sent" : "failed", {
       providerId: (result && result.id) || "",
       error: String((result && (result.error || result.reason)) || "").slice(0, 200),
+      status: resendStatus(result),
+      ...(firstError ? {
+        senderFallback: true,
+        fromUsed: ok ? message.fallbackFrom : "",
+        primaryError: String(firstError.error || firstError.reason || "").slice(0, 200),
+      } : {}),
     });
     if (typeof deps.writeMail === "function") await deps.writeMail("jobMail", doc);
-    return { ok: !!(result && result.ok), sent: !!(result && result.ok), reason: result && result.ok ? "sent" : "not-sent" };
+    return {
+      ok,
+      sent: ok,
+      reason: ok ? "sent" : resendFailureReason(firstError && !ok && senderNotAuthorised(result) ? firstError : result),
+      senderFallback: !!firstError && ok,
+    };
   }
   if (typeof deps.writeMail !== "function") return { ok: false, sent: false, reason: "not-sent" };
   await deps.writeMail("mail", {
@@ -468,6 +538,7 @@ export async function sendJobEmail({ callerUid, jobId, to, cc } = {}, deps = {})
     senderEmail: callerUser && callerUser.email,
     env,
   });
+  const callupFrom = jobEmailFrom(companyName);
   const built = buildJobEmail({
     job,
     company: { companyId: membership.tenantId, name: companyName },
@@ -518,6 +589,7 @@ export async function sendJobEmail({ callerUid, jobId, to, cc } = {}, deps = {})
 
   const message = {
     from: sender.from,
+    fallbackFrom: callupFrom,
     to: recipients.to,
     cc: recipients.cc,
     replyTo: sender.replyTo,
@@ -535,11 +607,15 @@ export async function sendJobEmail({ callerUid, jobId, to, cc } = {}, deps = {})
     queued = await queueJobEmail(message, { ...deps, env, allowLiveMail: true });
   } catch (err) {
     if (err && /refusing live job email/.test(String(err.message || err))) throw err;
+    const line = { jobId: id, companyId: membership.tenantId, name: String(err && err.name || "").slice(0, 80), error: String(err && err.message || err || "").slice(0, 200) };
+    if (typeof deps.logError === "function") deps.logError("sendJobEmail send threw", line);
+    else if (!process.env.NODE_TEST_CONTEXT) console.error("sendJobEmail send threw", line);
     return fail("not-sent");
   }
-  if (!queued || !queued.sent) return fail("not-sent");
+  if (!queued || !queued.sent) return fail((queued && queued.reason) || "not-sent");
   return {
     ok: true,
+    senderFallback: !!queued.senderFallback,
     attached: attachments.length,
     overflowCount: overflow.length,
     skipped: skipped.length,

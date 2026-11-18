@@ -653,3 +653,54 @@ test("crew still get no receipts when a job has a tonnes-only docket", async () 
   assert.doesNotMatch(payload.text, /Veolia|Dump receipts|4\.38/);
   assert.equal(calls.reads.some(path => /receipts/.test(path)), false);
 });
+
+test("a 403 sender-domain refusal from Resend retries once from the CallUp sender and logs the error", async () => {
+  const w = world();
+  w.deps.env = overrideEnv();
+  const errors = [];
+  w.deps.logError = (label, line) => errors.push({ label, line });
+  w.deps.sendResend = async (payload, key) => {
+    w.calls.send.push({ payload, key });
+    if (/heartwoodew\.com>$/.test(payload.from)) {
+      return { ok: false, reason: "resend-403", error: "This API key is not authorized to send emails from heartwoodew.com" };
+    }
+    return { ok: true, id: "em_fallback" };
+  };
+  const sent = await sendJobEmail({ callerUid: ALEX_UID, jobId: "job1", to: "jo@orbit.example" }, w.deps);
+  assert.equal(sent.ok, true);
+  assert.equal(sent.senderFallback, true);
+  assert.equal(w.calls.send.length, 2);
+  assert.equal(w.calls.send[0].payload.from, "Alex Daly - Heartwood Earthworx <alex@heartwoodew.com>");
+  assert.equal(w.calls.send[1].payload.from, "Heartwood Earthworx via CallUp <noreply@callupapp.com.au>");
+  assert.equal(w.calls.send[1].payload.reply_to, "alex@heartwoodew.com");
+  assert.notEqual(w.calls.send[1].key, w.calls.send[0].key);
+  assert.deepEqual(w.calls.send[1].payload.attachments, w.calls.send[0].payload.attachments);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].line.status, 403);
+  assert.equal(errors[0].line.fromDomain, "heartwoodew.com");
+  assert.match(errors[0].line.error, /not authorized/);
+  assert.doesNotMatch(JSON.stringify(errors), /jo@orbit|re_|Bearer/);
+  const audit = w.calls.mail.find(row => row.col === "jobMail").doc;
+  assert.equal(audit.delivery, "sent");
+  assert.equal(audit.senderFallback, true);
+  assert.match(audit.primaryError, /not authorized/);
+});
+
+test("Resend failures map to specific messages instead of 'try again in a minute'", async () => {
+  for (const [status, error, reason] of [
+    [403, "This API key is not authorized to send emails from heartwoodew.com", "sender-not-authorised"],
+    [413, "Request entity too large", "too-large"],
+    [422, "Invalid `to` field", "mail-rejected"],
+    [429, "Too many requests", "mail-unavailable"],
+    [500, "Internal", "mail-unavailable"],
+  ]) {
+    const w = world();
+    w.deps.env = { INVITE_EMAIL_ENABLED: "true" };
+    w.deps.logError = () => {};
+    w.deps.sendResend = async () => ({ ok: false, reason: "resend-" + status, error });
+    const out = await sendJobEmail({ callerUid: ALEX_UID, jobId: "job1", to: "jo@orbit.example" }, w.deps);
+    assert.equal(out.ok, false);
+    assert.equal(out.reason, reason, `status ${status}`);
+    assert.doesNotMatch(jobEmailFailureText(reason), /You can't email this job/);
+  }
+});
