@@ -253,11 +253,22 @@ function options(list, selected) {
   return list.map(([id, label]) => `<option value="${esc(id)}"${id === selected ? " selected" : ""}>${esc(label)}</option>`).join("");
 }
 
-export function serviceFormHtml(record, assets, costs, { showCost, presetAsset }) {
+export function serviceFormHtml(record, assets, costs, { showCost, presetAsset, previousPlaces = [] } = {}) {
   const row = record || {};
   const assetId = row.assetId || presetAsset || (assets[0] && assets[0].id) || "";
   const cost = row.id && costs ? (costs[row.id] || "") : "";
   const machines = (assets || []).map(a => `<option value="${esc(a.id)}"${a.id === assetId ? " selected" : ""}>${esc(a.name || "Machine")}${a.rego ? ` · ${esc(a.rego)}` : ""}</option>`).join("");
+  const places = [];
+  const seenPlaces = new Set();
+  for (const raw of previousPlaces || []) {
+    const text = String(raw || "").replace(/\s+/g, " ").trim();
+    const key = text.toLowerCase();
+    if (!text || text.length > 120 || seenPlaces.has(key) || /\$/.test(text)) continue;
+    seenPlaces.add(key);
+    places.push(text);
+    if (places.length >= 12) break;
+  }
+  const placeList = places.length ? `<datalist id="svc-places">${places.map(place => `<option value="${esc(place)}"></option>`).join("")}</datalist>` : "";
   return `<form id="compform" class="comp-form" data-kind="service" data-comp-id="${esc(row.id || "")}">
     <h2>${row.id ? "Edit service" : "Add service"}</h2>
     <p class="comp-help">Record when this machine was serviced. Invoices and photos are not stored in the app.</p>
@@ -266,7 +277,8 @@ export function serviceFormHtml(record, assets, costs, { showCost, presetAsset }
     <label>Hours or km<input name="reading" inputmode="numeric" value="${row.reading ? esc(row.reading) : ""}" autocomplete="off"></label>
     <label>Reading unit<select name="readingUnit"><option value=""${!row.readingUnit ? " selected" : ""}>Not recorded</option><option value="hours"${row.readingUnit === "hours" ? " selected" : ""}>Hours</option><option value="km"${row.readingUnit === "km" ? " selected" : ""}>Km</option></select></label>
     <label>Type<select name="serviceType">${options(SERVICE_TYPES, row.serviceType || "major")}</select></label>
-    <label>Who / where<input name="servicedBy" maxlength="120" value="${esc(row.servicedBy || "")}" autocomplete="off"></label>
+    <label>Who / where<input name="servicedBy" maxlength="120" value="${esc(row.servicedBy || "")}" ${places.length ? 'list="svc-places" ' : ""}autocomplete="organization"></label>
+    ${placeList}
     <label>Notes<textarea name="notes" rows="3" maxlength="2000">${esc(row.notes || "")}</textarea></label>
     ${showCost ? `<label>Cost<input name="amount" maxlength="40" value="${esc(cost)}" autocomplete="off"></label>` : ""}
     <div class="comp-actions"><button class="sm-btn primary" type="submit">Save</button><button class="sm-btn" type="button" data-comp-cancel>Cancel</button>${row.id ? `<button class="sm-btn" type="button" data-comp-delete>Remove</button>` : ""}</div>

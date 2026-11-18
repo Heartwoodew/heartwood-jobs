@@ -164,7 +164,7 @@ export function claimsScreenHtml({ claims, uid, isAdmin, jobs, today, error, fil
     <h2>New claim</h2>
     <p class="sub">For things you paid for yourself. It does not have to be for a job.</p>
     <div class="lv-row"><label>Date<input type="date" name="date" required value="${esc(today || "")}"></label><label>Amount incl. GST<input name="amount" inputmode="decimal" required placeholder="0.00" autocomplete="off"></label></div>
-    <label>Supplier<input name="supplier" required maxlength="120" placeholder="Shop or business" autocomplete="off"></label>
+    <label>Supplier<input name="supplier" required maxlength="120" placeholder="Shop or business" list="af-supplier" autocomplete="organization"></label>
     <label>Category<select name="category" required>${cats}</select></label>
     <fieldset class="rc-paidwith"><legend>How you paid</legend>${paid}</fieldset>
     <label>Job <span class="sub">optional</span><select name="jobId">${jobOpts}</select></label>

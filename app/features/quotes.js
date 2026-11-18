@@ -3,6 +3,7 @@ import { orgSettings, POWERED_BY, PRODUCT_NAME } from "../org-settings.js";
 import { scopeRecord } from "./company.js";
 import { JOB_MONEY_COLLECTION, jobMoneyDoc } from "./job-money.js";
 import { attachAddressSearch, placesEnabled, sanitizePlace } from "./places.js";
+import { bindDescriptionPicker, descriptionPickerHtml, inputAttrs } from "./autofill.js";
 import { LINE_TYPES, measureQty, normalizeLineType, quotePack, quotePackNote, rateSaveChoice, sanitizeTradeList, tradeLabel, tradeToolsHtml, typeInfo } from "./trades.js";
 import { calcLandscaping } from "./packs/landscaping.js";
 import { calcConcreting } from "./packs/concreting.js";
@@ -1592,6 +1593,7 @@ function openQuoteWizard(existing, opts = {}) {
       state.type = state.sections[0] ? state.sections[0].type : "";
     };
     const paint = () => {
+      if (typeof api.refreshAutofill === "function") api.refreshAutofill();
       const calc = calcSections(state, rates);
       const money = !!canSeeMoney();
       const revHtml = revisionsPanelHtml(revisions, {
@@ -1767,6 +1769,8 @@ function openQuoteWizard(existing, opts = {}) {
     const keepOpen = sec => { if (sec) sec._extrasOpen = true; };
     const extraSection = node => sectionById(node && node.closest && (node.closest("[data-sec]") || {}).dataset && node.closest("[data-sec]").dataset.sec);
     const bindExtras = () => {
+      bindDescriptionPicker(d);
+      if (typeof api.wireClientPrefill === "function") api.wireClientPrefill(d);
       const addr = d.querySelector("[name=address]");
       if (addr) attachAddressSearch(addr, { onPick: p => {
         state.address = p.formattedAddress; state.addressPlace = p;
@@ -2190,6 +2194,7 @@ function openQuoteWizard(existing, opts = {}) {
           tx.set(ref, { ...payload, revisionCount: n }, { merge: true });
           return { n, created: make };
         });
+        if (typeof api.remember === "function") api.remember({ client: payload.client, address: payload.address, description: payload.description });
         if (accept) {
           if (existing?.jobId) { toast("Already accepted"); d.close(); renderAdmin(); return; }
           const plans = jobsFromAcceptedQuote(payload, calc, mode);
@@ -2235,12 +2240,13 @@ function categoryStepHtml(d, esc, CLIENTS) {
       return `<button type="button" class="qw-type ${on ? "on" : ""}" data-type="${esc(c.type)}" aria-pressed="${on ? "true" : "false"}"><span class="qw-tick" aria-hidden="true"></span><span>${esc(c.label)}</span></button>`;
     }).join("")}</div></fieldset>`).join("");
   return `<div class="qw-pane">
-    <label>Client<input name="client" list="qclients" value="${esc(d.client || "")}" required autocomplete="organization"><datalist id="qclients">${CLIENTS.map(c => `<option value="${esc(c)}">`).join("")}</datalist></label>
-    <label class="plc-wrap">Job address<input name="address" value="${esc(d.address || "")}" required autocomplete="street-address" placeholder="${placesEnabled() ? "Start typing to search Google Maps" : "Lot and street"}"></label>
+    <label>Client<input name="client" ${inputAttrs("client")} value="${esc(d.client || "")}" required></label>
+    <label class="plc-wrap">Job address<input name="address" ${placesEnabled() ? 'autocomplete="off"' : inputAttrs("address")} value="${esc(d.address || "")}" required placeholder="${placesEnabled() ? "Start typing to search Google Maps" : "Lot and street"}"></label>
     <p class="sub plc-tag" id="qaddrtag" ${d.addressPlace ? "" : "hidden"}>📍 Matched on Google Maps — travel uses this exact spot.</p>
     ${picker}
     <p class="sub">Tick every category this quote covers. Nothing is added until you tick it, and an empty section is not saved. Each ticked category is priced by that trade's pack. Hours sit on the next step. They are optional for the crew and are not written to a timesheet.</p>
     ${blocks || `<p class="sub">Quote pack coming soon for this company. Add a trade with a ready pack to price a quote.</p>`}
+    ${descriptionPickerHtml(api && typeof api.suggestions === "function" ? api.suggestions("description") : [])}
     <label>Scope / notes<textarea name="description" rows="2">${esc(d.description || "")}</textarea></label>
   </div>`;
 }

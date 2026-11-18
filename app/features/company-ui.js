@@ -3,6 +3,7 @@
 
 import { POWERED_BY, PRODUCT_NAME } from "../org-settings.js";
 import { companyFieldErrors, derivedJobPrefix, filterMaster, friendInviteLink, masterTotals } from "./company.js";
+import { inputAttrs } from "./autofill.js";
 import { LOGO_ACCEPT, acceptLogoValue, isLogoStoragePath } from "./company-logo.js";
 import { signupTradesHtml, tradeSettingsHtml } from "./trades.js";
 import { referralLink } from "./referral.js";
@@ -131,14 +132,14 @@ export function clientFormHtml() {
     <h2>Add client</h2>
     <p class="sub">The company or client name is required. Contact details are saved with it.</p>
     <p id="clienterr" class="err" role="alert" tabindex="-1"></p>
-    <label>Company / client name <abbr class="req" title="required">*</abbr><input name="name" required maxlength="120" autocomplete="organization"></label>
+    <label>Company / client name <abbr class="req" title="required">*</abbr><input name="name" required maxlength="120" ${inputAttrs("client")}></label>
     <p class="field-err" data-err="name" hidden></p>
-    <label>Contact name<input name="contactName" maxlength="80" autocomplete="name"></label>
-    <label>Phone<input name="phone" maxlength="40" inputmode="tel" autocomplete="tel"></label>
+    <label>Contact name<input name="contactName" maxlength="80" ${inputAttrs("contactName")}></label>
+    <label>Phone<input name="phone" maxlength="40" ${inputAttrs("phone")}></label>
     <p class="field-err" data-err="phone" hidden></p>
-    <label>Email<input name="email" type="email" maxlength="120" autocomplete="email"></label>
+    <label>Email<input name="email" maxlength="120" ${inputAttrs("email")}></label>
     <p class="field-err" data-err="email" hidden></p>
-    <label>Address<input name="address" maxlength="160" autocomplete="street-address"></label>
+    <label>Address<input name="address" maxlength="160" ${inputAttrs("address")}></label>
     <label>Notes<textarea name="notes" rows="3" maxlength="500"></textarea></label>
     <div class="btns"><button value="cancel" formnovalidate class="ghost big">Cancel</button><button value="ok" class="primary big">Save client</button></div>
   </form>`;

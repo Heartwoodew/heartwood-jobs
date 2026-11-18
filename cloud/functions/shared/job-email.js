@@ -662,7 +662,20 @@ function checkRows(items, kind) {
   }).join("");
 }
 
-export function emailSheetHtml({ subject = "", body = "", to = "", suggestion = "", photos = [], receipts = [], photoError = false } = {}) {
+function emailChoices(list) {
+  const seen = new Set();
+  const out = [];
+  for (const raw of list || []) {
+    const email = cleanEmail(raw);
+    if (!email || seen.has(email)) continue;
+    seen.add(email);
+    out.push(email);
+    if (out.length >= 20) break;
+  }
+  return out;
+}
+
+export function emailSheetHtml({ subject = "", body = "", to = "", suggestion = "", suggestions = [], photos = [], receipts = [], photoError = false } = {}) {
   const photoBlock = photos.length
     ? `<div class="jem-photos"><p class="sub">Photos</p><button type="button" class="sm-btn" id="jemnone">No photos</button>${checkRows(photos, "photo", "photo")}</div>`
     : `<p class="sub">${photoError ? "Photos couldn't be loaded. You can still email the job details." : "No photos on this job."}</p>`;
@@ -670,10 +683,13 @@ export function emailSheetHtml({ subject = "", body = "", to = "", suggestion = 
     ? `<div class="jem-photos"><p class="sub">Tip dockets</p><p class="sub">Company-account dump receipts. Reimbursements are not listed.</p>${checkRows(receipts, "receipt", "receipt")}</div>`
     : "";
   const filled = esc(to || "");
+  const choices = emailChoices(suggestions);
+  const choiceHtml = choices.map(email => `<option value="${esc(email)}"></option>`).join("");
   return `<div class="embox jobemail"><h3>Email job</h3>
     <p class="sub">CallUp sends this email. Nothing goes until you tap Send.</p>
-    <label>To<input type="email" id="jemto" inputmode="email" autocomplete="email" placeholder="Client’s email" value="${filled}"></label>
-    <label>Cc<input type="text" id="jemcc" inputmode="email" autocomplete="off" placeholder="Optional" value=""></label>
+    <label>To<input type="email" id="jemto" list="jememails" inputmode="email" autocomplete="email" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="Client’s email" value="${filled}"></label>
+    <label>Cc<input type="text" id="jemcc" list="jememails" inputmode="email" autocomplete="email" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="Optional" value=""></label>
+    <datalist id="jememails">${choiceHtml}</datalist>
     ${suggestion && suggestion !== to ? `<p class="sub">Client contact <button type="button" class="sm-btn" id="jemuse">${esc(suggestion)}</button></p>` : ""}
     <p class="sub jem-subject" id="jemsubj">${esc(subject)}</p>
     <pre class="email-preview" id="jembody">${esc(body)}</pre>
