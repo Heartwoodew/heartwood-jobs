@@ -246,7 +246,35 @@ test("quote-rates rules do not field-lock the document, so a tradeRates map is a
   const meta = rules.slice(rules.indexOf("match /meta/{docId}"), rules.indexOf("// Per-company settings"));
   assert.match(meta, /docId == "quoteRates"/);
   assert.equal(meta.includes("hasOnly("), false);
-  const write = rules.slice(rules.indexOf("function cmWriteOk"), rules.indexOf("match /companyMeta/"));
+  const write = extractFunction(rules, "cmWriteOk");
   assert.match(write, /docId == c \+ "_quoteRates" && role in \["admin", "manager"\]/);
   assert.equal(write.includes("hasOnly("), false);
 });
+
+function extractFunction(source, name) {
+  const start = source.indexOf(`function ${name}`);
+  if (start < 0) throw new Error(`missing function ${name}`);
+  let i = source.indexOf("{", start);
+  let depth = 0;
+  let quote = false;
+  for (; i < source.length; i++) {
+    const ch = source[i];
+    if (quote) {
+      if (ch === "\\") { i += 1; continue; }
+      if (ch === "'") quote = false;
+      continue;
+    }
+    if (ch === "'") { quote = true; continue; }
+    if (source.startsWith("//", i)) {
+      const nl = source.indexOf("\n", i);
+      i = nl < 0 ? source.length : nl;
+      continue;
+    }
+    if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, i + 1);
+    }
+  }
+  throw new Error(`unclosed function ${name}`);
+}

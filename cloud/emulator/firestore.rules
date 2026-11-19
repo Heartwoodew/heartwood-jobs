@@ -455,25 +455,26 @@ service cloud.firestore {
     // Emails this company has already sent a job to. Office only (admin, manager, supervisor,
     // plus Alex and Patrick at Heartwood). Crew cannot read it: it can name people on jobs
     // they are not assigned to. No price fields. No list, no delete.
-    function autofillOffice(companyId) {
-      return signedIn()
-        && companyId == callerCompany()
-        && companyOpen(companyId)
-        && (
-          (companyId == "heartwood" && (isAlex() || isPatrick()))
-          || (hasProfile() && profile().get("role", "") in ["admin", "supervisor", "manager"])
-        );
-    }
-    function autofillDocOk(companyId) {
-      let d = request.resource.data;
-      return d.keys().hasOnly(["companyId", "emails", "updatedAt", "updatedBy"])
-        && d.companyId == companyId
-        && d.emails is list
-        && d.emails.size() <= 40
-        && d.updatedBy == request.auth.uid
-        && d.updatedAt == request.time;
-    }
     match /companies/{companyId}/autofill/{docId} {
+      function autofillOffice(companyId) {
+        return signedIn()
+          && companyId == callerCompany()
+          && companyOpen(companyId)
+          && (
+            (companyId == "heartwood" && (isAlex() || isPatrick()))
+            || (hasProfile() && profile().get("role", "") in ["admin", "supervisor", "manager"])
+          );
+      }
+      function autofillDocOk(companyId) {
+        let d = request.resource.data;
+        return d.keys().hasOnly(["companyId", "emails", "updatedAt", "updatedBy"])
+          && d.companyId == companyId
+          && d.emails is list
+          && d.emails.size() <= 40
+          && d.updatedBy == request.auth.uid
+          && d.updatedAt == request.time;
+      }
+
       allow get: if docId == "recipients" && autofillOffice(companyId) && (resource == null || resource.data.companyId == companyId);
       allow list: if false;
       allow create, update: if docId == "recipients" && autofillOffice(companyId) && autofillDocOk(companyId);
@@ -1965,60 +1966,105 @@ service cloud.firestore {
     // Manager and admin of the same company read. Supervisor and below do not. No other company does.
     // Heartwood: status "paused" blocks locations (llPaused). Other companies use companyNotPaused,
     // the same trial and billing pause as the rest of the app. No company document means not paused.
-    function llRole() {
-      return hasProfile() ? profile().get("role", "") : "";
-    }
-    function llPaused(id) {
-      let path = /databases/$(database)/documents/companies/$(id);
-      return exists(path) && get(path).data.get("status", "") == "paused";
-    }
-    function llOffice() {
-      return signedIn() && callerCompany() != "" && (
-        isAlex()
-        || (isPatrick() && callerCompany() == "heartwood")
-        || (hasProfile() && (llRole() == "admin" || llRole() == "manager"))
-      );
-    }
-    function llGps(d) {
-      return d.sharing == "gps"
-        && d.keys().hasOnly(["uid", "name", "companyId", "clockedOn", "sharing", "lat", "lng", "accuracy", "updatedAt", "weekStart", "entryId"])
-        && d.lat is number && d.lat >= -90 && d.lat <= 90
-        && d.lng is number && d.lng >= -180 && d.lng <= 180
-        && d.accuracy is number && d.accuracy >= 0 && d.accuracy <= 100000;
-    }
-    function llOff(d) {
-      return d.sharing == "off"
-        && d.keys().hasOnly(["uid", "name", "companyId", "clockedOn", "sharing", "updatedAt", "weekStart", "entryId"]);
-    }
-    function llOpenEntry(sheet) {
-      let entry = sheet.entries[request.resource.data.entryId];
-      return sheet.uid == request.auth.uid
-        && docCompany(sheet) == request.resource.data.companyId
-        && entry.source == "clock"
-        && (entry.status == "open" || entry.status == "break");
-    }
-    function llClocked() {
-      let path = /databases/$(database)/documents/timesheets/$(request.auth.uid + "_" + request.resource.data.weekStart);
-      return exists(path) && llOpenEntry(get(path).data);
-    }
-    function llBody(d, id) {
-      return d.uid == id
-        && d.uid == request.auth.uid
-        && d.name is string && d.name.size() > 0 && d.name.size() <= 80
-        && d.clockedOn == true
-        && d.updatedAt == request.time
-        && d.weekStart is string && d.weekStart.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
-        && d.entryId is string && d.entryId.matches('^[a-z0-9]{8,24}$')
-        && (llGps(d) || llOff(d))
-        && llClocked();
-    }
     match /liveLocations/{id} {
+      function llRole() {
+        return hasProfile() ? profile().get("role", "") : "";
+      }
+      function llPaused(id) {
+        let path = /databases/$(database)/documents/companies/$(id);
+        return exists(path) && get(path).data.get("status", "") == "paused";
+      }
+      function llOffice() {
+        return signedIn() && callerCompany() != "" && (
+          isAlex()
+          || (isPatrick() && callerCompany() == "heartwood")
+          || (hasProfile() && (llRole() == "admin" || llRole() == "manager"))
+        );
+      }
+      function llGps(d) {
+        return d.sharing == "gps"
+          && d.keys().hasOnly(["uid", "name", "companyId", "clockedOn", "sharing", "lat", "lng", "accuracy", "updatedAt", "weekStart", "entryId"])
+          && d.lat is number && d.lat >= -90 && d.lat <= 90
+          && d.lng is number && d.lng >= -180 && d.lng <= 180
+          && d.accuracy is number && d.accuracy >= 0 && d.accuracy <= 100000;
+      }
+      function llOff(d) {
+        return d.sharing == "off"
+          && d.keys().hasOnly(["uid", "name", "companyId", "clockedOn", "sharing", "updatedAt", "weekStart", "entryId"]);
+      }
+      function llOpenEntry(sheet) {
+        let entry = sheet.entries[request.resource.data.entryId];
+        return sheet.uid == request.auth.uid
+          && docCompany(sheet) == request.resource.data.companyId
+          && entry.source == "clock"
+          && (entry.status == "open" || entry.status == "break");
+      }
+      function llClocked() {
+        let path = /databases/$(database)/documents/timesheets/$(request.auth.uid + "_" + request.resource.data.weekStart);
+        return exists(path) && llOpenEntry(get(path).data);
+      }
+      function llBody(d, id) {
+        return d.uid == id
+          && d.uid == request.auth.uid
+          && d.name is string && d.name.size() > 0 && d.name.size() <= 80
+          && d.clockedOn == true
+          && d.updatedAt == request.time
+          && d.weekStart is string && d.weekStart.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+          && d.entryId is string && d.entryId.matches('^[a-z0-9]{8,24}$')
+          && (llGps(d) || llOff(d))
+          && llClocked();
+      }
+
       allow get: if llOffice() && !llPaused("heartwood") && callerCompany() == "heartwood" && docCompany(resource.data) == "heartwood";
       allow list: if llOffice() && !llPaused("heartwood") && callerCompany() == "heartwood" && resource.data.companyId == "heartwood";
       allow create, update: if callerCompany() == "heartwood" && request.resource.data.companyId == "heartwood" && !llPaused("heartwood") && llBody(request.resource.data, id);
       allow delete: if signedIn() && request.auth.uid == id && callerCompany() == "heartwood" && docCompany(resource.data) == "heartwood" && !llPaused("heartwood");
     }
     match /companies/{c}/liveLocations/{id} {
+      function llRole() {
+        return hasProfile() ? profile().get("role", "") : "";
+      }
+      function llOffice() {
+        return signedIn() && callerCompany() != "" && (
+          isAlex()
+          || (isPatrick() && callerCompany() == "heartwood")
+          || (hasProfile() && (llRole() == "admin" || llRole() == "manager"))
+        );
+      }
+      function llGps(d) {
+        return d.sharing == "gps"
+          && d.keys().hasOnly(["uid", "name", "companyId", "clockedOn", "sharing", "lat", "lng", "accuracy", "updatedAt", "weekStart", "entryId"])
+          && d.lat is number && d.lat >= -90 && d.lat <= 90
+          && d.lng is number && d.lng >= -180 && d.lng <= 180
+          && d.accuracy is number && d.accuracy >= 0 && d.accuracy <= 100000;
+      }
+      function llOff(d) {
+        return d.sharing == "off"
+          && d.keys().hasOnly(["uid", "name", "companyId", "clockedOn", "sharing", "updatedAt", "weekStart", "entryId"]);
+      }
+      function llOpenEntry(sheet) {
+        let entry = sheet.entries[request.resource.data.entryId];
+        return sheet.uid == request.auth.uid
+          && docCompany(sheet) == request.resource.data.companyId
+          && entry.source == "clock"
+          && (entry.status == "open" || entry.status == "break");
+      }
+      function llClocked() {
+        let path = /databases/$(database)/documents/timesheets/$(request.auth.uid + "_" + request.resource.data.weekStart);
+        return exists(path) && llOpenEntry(get(path).data);
+      }
+      function llBody(d, id) {
+        return d.uid == id
+          && d.uid == request.auth.uid
+          && d.name is string && d.name.size() > 0 && d.name.size() <= 80
+          && d.clockedOn == true
+          && d.updatedAt == request.time
+          && d.weekStart is string && d.weekStart.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+          && d.entryId is string && d.entryId.matches('^[a-z0-9]{8,24}$')
+          && (llGps(d) || llOff(d))
+          && llClocked();
+      }
+
       allow get: if llOffice() && c != "heartwood" && callerCompany() == c && docCompany(resource.data) == c && companyNotPaused(c);
       allow list: if llOffice() && c != "heartwood" && callerCompany() == c && resource.data.companyId == c && companyNotPaused(c);
       allow create, update: if c != "heartwood" && callerCompany() == c && request.resource.data.companyId == c && companyNotPaused(c) && llBody(request.resource.data, id);
@@ -2129,87 +2175,38 @@ service cloud.firestore {
         || (companyId != "heartwood" && !missing && c == companyId && companyNotPaused(companyId));
       return signedIn() && companyId is string && companyId.size() >= 2 && same ? (perfListed() ? "admin" : p.get("role", "")) : "";
     }
-    function take5Actor(companyId) {
-      let path = /databases/$(database)/documents/users/$(request.auth.uid);
-      let missing = !exists(path);
-      let p = missing ? {} : get(path).data;
-      let c = perfCompanyOf(p);
-      return signedIn() && companyId is string && companyId.size() >= 2 && (
-        (companyId == "heartwood" && (perfListed() || (!missing && c == "heartwood")))
-        || (companyId != "heartwood" && !missing && c == companyId && companyNotPaused(companyId))
-      );
-    }
-    function take5Office(companyId) {
-      let path = /databases/$(database)/documents/users/$(request.auth.uid);
-      let missing = !exists(path);
-      let p = missing ? {} : get(path).data;
-      let role = p.get("role", "");
-      let c = perfCompanyOf(p);
-      let leader = perfListed() || role in ["supervisor", "manager", "admin"];
-      return signedIn() && companyId is string && leader && (
-        (companyId == "heartwood" && (perfListed() || (!missing && c == "heartwood")))
-        || (companyId != "heartwood" && !missing && c == companyId && companyNotPaused(companyId))
-      );
-    }
-    function take5IdOk(id) { return id.matches('^t5[a-z0-9]{16}$'); }
-    function take5MayGetMissing(id) {
-      let path = /databases/$(database)/documents/users/$(request.auth.uid);
-      let missing = !exists(path);
-      let p = missing ? {} : get(path).data;
-      let c = perfCompanyOf(p);
-      let open = c == "heartwood" || (!missing && companyNotPaused(c));
-      return take5IdOk(id) && signedIn() && open && (perfListed() || !missing);
-    }
-    function take5Body(id) {
-      let d = request.resource.data;
-      return take5IdOk(id)
-        && d.keys().hasOnly(["companyId", "uid", "name", "jobId", "jobNo", "day", "note", "steps", "photoPath", "createdAt"])
-        && d.companyId is string
-        && d.uid == request.auth.uid
-        && d.name is string && d.name.size() >= 2 && d.name.size() <= 80
-        && d.jobId is string && d.jobId.size() > 0 && d.jobId.size() <= 80
-        && d.jobNo is string && d.jobNo.size() <= 40
-        && d.day is string && d.day.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
-        && d.note is string && d.note.size() > 0 && d.note.size() <= 500
-        && d.steps is map
-        && d.steps.keys().hasOnly(["stop", "look", "assess", "control", "proceed"])
-        && d.steps.stop == true && d.steps.look == true && d.steps.assess == true
-        && d.steps.control == true && d.steps.proceed == true
-        && d.photoPath is string && d.photoPath.size() <= 200
-        && (d.photoPath == "" || d.photoPath == "take5Photos/" + d.companyId + "/" + d.uid + "_" + id + ".jpg")
-        && d.createdAt == request.time;
-    }
-    function perfWeightsOk(w) {
-      return w is map
-        && w.keys().hasOnly(["hours", "money", "jobs", "prestart", "take5", "incidents", "sick", "annual"])
-        && w.hours is number && w.hours >= 0 && w.hours <= 10
-        && w.money is number && w.money >= 0 && w.money <= 10
-        && w.jobs is number && w.jobs >= 0 && w.jobs <= 10
-        && w.prestart is number && w.prestart >= 0 && w.prestart <= 10
-        && w.take5 is number && w.take5 >= 0 && w.take5 <= 10
-        && w.incidents is number && w.incidents >= 0 && w.incidents <= 10
-        && w.sick is number && w.sick >= 0 && w.sick <= 10
-        && w.annual is number && w.annual >= 0 && w.annual <= 10;
-    }
-    function perfBody(companyId) {
-      let d = request.resource.data;
-      return d.keys().hasOnly(["companyId", "excludeLeaders", "weights", "updatedAt", "updatedBy"])
-        && d.companyId == companyId
-        && d.excludeLeaders is bool
-        && perfWeightsOk(d.weights)
-        && d.updatedBy == request.auth.uid
-        && d.updatedAt == request.time;
-    }
-    function perfDefaultWeights() {
-      let w = request.resource.data.weights;
-      return w.hours == 1 && w.money == 1 && w.jobs == 1 && w.prestart == 1 && w.take5 == 1
-        && w.incidents == 1 && w.sick == 1 && w.annual == 0;
-    }
-    function perfCanRead(companyId) {
-      let role = perfRole(companyId);
-      return role == "admin" || role == "manager";
-    }
     match /performanceSettings/{companyId} {
+      function perfWeightsOk(w) {
+        return w is map
+          && w.keys().hasOnly(["hours", "money", "jobs", "prestart", "take5", "incidents", "sick", "annual"])
+          && w.hours is number && w.hours >= 0 && w.hours <= 10
+          && w.money is number && w.money >= 0 && w.money <= 10
+          && w.jobs is number && w.jobs >= 0 && w.jobs <= 10
+          && w.prestart is number && w.prestart >= 0 && w.prestart <= 10
+          && w.take5 is number && w.take5 >= 0 && w.take5 <= 10
+          && w.incidents is number && w.incidents >= 0 && w.incidents <= 10
+          && w.sick is number && w.sick >= 0 && w.sick <= 10
+          && w.annual is number && w.annual >= 0 && w.annual <= 10;
+      }
+      function perfBody(companyId) {
+        let d = request.resource.data;
+        return d.keys().hasOnly(["companyId", "excludeLeaders", "weights", "updatedAt", "updatedBy"])
+          && d.companyId == companyId
+          && d.excludeLeaders is bool
+          && perfWeightsOk(d.weights)
+          && d.updatedBy == request.auth.uid
+          && d.updatedAt == request.time;
+      }
+      function perfDefaultWeights() {
+        let w = request.resource.data.weights;
+        return w.hours == 1 && w.money == 1 && w.jobs == 1 && w.prestart == 1 && w.take5 == 1
+          && w.incidents == 1 && w.sick == 1 && w.annual == 0;
+      }
+      function perfCanRead(companyId) {
+        let role = perfRole(companyId);
+        return role == "admin" || role == "manager";
+      }
+
       allow get: if perfCanRead(companyId);
       allow list: if false;
       allow create, update: if perfRole(companyId) == "admin" && perfBody(companyId);
@@ -2224,6 +2221,17 @@ service cloud.firestore {
       allow delete: if false;
     }
     match /take5Settings/{companyId} {
+      function take5Actor(companyId) {
+        let path = /databases/$(database)/documents/users/$(request.auth.uid);
+        let missing = !exists(path);
+        let p = missing ? {} : get(path).data;
+        let c = perfCompanyOf(p);
+        return signedIn() && companyId is string && companyId.size() >= 2 && (
+          (companyId == "heartwood" && (perfListed() || (!missing && c == "heartwood")))
+          || (companyId != "heartwood" && !missing && c == companyId && companyNotPaused(companyId))
+        );
+      }
+
       allow get: if take5Actor(companyId);
       allow list: if false;
       allow create, update: if perfRole(companyId) == "admin"
@@ -2235,6 +2243,57 @@ service cloud.firestore {
       allow delete: if false;
     }
     match /take5s/{id} {
+      function take5Actor(companyId) {
+        let path = /databases/$(database)/documents/users/$(request.auth.uid);
+        let missing = !exists(path);
+        let p = missing ? {} : get(path).data;
+        let c = perfCompanyOf(p);
+        return signedIn() && companyId is string && companyId.size() >= 2 && (
+          (companyId == "heartwood" && (perfListed() || (!missing && c == "heartwood")))
+          || (companyId != "heartwood" && !missing && c == companyId && companyNotPaused(companyId))
+        );
+      }
+      function take5Office(companyId) {
+        let path = /databases/$(database)/documents/users/$(request.auth.uid);
+        let missing = !exists(path);
+        let p = missing ? {} : get(path).data;
+        let role = p.get("role", "");
+        let c = perfCompanyOf(p);
+        let leader = perfListed() || role in ["supervisor", "manager", "admin"];
+        return signedIn() && companyId is string && leader && (
+          (companyId == "heartwood" && (perfListed() || (!missing && c == "heartwood")))
+          || (companyId != "heartwood" && !missing && c == companyId && companyNotPaused(companyId))
+        );
+      }
+      function take5IdOk(id) { return id.matches('^t5[a-z0-9]{16}$'); }
+      function take5MayGetMissing(id) {
+        let path = /databases/$(database)/documents/users/$(request.auth.uid);
+        let missing = !exists(path);
+        let p = missing ? {} : get(path).data;
+        let c = perfCompanyOf(p);
+        let open = c == "heartwood" || (!missing && companyNotPaused(c));
+        return take5IdOk(id) && signedIn() && open && (perfListed() || !missing);
+      }
+      function take5Body(id) {
+        let d = request.resource.data;
+        return take5IdOk(id)
+          && d.keys().hasOnly(["companyId", "uid", "name", "jobId", "jobNo", "day", "note", "steps", "photoPath", "createdAt"])
+          && d.companyId is string
+          && d.uid == request.auth.uid
+          && d.name is string && d.name.size() >= 2 && d.name.size() <= 80
+          && d.jobId is string && d.jobId.size() > 0 && d.jobId.size() <= 80
+          && d.jobNo is string && d.jobNo.size() <= 40
+          && d.day is string && d.day.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+          && d.note is string && d.note.size() > 0 && d.note.size() <= 500
+          && d.steps is map
+          && d.steps.keys().hasOnly(["stop", "look", "assess", "control", "proceed"])
+          && d.steps.stop == true && d.steps.look == true && d.steps.assess == true
+          && d.steps.control == true && d.steps.proceed == true
+          && d.photoPath is string && d.photoPath.size() <= 200
+          && (d.photoPath == "" || d.photoPath == "take5Photos/" + d.companyId + "/" + d.uid + "_" + id + ".jpg")
+          && d.createdAt == request.time;
+      }
+
       allow get: if resource == null && take5MayGetMissing(id);
       allow get: if resource != null && resource.data.uid == request.auth.uid && take5Actor(resource.data.companyId);
       allow get: if resource != null && take5Office(resource.data.companyId);
@@ -2261,78 +2320,79 @@ service cloud.firestore {
     // Office is admin, manager and supervisor (same people who read quotes). Crew is operator
     // or labourer, and only when they are on the job's assigned list. Office-only files are
     // hidden from crew. A paused company cannot read or write. A missing company is not paused.
-    function documentActor() {
-      let bootstrap = signedIn() && request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "R7t41e54Ykcdk9WPdVZnDd697iI2"];
-      let user = /databases/$(database)/documents/users/$(request.auth.uid);
-      let has = signedIn() && !bootstrap && exists(user);
-      let data = has ? get(user).data : null;
-      let role = data != null ? data.get("role", "") : "";
-      let companyId = data != null ? data.get("companyId", "") : "";
-      let tenantId = data != null ? data.get("tenantId", "") : "";
-      let company = bootstrap ? "heartwood"
-        : (companyId is string && companyId.size() > 0 ? companyId
-          : (tenantId is string && tenantId.size() > 0 ? tenantId : (has ? "heartwood" : "")));
-      return { "role": role, "company": company, "ok": signedIn() && (bootstrap || has) };
-    }
-    function documentGate(jobId) {
-      let actor = documentActor();
-      let job = get(/databases/$(database)/documents/jobs/$(jobId)).data;
-      let companyId = job.get("companyId", "");
-      let tenantId = job.get("tenantId", "");
-      let company = (companyId is string && companyId.size() > 0) ? companyId
-        : ((tenantId is string && tenantId.size() > 0) ? tenantId : "heartwood");
-      let assigned = job.get("assigned", []) is list && request.auth.uid in job.get("assigned", []);
-      let open = company == "heartwood" || companyNotPaused(company);
-      let same = actor.ok && actor.company == company && open;
-      let office = same && (
-        actor.role in ["admin", "manager", "supervisor"]
-        || (company == "heartwood" && request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "R7t41e54Ykcdk9WPdVZnDd697iI2"])
-      );
-      let crew = same && assigned && actor.role in ["operator", "labourer"];
-      return { "office": office, "crew": crew, "company": company };
-    }
-    function documentShape(d, jobId, docId) {
-      return docId.matches('^d[A-Za-z0-9]{8,40}$')
-        && d.keys().hasOnly(["companyId", "tenantId", "jobId", "name", "fileName", "contentType", "size", "visibility", "storagePath", "uploaderUid", "uploaderName", "createdAt", "updatedAt"])
-        && d.companyId is string && d.tenantId == d.companyId && d.jobId == jobId
-        && d.name is string && d.name.size() > 0 && d.name.size() <= 160
-        && d.fileName is string && d.fileName.size() > 0 && d.fileName.size() <= 200
-        && d.contentType is string && d.contentType.size() > 0 && d.contentType.size() <= 160
-        && d.size is number && d.size > 0 && d.size <= 25 * 1024 * 1024
-        && d.visibility in ["crew", "office"]
-        && d.storagePath == "tenants/" + d.companyId + "/jobs/" + jobId + "/documents/" + docId
-        && d.uploaderUid == request.auth.uid
-        && d.uploaderName is string && d.uploaderName.size() > 0 && d.uploaderName.size() <= 80
-        && d.createdAt == request.time
-        && d.updatedAt == request.time;
-    }
-    function documentCreate(jobId, docId) {
-      let gate = documentGate(jobId);
-      let d = request.resource.data;
-      return gate.office && d.companyId == gate.company && documentShape(d, jobId, docId);
-    }
-    function documentOffice(jobId) {
-      return documentGate(jobId).office;
-    }
-    function documentCrew(jobId) {
-      let gate = documentGate(jobId);
-      return gate.crew && resource.data.visibility == "crew";
-    }
-    function documentRename(jobId) {
-      let gate = documentGate(jobId);
-      let next = request.resource.data;
-      let prev = resource.data;
-      return gate.office
-        && prev.get("companyId", "") == gate.company
-        && next.diff(prev).affectedKeys().hasOnly(["name", "updatedAt"])
-        && next.name is string && next.name.size() > 0 && next.name.size() <= 160
-        && next.updatedAt == request.time;
-    }
-    function documentRemove(jobId) {
-      let gate = documentGate(jobId);
-      return gate.office && resource.data.get("companyId", "") == gate.company;
-    }
     match /jobs/{jobId}/documents/{docId} {
+      function documentActor() {
+        let bootstrap = signedIn() && request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "R7t41e54Ykcdk9WPdVZnDd697iI2"];
+        let user = /databases/$(database)/documents/users/$(request.auth.uid);
+        let has = signedIn() && !bootstrap && exists(user);
+        let data = has ? get(user).data : null;
+        let role = data != null ? data.get("role", "") : "";
+        let companyId = data != null ? data.get("companyId", "") : "";
+        let tenantId = data != null ? data.get("tenantId", "") : "";
+        let company = bootstrap ? "heartwood"
+          : (companyId is string && companyId.size() > 0 ? companyId
+            : (tenantId is string && tenantId.size() > 0 ? tenantId : (has ? "heartwood" : "")));
+        return { "role": role, "company": company, "ok": signedIn() && (bootstrap || has) };
+      }
+      function documentGate(jobId) {
+        let actor = documentActor();
+        let job = get(/databases/$(database)/documents/jobs/$(jobId)).data;
+        let companyId = job.get("companyId", "");
+        let tenantId = job.get("tenantId", "");
+        let company = (companyId is string && companyId.size() > 0) ? companyId
+          : ((tenantId is string && tenantId.size() > 0) ? tenantId : "heartwood");
+        let assigned = job.get("assigned", []) is list && request.auth.uid in job.get("assigned", []);
+        let open = company == "heartwood" || companyNotPaused(company);
+        let same = actor.ok && actor.company == company && open;
+        let office = same && (
+          actor.role in ["admin", "manager", "supervisor"]
+          || (company == "heartwood" && request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "R7t41e54Ykcdk9WPdVZnDd697iI2"])
+        );
+        let crew = same && assigned && actor.role in ["operator", "labourer"];
+        return { "office": office, "crew": crew, "company": company };
+      }
+      function documentShape(d, jobId, docId) {
+        return docId.matches('^d[A-Za-z0-9]{8,40}$')
+          && d.keys().hasOnly(["companyId", "tenantId", "jobId", "name", "fileName", "contentType", "size", "visibility", "storagePath", "uploaderUid", "uploaderName", "createdAt", "updatedAt"])
+          && d.companyId is string && d.tenantId == d.companyId && d.jobId == jobId
+          && d.name is string && d.name.size() > 0 && d.name.size() <= 160
+          && d.fileName is string && d.fileName.size() > 0 && d.fileName.size() <= 200
+          && d.contentType is string && d.contentType.size() > 0 && d.contentType.size() <= 160
+          && d.size is number && d.size > 0 && d.size <= 25 * 1024 * 1024
+          && d.visibility in ["crew", "office"]
+          && d.storagePath == "tenants/" + d.companyId + "/jobs/" + jobId + "/documents/" + docId
+          && d.uploaderUid == request.auth.uid
+          && d.uploaderName is string && d.uploaderName.size() > 0 && d.uploaderName.size() <= 80
+          && d.createdAt == request.time
+          && d.updatedAt == request.time;
+      }
+      function documentCreate(jobId, docId) {
+        let gate = documentGate(jobId);
+        let d = request.resource.data;
+        return gate.office && d.companyId == gate.company && documentShape(d, jobId, docId);
+      }
+      function documentOffice(jobId) {
+        return documentGate(jobId).office;
+      }
+      function documentCrew(jobId) {
+        let gate = documentGate(jobId);
+        return gate.crew && resource.data.visibility == "crew";
+      }
+      function documentRename(jobId) {
+        let gate = documentGate(jobId);
+        let next = request.resource.data;
+        let prev = resource.data;
+        return gate.office
+          && prev.get("companyId", "") == gate.company
+          && next.diff(prev).affectedKeys().hasOnly(["name", "updatedAt"])
+          && next.name is string && next.name.size() > 0 && next.name.size() <= 160
+          && next.updatedAt == request.time;
+      }
+      function documentRemove(jobId) {
+        let gate = documentGate(jobId);
+        return gate.office && resource.data.get("companyId", "") == gate.company;
+      }
+
       allow get: if documentOffice(jobId);
       allow list: if documentOffice(jobId);
       allow get: if documentCrew(jobId);
