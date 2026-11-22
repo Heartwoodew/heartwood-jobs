@@ -3,7 +3,7 @@
 // A remembered book is ignored unless its companyId (and uid, when given) matches.
 
 import { docCompanyId } from "./company.js";
-import { suburbOf } from "./capacity.js";
+import { suburbOf } from "./suburb.js";
 
 const EMAIL_RE = /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i;
 const PRICE_RE = /(?:A|AU)?\$\s?\d[\d,]*(?:\.\d+)?(?:\s?(?:ex|inc|incl)\.?\s?GST)?/gi;
