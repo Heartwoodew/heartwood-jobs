@@ -9,9 +9,8 @@ import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager
 import { getStorage, ref as storageRef, uploadBytes, uploadBytesResumable, deleteObject, connectStorageEmulator, listAll, getMetadata, getBlob }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
 import { firebaseConfig, useEmulator, vapidKey } from "./firebase-config.js";
-import { installQuotes, adminViewRouter, quoteRatesSettingsBlurb, setDefaultDepot, noDollars, setQuoteTradeSetup, setQuoteFocus } from "./features/quotes.js";
-import { askHelp, helpAnswerHtml, helpPanelHtml, helpVisible } from "./features/help.js";
-import { capacityViewHtml, shiftWeek } from "./features/capacity.js";
+// Startup graph: auth, the company shell, and the home / run sheet. Everything else is a dynamic import
+// below, fetched when that screen opens and prefetched once the first screen has painted.
 import { JOB_MONEY_COLLECTION, jobMoneyDoc, mergeJobMoney, splitJobMoney } from "./features/job-money.js";
 import { OPEN_STATUSES, staleOpenJobs, mergeJobLists, parseHoursInput } from "./features/job-window.js";
 import {
@@ -20,22 +19,10 @@ import {
   sanitizeDispatchSettings, spaceDay, withSortHint, writeDispatchLocal,
 } from "./features/dispatch-times.js";
 import { installRouteOrder, orderJobsForRun, runSheetId, geoPatch, setRouteDepot } from "./features/route-order.js";
-import { planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPlanned, jobPhotoPrefix, storageErrorCode, summarizePhotoListing } from "./features/cloud-storage.js";
-import { buildOperationalExport, retentionAdminText, retentionView } from "./features/cloud-retention.js";
-import {
-  buildJobEmail, compressImageBlob, deviceCanShareFiles, emailSendPlan, emailSheetHtml,
-  jpegName, mailtoHref, parseEmailRecipients, photoBudget, photosZip, selectEmailAttachments, shareText, suggestRecipient, uniqueNames,
-} from "./features/job-email.js";
 import {
   bindDescriptionPicker, collectSuggestions, descriptionPickerHtml, detailsFromClient, emailsFromRecipientDoc,
   inputAttrs, listsHtml, loadBook, matchClient, prefillPatch, pushRecentEmail, rememberBook, saveBook, unionEmails,
 } from "./features/autofill.js";
-import { buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, lightboxHtml, photoFailureText } from "./features/photo-gallery.js";
-import { decidePhotoEmail } from "./features/photo-capture.js";
-import { mountDocuments, unmountDocuments, openDocumentBlob, canManageDocuments, flushDocumentQueue, sharedQueue } from "./features/job-documents.js";
-import { installChatApp } from "./features/chat-ui.js";
-import { installPush } from "./features/push.js";
-import { installCompliance } from "./features/compliance.js";
 import { SWMS, SWMS_EMPTY, SWMS_VERSION, sigMs, sigExp, latestSig, statusOf, swmsSignatureData, buildPlaceholderPdf, companySwms, swmsReminderModel, swmsSignoffOrg } from "./features/swms-sign.js";
 import {
   acceptLoadingHtml, acceptScreenModel, acceptViewHtml, buildInviteDraft, inviteFailureText,
@@ -49,13 +36,6 @@ import {
   flushUploads, noteWrite, clearWrite, pendingEntries, indicatorModel, pendingListHtml,
   sharedOfflineStore, registerUploadSync,
 } from "./features/offline.js";
-import {
-  DEFAULT_WEIGHTS, canEditPerformanceSettings, canSeeStaffPerformance,
-  performancePanelHtml, performanceSettingsHtml, periodBounds, rankPerformance, sanitizeWeights, weightsFromForm,
-} from "./features/performance.js";
-import {
-  canViewTake5, hasTake5, shouldPromptTake5, take5Enabled, take5EntryVisible, take5FormHtml, take5IdFor, take5JobHtml, take5ListHtml, take5Payload, take5PhotoPath, take5StartButtonHtml,
-} from "./features/take5.js";
 import { captureReferralParam, clearStoredReferral, referralGiveUp, storedReferralCode } from "./features/referral.js";
 import { PRODUCT_NAME, POWERED_BY, clearSavedOrg, orgSettings, saveOrgSettings, setActiveCompany } from "./org-settings.js";
 import {
@@ -72,12 +52,6 @@ import {
   titlesAfterTradeChange, titlesEditorHtml, tradeLabel, quotePack,
 } from "./features/trades.js";
 import { acceptLogoValue, compressLogo, isLogoStoragePath, logoFailureText, logoFileOk, logoUploadPlan } from "./features/company-logo.js";
-import { exportAllowed, hoursCsv, invoiceCsv, jobsCsv, reimbursementsCsv } from "./features/company-exports.js";
-import {
-  formatReceiptMeasure, isVeoliaSupplier, nextPaidPersonallyControl, parseReceiptMeasures, receiptDupKey, receiptHasMoney,
-  receiptMeasureFields, receiptNeedsAmount, receiptOwedTotal, receiptPaidPersonally, reimbursementFromReceipt,
-  validateReceiptUpload, VEOLIA_PAID_NOTE,
-} from "./features/receipts.js";
 import {
   accuracyText, brisbaneHM, captureFix, coordText, daysForSheet, editList, entryList, locationConsent,
   locationMap, machineChoicePatch, machinePromptNeeded, machineShiftToResume, mapsHref, needsLocationConsent, newTsId, openClock,
@@ -87,20 +61,196 @@ import {
   LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, canSeeCrewMap, companySharesLocation, crewListHtml, crewMapModel,
   homeCrewSlot, liveCollectionPath, liveLocationBody, shareIndicator, shouldSendPosition,
 } from "./features/live-location.js";
-import {
-  assignmentWarning, cellLeaveText, certificateContentType, certificateObjectName, certificateStoragePath,
-  leaveCreateBody, leaveDecisionBody, leaveScreenHtml, newLeaveId, plannerLeaveHtml, saveCertificate, certificateDownloadName, weekLeaveHtml,
-} from "./features/leave.js";
-import { ACCOUNTS_TO, XLSX_MIME, buildHoursReport, deliverHoursFile, exportFileName, newExportId, reportSheets, xlsxBytes } from "./features/hours-export.js";
-import {
-  claimCreateBody, claimDecisionBody, claimsScreenHtml, newClaimId, receiptContentType, receiptDownloadName,
-  receiptObjectName, receiptStoragePath, RECEIPT_MAX_BYTES,
-} from "./features/claims.js";
-import {
-  addressWithSuburb, bulkCandidates, canImportInbox, composeAddress, defaultImportMode, duplicateWarning,
-  findExistingJob, isImported, parseInboxEmail,
-} from "./features/inbox-import.js";
-import { startDesktopInstall } from "./features/desktop-install.js";
+
+// Same price strip as features/quotes.js noDollars. Kept here so a crew run sheet never paints a dollar
+// while the quotes module is still loading.
+function noDollars(text) {
+  return String(text == null ? "" : text).replace(/(?:A|AU)?\$\s?\d[\d,]*(?:\.\d+)?(?:\s?(?:ex|inc|incl)\.?\s?GST)?/gi, "[price removed]").replace(/\$/g, "");
+}
+let installQuotes = () => ({ bindAdmin() {} });
+let adminViewRouter = () => "";
+let quoteRatesSettingsBlurb = () => "";
+let setDefaultDepot = () => {};
+let setQuoteTradeSetup = () => {};
+let setQuoteFocus = () => {};
+let askHelp = async () => ({ text: "", source: "knowledge" });
+let helpAnswerHtml = () => "";
+let helpPanelHtml = () => "";
+let helpVisible = me => !!(me && (me.uid || me.role || me.staffRole));
+let capacityViewHtml = () => "";
+let shiftWeek = (day) => day;
+let planJobPhotoMirrors = () => ({ ok: false, mirrors: [] });
+let planStaffReceiptCapture = () => ({ ok: false });
+let resolveMembership = () => ({ ok: false, reason: "no-membership" });
+let putPlanned = async () => {};
+let jobPhotoPrefix = () => ({ prefix: "" });
+let storageErrorCode = err => (err && err.code) || "";
+let summarizePhotoListing = () => ({ photos: [], failures: [] });
+let buildOperationalExport = () => ({ ok: false, reason: "not-ready" });
+let retentionAdminText = () => "";
+let retentionView = () => ({ warning: false, due: false, state: "" });
+let buildJobEmail = () => ({ subject: "", body: "", attachments: [] });
+let compressImageBlob = async blob => blob;
+let deviceCanShareFiles = () => false;
+let emailSendPlan = () => ({ ok: false });
+let emailSheetHtml = () => "";
+let jpegName = name => name;
+let mailtoHref = () => "";
+let parseEmailRecipients = () => [];
+let photoBudget = () => ({ ok: true, photos: [] });
+let photosZip = async () => new Blob();
+let selectEmailAttachments = list => list || [];
+let shareText = async () => {};
+let suggestRecipient = () => "";
+let uniqueNames = list => list || [];
+let buildJobGallery = () => ({ photos: [] });
+let stampExpiresAfter = row => row;
+let galleryExportPhotos = () => [];
+let photoSlotHtml = () => "";
+let lightboxHtml = () => "";
+let photoFailureText = () => "";
+let decidePhotoEmail = () => ({ send: false });
+let mountDocuments = () => {};
+let unmountDocuments = () => {};
+let openDocumentBlob = async () => {};
+let canManageDocuments = role => role === "admin" || role === "manager" || role === "supervisor";
+let flushDocumentQueue = async () => {};
+let sharedQueue = () => ({ list: async () => [] });
+let installChatApp = () => ({ badge() { return ""; }, teamHtml() { return ""; }, jobHtml() { return ""; }, mount() {}, openJob() {}, start() {}, stop() {}, watch() {}, refresh() {} });
+let installPush = () => ({ start() {}, stop() {}, mount() {}, settle() {}, panelHtml() { return ""; }, bannerHtml() { return ""; } });
+let installCompliance = () => ({ start() {}, stop() {}, bind() {}, abandon() {}, adminHtml() { return ""; }, staffHtml() { return ""; }, adminBannerHtml() { return ""; }, staffBannerHtml() { return ""; }, canSee() { return false; }, canEdit() { return false; }, canPrestart() { return false; }, prestartReminder() { return ""; }, focusPrestart() {}, canEditService() { return false; } });
+let DEFAULT_WEIGHTS = {};
+let canEditPerformanceSettings = () => false;
+let canSeeStaffPerformance = () => false;
+let performancePanelHtml = () => "";
+let performanceSettingsHtml = () => "";
+let periodBounds = () => ({ start: "", end: "" });
+let rankPerformance = () => ({ rows: [] });
+let sanitizeWeights = weights => weights || {};
+let weightsFromForm = () => ({});
+let canViewTake5 = () => false;
+let hasTake5 = () => false;
+let shouldPromptTake5 = () => false;
+let take5Enabled = () => true;
+let take5EntryVisible = ({ enabled = true } = {}) => enabled !== false;
+let take5FormHtml = () => "";
+let take5IdFor = () => "";
+let take5JobHtml = () => "";
+let take5ListHtml = () => "";
+let take5Payload = () => ({});
+let take5PhotoPath = () => "";
+let take5StartButtonHtml = () => "";
+let exportAllowed = () => false;
+let hoursCsv = () => "";
+let invoiceCsv = () => "";
+let jobsCsv = () => "";
+let reimbursementsCsv = () => "";
+let formatReceiptMeasure = () => "";
+let isVeoliaSupplier = () => false;
+let nextPaidPersonallyControl = () => false;
+let parseReceiptMeasures = () => ({});
+let receiptDupKey = () => "";
+let receiptHasMoney = () => false;
+let receiptMeasureFields = () => "";
+let receiptNeedsAmount = () => false;
+let receiptOwedTotal = () => 0;
+let receiptPaidPersonally = () => false;
+let reimbursementFromReceipt = () => null;
+let validateReceiptUpload = () => ({ ok: false });
+let VEOLIA_PAID_NOTE = "";
+let assignmentWarning = () => "";
+let cellLeaveText = () => "";
+let certificateContentType = () => "";
+let certificateObjectName = name => name;
+let certificateStoragePath = () => "";
+let leaveCreateBody = () => ({});
+let leaveDecisionBody = () => ({});
+let leaveScreenHtml = () => "";
+let newLeaveId = () => "";
+let plannerLeaveHtml = () => "";
+let saveCertificate = async () => {};
+let certificateDownloadName = name => name;
+let weekLeaveHtml = () => "";
+let ACCOUNTS_TO = "";
+let XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+let buildHoursReport = () => ({});
+let deliverHoursFile = async () => {};
+let exportFileName = () => "hours.xlsx";
+let newExportId = () => "";
+let reportSheets = () => [];
+let xlsxBytes = () => new Uint8Array();
+let claimCreateBody = () => ({});
+let claimDecisionBody = () => ({});
+let claimsScreenHtml = () => "";
+let newClaimId = () => "";
+let receiptContentType = () => "";
+let receiptDownloadName = name => name;
+let receiptObjectName = name => name;
+let receiptStoragePath = () => "";
+let RECEIPT_MAX_BYTES = 8 * 1024 * 1024;
+let addressWithSuburb = value => value || "";
+let bulkCandidates = () => [];
+let canImportInbox = me => !!(me && (me.role === "admin" || me.role === "manager" || me.role === "supervisor" || me.staffRole === "manager" || me.staffRole === "supervisor"));
+let composeAddress = () => "";
+let defaultImportMode = () => "job";
+let duplicateWarning = () => "";
+let findExistingJob = () => null;
+let isImported = () => false;
+let parseInboxEmail = () => ({});
+let startDesktopInstall = () => {};
+let featuresOn = false;
+let packPromise = null;
+function loadFeaturePack() {
+  if (!packPromise) packPromise = (async () => {
+    const [quotes, help, capacity, cloudStorage, retention, jobEmail, gallery, capture, documents, chatUi, push, compliance, performance, take5, exportsMod, receipts, leave, hours, claims, inbox, desktop] = await Promise.all([
+      import("./features/quotes.js"),
+      import("./features/help.js"),
+      import("./features/capacity.js"),
+      import("./features/cloud-storage.js"),
+      import("./features/cloud-retention.js"),
+      import("./features/job-email.js"),
+      import("./features/photo-gallery.js"),
+      import("./features/photo-capture.js"),
+      import("./features/job-documents.js"),
+      import("./features/chat-ui.js"),
+      import("./features/push.js"),
+      import("./features/compliance.js"),
+      import("./features/performance.js"),
+      import("./features/take5.js"),
+      import("./features/company-exports.js"),
+      import("./features/receipts.js"),
+      import("./features/leave.js"),
+      import("./features/hours-export.js"),
+      import("./features/claims.js"),
+      import("./features/inbox-import.js"),
+      import("./features/desktop-install.js"),
+    ]);
+    ({ installQuotes, adminViewRouter, quoteRatesSettingsBlurb, setDefaultDepot, setQuoteTradeSetup, setQuoteFocus } = quotes);
+    ({ askHelp, helpAnswerHtml, helpPanelHtml, helpVisible } = help);
+    ({ capacityViewHtml, shiftWeek } = capacity);
+    ({ planJobPhotoMirrors, planStaffReceiptCapture, resolveMembership, putPlanned, jobPhotoPrefix, storageErrorCode, summarizePhotoListing } = cloudStorage);
+    ({ buildOperationalExport, retentionAdminText, retentionView } = retention);
+    ({ buildJobEmail, compressImageBlob, deviceCanShareFiles, emailSendPlan, emailSheetHtml, jpegName, mailtoHref, parseEmailRecipients, photoBudget, photosZip, selectEmailAttachments, shareText, suggestRecipient, uniqueNames } = jobEmail);
+    ({ buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, lightboxHtml, photoFailureText } = gallery);
+    ({ decidePhotoEmail } = capture);
+    ({ mountDocuments, unmountDocuments, openDocumentBlob, canManageDocuments, flushDocumentQueue, sharedQueue } = documents);
+    ({ installChatApp } = chatUi);
+    ({ installPush } = push);
+    ({ installCompliance } = compliance);
+    ({ DEFAULT_WEIGHTS, canEditPerformanceSettings, canSeeStaffPerformance, performancePanelHtml, performanceSettingsHtml, periodBounds, rankPerformance, sanitizeWeights, weightsFromForm } = performance);
+    ({ canViewTake5, hasTake5, shouldPromptTake5, take5Enabled, take5EntryVisible, take5FormHtml, take5IdFor, take5JobHtml, take5ListHtml, take5Payload, take5PhotoPath, take5StartButtonHtml } = take5);
+    ({ exportAllowed, hoursCsv, invoiceCsv, jobsCsv, reimbursementsCsv } = exportsMod);
+    ({ formatReceiptMeasure, isVeoliaSupplier, nextPaidPersonallyControl, parseReceiptMeasures, receiptDupKey, receiptHasMoney, receiptMeasureFields, receiptNeedsAmount, receiptOwedTotal, receiptPaidPersonally, reimbursementFromReceipt, validateReceiptUpload, VEOLIA_PAID_NOTE } = receipts);
+    ({ assignmentWarning, cellLeaveText, certificateContentType, certificateObjectName, certificateStoragePath, leaveCreateBody, leaveDecisionBody, leaveScreenHtml, newLeaveId, plannerLeaveHtml, saveCertificate, certificateDownloadName, weekLeaveHtml } = leave);
+    ({ ACCOUNTS_TO, XLSX_MIME, buildHoursReport, deliverHoursFile, exportFileName, newExportId, reportSheets, xlsxBytes } = hours);
+    ({ claimCreateBody, claimDecisionBody, claimsScreenHtml, newClaimId, receiptContentType, receiptDownloadName, receiptObjectName, receiptStoragePath, RECEIPT_MAX_BYTES } = claims);
+    ({ addressWithSuburb, bulkCandidates, canImportInbox, composeAddress, defaultImportMode, duplicateWarning, findExistingJob, isImported, parseInboxEmail } = inbox);
+    ({ startDesktopInstall } = desktop);
+    featuresOn = true;
+    mountFeatureApps();
+  })();
+  return packPromise;
+}
 
 const cfg = useEmulator ? { ...firebaseConfig, apiKey: "demo-key", projectId: "demo-heartwood" } : firebaseConfig;
 const fb = initializeApp(cfg);
@@ -110,6 +260,21 @@ setPersistence(auth, browserLocalPersistence).catch(() => {});
 // Offline cache: jobs already loaded stay readable and writes queue until the phone is back online.
 const db = initializeFirestore(fb, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) });
 const storage = getStorage(fb);
+// One in-flight read per document. Company and staff docs are asked for from the boot path and again from offline warm-up.
+const docReads = new Map();
+function cachedGetDoc(ref) {
+  const key = ref && (ref.path || ref._path);
+  if (!key) return getDoc(ref);
+  let pending = docReads.get(key);
+  if (!pending) {
+    pending = getDoc(ref).then(snap => snap, err => {
+      if (docReads.get(key) === pending) docReads.delete(key);
+      throw err;
+    });
+    docReads.set(key, pending);
+  }
+  return pending;
+}
 if (useEmulator) {
   connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
   connectFirestoreEmulator(db, "127.0.0.1", 8080);
@@ -205,7 +370,6 @@ window.addEventListener("offline", () => paintSync());
 if (navigator.serviceWorker) navigator.serviceWorker.addEventListener("message", ev => {
   if (ev.data && ev.data.type === "callup-sync") flushOffline().catch(() => {});
 });
-startDesktopInstall();
 
 // ------------------------------------------------------------------ constants / helpers
 // Client names for job/quote forms. Heartwood's builders by default; replaced in place per company (refreshClientLists).
@@ -313,7 +477,40 @@ let COMP = { start() {}, stop() {}, bind() {}, abandon() {}, adminHtml() { retur
 let QG = { bindAdmin() {} }; // Quotes module; filled after helpers load
 let ROUTE = { open() {} };
 const ALEX_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";      // Alex has no users/{uid} profile doc; always staff
-const ui = { view: "list", staffF: "", typeF: "", photoLists: {}, photoUrls: {}, photoBlobs: {}, photoThumbs: {}, photoThumbTasks: {}, photoErrors: {}, photoJobs: {}, photoPaint: 0, queuedThumbs: {} };
+const ui = { view: "list", staffF: "", typeF: "", photoLists: {}, photoUrls: {}, photoBlobs: {}, photoThumbs: {}, photoThumbTasks: {}, photoErrors: {}, photoJobs: {}, photoPaint: 0, queuedThumbs: {}, holdSideWork: true, startupQueue: [] };
+const ADMIN_SAFE = new Set(["home", "jobs", "unscheduled", "completed", "swms", "crew", "master", "clients"]);
+const OP_SAFE = new Set(["today", "week", "done", "more", "crew"]);
+function queueStartup(fn) { ui.startupQueue.push(fn); }
+let deferredBoot = false;
+function noteFirstScreen() {
+  if (!me || ui.firstScreen) return;
+  ui.firstScreen = true;
+  const kick = () => {
+    const idle = window.requestIdleCallback || (cb => setTimeout(cb, 50));
+    idle(() => { beginDeferredStartup().catch(err => console.warn("startup", err && (err.message || err))); }, { timeout: 1500 });
+  };
+  if (window.requestAnimationFrame) requestAnimationFrame(kick);
+  else setTimeout(kick, 0);
+}
+async function beginDeferredStartup() {
+  if (deferredBoot || !me) return;
+  deferredBoot = true;
+  ui.holdSideWork = false;
+  const queued = ui.startupQueue.splice(0);
+  for (const fn of queued) {
+    try { fn(); } catch (err) { console.warn("startup", err && (err.message || err)); }
+  }
+  await loadFeaturePack();
+  if (!me) return;
+  watchPrestartNotices();
+  watchTake5Flag();
+  warmUpcoming(jobs).catch(() => {});
+  loadTradeSetup(ui.companyRecord || { companyId: myCompanyId() }).catch(() => {});
+  flushOffline().catch(() => {});
+  paintSync();
+  if (me.role === "admin" && !ui.myJobs) renderAdmin();
+  else renderOperator();
+}
 paintSync();
 
 // ------------------------------------------------------------------ auth
@@ -342,7 +539,7 @@ onAuthStateChanged(auth, async user => {
   // | "manager" (supervisor, plus company rates, leave decisions and staff up to manager) | "admin".
   // A manager cannot change billing, the plan, company details, or an admin. A manager can change the trade list. Patrick is rules-admin with an operator profile (bookable).
   let snap = null;
-  try { snap = await getDoc(doc(db, "users", user.uid)); }
+  try { snap = await cachedGetDoc(doc(db, "users", user.uid)); }
   catch {
     try { snap = await getDocFromCache(doc(db, "users", user.uid)); }
     catch { snap = null; }
@@ -414,7 +611,6 @@ onAuthStateChanged(auth, async user => {
     try { history.replaceState({ callupView: "home" }, "", withCompanyViewParam(location.href, false)); } catch { /* the param is only a marker */ }
   }
   await loadCompanyBrand();
-  flushOffline().catch(() => {});
   $("#who").textContent = `${me.name} · ${me.role}`; showAccountChrome(true);
   if (ui.companyAccess && ui.companyAccess.paused) {
     renderAccountPaused();
@@ -428,12 +624,16 @@ onAuthStateChanged(auth, async user => {
   ui.emailRecipientsFor = "";
   ui.ownReceipts = [];
   ui.jobReceiptRows = [];
-  if (myCompanyId() !== "heartwood" && (me.role === "admin" || me.role === "manager" || me.role === "supervisor")) loadClients().catch(() => {});
-  else if (myCompanyId() === "heartwood") loadClients().catch(() => {});
-  loadEmailRecipients();
-  watchOwnClock();
-  CHAT.start();
-  PUSH.start();
+  queueStartup(() => {
+    if (myCompanyId() !== "heartwood" && (me.role === "admin" || me.role === "manager" || me.role === "supervisor")) loadClients().catch(() => {});
+    else if (myCompanyId() === "heartwood") loadClients().catch(() => {});
+    loadEmailRecipients();
+    watchOwnClock();
+    swmsSub();
+    leaveStart();
+    claimsStart();
+    if (me.platformOwner) watchMaster();
+  });
   if (me.role === "admin") {
     if (window.HW_PREVIEW_VIEW === "staff") ui.view = "staff";
     if (window.HW_PREVIEW_VIEW === "settings" || window.HW_PREVIEW_VIEW === "company") ui.view = "settings";
@@ -449,47 +649,61 @@ onAuthStateChanged(auth, async user => {
     staff = companyId === "heartwood"
       ? [{ uid: ALEX_UID, name: "Alex" }, ...logins.filter(u => u.uid !== ALEX_UID)]
       : logins;
-    // two weeks back (catch overdue work) to 4 weeks ahead, plus anything undated
-    const q = companyJobs([where("date", ">=", addDays(todayStr(), -14)), where("date", "<=", addDays(todayStr(), 28)), orderBy("date")]);
-    // Older jobs still open (Scheduled / In progress, dated before the window) stay in the office list and search.
+    // Today and tomorrow first, so Home can paint. The full office window follows after that paint.
     let windowJobs = [], staleJobs = [];
     const setJobs = () => { jobs = mergeJobLists(windowJobs, staleJobs).map(withMoney); addNameOnlyStaff(jobs); };
-    const u1 = onSnapshot(q, s => { windowJobs = s.docs.map(d => ({ id: d.id, ...d.data() })); setJobs(); renderAdmin(); queueDispatchPersist(jobs); warmUpcoming(jobs).catch(() => {}); }, e => { console.warn("jobs", e.code, e.message); windowJobs = []; setJobs(); renderAdmin(); });
-    const u5 = onSnapshot(companyJobs([where("status", "in", [...OPEN_STATUSES])]), s => {
-      staleJobs = staleOpenJobs(s.docs.map(d => ({ id: d.id, ...d.data() })), todayStr()); setJobs(); renderAdmin(); queueDispatchPersist(jobs);
-    }, e => console.warn("older open jobs", e.code, e.message));
-    // Invoicing: every Done job (any date), admin only.
-    const u2 = onSnapshot(companyJobs([where("status", "==", "Done")]), s => { ui.done = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); donePill(); if (ui.view === "invoices" || ui.view === "completed" || ui.view === "home") renderAdmin(); }, e => console.warn("done jobs", e.code || e.message));
-    const u3 = onSnapshot(query(collection(db, "incidents"), where("companyId", "==", myCompanyId())), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); ui.perfIncState = "ok"; if (ui.view === "safety" || ui.view === "home" || ui.view === "staff") renderAdmin(); incRefresh(); }, e => { ui.perfIncState = "absent"; console.warn("incidents", e.code); });
-    const u4 = onSnapshot(query(collection(db, "invites"), where("tenantId", "==", myTenant()), where("role", "in", [...myInviteRoles()])), s => {
-      ui.invites = s.docs.map(d => ({ id: d.id, ...d.data() })); ui.invitesErr = "";
-      if (ui.view === "staff") renderAdmin();
-      watchInviteMail();
-    }, e => { ui.invites = []; ui.invitesErr = e.code || "permission-denied"; if (ui.view === "staff") renderAdmin(); });
-    // Company logins for the Staff tab. onSnapshot reads the persistent cache when the phone is offline.
-    const u6 = watchStaffRoster();
-    moneyStart(renderAdmin);
-    const stopCap = startCapacityWatch();
-    unsub = () => { u1(); u2(); u3(); u4(); u5(); u6(); stopCap(); moneyStop(); CHAT.stop(); PUSH.stop(); COMP.stop(); stopPrestartNotices(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; }; swmsSub(); COMP.start(); watchPrestartNotices(); leaveStart(); claimsStart(); watchTake5Flag(); if (me.platformOwner) watchMaster();
-    getDocs(companyJobs([where("date", "==", "")])).then(s => { ui.undated = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); addNameOnlyStaff(ui.undated); renderAdmin(); }).catch(e => console.warn("undated", e.code, e.message));
+    const nearQ = companyJobs([where("date", ">=", todayStr()), where("date", "<=", addDays(todayStr(), 1)), orderBy("date")]);
+    let stopNear = onSnapshot(nearQ, s => { windowJobs = s.docs.map(d => ({ id: d.id, ...d.data() })); setJobs(); renderAdmin(); }, e => { console.warn("jobs", e.code, e.message); windowJobs = []; setJobs(); renderAdmin(); });
+    const stopShared = () => { CHAT.stop(); PUSH.stop(); COMP.stop(); stopPrestartNotices(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; };
+    unsub = () => { stopNear(); stopShared(); };
+    queueStartup(() => {
+      stopNear();
+      stopNear = () => {};
+      // two weeks back (catch overdue work) to 4 weeks ahead, plus anything undated
+      const q = companyJobs([where("date", ">=", addDays(todayStr(), -14)), where("date", "<=", addDays(todayStr(), 28)), orderBy("date")]);
+      // Older jobs still open (Scheduled / In progress, dated before the window) stay in the office list and search.
+      const u1 = onSnapshot(q, s => { windowJobs = s.docs.map(d => ({ id: d.id, ...d.data() })); setJobs(); renderAdmin(); queueDispatchPersist(jobs); }, e => { console.warn("jobs", e.code, e.message); windowJobs = []; setJobs(); renderAdmin(); });
+      const u5 = onSnapshot(companyJobs([where("status", "in", [...OPEN_STATUSES])]), s => {
+        staleJobs = staleOpenJobs(s.docs.map(d => ({ id: d.id, ...d.data() })), todayStr()); setJobs(); renderAdmin(); queueDispatchPersist(jobs);
+      }, e => console.warn("older open jobs", e.code, e.message));
+      // Invoicing: every Done job (any date), admin only.
+      const u2 = onSnapshot(companyJobs([where("status", "==", "Done")]), s => { ui.done = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); donePill(); if (ui.view === "invoices" || ui.view === "completed" || ui.view === "home") renderAdmin(); }, e => console.warn("done jobs", e.code || e.message));
+      const u3 = onSnapshot(query(collection(db, "incidents"), where("companyId", "==", myCompanyId())), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); ui.perfIncState = "ok"; if (ui.view === "safety" || ui.view === "home" || ui.view === "staff") renderAdmin(); incRefresh(); }, e => { ui.perfIncState = "absent"; console.warn("incidents", e.code); });
+      const u4 = onSnapshot(query(collection(db, "invites"), where("tenantId", "==", myTenant()), where("role", "in", [...myInviteRoles()])), s => {
+        ui.invites = s.docs.map(d => ({ id: d.id, ...d.data() })); ui.invitesErr = "";
+        if (ui.view === "staff") renderAdmin();
+        watchInviteMail();
+      }, e => { ui.invites = []; ui.invitesErr = e.code || "permission-denied"; if (ui.view === "staff") renderAdmin(); });
+      // Company logins for the Staff tab. onSnapshot reads the persistent cache when the phone is offline.
+      const u6 = watchStaffRoster();
+      moneyStart(renderAdmin);
+      const stopCap = startCapacityWatch();
+      unsub = () => { u1(); u2(); u3(); u4(); u5(); u6(); stopCap(); moneyStop(); stopShared(); };
+      getDocs(companyJobs([where("date", "==", "")])).then(s => { ui.undated = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); addNameOnlyStaff(ui.undated); renderAdmin(); }).catch(e => console.warn("undated", e.code, e.message));
+    });
   } else {
     // Operators may only list jobs assigned to them (enforced by firestore.rules).
+    // A date filter on top of array-contains needs an index this app does not add, so crew startup stays this query.
     const q = companyJobs([where("assigned", "array-contains", user.uid)]);
-    const u1 = onSnapshot(q, s => { jobs = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); renderOperator(); warmUpcoming(jobs).catch(() => {}); });
-    // Company supervisors are office (they already read quotes); crew never subscribe and the rules refuse them.
-    moneyStart(renderOperator);
-    const u3 = onSnapshot(query(collection(db, "incidents"), where("companyId", "==", myCompanyId()), where("reportedBy", "==", user.uid)), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); if (!ui.opSel && (ui.opTab || "today") === "today") renderOperator(); incRefresh(); }, e => console.warn("incidents", e.code));
-    const u4 = canInvite()
-      ? onSnapshot(query(collection(db, "invites"), where("tenantId", "==", myTenant()), where("role", "in", [...myInviteRoles()])), s => {
-        ui.invites = s.docs.map(d => ({ id: d.id, ...d.data() })); ui.invitesErr = "";
-        if ((ui.opTab || "today") === "staff") renderOperator();
-        watchInviteMail();
-      }, e => { ui.invites = []; ui.invitesErr = e.code || "permission-denied"; if ((ui.opTab || "today") === "staff") renderOperator(); })
-      : () => {};
-    const u6 = watchStaffRoster();
-    if (canInvite() && window.HW_PREVIEW_VIEW === "staff") ui.opTab = "staff";
-    const stopCap = startCapacityWatch();
-    unsub = () => { u1(); u3(); u4(); u6(); stopCap(); moneyStop(); CHAT.stop(); PUSH.stop(); COMP.stop(); stopPrestartNotices(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); }; swmsSub(); COMP.start(); watchPrestartNotices(); leaveStart(); claimsStart(); watchTake5Flag();
+    const u1 = onSnapshot(q, s => { jobs = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); renderOperator(); });
+    const stopShared = () => { CHAT.stop(); PUSH.stop(); COMP.stop(); stopPrestartNotices(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); };
+    unsub = () => { u1(); stopShared(); };
+    queueStartup(() => {
+      // Company supervisors are office (they already read quotes); crew never subscribe and the rules refuse them.
+      moneyStart(renderOperator);
+      const u3 = onSnapshot(query(collection(db, "incidents"), where("companyId", "==", myCompanyId()), where("reportedBy", "==", user.uid)), s => { ui.incidents = s.docs.map(d => ({ id: d.id, ...d.data() })); if (!ui.opSel && (ui.opTab || "today") === "today") renderOperator(); incRefresh(); }, e => console.warn("incidents", e.code));
+      const u4 = canInvite()
+        ? onSnapshot(query(collection(db, "invites"), where("tenantId", "==", myTenant()), where("role", "in", [...myInviteRoles()])), s => {
+          ui.invites = s.docs.map(d => ({ id: d.id, ...d.data() })); ui.invitesErr = "";
+          if ((ui.opTab || "today") === "staff") renderOperator();
+          watchInviteMail();
+        }, e => { ui.invites = []; ui.invitesErr = e.code || "permission-denied"; if ((ui.opTab || "today") === "staff") renderOperator(); })
+        : () => {};
+      const u6 = watchStaffRoster();
+      if (canInvite() && window.HW_PREVIEW_VIEW === "staff") ui.opTab = "staff";
+      const stopCap = startCapacityWatch();
+      unsub = () => { u1(); u3(); u4(); u6(); stopCap(); moneyStop(); stopShared(); };
+    });
   }
 });
 
@@ -545,7 +759,7 @@ async function loadTradeSetup(company) {
     applyJobTypes(resolveCompanySetup({ companyId: id, trades: window.HW_PREVIEW_TRADES }, null));
     return;
   }
-  const snap = await getDoc(doc(db, "companyTrades", id)).catch(() => null);
+  const snap = await cachedGetDoc(doc(db, "companyTrades", id)).catch(() => null);
   const stored = snap && snap.exists() ? snap.data() : null;
   applyJobTypes(resolveCompanySetup(company || { companyId: id }, stored));
 }
@@ -582,7 +796,7 @@ async function saveTradeSetup(next) {
 }
 async function loadCompanyBrand() {
   const id = myCompanyId();
-  const snap = await getDoc(doc(db, "companies", id)).catch(() => null);
+  const snap = await cachedGetDoc(doc(db, "companies", id)).catch(() => null);
   const loaded = snap && snap.exists() ? { ...snap.data(), companyId: id } : null;
   ui.companyRecord = loaded;
   ui.companyStatus = loaded ? String(loaded.status || "") : "";
@@ -594,16 +808,17 @@ async function loadCompanyBrand() {
     paintBrand();
     return;
   }
-  await loadTradeSetup(loaded || { companyId: id });
-  if (me && me.role === "admin" && loaded) {
-    if (loaded.referredBy) clearStoredReferral(localStorage);
-    else await rememberSignupReferral(id);
-  }
   // Depot for quotes and run sheets: the company's address from settings (Heartwood: Chuwar unless changed there).
   const depot = orgSettings().address;
   setRouteDepot(depot, { heartwood: id === "heartwood" }); setDefaultDepot(depot, { heartwood: id === "heartwood" });
   paintBrand();
   loadDispatchSettings().catch(() => {});
+  queueStartup(() => {
+    if (me && me.role === "admin" && loaded) {
+      if (loaded.referredBy) clearStoredReferral(localStorage);
+      else rememberSignupReferral(id).catch(() => {});
+    }
+  });
 }
 function dispatchSettingsNow() {
   if (!ui.dispatchSettings) {
@@ -632,7 +847,7 @@ async function loadDispatchSettings() {
   try {
     let snap = null;
     try { snap = await getDocFromCache(ref); } catch { snap = null; }
-    if (!snap || !snapExists(snap)) snap = await getDoc(ref);
+    if (!snap || !snapExists(snap)) snap = await cachedGetDoc(ref);
     if (snap && snapExists(snap)) {
       ui.dispatchSettings = sanitizeDispatchSettings(snap.data());
       writeDispatchLocal(id, ui.dispatchSettings);
@@ -1939,9 +2154,9 @@ async function warmUpcoming(list) {
         await getDocs(src);
       } else if (read.kind === "run-sheet") {
         const id = runSheetId(read.uid, read.date);
-        if (id) await getDoc(doc(db, "runSheets", id));
+        if (id) await cachedGetDoc(doc(db, "runSheets", id));
       } else if (read.kind === "company") {
-        await getDoc(doc(db, "companies", read.companyId));
+        await cachedGetDoc(doc(db, "companies", read.companyId));
       } else if (read.kind === "prestart-templates") {
         await getDocs(collection(db, "tenants", read.companyId, "prestartTemplates"));
       } else if (read.kind === "fleet") {
@@ -4132,6 +4347,7 @@ async function reimbCsv(L) {
   a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 function reimbPill() {
+  if (ui.holdSideWork) return;
   const fw = $("#fabwrap"); let el = $("#rbpill");
   if (!fw || !isOwner()) { if (el) el.remove(); return; }
   reimbSubs();
@@ -4812,6 +5028,11 @@ function take5Page() {
   return `<div class="sm-head"><h1>Take 5s</h1></div><p class="pad sub">A Take 5 is the five-step check before work starts. Open a job and tap Start Take 5. It is also in this menu.</p>${take5ListHtml(ui.take5s || [], { empty: "No Take 5s yet. Open a job and tap Start Take 5." })}`;
 }
 function renderAdmin() {
+  noteFirstScreen();
+  if (me && !ADMIN_SAFE.has(ui.view) && !featuresOn) {
+    loadFeaturePack().then(() => { if (me && me.role === "admin") renderAdmin(); });
+    return;
+  }
   donePill(); reimbPill(); inboxSub();
   if (!me || me.role !== "admin") return;
   if (ui.view === "invoices" && me.role !== "admin") ui.view = "home";
@@ -4856,7 +5077,7 @@ function renderAdmin() {
   if (ui.view === "settings") bindSettings(A);
   PUSH.mount(A);
   if (ui.view === "master") bindMaster(A);
-  if (ui.view === "crew" || (ui.view === "home" && homeCrewSlot(me) === "crew")) openCrewScreen();
+  if (!ui.holdSideWork && (ui.view === "crew" || (ui.view === "home" && homeCrewSlot(me) === "crew"))) openCrewScreen();
   A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.navOpen = false;
     if (b.dataset.view === "myjobs") { ui.myJobs = true; ui.opSel = null; window.scrollTo(0, 0); return renderAdmin(); }
     if (b.dataset.view !== "compliance") COMP.abandon();
@@ -5240,6 +5461,7 @@ function wireReviewPrefill(root) {
   });
 }
 function editJob(j) {
+  if (!featuresOn) { loadFeaturePack().then(() => editJob(j)); return; }
   const importing = !!(j && j._import);
   refreshAutofillLists();
   const suggest = currentSuggestions();
@@ -5553,7 +5775,7 @@ function refreshAfterImport() {
   else renderOperator();
 }
 function inboxSub() {
-  if (!canImport() || ui.inboxSub) return;
+  if (ui.holdSideWork || !canImport() || ui.inboxSub) return;
   ui.inboxSub = onSnapshot(collection(db, "inbox"), s => { ui.inbox = s.docs.map(d => ({ id: d.id, ...d.data() })); ui.inboxErr = "";
     if (me && me.role === "admin" && !ui.myJobs) { if (ui.view === "inbox" || ui.view === "home") renderAdmin(); else inboxBadge(); }
     else if (ui.opTab === "inbox") renderOperator(); },
@@ -6367,7 +6589,7 @@ function readRunSheet(uid, date) {
   ui.runSheets = ui.runSheets || {};
   if (ui.runSheets[id] === undefined) {
     ui.runSheets[id] = null;
-    getDoc(doc(db, "runSheets", id)).then(snap => {
+    cachedGetDoc(doc(db, "runSheets", id)).then(snap => {
       ui.runSheets[id] = snapExists(snap) ? { id, ...snap.data() } : false;
       const sheet = ui.runSheets[id];
       if (sheet && sheet.status === "approved" && !ui.opSel && me && (me.role !== "admin" || ui.myJobs)) renderOperator();
@@ -6390,6 +6612,12 @@ function withRunOrder(list) {
   return out;
 }
 function renderOperator() {
+  noteFirstScreen();
+  if (!ui.opTab || ui.opTab === "home") ui.opTab = "today";
+  if ((!OP_SAFE.has(ui.opTab) || ui.opSel) && !featuresOn) {
+    loadFeaturePack().then(() => { if (me) renderOperator(); });
+    return;
+  }
   refreshAutofillLists();
   paintBrand();
   PUSH.settle();
@@ -6397,7 +6625,6 @@ function renderOperator() {
   const forceOp = ui.forceRender;
   if (!forceOp && document.querySelector("#compform, #prestartform")) return;
   ui.forceRender = false;
-  if (!ui.opTab || ui.opTab === "home") ui.opTab = "today";
   if (ui.opTab === "crew" && !canSeeCrewMap(me)) ui.opTab = "more";
   if (ui.opTab === "crew" && !forceOp && document.getElementById("crewmap")) { paintCrew(); return; }
   const opCrew = canSeeCrewMap(me) && (ui.opTab === "crew" || ui.opTab === "today");
@@ -6565,7 +6792,7 @@ function renderOperator() {
       <div class="mob-list">${todayJobs.map(opCard).join("") || `<p class="muted pad">Nothing booked for ${esc(orgSettings().name)}.</p>`}</div>
       ${opTabs("today")}</div>`;
     bindOp(mine);
-    if (homeCrewSlot(me) === "crew") openCrewScreen();
+    if (!ui.holdSideWork && homeCrewSlot(me) === "crew") openCrewScreen();
     return;
   }
   const groups = ui.opTab === "done" ? groupByDate(doneL).map(([d, js]) => [d === t0 ? "Today · " + dayLabel(d) : dayLabel(d), js])
@@ -7787,7 +8014,10 @@ document.addEventListener("click", e => {
   setInterval(() => box.classList.toggle("hidden", !me), 1000);
 })();
 
-CHAT = installChatApp({ db, storage, getMe: () => me, toast });
+function mountChat() {
+  CHAT = installChatApp({ db, storage, getMe: () => me, toast });
+  if (me) CHAT.start();
+}
 function openPushTarget(target) {
   if (!me || !target) return false;
   const strip = () => {
@@ -7862,7 +8092,8 @@ function openPushTarget(target) {
   ui.jobPane = "chat";
   return true;
 }
-PUSH = installPush({
+function mountPush() {
+  PUSH = installPush({
   app: fb, db, vapidKey, emulator: useEmulator,
   getUid: () => me && me.uid,
   getCompanyId: () => myCompanyId(),
@@ -7872,8 +8103,11 @@ PUSH = installPush({
     if (me.role === "admin" && !ui.myJobs) renderAdmin(); else renderOperator();
   },
   open: openPushTarget,
-});
-COMP = installCompliance({
+  });
+  if (me) PUSH.start();
+}
+function mountCompliance() {
+  COMP = installCompliance({
   db, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp,
   queueWrite, savedOnPhone: SAVED_ON_PHONE,
   getJobs: () => [...(jobs || []), ...(ui.undated || []), ...(ui.done || [])],
@@ -7881,7 +8115,9 @@ COMP = installCompliance({
   canSeeMoney,
   rerenderAdmin: () => { if (me && me.role === "admin") { ui.forceRender = true; renderAdmin(); } },
   rerenderOperator: () => { ui.forceRender = true; renderOperator(); },
-});
+  });
+  if (me) COMP.start();
+}
 // ---- Guided Quotes (CallUp, Nov 2026). Rates in meta/quoteRates — never invented. No GPS in this build.
 async function loadRunSheets(date) {
   ui.runSheets = ui.runSheets || {};
@@ -7889,7 +8125,7 @@ async function loadRunSheets(date) {
     const id = runSheetId(s.uid, date);
     if (!id) return;
     try {
-      const snap = await getDoc(doc(db, "runSheets", id));
+      const snap = await cachedGetDoc(doc(db, "runSheets", id));
       ui.runSheets[id] = snapExists(snap) ? { id, ...snap.data() } : false;
     } catch { ui.runSheets[id] = false; }
   }));
@@ -7936,7 +8172,8 @@ async function openAcceptedJob(jobId) {
   else if ((jobs || []).some(j => j.id === job.id)) { ui.opSel = job.id; ui.jobPane = "job"; renderOperator(); window.scrollTo(0, 0); }
   else editJob(job);
 }
-QG = installQuotes({
+function mountQuotes() {
+  QG = installQuotes({
   db, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, collection, query, where, onSnapshot, serverTimestamp, arrayUnion, runTransaction,
   $, esc, toast, $$, CLIENTS, TYPES, canSeeMoney, canQuote, canEditQuoteRates, todayStr, jobNo,
   openJob: openAcceptedJob,
@@ -7959,5 +8196,20 @@ QG = installQuotes({
   },
   renderAdmin: () => (me && me.role === "admin" ? renderAdmin() : renderOperator()),
   get staff() { return staff; }
-});
-window.HW_QUOTES = QG; // preview / tests
+  });
+  window.HW_QUOTES = QG; // preview / tests
+}
+function mountFeatureApps() {
+  if (ui.featuresMounted) return;
+  ui.featuresMounted = true;
+  mountChat();
+  mountPush();
+  mountCompliance();
+  mountQuotes();
+  const depot = orgSettings().address;
+  setRouteDepot(depot, { heartwood: myCompanyId() === "heartwood" });
+  setDefaultDepot(depot, { heartwood: myCompanyId() === "heartwood" });
+  if (ui.tradeSetup) setQuoteTradeSetup(ui.tradeSetup);
+  startDesktopInstall();
+}
+window.HW_QUOTES = QG;

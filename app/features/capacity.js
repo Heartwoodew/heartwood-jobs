@@ -4,6 +4,8 @@
 // already stored by the app. No dollar amounts are read or rendered.
 
 import { addDays as addDaysIso, approvedOn, portionLabel, typeLabel } from "./leave.js";
+import { suburbOf } from "./suburb.js";
+export { suburbOf };
 
 export const CAPACITY_TZ = "Australia/Brisbane";
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
@@ -32,19 +34,6 @@ export function recordCompany(row) {
   const id = row && (row.companyId || row.tenantId);
   const text = String(id || "").trim();
   return text || "heartwood";
-}
-
-/** Suburb only. A price typed into an address is dropped and never shown. */
-export function suburbOf(address) {
-  const raw = String(address || "").replace(/(?:A|AU)?\$\s?\d+(?:,\d{3})*(?:\.\d+)?/gi, " ").replace(/\$/g, " ");
-  const bits = raw.split(",").map(s => s.trim()).filter(Boolean);
-  const tail = bits.length > 1 ? bits[bits.length - 1] : "";
-  return tail
-    .replace(/\b(QLD|NSW|VIC|SA|WA|TAS|NT|ACT)\b/ig, " ")
-    .replace(/\b\d{4}\b/g, " ")
-    .replace(/[^A-Za-z\s'-]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 function parseMinutes(time) {
