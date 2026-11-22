@@ -5,7 +5,8 @@ import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-// Measured on main before this change, with cloud/scripts/rules-complexity.py.
+// Measured on main before the scope-tree shrink, with cloud/scripts/rules-complexity.py.
+// matches is the current ruleset (inbound forward added config, mail, drafts, routes, seen).
 // rootFunctions: helpers on the database match, inherited by every collection.
 // scopeWeight: sum over matches of functions visible there (the compiler's scope tree).
 // maxCallDepth: longest helper call chain.
@@ -13,7 +14,7 @@ const BEFORE = {
   bytes: 163877,
   functions: 306,
   rootFunctions: 303,
-  matches: 76,
+  matches: 81,
   maxMatchNesting: 2,
   maxCallDepth: 8,
   scopeWeight: 22879,

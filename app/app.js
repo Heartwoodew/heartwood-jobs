@@ -197,12 +197,19 @@ let duplicateWarning = () => "";
 let findExistingJob = () => null;
 let isImported = () => false;
 let parseInboxEmail = () => ({});
+let forwardScreenHtml = () => "";
+let jobFromDraft = () => ({ ok: false, reason: "loading" });
+let inboundToken = () => "";
+let collectSupervisorEmails = () => [];
+let normalizeSupervisorEmail = () => "";
+let readDraftEdits = (root, draft) => draft;
+let INBOUND_DOMAIN = "inbound.callupapp.com.au";
 let startDesktopInstall = () => {};
 let featuresOn = false;
 let packPromise = null;
 function loadFeaturePack() {
   if (!packPromise) packPromise = (async () => {
-    const [quotes, help, capacity, cloudStorage, retention, jobEmail, gallery, capture, documents, chatUi, push, compliance, performance, take5, exportsMod, receipts, leave, hours, claims, inbox, desktop] = await Promise.all([
+    const [quotes, help, capacity, cloudStorage, retention, jobEmail, gallery, capture, documents, chatUi, push, compliance, performance, take5, exportsMod, receipts, leave, hours, claims, inbox, desktop, inbound] = await Promise.all([
       import("./features/quotes.js"),
       import("./features/help.js"),
       import("./features/capacity.js"),
@@ -224,6 +231,7 @@ function loadFeaturePack() {
       import("./features/claims.js"),
       import("./features/inbox-import.js"),
       import("./features/desktop-install.js"),
+      import("./features/inbound-forward.js"),
     ]);
     ({ installQuotes, adminViewRouter, quoteRatesSettingsBlurb, setDefaultDepot, setQuoteTradeSetup, setQuoteFocus } = quotes);
     ({ askHelp, helpAnswerHtml, helpPanelHtml, helpVisible } = help);
@@ -246,6 +254,7 @@ function loadFeaturePack() {
     ({ claimCreateBody, claimDecisionBody, claimsScreenHtml, newClaimId, receiptContentType, receiptDownloadName, receiptObjectName, receiptStoragePath, RECEIPT_MAX_BYTES } = claims);
     ({ addressWithSuburb, bulkCandidates, canImportInbox, composeAddress, defaultImportMode, duplicateWarning, findExistingJob, isImported, parseInboxEmail } = inbox);
     ({ startDesktopInstall } = desktop);
+    ({ forwardScreenHtml, jobFromDraft, inboundToken, collectSupervisorEmails, normalizeSupervisorEmail, readDraftEdits, INBOUND_DOMAIN } = inbound);
     featuresOn = true;
     mountFeatureApps();
   })();
@@ -1911,21 +1920,21 @@ function queueOf(j) {
 const jobNo = j => j.sm8JobNo ? j.sm8JobNo : companyJobPrefix(orgSettings()) + "-" + String(j.id || "").slice(-4).toUpperCase();
 const firstLine = s => String(s || "").split(/\n|\. /)[0];
 const shortDate = s => s ? new Date(s + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Unscheduled";
-const NAV = [["home", "⌂", "Home"], ["compliance", "🚐", "Compliance"], ["prestart", "☑", "Prestart"], ["take5", "✋", "Take 5s"], ["chat", "💬", "Team chat"], ["dispatch", "▦", "Dispatch Board"], ["capacity", "▦", "Capacity"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["crew", "⌖", "Crew map"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["staff", "👥", "Staff"], ["inbox", "✉", "Inbox", 0, 1],
+const NAV = [["home", "⌂", "Home"], ["compliance", "🚐", "Compliance"], ["prestart", "☑", "Prestart"], ["take5", "✋", "Take 5s"], ["chat", "💬", "Team chat"], ["dispatch", "▦", "Dispatch Board"], ["capacity", "▦", "Capacity"], ["jobs", "☰", "Jobs"], ["unscheduled", "◷", "Unscheduled"], ["quotes", "✎", "Quotes"], ["completed", "✔", "Completed"], ["crew", "⌖", "Crew map"], ["safety", "⚠", "Safety"], ["swms", "📋", "SWMS"], ["clients", "👤", "Clients"], ["staff", "👥", "Staff"], ["inbox", "✉", "Inbox", 0, 1], ["forward", "📨", "Job email"],
   ["invoices", "$", "Invoices"], ["reports", "📈", "Reports", 1], ["myjobs", "👷", "My jobs"], ["timesheet", "⏱", "Timesheet"], ["leave", "🌴", "Leave"], ["claims", "🧾", "Reimbursements"], ["reimb", "💵", "Receipt ledger", 0, 1], ["settings", "⚙", "Company"], ["master", "▣", "Master"]];
 ui.view = "home"; ui.queue = "All"; ui.dview = "week"; ui.wk = 0; ui.q = "";
 const PHONE = matchMedia("(max-width:760px)");
 const TOUCH = matchMedia("(pointer:coarse)");
 PHONE.addEventListener?.("change", () => { if (me && me.role === "admin") renderAdmin(); });
 // Grouped side menu: top items, then collapsible groups (open/closed remembered on this device; the group holding the current screen is always open).
-const NAV_TOP = ["home", "chat", "inbox", "clients", "staff", "master"];
+const NAV_TOP = ["home", "chat", "inbox", "forward", "clients", "staff", "master"];
 const NAV_FOOT = ["settings"];
 const NAV_GROUPS = [["jobs", "☰", "Jobs", ["dispatch", "capacity", "jobs", "unscheduled", "quotes", "completed", "myjobs", "crew"]], ["money", "$", "Money", ["invoices", "claims", "reimb", "timesheet", "leave"]], ["safety", "⚠", "Safety", ["safety", "swms", "prestart", "take5", "compliance"]]];
 const NAV_LBL = { safety: "Incidents" };
 ui.navCol = (() => { try { return JSON.parse(localStorage.getItem("hwNavCol") || "{}"); } catch { return {}; } })();
 function shell(inner) {
   const cur = NAV.find(n => n[0] === ui.view);
-  const item = k => { const x = NAV.find(n => n[0] === k); if (!x || x[3] || (k === "inbox" ? !canImport() : (x[4] && !isOwner())) || (k === "invoices" && (!me || me.role !== "admin")) || (k === "staff" && !canInvite()) || (k === "quotes" && !canQuote()) || (k === "capacity" && !canSeeCapacity()) || (k === "compliance" && !COMP.canSee()) || (k === "prestart" && !COMP.canPrestart()) || (k === "take5" && !take5EntryVisible({ enabled: ui.take5On !== false })) || (k === "crew" && !canSeeCrewMap(me))) return "";
+  const item = k => { const x = NAV.find(n => n[0] === k); if (!x || x[3] || (k === "inbox" ? !canImport() : (x[4] && !isOwner())) || (k === "forward" && !canForward()) || (k === "invoices" && (!me || me.role !== "admin")) || (k === "staff" && !canInvite()) || (k === "quotes" && !canQuote()) || (k === "capacity" && !canSeeCapacity()) || (k === "compliance" && !COMP.canSee()) || (k === "prestart" && !COMP.canPrestart()) || (k === "take5" && !take5EntryVisible({ enabled: ui.take5On !== false })) || (k === "crew" && !canSeeCrewMap(me))) return "";
     const badge = k === "chat" ? CHAT.badge("staff") : "";
     if (k === "master" && !(me && me.platformOwner)) return "";
     return `<button class="sm-nav ${ui.view === k ? "on" : ""}" data-view="${k}" title="${esc(NAV_LBL[k] || x[2])}"><span class="ic">${x[1]}</span><span class="lbl">${esc(NAV_LBL[k] || x[2])}</span>${badge}</button>`; };
@@ -2683,6 +2692,12 @@ const canEditTitles = () => !!(me && (me.role === "admin" || me.role === "manage
 // Inbox and import: admins and supervisors. Operators (staff) do not see the Inbox.
 // Builder-email Inbox and Find PO (Orbit portal, Alex's mailbox, box workers) are Heartwood-only.
 const canImport = () => canImportInbox(me) && myCompanyId() === "heartwood";
+// Forwarded job email: same people who can open Inbox (admin, manager, supervisor). Crew cannot.
+// Heartwood job writes stay with an admin. Other companies' office can approve.
+const canForward = () => canImportInbox(me);
+const canMintForward = () => !!(me && (me.role === "admin" || me.role === "manager" || me.staffRole === "manager" || (myCompanyId() === "heartwood" && (isOwner() || me.uid === "R7t41e54Ykcdk9WPdVZnDd697iI2"))));
+const canEditForwardSupervisors = () => canForward() && (myCompanyId() === "heartwood" ? !!(me && me.role === "admin") : true);
+const canApproveForward = () => canForward() && (myCompanyId() !== "heartwood" || !!(me && me.role === "admin"));
 const canFindPo = () => myCompanyId() === "heartwood";
 // Quotes: same people who see money (admins + users.role/staffRole supervisor). Ordinary staff: no Quotes nav or dollars.
 const canQuote = () => canSeeMoney();
@@ -5060,13 +5075,14 @@ function renderAdmin() {
   const staffHtml = ui.view === "staff" ? staffPageHtml() : null;
   paintBrand();
   refreshAutofillLists();
-  $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "master" ? masterView() : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "capacity" ? capacityScreen() : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "take5" ? take5Page() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "chat" ? CHAT.teamHtml() : ui.view === "crew" ? crewMapScreen() : quotesHtml != null ? quotesHtml : jobsView(all));
+  $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "master" ? masterView() : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "capacity" ? capacityScreen() : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "take5" ? take5Page() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "forward" ? forwardView() : ui.view === "chat" ? CHAT.teamHtml() : ui.view === "crew" ? crewMapScreen() : quotesHtml != null ? quotesHtml : jobsView(all));
   const A = $("#app"); inboxBadge(); bindTrialBanner(A); bindMasterReturn(A);
   CHAT.watch([...(jobs || []), ...(ui.undated || [])]);
   if (ui.view === "chat") CHAT.mount(A);
   if (ui.view === "invoices") bindInvoices(A);
   if (ui.view === "clients") bindClients(A);
   if (ui.view === "inbox") bindInbox(A);
+  if (ui.view === "forward") bindForward(A);
   if (ui.view === "reimb") bindReimb(A);
   if (ui.view === "timesheet") bindTs(A, renderAdmin);
   if (ui.view === "leave") bindLeave(A);
@@ -5081,7 +5097,7 @@ function renderAdmin() {
   A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.navOpen = false;
     if (b.dataset.view === "myjobs") { ui.myJobs = true; ui.opSel = null; window.scrollTo(0, 0); return renderAdmin(); }
     if (b.dataset.view !== "compliance") COMP.abandon();
-    ui.view = b.dataset.view; if (ui.view === "invoices" && me.role !== "admin") ui.view = "home"; ui.forceRender = true; renderAdmin(); });
+    ui.view = b.dataset.view; if ((ui.view === "invoices" && me.role !== "admin") || (ui.view === "forward" && !canForward())) ui.view = "home"; ui.forceRender = true; renderAdmin(); });
   // The menu is a deliberate tap: force the redraw, or an open Prestart/Compliance form swallows it and the admin is stuck there.
   if ($("#burger")) $("#burger").onclick = () => { ui.navOpen = !ui.navOpen; ui.forceRender = true; renderAdmin(); };
   A.querySelectorAll("[data-grp]").forEach(b => b.onclick = () => { const g = b.dataset.grp; if (NAV_GROUPS.find(x => x[0] === g)[3].includes(ui.view)) return;
@@ -6034,6 +6050,145 @@ async function saveBulkImport(A) {
   toast(failed ? `Saved ${saved}. ${failed} not saved.` : `Saved ${saved} job${saved === 1 ? "" : "s"}.`);
   refreshAfterImport();
 }
+function forwardView() {
+  if (!canForward()) return `<p class="pad">Supervisors and admins only.</p>`;
+  if (!ui.forwardState) {
+    ui.forwardState = { loading: true, emails: [], drafts: [], verifications: [], ignored: [] };
+    loadForward();
+  }
+  return forwardScreenHtml({ ...ui.forwardState, canMint: canMintForward(), canEditSupervisors: canEditForwardSupervisors(), canApprove: canApproveForward() });
+}
+async function loadForward() {
+  if (!canForward()) return;
+  const id = myCompanyId();
+  const supRef = doc(db, ...supervisorsPath(id));
+  try {
+    const [cfg, sup, drafts, mail] = await Promise.all([
+      getDoc(doc(db, "companies", id, "inbound", "config")),
+      getDoc(supRef),
+      getDocs(collection(db, "companies", id, "jobDrafts")),
+      getDocs(collection(db, "companies", id, "inboundMail")),
+    ]);
+    const rows = mail.docs.map(d => ({ id: d.id, ...d.data() }));
+    ui.forwardState = {
+      loading: false,
+      address: cfg.exists() ? (cfg.data().address || "") : "",
+      emails: collectSupervisorEmails(sup.exists() ? sup.data() : {}),
+      drafts: drafts.docs.map(d => ({ id: d.id, ...d.data() })).filter(d => d.status === "pending"),
+      verifications: rows.filter(r => r.kind === "verification"),
+      ignored: rows.filter(r => r.kind === "ignored"),
+      error: "",
+    };
+  } catch (e) {
+    ui.forwardState = { loading: false, emails: [], drafts: [], verifications: [], ignored: [], error: e.code || e.message || "Couldn't load forwarding." };
+  }
+  if ((me && me.role === "admin" && ui.view === "forward") || ui.opTab === "forward") {
+    if (me && me.role === "admin" && !ui.myJobs) renderAdmin();
+    else renderOperator();
+  }
+}
+async function mintForwardAddress() {
+  if (!canMintForward()) return toast("An admin creates the forwarding address.");
+  const id = myCompanyId();
+  const bytes = new Uint8Array(8);
+  if (!globalThis.crypto || !crypto.getRandomValues) return toast("This browser can't create an address.");
+  crypto.getRandomValues(bytes);
+  const token = inboundToken(bytes);
+  const local = `${id}-${token}`;
+  const address = `${local}@${INBOUND_DOMAIN}`;
+  if (!token || !address.includes("@")) return toast("Couldn't create an address.");
+  try {
+    await runTransaction(db, async tx => {
+      const cfgRef = doc(db, "companies", id, "inbound", "config");
+      const existing = await tx.get(cfgRef);
+      if (existing.exists()) return;
+      tx.set(doc(db, "inboundRoutes", local), { companyId: id, address, createdBy: me.uid, createdAt: serverTimestamp() });
+      tx.set(cfgRef, { companyId: id, address, localPart: local, domain: INBOUND_DOMAIN, createdBy: me.uid, createdAt: serverTimestamp() });
+    });
+    ui.forwardState = null;
+    toast("Forwarding address created");
+    if (me.role === "admin" && !ui.myJobs) renderAdmin();
+    else renderOperator();
+  } catch (e) { toast("Not created: " + (e.code || e.message)); }
+}
+async function saveSupervisorEmails(next) {
+  const id = myCompanyId();
+  const payload = { emails: next };
+  if (id !== "heartwood") payload.companyId = id;
+  await setDoc(doc(db, ...supervisorsPath(id)), payload, { merge: true });
+  if (ui.forwardState) ui.forwardState = { ...ui.forwardState, emails: next };
+}
+function redrawForward() {
+  ui.forwardState = null;
+  if (me && me.role === "admin" && !ui.myJobs && ui.view === "forward") renderAdmin();
+  else renderOperator();
+}
+async function approveForwardDraft(root, id) {
+  if (!canApproveForward()) return toast("An admin approves this before it becomes a job.");
+  const draft = (ui.forwardState && ui.forwardState.drafts || []).find(d => d.id === id);
+  if (!draft || draft.status === "approved") return;
+  const edited = readDraftEdits(root, draft);
+  const built = jobFromDraft({ ...edited, id: draft.id, messageId: draft.messageId }, { companyId: myCompanyId(), uid: me.uid });
+  if (!built.ok) return toast(built.reason === "client-address" ? "Add a client and an address before approving." : "That draft can't be approved.");
+  try {
+    const ref = doc(db, "jobs", built.id);
+    const existing = await getDoc(ref);
+    if (!existing.exists()) await setDoc(ref, { ...built.job, createdAt: serverTimestamp(), updatedAt: serverTimestamp(), updatedBy: me.uid });
+    await updateDoc(doc(db, "companies", myCompanyId(), "jobDrafts", draft.id), {
+      client: built.job.client, address: built.job.address, type: built.job.type, po: built.job.po,
+      description: built.job.description, date: built.job.date, notes: built.job.notes,
+      ...(built.job.supervisorName ? { supervisorName: built.job.supervisorName } : {}),
+      ...(built.job.supervisorEmail ? { supervisorEmail: built.job.supervisorEmail } : {}),
+      ...(built.job.contactPhone ? { supervisorPhone: built.job.contactPhone } : {}),
+      status: "approved", jobId: built.id, approvedBy: me.uid, approvedAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    });
+    toast("Job approved");
+    redrawForward();
+  } catch (e) { toast("Not approved: " + (e.code || e.message)); }
+}
+async function discardForwardDraft(id) {
+  try {
+    await updateDoc(doc(db, "companies", myCompanyId(), "jobDrafts", id), {
+      status: "discarded", discardedBy: me.uid, discardedAt: serverTimestamp(),
+    });
+    toast("Draft discarded");
+    redrawForward();
+  } catch (e) { toast("Not discarded: " + (e.code || e.message)); }
+}
+function bindForward(A) {
+  const copy = A.querySelector("#fwdcopy");
+  if (copy) copy.onclick = async () => {
+    const address = copy.dataset.address || "";
+    try { await navigator.clipboard.writeText(address); toast("Copied"); }
+    catch { toast(address); }
+  };
+  const mint = A.querySelector("#fwdmint");
+  if (mint) mint.onclick = () => mintForwardAddress();
+  const refresh = A.querySelector("#fwdrefresh");
+  if (refresh) refresh.onclick = () => redrawForward();
+  const form = A.querySelector("#fwdsup");
+  if (form) form.onsubmit = async ev => {
+    ev.preventDefault();
+    const email = normalizeSupervisorEmail(form.email.value);
+    if (!email) return toast("Enter a valid email.");
+    const next = [...new Set([...(ui.forwardState && ui.forwardState.emails || []), email])];
+    try { await saveSupervisorEmails(next); form.reset(); toast("Supervisor saved"); redrawForward(); }
+    catch (e) { toast("Not saved: " + (e.code || e.message)); }
+  };
+  A.querySelectorAll("[data-fwd-remove]").forEach(b => b.onclick = async () => {
+    const next = (ui.forwardState && ui.forwardState.emails || []).filter(e => e !== b.dataset.fwdRemove);
+    try { await saveSupervisorEmails(next); redrawForward(); }
+    catch (e) { toast("Not saved: " + (e.code || e.message)); }
+  });
+  A.querySelectorAll("[data-fwd-approve]").forEach(b => b.onclick = () => approveForwardDraft(A, b.dataset.fwdApprove));
+  A.querySelectorAll("[data-fwd-discard]").forEach(b => b.onclick = () => discardForwardDraft(b.dataset.fwdDiscard));
+  A.querySelectorAll("[data-fwd-dismiss]").forEach(b => b.onclick = async () => {
+    try {
+      await updateDoc(doc(db, "companies", myCompanyId(), "inboundMail", b.dataset.fwdDismiss), { dismissed: true, dismissedAt: serverTimestamp() });
+      redrawForward();
+    } catch (e) { toast("Not hidden: " + (e.code || e.message)); }
+  });
+}
 function bindInbox(A) {
   const all = loadedJobs();
   const go = () => refreshAfterImport();
@@ -6708,6 +6863,12 @@ function renderOperator() {
     bindInbox($("#app")); bindOp(mine); return;
   }
   if (ui.opTab === "inbox") ui.opTab = "more";
+  if (ui.opTab === "forward" && canForward()) {
+    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Job email</div><div class="mob-sub">Forwarded mail waiting for approval</div></div>
+      ${forwardView()}${opTabs("more")}</div>`;
+    bindForward($("#app")); bindOp(mine); return;
+  }
+  if (ui.opTab === "forward") ui.opTab = "more";
   if (ui.opTab === "settings" && canEditTitles()) {
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Company</div><div class="mob-sub">Trades</div></div>
       <div class="pad">${settingsView()}</div>${opTabs("more")}</div>`;
@@ -6732,6 +6893,7 @@ function renderOperator() {
     const fleetBtn = COMP.canSee() ? `<button type="button" class="mob-more" data-go="fleet"><b>Compliance</b><small>Registration and COI status</small></button>` : "";
     const staffBtn = canInvite() ? `<button type="button" class="mob-more" data-go="staff"><b>Staff</b><small>Everyone with a login or an invite</small></button>` : "";
     const inboxBtn = canImport() ? `<button type="button" class="mob-more" data-go="inbox"><b>Inbox</b><small>Import builder emails as jobs</small></button>` : "";
+    const forwardBtn = canForward() ? `<button type="button" class="mob-more" data-go="forward"><b>Job email</b><small>Forwarded mail to approve</small></button>` : "";
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">More</div><div class="mob-sub">${esc(me.name || "")} · ${esc(orgSettings().name)}</div></div>
       <div class="mob-menu">
         ${crewBtn}
@@ -6750,6 +6912,7 @@ function renderOperator() {
         ${staffBtn}
         ${canEditTitles() ? `<button type="button" class="mob-more" data-go="settings"><b>Company</b><small>Add or remove trades. Details and billing stay with an admin.</small></button>` : ""}
         ${inboxBtn}
+        ${forwardBtn}
         ${PUSH.panelHtml()}
         ${skillsEditorHtml((me.cloudProfile && me.cloudProfile.skills) || [], { canEdit: true })}
         <p class="powered pad">${esc(orgSettings().name)} · ${esc(POWERED_BY)}</p>
