@@ -32,6 +32,12 @@ button.primary{background:var(--acc);border-color:var(--acc);color:#fff;font-wei
 .top button.ghost{color:#f6f1ea;border-color:#6b5440}button.sm{padding:2px 7px;font-size:12px}
 .hidden{display:none!important}.muted{color:var(--mut)}.pad{padding:16px}.err{color:#b00020;font-weight:600}
 main{max-width:1150px;margin:0 auto;padding:12px}
+.boot{padding:8px 16px 16px}
+.boot-k,.boot-h,.boot-c{background:#efe6da;border-radius:8px;margin:0 0 10px}
+.boot-k{width:46%;height:14px}
+.boot-h{width:72%;height:28px;margin-top:14px}
+.boot-c{width:38%;height:18px}
+.boot-row{height:78px;margin:0 0 10px;background:#fffdf9;border:1px solid var(--line);border-radius:12px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px}
 .login{max-width:360px;margin:40px auto;display:grid;gap:12px}
 .cardopt{border:1px solid #e6d3a1;border-radius:10px;padding:10px 12px;display:grid;gap:6px}
