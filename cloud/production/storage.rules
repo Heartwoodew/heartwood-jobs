@@ -1,8 +1,9 @@
 rules_version = '2';
 // EMULATOR AND PROPOSED STORAGE RULES.
 // Do not deploy until the owner completes cloud/MIGRATION.md.
-// Job-photo list stays on canSeeJob. Object read does not: repeated jobData()
-// calls are counted on get and production denies them, while list still caches.
+// Job-photo list uses canListJobPhotos (company match, not canSeeJob). Object
+// read does not call canSeeJob: repeated jobData() calls are counted on get and
+// production denies them, while list still caches.
 // Receipts, finance and exports are unchanged. Delete stays off for those,
 // and for job photos. Chat photos are a separate path: the uploader or an
 // admin of that tenant may delete one. No public download tokens.
@@ -93,29 +94,62 @@ service firebase.storage {
     }
     // Object read must not call canSeeJob. That helper calls jobData() once per field.
     // Production counts each call on getMetadata/getBlob and denies the read once the
-    // two-document cap is passed. list still caches those calls, so the folder lists
-    // and the gallery hides the storage/unauthorized as an empty set. Bootstrap admins
-    // read with no Firestore access. Assigned staff use one get of the job. A missing
-    // user profile is not read: that get throws and would deny the admin allow too.
-    function jobPhotoStaff(tenantId, jobId) {
-      let job = firestore.get(jobPath(jobId)).data;
-      let jobTenant = "tenantId" in job && job.tenantId is string && job.tenantId.size() > 0 ? job.tenantId : "heartwood";
-      let assigned = "assigned" in job && job.assigned is list && request.auth.uid in job.assigned;
-      return signedIn() && tenantId is string && tenantId.size() > 0 && jobTenant == tenantId && assigned;
+    // two-document cap is passed. list still caches those calls. Bootstrap admins
+    // (Alex, Patrick on heartwood) read with no Firestore access. Everyone else uses
+    // one get of the job and one get of the user. A missing profile is not read on
+    // the bootstrap allow: that get throws and would deny it too.
+    // Company is companyId, then tenantId, then heartwood, so legacy Heartwood jobs
+    // and staff with neither field still match. A set companyId wins over tenantId.
+    // Path tenant, job company and the caller's company must be the same. Access is
+    // assigned staff, or supervisor/manager/admin. Customer scope still applies.
+    function jobCompanyOf(jobId) {
+      let job = jobData(jobId);
+      return "companyId" in job && job.companyId is string && job.companyId.size() > 0
+        ? job.companyId
+        : ("tenantId" in job && job.tenantId is string && job.tenantId.size() > 0 ? job.tenantId : "heartwood");
     }
-    // CallUp company owner/admin object read: one get of the caller's profile.
-    // Do not call canSeeJob, hasProfile, or profile() here. exists() plus get()
-    // of the same user would already use the two-document production cap.
-    // Staff keep jobPhotoStaff (assigned only). Heartwood bootstrap admins stay
-    // on the no-Firestore allow. Receipts are unchanged.
-    function jobPhotoCompanyAdmin(tenantId) {
-      let user = firestore.get(userPath()).data;
-      let accountCompany = "companyId" in user && user.companyId is string && user.companyId.size() > 0
+    function memberCompany() {
+      let user = userData();
+      return "companyId" in user && user.companyId is string && user.companyId.size() > 0
         ? user.companyId
         : ("tenantId" in user && user.tenantId is string && user.tenantId.size() > 0 ? user.tenantId : "heartwood");
-      let isAdmin = "role" in user && user.role == "admin";
-      return signedIn() && tenantId is string && tenantId.size() > 0 && tenantId != "heartwood"
-        && accountCompany == tenantId && isAdmin;
+    }
+    function photoCustomerOk(jobId) {
+      return !("customerIds" in userData())
+        || !(userData().customerIds is list)
+        || userData().customerIds.size() == 0
+        || ("client" in jobData(jobId) && jobData(jobId).client is string && jobData(jobId).client in userData().customerIds);
+    }
+    function photoPermitted(jobId) {
+      let office = "role" in userData() && userData().role in ["supervisor", "manager", "admin"];
+      return office || accountAssigned(jobId);
+    }
+    function canListJobPhotos(tenantId, jobId) {
+      return signedIn() && tenantId is string && tenantId.size() > 0
+        && jobCompanyOf(jobId) == tenantId
+        && (
+          (tenantId == "heartwood" && (isAlex() || isPatrick()))
+          || (memberCompany() == tenantId && photoPermitted(jobId) && photoCustomerOk(jobId))
+        );
+    }
+    function jobPhotoReader(tenantId, jobId) {
+      let job = firestore.get(jobPath(jobId)).data;
+      let user = firestore.get(userPath()).data;
+      let jobCompany = "companyId" in job && job.companyId is string && job.companyId.size() > 0
+        ? job.companyId
+        : ("tenantId" in job && job.tenantId is string && job.tenantId.size() > 0 ? job.tenantId : "heartwood");
+      let userCompany = "companyId" in user && user.companyId is string && user.companyId.size() > 0
+        ? user.companyId
+        : ("tenantId" in user && user.tenantId is string && user.tenantId.size() > 0 ? user.tenantId : "heartwood");
+      let assigned = "assigned" in job && job.assigned is list && request.auth.uid in job.assigned;
+      let office = "role" in user && user.role in ["supervisor", "manager", "admin"];
+      let customerOk = !("customerIds" in user)
+        || !(user.customerIds is list)
+        || user.customerIds.size() == 0
+        || ("client" in job && job.client is string && job.client in user.customerIds);
+      return tenantId is string && tenantId.size() > 0
+        && jobCompany == tenantId && userCompany == tenantId
+        && (assigned || office) && customerOk;
     }
     function jobPhotoFile(tenantId, jobId) {
       return request.resource.contentType.matches('image/(jpeg|png|webp|gif)')
@@ -131,13 +165,12 @@ service firebase.storage {
     }
 
     match /tenants/{tenantId}/jobs/{jobId}/photos {
-      allow list: if canSeeJob(tenantId, jobId);
+      allow list: if canListJobPhotos(tenantId, jobId);
     }
 
     match /tenants/{tenantId}/jobs/{jobId}/photos/{file} {
       allow read: if signedIn() && tenantId == "heartwood" && (isAlex() || isPatrick());
-      allow read: if jobPhotoStaff(tenantId, jobId);
-      allow read: if jobPhotoCompanyAdmin(tenantId);
+      allow read: if signedIn() && !(tenantId == "heartwood" && (isAlex() || isPatrick())) && jobPhotoReader(tenantId, jobId);
       allow create, update: if canSeeJob(tenantId, jobId) && jobPhotoFile(tenantId, jobId);
       allow delete: if false;
     }
@@ -449,6 +482,21 @@ service firebase.storage {
       return signedIn() && tenantId != "heartwood" && tenantId.size() > 0
         && docOfficeProfile(tenantId) && storageCompanyOpen(tenantId);
     }
+    // Non-Heartwood upload. The path tenant, the job's companyId and the
+    // uploader's company must match. User and job are the two production reads,
+    // so this allow does not also read companies/{id}. Read, list and delete
+    // still use docCompanyOffice, which refuses a paused company. A job with no
+    // companyId does not match a CallUp path (Heartwood create uses jobCompanyMatches).
+    function docCompanyOfficeCreate(tenantId, jobId) {
+      let user = firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
+      let job = firestore.get(jobPath(jobId)).data;
+      let jobCompany = "companyId" in job && job.companyId is string && job.companyId.size() > 0
+        ? job.companyId : "";
+      return signedIn() && tenantId != "heartwood" && tenantId.size() > 0
+        && docAccountCompany(user) == tenantId
+        && jobCompany == tenantId
+        && docOfficeRole(user);
+    }
     function docCrewAssigned(tenantId, jobId) {
       let job = firestore.get(jobPath(jobId)).data;
       let company = "companyId" in job && job.companyId is string && job.companyId.size() > 0
@@ -513,7 +561,7 @@ service firebase.storage {
       allow read: if docCrewRead(tenantId, jobId);
       allow create: if docNameOk(file) && docFileOk(tenantId, jobId) && docHeartwoodOwner(tenantId) && jobCompanyMatches(tenantId, jobId);
       allow create: if docNameOk(file) && docFileOk(tenantId, jobId) && docHeartwoodOffice(tenantId) && jobCompanyMatches(tenantId, jobId);
-      allow create: if docNameOk(file) && docFileOk(tenantId, jobId) && docCompanyOffice(tenantId);
+      allow create: if docNameOk(file) && docFileOk(tenantId, jobId) && docCompanyOfficeCreate(tenantId, jobId);
       allow delete: if docHeartwoodOwner(tenantId);
       allow delete: if docHeartwoodOffice(tenantId);
       allow delete: if docCompanyOffice(tenantId);
