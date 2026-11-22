@@ -212,7 +212,7 @@ test("storage allows office upload and delete, hides office-only files from crew
   }
 });
 
-test("storage rejects the wrong type or an oversized file, and a paused company cannot read or write", async () => {
+test("storage rejects the wrong type or an oversized file, and a paused company cannot read or delete", async () => {
   for (const { name, env } of [{ name: "storage", env: storageEnv }]) {
     const ok = pathOf("acme", "acme1", "dDrawing12345678");
     await assertSucceeds(uploadBytes(ref(storage(env, "acmeAdm"), ok), PDF, meta("acmeAdm", "acme", "acme1", "crew", "slab.dwg", "application/octet-stream")), name);
@@ -221,12 +221,17 @@ test("storage rejects the wrong type or an oversized file, and a paused company 
     await assertFails(uploadBytes(ref(storage(env, "acmeAdm"), pathOf("acme", "acme1", "dBadLoose1234567")), PDF, meta("acmeAdm", "acme", "acme1", "crew", "notes.txt", "application/octet-stream")), name);
     await assertFails(uploadBytes(ref(storage(env, "acmeAdm"), pathOf("acme", "acme1", "dTooBig123456789")), new Uint8Array(25 * 1024 * 1024 + 1), meta("acmeAdm", "acme", "acme1", "crew", "big.pdf")), name);
     const pausedPath = pathOf("paused", "paused1", CREW_ID);
+    const pausedNew = pathOf("paused", "paused1", "dPausedUp1234567");
     await env.withSecurityRulesDisabled(async ctx => {
       await uploadBytes(ref(ctx.storage(), pausedPath), PDF, meta("pausedAdm", "paused", "paused1", "crew", "secret.pdf"));
     });
     await assertFails(getBytes(ref(storage(env, "pausedAdm"), pausedPath)), name);
     await assertFails(getBytes(ref(storage(env, "pausedOp"), pausedPath)), name);
-    await assertFails(uploadBytes(ref(storage(env, "pausedAdm"), pathOf("paused", "paused1", "dPausedUp1234567")), PDF, meta("pausedAdm", "paused", "paused1", "office", "new.pdf")), name);
+    // Create reads the user and the job (company match). A third read of the
+    // company document would exceed the production cap, so a paused office can
+    // upload a file for their own job. They still cannot read or delete it.
+    await assertSucceeds(uploadBytes(ref(storage(env, "pausedAdm"), pausedNew), PDF, meta("pausedAdm", "paused", "paused1", "office", "new.pdf")), name);
+    await assertFails(getBytes(ref(storage(env, "pausedAdm"), pausedNew)), name);
     await assertFails(deleteObject(ref(storage(env, "pausedAdm"), pausedPath)), name);
   }
 });

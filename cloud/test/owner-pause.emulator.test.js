@@ -117,19 +117,25 @@ test("only the platform owner can set an owner pause, and a paused company is lo
   assert.equal(open.data().ownerPausedBy, ALEX);
 });
 
-test("storage for an owner-paused company is blocked the same way as a trial pause", async () => {
+test("storage for an owner-paused company cannot be read or deleted", async () => {
   const file = "tenants/acme/jobs/acmejob/documents/dOwnerPause12345";
+  const created = "tenants/acme/jobs/acmejob/documents/dOwnerNew1234567";
   const admin = () => storageEnv.authenticatedContext("acmeAdm").storage();
   await assertSucceeds(getBytes(ref(admin(), file)));
   await storageEnv.withSecurityRulesDisabled(async ctx => {
     await updateDoc(doc(ctx.firestore(), "companies/acme"), { ownerPaused: true, ownerPausedBy: ALEX });
   });
   await assertFails(getBytes(ref(admin(), file)));
-  await assertFails(uploadBytes(ref(admin(), "tenants/acme/jobs/acmejob/documents/dOwnerNew1234567"), PDF, {
+  // Create already reads the uploader and the job. A company read would be a
+  // third document, which production storage rules reject, so a paused office
+  // can upload. The new bytes still cannot be read back.
+  const meta = {
     contentType: "application/pdf",
     customMetadata: {
       tenantId: "acme", jobId: "acmejob", uploaderUid: "acmeAdm", purpose: "job-document",
       visibility: "office", fileName: "new.pdf",
     },
-  }));
+  };
+  await assertSucceeds(uploadBytes(ref(admin(), created), PDF, meta));
+  await assertFails(getBytes(ref(admin(), created)));
 });
