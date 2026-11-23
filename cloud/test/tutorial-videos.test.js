@@ -37,6 +37,8 @@ test("questions map to the matching video", () => {
   assert.equal(matchVideo("How do I create a company?", office).n, 1);
   assert.equal(matchVideo("how do i install the app on my phone", office).n, 3);
   assert.equal(matchVideo("how do I install callup", crew).n, 3);
+  assert.equal(matchVideo("how do I turn on notifications", office).n, 4);
+  assert.equal(matchVideo("how do I turn on notifications", crew).n, 4);
   assert.equal(matchVideo("How do I make a quote?", office), null);
   assert.equal(matchVideo("", office), null);
   assert.equal(matchVideo("staffing levels for leave", office), null);
@@ -45,12 +47,16 @@ test("questions map to the matching video", () => {
 test("crew are never pointed at office-only videos", () => {
   assert.equal(matchVideo("how do I invite staff", crew), null);
   assert.equal(matchVideo("how do I create a company", operator), null);
-  assert.deepEqual(videosFor(crew).map(v => v.n), [3]);
-  assert.deepEqual(videosFor({ role: "admin", staffRole: "labourer", canSeeMoney: true }).map(v => v.n), [3]);
-  assert.deepEqual(videosFor(supervisor).map(v => v.n), [1, 2, 3]);
+  assert.deepEqual(videosFor(crew).map(v => v.n), [3, 4]);
+  assert.deepEqual(videosFor({ role: "admin", staffRole: "labourer", canSeeMoney: true }).map(v => v.n), [3, 4]);
+  assert.deepEqual(videosFor(supervisor).map(v => v.n), [1, 2, 3, 4]);
   assert.equal(videoById(1, crew), null);
   assert.equal(videoById(3, crew).n, 3);
-  assert.deepEqual(videoListForModel(crew), [{ id: 3, title: "Install the app", url: "https://youtu.be/uKLQKTpxVJA" }]);
+  assert.equal(videoById(4, crew).title, "Turn on phone alerts");
+  assert.deepEqual(videoListForModel(crew), [
+    { id: 3, title: "Install the app", url: "https://youtu.be/uKLQKTpxVJA" },
+    { id: 4, title: "Turn on phone alerts", url: "https://youtu.be/e7leDphA0no" },
+  ]);
 });
 
 test("Help answers carry a plain YouTube link, never an embed", () => {
@@ -75,9 +81,10 @@ test("Help answers carry a plain YouTube link, never an embed", () => {
 test("the Help panel lists the videos this viewer may watch", () => {
   const officePanel = helpPanelHtml(office);
   assert.match(officePanel, /Video guides/);
-  for (const id of ["kBowcNxUdZQ", "AuuLkAaCZ-E", "uKLQKTpxVJA"]) assert.match(officePanel, new RegExp("youtu\\.be/" + id));
+  for (const id of ["kBowcNxUdZQ", "AuuLkAaCZ-E", "uKLQKTpxVJA", "e7leDphA0no"]) assert.match(officePanel, new RegExp("youtu\\.be/" + id));
   const crewPanel = helpPanelHtml(crew);
   assert.match(crewPanel, /uKLQKTpxVJA/);
+  assert.match(crewPanel, /e7leDphA0no/);
   assert.doesNotMatch(crewPanel, /kBowcNxUdZQ|AuuLkAaCZ-E/);
   assert.doesNotMatch(officePanel + crewPanel, /iframe|youtube-nocookie/i);
   assert.equal(helpVideosHtml({ role: "operator", canSeeMoney: false }).includes("Install the app"), true);
@@ -111,11 +118,11 @@ test("helperAsk gives the model the filtered list and returns a checked videoId"
   const sup = await run("sup1", "how do I invite staff to callup", "Open Staff and send an invite.\nVIDEO: 2");
   assert.equal(sup.result.videoId, 2);
   assert.doesNotMatch(sup.result.reply, /VIDEO:/);
-  assert.deepEqual(sup.payload.tutorialVideos.map(v => v.id), [1, 2, 3]);
+  assert.deepEqual(sup.payload.tutorialVideos.map(v => v.id), [1, 2, 3, 4]);
   assert.match(sup.system, /VIDEO: <id>/);
   const lab = await run("lab1", "how do I invite staff", "Ask a supervisor.\nVIDEO: 2");
   assert.equal(lab.result.videoId, null);
-  assert.deepEqual(lab.payload.tutorialVideos.map(v => v.id), [3]);
+  assert.deepEqual(lab.payload.tutorialVideos.map(v => v.id), [3, 4]);
 });
 
 test("no embed: the CSP and hosting config are not widened for YouTube frames", () => {
