@@ -433,16 +433,21 @@ After review:
 
 No functions deploy, no Storage change, no index deploy, no Stripe change, no backfill.
 
-## Help tutorial videos (not deployed)
+## Help tutorial videos
 
-Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production. No data change, no rules change, no CSP change (videos are plain youtu.be links, not embeds).
+Merged to main as service worker `callup-shell-v147-help-videos`. Help links are plain youtu.be links. `helperAsk` can load `cloud/functions/shared/tutorial-videos.js` when the helper is switched back on. It is still hard-off.
+
+## Crew map, notifications, and live location (not deployed)
+
+Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production.
 
 After review:
 
-1. Deploy hosting. Service worker `callup-shell-v147-help-videos`. PR 118 then needs `v148` or later.
-2. Optional: `helperAsk` from an isolated functions copy. It is still hard-off (`HELPER_HARD_OFF`), so this only matters when the helper is switched back on. It adds `cloud/functions/shared/tutorial-videos.js`.
+1. Build a fresh hosting folder with `bash tools/build-callup-hosting.sh`.
+2. Deploy hosting only with `firebase deploy --only hosting --config cloud/firebase.hosting.json --project heartwood-9f37f`. Service worker `callup-shell-v148-crew-map`. This includes the help-video module from v147. No rules deploy and no index deploy.
+3. Background push copy is in Cloud Functions (`fcmMessage`). The predeploy hook in `cloud/firebase.json` still refuses a functions deploy. When that hook is lifted for a reviewed release, publish `chatMessagePush`, `dailyJobPush`, `dailyJobChangePush`, `prestartJobPush`, `prestartAssetPush`, `prestartTimesheetPush`, `remindLocationSharing`, and `supportTicketCreated` in australia-southeast1. Until then, phones keep the previous data-only payload.
 
-No Firestore rules, no Storage, no index deploy, no Stripe change, no backfill.
+The Stripe GST PR 118 needs `callup-shell-v149` or later after this one.
 
 ## Admin password reset (15 Nov 2026)
 

@@ -159,11 +159,35 @@ export function chatPushContent({ tenantId, threadId, message, job, origin }) {
   };
 }
 
+function pushIconUrl(pageUrl) {
+  try {
+    const u = new URL(String(pageUrl || ""));
+    if (u.protocol !== "https:") return "";
+    return u.origin + "/app/icons/icon-192.png";
+  } catch {
+    return "";
+  }
+}
+
+// Web push on iOS is dropped when the payload is data-only and the page is closed.
+// notification (and webpush.notification) is what the phone shows. data stays for the service worker.
 export function fcmMessage(target, content) {
+  const data = (content && content.data) || {};
+  const title = String(data.title || (content && content.title) || "CallUp").slice(0, 120);
+  const body = String(data.body || (content && content.body) || "").slice(0, 180);
+  const link = String((content && content.url) || data.url || "");
+  const icon = pushIconUrl(link);
+  const webNotification = { title, body };
+  if (icon) webNotification.icon = icon;
   return {
     token: target.token,
-    data: content.data,
-    webpush: { fcmOptions: { link: content.url } },
+    data,
+    notification: { title, body },
+    webpush: {
+      headers: { Urgency: "high" },
+      notification: webNotification,
+      fcmOptions: link ? { link } : {},
+    },
   };
 }
 
