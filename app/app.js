@@ -211,7 +211,7 @@ let INBOUND_DOMAIN = "inbound.callupapp.com.au";
 let startDesktopInstall = () => {};
 let refreshDesktopBanner = () => {};
 let desktopBannerWouldShow = () => false;
-let SHELL_VERSION = "callup-shell-v146-signup-polish";
+let SHELL_VERSION = "callup-shell-v147-help-videos";
 let prepareTicket = () => ({ ok: false, reason: "loading" });
 let ticketDialogHtml = () => "";
 let ticketFailureText = () => "The ticket could not be sent. Try again.";
@@ -466,7 +466,7 @@ async function openHelp() {
   await loadFeaturePack();
   let panel = $("#helppanel");
   if (panel) { panel.remove(); return; }
-  document.body.insertAdjacentHTML("beforeend", helpPanelHtml());
+  document.body.insertAdjacentHTML("beforeend", helpPanelHtml(helpContext()));
   panel = $("#helppanel");
   $("#helpx").onclick = () => panel.remove();
   panel.querySelectorAll("[data-help-q]").forEach(btn => btn.onclick = () => submitHelpQuestion(btn.dataset.helpQ));

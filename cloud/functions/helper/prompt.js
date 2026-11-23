@@ -30,6 +30,7 @@ export function packUserPayload(base) {
   if (base.timesheets && base.timesheets.length) payload.timesheets = base.timesheets;
   if (base.leave && base.leave.length) payload.leave = base.leave;
   if (base.prestarts && base.prestarts.length) payload.prestarts = base.prestarts;
+  if (base.tutorialVideos && base.tutorialVideos.length) payload.tutorialVideos = base.tutorialVideos;
   const size = () => JSON.stringify(payload).length;
   while (size() > USER_CAP && payload.jobs.length > 1) payload.jobs.pop();
   if (size() > USER_CAP && payload.knowledge && payload.knowledge.length > 400) {
@@ -79,7 +80,7 @@ function neutralDeep(value, tenantId) {
 }
 
 export function buildHelperPrompt({
-  name, role, tenantId, canSeeMoney, finance, today, knowledge, context, question, canary,
+  videos = [], name, role, tenantId, canSeeMoney, finance, today, knowledge, context, question, canary,
 }) {
   const token = canary || newCanary();
   const money = canSeeMoney ? "visible" : "hidden";
@@ -109,6 +110,9 @@ export function buildHelperPrompt({
     knowledge.source === "placeholder"
       ? "The knowledge text is a placeholder. Do not invent how CallUp works beyond it."
       : "Use the knowledge text for how-to questions.",
+    ...(videos.length ? [
+      "tutorialVideos lists CallUp tutorial videos this person may watch. If one matches the question, say there is a short video on it and end the reply with a last line of the form VIDEO: <id>, using an id from that list only. The app shows the YouTube link, so do not write a URL.",
+    ] : []),
     "HELPER_RULES_END",
   ].join("\n");
   const knowledgeText = neutralText(canSeeMoney ? knowledge.text : redactMoneyText(knowledge.text).replaceAll("$", ""), tenantId);
@@ -126,6 +130,7 @@ export function buildHelperPrompt({
     timesheets: context.timesheets,
     leave: context.leave,
     prestarts: context.prestarts,
+    tutorialVideos: videos.map(v => ({ id: v.id, title: v.title })),
     question,
   }), tenantId));
   return { system, user, canary: token };

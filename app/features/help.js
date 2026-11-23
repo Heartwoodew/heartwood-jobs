@@ -1,4 +1,5 @@
 import { deviceOnline, needsSignal } from "./offline.js";
+import { isOfficeViewer, matchVideo, videoById, videoUrl, videosFor } from "./tutorial-videos.js";
 
 // Basic in-app Help for every CallUp company and every role.
 // Answers come from this knowledge list. helperAsk is tried only when a caller
@@ -128,12 +129,24 @@ const TOPICS = Object.freeze([
     office: "Team chat is the message list for everyone signed in at this company. This Help button answers how to use CallUp. Team chat does not.",
     crew: "Team chat is for messages to people at your company. This Help button answers how to use CallUp.",
   },
+  {
+    id: "install",
+    keywords: ["install", "download the app", "download callup", "home screen", "get the app", "desktop app"],
+    go: "",
+    goLabel: "",
+    office: "CallUp runs in the browser and can be installed on a phone or computer. On iPhone open app.callupapp.com.au in Safari, tap Share, then Add to Home Screen. On Android open it in Chrome and tap Install app. The video shows each step.",
+    crew: "On iPhone open app.callupapp.com.au in Safari, tap Share, then Add to Home Screen. On Android open it in Chrome and tap Install app. Then sign in with the login your company sent you.",
+  },
 ]);
 
 function officeUser(ctx) {
-  const role = String((ctx && (ctx.staffRole || ctx.role)) || "");
-  if (role === "labourer" || role === "operator") return false;
-  return !!(ctx && ctx.canSeeMoney);
+  return isOfficeViewer(ctx);
+}
+
+// Tutorial video for this question and this viewer, or null. Crew never get office-only videos.
+function videoFor(question, ctx) {
+  const video = matchVideo(question, ctx);
+  return video ? { n: video.n, title: video.title, url: videoUrl(video) } : null;
 }
 
 function normalise(text) {
@@ -161,14 +174,18 @@ export function matchHelp(question, ctx = {}) {
       best = topic;
     }
   }
+  const video = videoFor(question, ctx);
   if (!best) {
     return {
       ok: true,
       topic: "",
       source: "knowledge",
-      text: "I can help with jobs, quotes, clients, staff, hours, leave, prestarts, Take 5s, photos and emailing a job. Try one of the suggestions, or ask how to do one of those.",
+      text: video
+        ? "There's a short video on that. Tap it to watch on YouTube."
+        : "I can help with jobs, quotes, clients, staff, hours, leave, prestarts, Take 5s, photos and emailing a job. Try one of the suggestions, or ask how to do one of those.",
       go: "",
       goLabel: "",
+      video,
     };
   }
   return {
@@ -178,6 +195,7 @@ export function matchHelp(question, ctx = {}) {
     text: office ? best.office : best.crew,
     go: best.go,
     goLabel: best.go ? best.goLabel : "",
+    video,
   };
 }
 
@@ -201,7 +219,11 @@ export async function askHelp(question, ctx = {}, caller) {
     const reply = remote && typeof remote.reply === "string" ? remote.reply.trim() : "";
     const usable = remote && remote.enabled && reply && !/switched off|didn't ask a model|don't have access/i.test(reply);
     if (usable && (officeUser(ctx) || !replyShowsMoney(reply))) {
-      return { ...local, text: reply, source: "helper" };
+      // helperAsk may name a video by id. Only ids in this app's list for this viewer are shown,
+      // so the link always comes from tutorial-videos.js, never from the reply.
+      const named = remote.videoId != null ? videoById(remote.videoId, ctx) : null;
+      const video = named ? { n: named.n, title: named.title, url: videoUrl(named) } : local.video;
+      return { ...local, text: reply, source: "helper", video };
     }
   } catch {
     /* helper is off, offline, or refused — the knowledge answer still works */
@@ -213,13 +235,26 @@ function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-export function helpPanelHtml() {
+export function videoLinkHtml(video) {
+  const url = video && /^https:\/\/youtu\.be\/[A-Za-z0-9_-]{11}$/.test(video.url || "") ? video.url : "";
+  if (!url) return "";
+  return `<a class="callup-help-video" href="${esc(url)}" target="_blank" rel="noopener noreferrer" data-help-video="${esc(video.n)}">▶ Video ${esc(video.n)}: ${esc(video.title)} <span class="sub">(YouTube)</span></a>`;
+}
+
+export function helpVideosHtml(ctx = {}) {
+  const list = videosFor(ctx).map(v => `<li>${videoLinkHtml({ n: v.n, title: v.title, url: videoUrl(v) })}</li>`).join("");
+  if (!list) return "";
+  return `<details class="callup-help-videos" id="helpvideos"><summary>Video guides</summary><ul>${list}</ul></details>`;
+}
+
+export function helpPanelHtml(ctx = {}) {
   const ideas = SUGGESTED_QUESTIONS.map(q => `<button type="button" class="sm-btn" data-help-q="${esc(q)}">${esc(q)}</button>`).join("");
   return `<section class="callup-help" id="helppanel" role="dialog" aria-label="Help">
     <div class="callup-help-bar"><h2>Help</h2><button type="button" class="sm-btn" id="helpx">Close</button></div>
     <p class="sub">Ask how to use CallUp. This does not change any records.</p>
     <p><button type="button" class="sm-btn" data-raise-ticket>Raise ticket</button></p>
     <div class="callup-help-ideas" id="helpideas">${ideas}</div>
+    ${helpVideosHtml(ctx)}
     <div class="callup-help-log" id="helplog" role="log"></div>
     <form id="helpform" class="callup-help-form">
       <input name="q" maxlength="2000" placeholder="How do I…" aria-label="Your question" autocomplete="off">
@@ -232,7 +267,8 @@ export function helpAnswerHtml(answer) {
   const go = answer && answer.go && answer.goLabel
     ? `<button type="button" class="sm-btn" data-help-go="${esc(answer.go)}">${esc(answer.goLabel)}</button>`
     : "";
-  return `<article class="callup-help-answer"><p>${esc(answer && answer.text || "")}</p>${go}</article>`;
+  const video = answer && answer.video ? videoLinkHtml(answer.video) : "";
+  return `<article class="callup-help-answer"><p>${esc(answer && answer.text || "")}</p>${video}${go}</article>`;
 }
 
 export function teamChatHelpCard() {
