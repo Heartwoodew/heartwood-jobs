@@ -385,6 +385,6 @@ test("billing settings show the referral to an admin and hide prices from crew",
   assert.match(index, /export const attachSignupReferral = onCall/);
   assert.match(index, /handleReferralWebhookEvent/);
   const sw = readFileSync(new URL("../../app/sw.js", import.meta.url), "utf8");
-  assert.match(sw, /callup-shell-v148-crew-map/);
+  assert.match(sw, /callup-shell-v149-boot-timeout/);
   assert.match(sw, /features\/referral\.js/);
 });

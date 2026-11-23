@@ -449,6 +449,16 @@ After review:
 
 The Stripe GST PR 118 needs `callup-shell-v149` or later after this one.
 
+## Boot timeout and recovery (not deployed)
+
+Do not deploy from this branch. Nothing here writes to production. No functions, no rules, no indexes.
+
+After review, deploy hosting only. Service worker `callup-shell-v149-boot-timeout`. A startup read that does not answer (profile, Heartwood staff list, platform session, company record) is abandoned and the phone uses its saved copy when it has one. Clearing a company view does not wait more than 5 seconds for the server. If the first screen has not painted after 12 seconds, Retry, Reload and Sign out replace the loading skeleton. Coming back online, or opening the app again, asks Firestore to reconnect. The multi-tab cache is unchanged. iOS single-tab persistence is a follow-up, not this change.
+
+No functions deploy, no Storage change, no rules deploy, no index deploy, no Stripe change, no backfill.
+
+This shell is `callup-shell-v149-boot-timeout`, so the Stripe GST work noted above now needs `callup-shell-v150` or later.
+
 ## Admin password reset (15 Nov 2026)
 
 Do not deploy from this branch. When it is deployed: hosting (service worker `callup-shell-v108-password-reset`) and the function `adminSendPasswordReset` in australia-southeast1. It uses the same `RESEND_API_KEY` and `INVITE_EMAIL_ENABLED` gate as `inviteEmailWorker`. The reset link is emailed to the staff member and is not returned to the browser. Firestore `passwordResetRate/{uid}` is Admin SDK only (client read and write denied). Rebased onto main's `callup-shell-v106-multi-category-quotes`; this branch stays `callup-shell-v108-password-reset`.
