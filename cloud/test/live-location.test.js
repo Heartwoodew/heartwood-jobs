@@ -157,7 +157,7 @@ test("the map library is not part of the offline shell", () => {
   const sw = read("../../app/sw.js");
   const app = read("../../app/app.js");
 
-  assert.match(sw, /callup-shell-v149-boot-timeout/);
+  assert.match(sw, /callup-shell-v150-help-video-5/);
   assert.match(sw, /features\/live-location\.js/);
   assert.doesNotMatch(sw, /leaflet|openstreetmap|unpkg\.com/i);
   assert.match(app, /LIVE_SHARE_TEXT/);

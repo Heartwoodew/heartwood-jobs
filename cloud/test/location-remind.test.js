@@ -258,9 +258,9 @@ test("the callable is wired, refuses tests, and the rules stay a read for the pe
   assert.match(emu, /match \/users\/\{uid\}\/locationNotices\/\{noticeId\}/);
   assert.match(rules, /allow create, update, delete: if false/);
   const sw = readFileSync(new URL("../../app/sw.js", import.meta.url), "utf8");
-  assert.match(sw, /callup-shell-v149-boot-timeout/);
+  assert.match(sw, /callup-shell-v150-help-video-5/);
   const migration = readFileSync(new URL("../MIGRATION.md", import.meta.url), "utf8");
   assert.match(migration, /remindLocationSharing/);
-  assert.match(migration, /callup-shell-v149-boot-timeout/);
+  assert.match(migration, /callup-shell-v150-help-video-5/);
   assert.match(migration, /Do not deploy from this branch/);
 });
