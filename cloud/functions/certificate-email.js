@@ -6,7 +6,7 @@ import { defineSecret } from "firebase-functions/params";
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { sendViaResend } from "./shared/staff-invites.js";
-import { planCertificateEmail } from "./shared/certificates.js";
+import { certificatesEnabled, planCertificateEmail, tradeIdsFromCompany } from "./shared/certificates.js";
 import { callerIsAdmin } from "./shared/quote-public.js";
 
 const RESEND_API_KEY = defineSecret("RESEND_API_KEY");
@@ -20,6 +20,10 @@ export async function sendCertificateWork({ uid, to, fileName, pdfBase64, compan
   const profile = await deps.loadProfile(uid);
   if (!callerIsAdmin(uid, profile, companyId)) return { ok: false, code: "permission-denied", message: "Only an admin can email a certificate." };
   const company = await deps.loadCompany(companyId);
+  const stored = typeof deps.loadTrades === "function" ? await deps.loadTrades(companyId) : null;
+  if (!certificatesEnabled(tradeIdsFromCompany(company, stored))) {
+    return { ok: false, code: "failed-precondition", message: "Certificates are only for pest control." };
+  }
   const plan = planCertificateEmail({
     to, company, job: deps.job || {}, fileName, pdfBase64,
     env: deps.env || {}, allowLiveMail: deps.allowLiveMail === true,
@@ -61,6 +65,10 @@ export const sendCertificateEmail = onCall(
       loadCompany: async id => {
         const snap = await db.collection("companies").doc(id).get();
         return snap.exists ? snap.data() : {};
+      },
+      loadTrades: async id => {
+        const snap = await db.collection("companyTrades").doc(id).get();
+        return snap.exists ? snap.data() : null;
       },
       send: payload => sendViaResend({ apiKey: RESEND_API_KEY.value(), payload, fetchImpl: fetch }),
     });

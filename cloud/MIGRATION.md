@@ -406,6 +406,14 @@ Order after merge:
 
 No Storage change, no index deploy, no Stripe change, no backfill.
 
+## Pest control checklists and certificates (not deployed)
+
+Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production. Existing checklist rows and certificate files stay where they are.
+
+After review, deploy hosting only. Service worker `callup-shell-v144-pest-trade`. The job checklist, checklist settings, and compliance certificates (the job panel and `sendCertificateEmail`) show only when the company's trades include pest control. Heartwood and every other trade keep the Photos tab, the photo steps on a job, quotes, and repeating jobs. `sendCertificateEmail` refuses a company that is not pest control.
+
+No functions deploy until that email refusal is reviewed. No Storage change, no rules deploy, no index deploy, no Stripe change, no backfill.
+
 ## Admin password reset (15 Nov 2026)
 
 Do not deploy from this branch. When it is deployed: hosting (service worker `callup-shell-v108-password-reset`) and the function `adminSendPasswordReset` in australia-southeast1. It uses the same `RESEND_API_KEY` and `INVITE_EMAIL_ENABLED` gate as `inviteEmailWorker`. The reset link is emailed to the staff member and is not returned to the browser. Firestore `passwordResetRate/{uid}` is Admin SDK only (client read and write denied). Rebased onto main's `callup-shell-v106-multi-category-quotes`; this branch stays `callup-shell-v108-password-reset`.

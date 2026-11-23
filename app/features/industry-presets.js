@@ -1,7 +1,20 @@
 // Company checklists and required photo steps. Defaults come from the industry.
 // A custom row is kept when the company changes industry. Untouched defaults for a
 // trade that was removed are dropped. Jobs already saved are not touched here.
-import { INDUSTRY_PRESETS, RECURRENCE_HINTS, SERVICE_TRADES } from "./packs/service-trades.js";
+// The checklist (job card and the settings list) shows only when the company
+// includes pest control. Photo steps stay for every trade. Nothing here deletes
+// stored checklist rows.
+import { INDUSTRY_PRESETS, RECURRENCE_HINTS } from "./packs/service-trades.js";
+
+const PEST_CONTROL_TRADE = "pest-control";
+
+/** True when this company's trades include pest control. A missing list is not pest control. */
+export function pestControlOn(setup) {
+  const ids = setup && Array.isArray(setup.enabled) && setup.enabled.length
+    ? setup.enabled
+    : (setup && Array.isArray(setup.trades) ? setup.trades : []);
+  return ids.includes(PEST_CONTROL_TRADE) || !!(setup && setup.trade === PEST_CONTROL_TRADE);
+}
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -113,17 +126,28 @@ export function recurrenceHint(typeId) {
 
 export function jobStepsHtml(job, setup) {
   const steps = stepsForJob(setup, job && job.type);
-  if (!steps.checklists.length && !steps.photoSteps.length) return "";
-  const checks = steps.checklists.map(row => `<li>${esc(row.label)}</li>`).join("");
-  const photos = steps.photoSteps.map(row => `<li>${esc(row.label)}${row.required === false ? "" : " <span class=\"sub\">Required</span>"}</li>`).join("");
-  return `<section class="card job-steps"><h3>Checklist and photos</h3>
-    ${checks ? `<p class="sub">Checklist</p><ul class="job-check">${checks}</ul>` : ""}
-    ${photos ? `<p class="sub">Photos</p><ul class="job-photos-steps">${photos}</ul>` : ""}
+  const checks = pestControlOn(setup) ? steps.checklists : [];
+  const photos = steps.photoSteps;
+  if (!checks.length && !photos.length) return "";
+  const title = checks.length && photos.length ? "Checklist and photos" : (checks.length ? "Checklist" : "Photos");
+  const checkHtml = checks.map(row => `<li>${esc(row.label)}</li>`).join("");
+  const photoHtml = photos.map(row => `<li>${esc(row.label)}${row.required === false ? "" : " <span class=\"sub\">Required</span>"}</li>`).join("");
+  return `<section class="card job-steps"><h3>${title}</h3>
+    ${checkHtml ? `<p class="sub">Checklist</p><ul class="job-check">${checkHtml}</ul>` : ""}
+    ${photoHtml ? `<p class="sub">Photos</p><ul class="job-photos-steps">${photoHtml}</ul>` : ""}
   </section>`;
 }
 
+/** Label beside the job card. Non-pest companies get Photos, never Checklist. */
+export function jobStepsScopeLabel(job, setup) {
+  if (!jobStepsHtml(job, setup)) return "";
+  const steps = stepsForJob(setup, job && job.type);
+  return pestControlOn(setup) && steps.checklists.length ? "Checklist" : "Photos";
+}
+
 export function presetEditorHtml(setup, { canEdit = false } = {}) {
-  const checks = sanitizePresetList(setup && setup.checklists, "check");
+  const pest = pestControlOn(setup);
+  const checks = pest ? sanitizePresetList(setup && setup.checklists, "check") : [];
   const photos = sanitizePresetList(setup && setup.photoSteps, "photo");
   const line = (row, kind) => `<li data-preset-row="${esc(row.id)}" data-preset-kind="${kind}">
     ${canEdit
@@ -132,18 +156,25 @@ export function presetEditorHtml(setup, { canEdit = false } = {}) {
       : `<b>${esc(row.label)}</b>`}
     ${row.custom ? `<span class="sub">Added by you</span>` : `<span class="sub">${esc(row.trade || "")}</span>`}
   </li>`;
-  const form = canEdit ? `<form id="presetadd" class="jf">
+  const form = canEdit ? (pest ? `<form id="presetadd" class="jf">
     <label>Add a checklist item or photo step<input name="label" maxlength="120" required placeholder="e.g. After photo"></label>
     <label>Kind<select name="kind"><option value="check">Checklist</option><option value="photo">Required photo</option></select></label>
     <button type="submit" class="sm-btn">Add</button>
     <p id="preseterr" class="err"></p>
-  </form>` : `<p class="sub">An admin or a manager can edit these. Changing industry keeps anything you added.</p>`;
-  const names = SERVICE_TRADES.map(row => row.label).join(", ");
+  </form>` : `<form id="presetadd" class="jf">
+    <label>Add a photo step<input name="label" maxlength="120" required placeholder="e.g. After photo"></label>
+    <input type="hidden" name="kind" value="photo">
+    <button type="submit" class="sm-btn">Add</button>
+    <p id="preseterr" class="err"></p>
+  </form>`) : `<p class="sub">${pest ? "An admin or a manager can edit these. Changing industry keeps anything you added." : "An admin or a manager can edit the photos to take."}</p>`;
+  const intro = pest
+    ? "Pest control jobs include a checklist and the photos to take. A certificate uses this company's name. Quotes and repeating jobs stay on for every trade."
+    : "Photos to take on a job. Earthworks site cleans start with before and after photos.";
   return `<section class="card preset-editor" id="preseteditor">
-    <h2>Checklists and photos</h2>
-    <p class="sub">Each industry starts with a checklist and the photos to take. Earthworks site cleans start with before and after photos. ${esc(names)} are included. Your company's name stays on quotes and certificates.</p>
-    <h3>Checklist</h3>
-    <ul class="preset-list">${checks.map(row => line(row, "check")).join("") || `<li class="muted">None yet.</li>`}</ul>
+    <h2>${pest ? "Checklists and photos" : "Photos"}</h2>
+    <p class="sub">${esc(intro)}</p>
+    ${pest ? `<h3>Checklist</h3>
+    <ul class="preset-list">${checks.map(row => line(row, "check")).join("") || `<li class="muted">None yet.</li>`}</ul>` : ""}
     <h3>Photos</h3>
     <ul class="preset-list">${photos.map(row => line(row, "photo")).join("") || `<li class="muted">None yet.</li>`}</ul>
     ${form}

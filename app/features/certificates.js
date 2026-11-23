@@ -2,6 +2,9 @@
 // It is stored as a normal job document, so office and assigned crew use the same
 // access as other job files. Email is a separate admin action.
 //
+// The create/send panel is only for a company whose trades include pest control.
+// Other trades do not see it. Existing certificate files on a job are left in place.
+//
 // Customer signature sign-off is not drawn on these PDFs. A later signature image
 // would be an extra job document next to this file, not a field on the certificate.
 
@@ -37,7 +40,7 @@ export const CERTIFICATE_TEMPLATES = Object.freeze([
   {
     id: "generic",
     label: "Certificate",
-    trades: ["*"],
+    trades: ["pest-control"],
     fields: [
       ["title", "Title"],
       ["details", "Details"],
@@ -52,8 +55,43 @@ function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+export const PEST_CONTROL_TRADE = "pest-control";
+
+function asTradeList(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+/** Ids from the company record and the trade catalog. Does not invent earthworks, and does not write. */
+export function tradeIdsFromCompany(company, stored) {
+  const ids = [];
+  const push = (list) => {
+    for (const id of asTradeList(list)) {
+      const clean = String(id || "").trim();
+      if (clean) ids.push(clean);
+    }
+  };
+  for (const src of [company, stored]) {
+    if (!src || typeof src !== "object") continue;
+    push(src.trades);
+    push(src.enabled);
+    if (src.trade) ids.push(String(src.trade).trim());
+    push(src.extraTrades);
+  }
+  return ids;
+}
+
+export function includesPestControl(tradeIds) {
+  return asTradeList(tradeIds).some(id => String(id) === PEST_CONTROL_TRADE);
+}
+
+/** Compliance certificates (panel, templates, email) are pest control only. */
+export function certificatesEnabled(tradeIds) {
+  return includesPestControl(tradeIds);
+}
+
 export function templatesForTrades(tradeIds) {
-  const on = new Set(tradeIds || []);
+  if (!certificatesEnabled(tradeIds)) return [];
+  const on = new Set(asTradeList(tradeIds).map(id => String(id)));
   return CERTIFICATE_TEMPLATES.filter(row => row.trades.includes("*") || row.trades.some(id => on.has(id)));
 }
 
@@ -174,7 +212,9 @@ export function planCertificateEmail({ to, company, job, fileName, pdfBase64, en
 }
 
 export function certificatePanelHtml(job, { trades, skills, canEmail = false } = {}) {
+  if (!certificatesEnabled(trades)) return "";
   const templates = templatesForTrades(trades);
+  if (!templates.length) return "";
   const licence = licenceNumbers(skills)[0] || "";
   const first = templates[0] ? templates[0].id : "generic";
   const options = templates.map(row => `<option value="${esc(row.id)}">${esc(row.label)}</option>`).join("");
