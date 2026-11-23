@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   ANDROID_BLOCKED_STEPS, IOS_BLOCKED_STEPS, IOS_HOME_STEPS, PROMPT_MISSED, PUSH_ORIGINS as pageOrigins,
-  blockedNotificationSteps, iosOpenedFromHomeScreen, iosPushHint, permissionResultMessage, pushDeliveryStatus, pushEnableError, pushTargetFromUrl, shouldRequestOnTap, shouldToast, tokenDocId, vapidReady,
+  blockedNotificationSteps, foregroundPushText, iosOpenedFromHomeScreen, iosPushHint, permissionResultMessage, pushBannerHtml, pushDeliveryStatus, pushEnableError, pushTargetFromUrl, shouldRequestOnTap, shouldToast, tokenDocId, vapidReady,
 } from "../../app/features/push-logic.js";
 import {
   ALEX_UID, PATRICK_UID, PUSH_BODY_MAX, PUSH_ORIGINS, canReceiveChat, chatOpenUrl, chatPushContent,
-  dispatchChatPush, fcmMessage, isStaleTokenError, selectChatRecipients, staleTargets, truncatePush, userCompany,
+  dispatchChatPush, fcmData, fcmMessage, isStaleTokenError, logPushException, logPushSend, sanitizePushErrorMessage, selectChatRecipients, staleTargets, truncatePush, userCompany,
 } from "../functions/chat-push.js";
 
 const heartwoodOp = { role: "operator", name: "Sam" };
@@ -126,6 +126,118 @@ test("stale tokens are removed and other send errors are kept", async () => {
   assert.equal(staleTargets([{ success: true }], [{ uid: "a" }]).length, 0);
 });
 
+test("an enabled banner has no in-app-only text, and a foreground toast uses notification text", () => {
+  const on = pushBannerHtml({ enabled: true, permission: "granted" });
+  assert.equal(on, "");
+  assert.equal(on.includes("In-app alerts only"), false);
+  const off = pushBannerHtml({ enabled: false, permission: "granted" });
+  assert.match(off, /In-app alerts only/);
+  assert.match(off, /Turn on notifications/);
+  const fromNote = foregroundPushText({ notification: { title: "Sam · Team chat", body: "On site" }, data: {} });
+  assert.equal(fromNote.title, "Sam · Team chat");
+  assert.equal(fromNote.body, "On site");
+  const fromData = foregroundPushText({
+    notification: { title: "Ignored", body: "Ignored" },
+    data: { title: "Sam · Team chat", body: "On site", threadId: "staff" },
+  });
+  assert.deepEqual(fromData, { title: "Sam · Team chat", body: "On site", threadId: "staff" });
+  assert.deepEqual(foregroundPushText(null), { title: "", body: "", threadId: "" });
+});
+
+test("fcm data values are strings, with high android priority and a web push TTL", () => {
+  const shown = fcmMessage(
+    { token: "not-logged" },
+    {
+      url: "https://jobs.heartwoodew.com/app/?chat=staff",
+      data: { kind: "chat", count: 2, ok: false, title: "Hi", empty: null, url: "https://jobs.heartwoodew.com/app/?chat=staff" },
+    },
+  );
+  assert.deepEqual(fcmData({ count: 2, ok: true, empty: null, title: "Hi" }), { count: "2", ok: "true", empty: "", title: "Hi" });
+  for (const value of Object.values(shown.data)) assert.equal(typeof value, "string");
+  assert.equal(shown.data.count, "2");
+  assert.equal(shown.data.ok, "false");
+  assert.equal(shown.data.empty, "");
+  assert.equal(shown.notification.title, "Hi");
+  assert.equal(shown.android.priority, "high");
+  assert.equal(shown.webpush.headers.Urgency, "high");
+  assert.equal(shown.webpush.headers.TTL, "86400");
+});
+
+function recordingWriter() {
+  const lines = [];
+  const write = {
+    log: (...args) => { lines.push(args.map(part => String(part)).join(" ")); },
+    error: (...args) => { lines.push(args.map(part => String(part)).join(" ")); },
+  };
+  return { lines, write, text: () => lines.join("\n") };
+}
+
+test("a failed send logs the FCM error code and not the device token", async () => {
+  const token = "fcm-token-value-0123456789-secret";
+  const recorded = recordingWriter();
+  const result = await dispatchChatPush({
+    tenantId: "heartwood",
+    threadId: "staff",
+    message: { senderUid: "op1", senderName: "Sam", text: "On site" },
+    loadJob: async () => null,
+    loadPeople: async () => [person("ada", { role: "admin" }, { token })],
+    sendEach: async () => ({
+      responses: [
+        { success: false, error: { code: "messaging/invalid-argument", message: "rejected " + token + " messaging/registration-token-not-registered" } },
+      ],
+    }),
+    deleteToken: async () => {},
+    reportSend: (label, responses, targets, fields) => logPushSend(label, responses, targets, fields, recorded.write),
+  });
+  assert.equal(result.sent, 0);
+  assert.equal(result.dropped, 0);
+  const output = recorded.text();
+  assert.match(output, /chat push heartwood staff targets 1 sent 0 dropped 0/);
+  assert.match(output, /fcm-error messaging\/invalid-argument/);
+  assert.match(output, /messaging\/registration-token-not-registered/);
+  assert.equal(output.includes(token), false);
+  const direct = recordingWriter();
+  logPushSend("chat push", [
+    { success: false, error: { code: "messaging/internal-error", message: "bad " + token } },
+  ], [{ token }], [], direct.write);
+  assert.match(direct.text(), /messaging\/internal-error/);
+  assert.equal(direct.text().includes(token), false);
+  assert.equal(sanitizePushErrorMessage("see " + token).includes(token), false);
+});
+
+test("a send exception is logged and does not include the device token", async () => {
+  const token = "fcm-token-value-0123456789-secret";
+  const recorded = recordingWriter();
+  const result = await dispatchChatPush({
+    tenantId: "heartwood",
+    threadId: "staff",
+    message: { senderUid: "op1", senderName: "Sam", text: "On site" },
+    loadJob: async () => null,
+    loadPeople: async () => [person("ada", { role: "admin" }, { token })],
+    sendEach: async () => {
+      const err = new Error("send failed " + token);
+      err.code = "messaging/internal-error";
+      throw err;
+    },
+    deleteToken: async () => {},
+    reportException: (label, err) => logPushException(label, err, recorded.write),
+  });
+  assert.equal(result.skipped, "send");
+  assert.equal(result.sent, 0);
+  const output = recorded.text();
+  assert.match(output, /chat push exception messaging\/internal-error/);
+  assert.equal(output.includes(token), false);
+  const schedule = readFileSync(new URL("../functions/push-schedule.js", import.meta.url), "utf8");
+  const index = readFileSync(new URL("../functions/index.js", import.meta.url), "utf8");
+  assert.match(schedule, /logPushException\(label, err\)/);
+  assert.match(schedule, /await runPush\("chat push"/);
+  assert.match(schedule, /await runPush\("daily jobs"/);
+  assert.match(schedule, /await runPush\("daily change"/);
+  assert.match(schedule, /await runPush\("prestart"/);
+  assert.match(index, /logPushException\("location remind"/);
+  assert.match(index, /logPushException\("support ticket"/);
+});
+
 test("notification copy is the sender and the chat, with text cut to about 100 characters", () => {
   const note = chatPushContent({
     tenantId: "heartwood",
@@ -217,6 +329,8 @@ test("opt-in stays a button press, and iPhone Safari shows the Home Screen hint"
   assert.equal(shown.webpush.notification.icon, "https://jobs.heartwoodew.com/app/icons/icon-192.png");
   assert.equal(shown.webpush.fcmOptions.link, "https://jobs.heartwoodew.com/app/?chat=staff");
   assert.equal(shown.webpush.headers.Urgency, "high");
+  assert.equal(shown.webpush.headers.TTL, "86400");
+  assert.equal(shown.android.priority, "high");
   assert.equal(shown.data.kind, "chat");
   assert.equal(shouldToast({ visibility: "visible", viewingThread: "staff", threadId: "staff" }), false);
   assert.equal(shouldToast({ visibility: "hidden", viewingThread: "", threadId: "staff" }), false);
@@ -256,6 +370,10 @@ test("opt-in stays a button press, and iPhone Safari shows the Home Screen hint"
   assert.doesNotMatch(after, /requestPermission/);
   assert.match(after, /if \(perm !== "granted"\)/);
   assert.match(after, /saveToken\(\)/);
+  const enabledAt = after.indexOf("state.enabled = true");
+  const prefsAt = after.indexOf("writePrefs(");
+  const rerenderAt = after.indexOf("deps.rerender");
+  assert.ok(enabledAt >= 0 && prefsAt > enabledAt && rerenderAt > prefsAt);
   assert.match(notify, /addEventListener\("click", onPushTap\)/);
   assert.match(logic, /class="sm-btn primary push-enable"/);
   assert.equal((logic.match(/push-enable/g) || []).length >= 2, true);
@@ -265,7 +383,13 @@ test("opt-in stays a button press, and iPhone Safari shows the Home Screen hint"
   assert.doesNotMatch(config, /BEGIN PRIVATE|-----BEGIN/);
   assert.equal(vapidReady("BMyCNKMjDvbOQW74GyjS7GlTo-Qe7r203dbshLNIPpuDcaafAuZmq-WSjX7Ptys4ZTXEH1GKy8QhtkNsaD1Zlk8"), true);
 
-  assert.match(sw, /callup-shell-v150-help-video-5/);
+  assert.match(sw, /callup-shell-v151-push-banner/);
+  assert.match(notify, /foregroundPushText\(payload\)/);
+  const css = readFileSync(new URL("../../app/styles.css", import.meta.url), "utf8");
+  assert.match(css, /\.push-banner\[hidden\]\{display:none !important\}/);
+  const bannerFn = logic.slice(logic.indexOf("export function pushBannerHtml"));
+  assert.match(bannerFn, /subscribed:\s*model\.enabled/);
+  assert.doesNotMatch(bannerFn, /subscribed:\s*false/);
   assert.match(sw, /notificationclick/);
   assert.match(sw, /note\.title/);
   assert.match(sw, /showNotification/);

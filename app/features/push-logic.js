@@ -86,6 +86,17 @@ export function pushDeliveryStatus({ iosHint = "", permission = "", subscribed =
   };
 }
 
+// Foreground FCM often arrives with an empty data map and the text on notification.
+// Same choice as the service worker: data title/body win, then payload.notification.
+export function foregroundPushText(payload) {
+  const data = payload && payload.data && typeof payload.data === "object" ? payload.data : {};
+  const note = payload && payload.notification && typeof payload.notification === "object" ? payload.notification : {};
+  const title = typeof data.title === "string" && data.title ? data.title : (typeof note.title === "string" ? note.title : "");
+  const body = typeof data.body === "string" && data.body ? data.body : (typeof note.body === "string" ? note.body : "");
+  const threadId = typeof data.threadId === "string" ? data.threadId : "";
+  return { title, body, threadId };
+}
+
 export function shouldToast({ visibility, viewingThread, threadId } = {}) {
   if (visibility !== "visible") return false;
   if (viewingThread && threadId && viewingThread === threadId) return false;
@@ -162,7 +173,7 @@ export function notifyPanelHtml(model = {}) {
 
 export function pushBannerHtml(model = {}) {
   if (!model || model.enabled || model.dismissed) return "";
-  const delivery = pushDeliveryStatus({ iosHint: model.iosHint, permission: model.permission, subscribed: false });
+  const delivery = pushDeliveryStatus({ iosHint: model.iosHint, permission: model.permission, subscribed: model.enabled });
   if (model.iosHint) {
     return `<section class="push-banner" data-push-banner><p class="push-ios">${esc(delivery.label)}</p><p>${esc(model.iosHint)}</p></section>`;
   }

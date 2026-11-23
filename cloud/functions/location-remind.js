@@ -5,7 +5,7 @@
 // The same sentence is stored on users/{uid}/locationNotices/current so the
 // person sees it the next time they open CallUp, even with no push token.
 import { HEARTWOOD_TENANT, appOriginFor } from "./shared/staff-invites.js";
-import { PUSH_ORIGINS, fcmMessage, staleTargets } from "./chat-push.js";
+import { PUSH_ORIGINS, fcmMessage, logPushException, logPushSend, staleTargets } from "./chat-push.js";
 
 export const ALEX_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";
 export const PATRICK_UID = "R7t41e54Ykcdk9WPdVZnDd697iI2";
@@ -156,14 +156,19 @@ export async function remindLocationSharing({ callerUid, targetUid } = {}, deps 
   const pushes = reminderPushes(tokens, { uid: target, companyId: targetCompany });
   if (!pushes.length) return finish(true, "", REMIND_NO_DEVICE, { sent: 0 });
 
+  if (typeof deps.sendEach !== "function") return finish(true, "", REMIND_SENT, { sent: 0 });
   let responses = [];
+  const targets = pushes.map(row => row.target);
   try {
-    const result = typeof deps.sendEach === "function" ? await deps.sendEach(pushes.map(row => row.message)) : { responses: [] };
+    const result = await deps.sendEach(pushes.map(row => row.message));
     responses = (result && result.responses) || [];
-  } catch {
+  } catch (err) {
+    logPushException("location remind", err);
+    console.log("location remind", targetCompany, "targets", pushes.length, "sent", 0, "dropped", 0);
     return finish(true, "", REMIND_SENT, { sent: 0 });
   }
-  const drop = staleTargets(responses, pushes.map(row => row.target));
+  logPushSend("location remind", responses, targets, [targetCompany]);
+  const drop = staleTargets(responses, targets);
   for (const token of drop) {
     try {
       if (typeof deps.deleteToken === "function") await deps.deleteToken(token);

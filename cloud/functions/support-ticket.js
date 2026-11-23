@@ -6,7 +6,7 @@
 // SUPPORT_TICKET_EMAIL is a comma-separated list. When it is unset, mail goes
 // to admin@callupapp.com.au.
 
-import { ALEX_UID, fcmMessage, staleTargets, truncatePush, PUSH_ORIGINS } from "./chat-push.js";
+import { ALEX_UID, fcmMessage, logPushException, logPushSend, staleTargets, truncatePush, PUSH_ORIGINS } from "./chat-push.js";
 import { allowPrefixes } from "./shared/quote-public.js";
 
 export { staleTargets };
@@ -162,10 +162,12 @@ export async function deliverSupportTicket(ticket, deps = {}) {
   const pushes = supportPushMessages(deps.tokens || [], ticket);
   let pushReason = pushes.length ? "no-sender" : "none";
   if (pushes.length && typeof deps.sendEach === "function") {
+    const targets = pushes.map(row => row.target);
     try {
       const result = await deps.sendEach(pushes.map(row => row.message));
       const responses = (result && result.responses) || [];
-      const drop = staleTargets(responses, pushes.map(row => row.target));
+      logPushSend("support ticket", responses, targets, [id]);
+      const drop = staleTargets(responses, targets);
       if (typeof deps.deleteToken === "function") {
         for (const target of drop) {
           try { await deps.deleteToken(target); } catch { /* the next ticket tries again */ }
@@ -173,7 +175,9 @@ export async function deliverSupportTicket(ticket, deps = {}) {
       }
       const failed = responses.filter(row => row && row.success === false).length;
       pushReason = responses.length && failed >= pushes.length ? "failed" : "sent";
-    } catch {
+    } catch (err) {
+      logPushException("support ticket", err);
+      console.log("support ticket", id, "targets", targets.length, "sent", 0, "dropped", 0);
       pushReason = "failed";
     }
   }

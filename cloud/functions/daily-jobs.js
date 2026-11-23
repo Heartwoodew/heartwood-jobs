@@ -5,7 +5,7 @@
 // Copy is the count and the first stop. No prices.
 
 import {
-  HEARTWOOD_COMPANY, PUSH_ORIGINS, fcmMessage, isStaleTokenError, jobCompany, jobPlace, staleTargets, userCompany,
+  HEARTWOOD_COMPANY, PUSH_ORIGINS, fcmMessage, isStaleTokenError, jobCompany, jobPlace, logPushException, logPushSend, staleTargets, userCompany,
 } from "./chat-push.js";
 
 export { isStaleTokenError, jobCompany, jobPlace, staleTargets, userCompany };
@@ -214,14 +214,17 @@ export async function dispatchDailyJobs({ date, loadCompanies, loadJobs, loadPeo
       }
       try {
         const result = await sendEach(digest.messages);
+        logPushSend("daily jobs", result && result.responses, digest.targets, [date, company.id]);
         const stale = staleTargets(result && result.responses, digest.targets);
         for (const target of stale) {
           try { await deleteToken(target); } catch { /* the next morning can try again */ }
         }
         dropped += stale.length;
         sent += 1;
-      } catch {
+      } catch (err) {
         // The claim is already stored, so a retry will not send a second copy.
+        logPushException("daily jobs", err);
+        console.log("daily jobs", date, company.id, "targets", digest.targets.length, "sent", 0, "dropped", 0);
       }
     }
   }
@@ -276,13 +279,17 @@ export async function dispatchDailyChange({ companyId, date, uid, jobs, person, 
   const messages = targets.map(target => dailyMessage(target.token, copyFor(companyId, date, mine, target.origin, "update")));
   try {
     const result = await sendEach(messages);
-    const stale = staleTargets(result && result.responses, targets);
+    const responses = (result && result.responses) || [];
+    logPushSend("daily change", responses, targets, [companyId, date]);
+    const stale = staleTargets(responses, targets);
     for (const target of stale) {
       try { await deleteToken(target); } catch { /* next change can try again */ }
     }
-    const failed = ((result && result.responses) || []).filter(row => row && row.success === false).length;
+    const failed = responses.filter(row => row && row.success === false).length;
     return { sent: Math.max(0, targets.length - failed), dropped: stale.length, skipped: "" };
-  } catch {
+  } catch (err) {
+    logPushException("daily change", err);
+    console.log("daily change", companyId, date, "targets", targets.length, "sent", 0, "dropped", 0);
     return { sent: 0, dropped: 0, skipped: "send" };
   }
 }

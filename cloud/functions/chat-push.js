@@ -169,10 +169,90 @@ function pushIconUrl(pageUrl) {
   }
 }
 
+// FCM rejects a data map that contains a number or a boolean. Null stays an empty string
+// so a missing title does not become the word "null".
+export function fcmData(data) {
+  const out = {};
+  if (!data || typeof data !== "object") return out;
+  for (const [key, value] of Object.entries(data)) {
+    out[key] = value == null ? "" : String(value);
+  }
+  return out;
+}
+
+const PUSH_ERROR_LIMIT = 180;
+
+// Error codes such as messaging/registration-token-not-registered stay readable.
+// A long token-like run, or the device token itself, is removed before anything is logged.
+export function sanitizePushErrorMessage(message, secrets = []) {
+  let text = String(message == null ? "" : message);
+  for (const secret of secrets) {
+    if (typeof secret !== "string" || secret.length < 12) continue;
+    text = text.split(secret).join("[redacted]");
+  }
+  text = text.replace(/[A-Za-z0-9_:.+\/=-]{20,}/g, (run) => {
+    if (run.includes("/") && run.length < 80 && !/[A-Za-z0-9]{24,}/.test(run)) return run;
+    return "[redacted]";
+  });
+  text = text.replace(/\s+/g, " ").trim();
+  if (text.length > PUSH_ERROR_LIMIT) text = text.slice(0, PUSH_ERROR_LIMIT);
+  return text;
+}
+
+export function safePushErrorCode(code) {
+  const text = String(code || "");
+  if (!/^[A-Za-z0-9./_-]{1,80}$/.test(text)) return "unknown";
+  if (/[A-Za-z0-9_-]{40,}/.test(text)) return "unknown";
+  return text;
+}
+
+export function describePushSend(responses, targets) {
+  const rows = Array.isArray(responses) ? responses : [];
+  const list = Array.isArray(targets) ? targets : [];
+  const secrets = [];
+  for (const target of list) {
+    if (target && typeof target.token === "string") secrets.push(target.token);
+    else if (typeof target === "string") secrets.push(target);
+  }
+  const failures = [];
+  let failed = 0;
+  for (const row of rows) {
+    if (!row || row.success !== false) continue;
+    failed += 1;
+    const err = row.error && typeof row.error === "object" ? row.error : {};
+    failures.push({
+      code: safePushErrorCode(err.code),
+      message: sanitizePushErrorMessage(err.message, secrets),
+    });
+  }
+  return {
+    targets: list.length,
+    sent: Math.max(0, list.length - failed),
+    dropped: staleTargets(rows, list).length,
+    failures,
+  };
+}
+
+// Counts only. Failed rows contribute an error code and a sanitized message, never a token.
+export function logPushSend(label, responses, targets, fields = [], write = console) {
+  const report = describePushSend(responses, targets);
+  const context = fields.map(field => String(field ?? ""));
+  write.log(label, ...context, "targets", report.targets, "sent", report.sent, "dropped", report.dropped);
+  for (const failure of report.failures) {
+    write.error(label, "fcm-error", failure.code, failure.message);
+  }
+  return report;
+}
+
+export function logPushException(label, err, write = console) {
+  const raw = err && (err.code || err.name) ? String(err.code || err.name) : "exception";
+  write.error(label, "exception", safePushErrorCode(raw), sanitizePushErrorMessage(err && err.message));
+}
+
 // Web push on iOS is dropped when the payload is data-only and the page is closed.
 // notification (and webpush.notification) is what the phone shows. data stays for the service worker.
 export function fcmMessage(target, content) {
-  const data = (content && content.data) || {};
+  const data = fcmData((content && content.data) || {});
   const title = String(data.title || (content && content.title) || "CallUp").slice(0, 120);
   const body = String(data.body || (content && content.body) || "").slice(0, 180);
   const link = String((content && content.url) || data.url || "");
@@ -183,8 +263,9 @@ export function fcmMessage(target, content) {
     token: target.token,
     data,
     notification: { title, body },
+    android: { priority: "high" },
     webpush: {
-      headers: { Urgency: "high" },
+      headers: { Urgency: "high", TTL: "86400" },
       notification: webNotification,
       fcmOptions: link ? { link } : {},
     },
@@ -205,7 +286,7 @@ export function staleTargets(responses, targets) {
   return drop;
 }
 
-export async function dispatchChatPush({ tenantId, threadId, message, loadJob, loadPeople, sendEach, deleteToken }) {
+export async function dispatchChatPush({ tenantId, threadId, message, loadJob, loadPeople, sendEach, deleteToken, reportSend = logPushSend, reportException = logPushException }) {
   const senderUid = message && message.senderUid;
   if (!tenantId || !threadId || !senderUid) return { sent: 0, dropped: 0, skipped: "empty" };
   if (threadId !== "staff" && !threadJobId(threadId)) return { sent: 0, dropped: 0, skipped: "thread" };
@@ -225,12 +306,15 @@ export async function dispatchChatPush({ tenantId, threadId, message, loadJob, l
     const result = await sendEach(messages);
     responses = (result && result.responses) || [];
   } catch (err) {
-    return { sent: 0, dropped: 0, skipped: "send", error: String((err && err.code) || "send-failed") };
+    reportException("chat push", err);
+    console.log("chat push", tenantId, threadId, "targets", targets.length, "sent", 0, "dropped", 0);
+    return { sent: 0, dropped: 0, skipped: "send", targets: targets.length, error: safePushErrorCode(err && err.code) };
   }
+  reportSend("chat push", responses, targets, [tenantId, threadId]);
   const drop = staleTargets(responses, targets);
   for (const target of drop) {
     try { await deleteToken(target); } catch { /* next send will try again */ }
   }
   const failed = responses.filter(row => row && row.success === false).length;
-  return { sent: Math.max(0, targets.length - failed), dropped: drop.length, skipped: "" };
+  return { sent: Math.max(0, targets.length - failed), dropped: drop.length, skipped: "", targets: targets.length };
 }

@@ -104,6 +104,7 @@ fieldset{border:1px solid var(--line);border-radius:8px;display:flex;flex-wrap:w
 .hint{font-size:12px;color:var(--mut);margin:-4px 0 0}.btns{display:flex;gap:8px;justify-content:flex-end}.log{font-size:13px;background:#f3ece3;border-radius:8px;padding:8px}
 .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--br);color:#fff;padding:10px 18px;border-radius:20px;z-index:20}
 .push-banner{margin:12px 16px;padding:12px 14px;background:#fffdf9;border:1px solid #eadfd3;border-radius:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.push-banner[hidden]{display:none !important}
 .push-banner p{margin:0;flex:1 1 180px}
 .push-ios{margin:8px 0;font-weight:700}
 .push-panel{display:flex;flex-direction:column;gap:8px;align-items:flex-start}
