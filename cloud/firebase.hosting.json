@@ -4,6 +4,15 @@
     "public": "hosting-dist",
     "cleanUrls": false,
     "trailingSlash": true,
+    "rewrites": [
+      {
+        "source": "/q/**",
+        "function": {
+          "functionId": "publicQuotePage",
+          "region": "australia-southeast1"
+        }
+      }
+    ],
     "headers": [
       {
         "source": "**",

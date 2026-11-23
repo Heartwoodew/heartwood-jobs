@@ -86,7 +86,7 @@ test("a shared title keeps the lower level unless the primary mapping is already
 });
 
 test("every preloaded title maps to the permission level named in the sprint", () => {
-  assert.equal(TRADES.length, 9);
+  assert.equal(TRADES.length, 16);
   const counts = {};
   for (const trade of TRADES) {
     const titles = defaultTitles([trade.id]);

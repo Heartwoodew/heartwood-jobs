@@ -16,6 +16,7 @@ import { calcConcreteCutting } from "./packs/concrete-cutting.js";
 import { companyRatesForTrade, defaultMeasures, gstFromEx, packRateInputs, prettyUnit, roundMoney, sanitizeQuotePrices, sanitizeTradeRates, savedTradeRate, splitCalcKey, tradeMapFromLegacy, writeTradeRate } from "./packs/money.js";
 import { measureReviewHtml, measureSetupHtml } from "./packs/form.js";
 import { changeLines, compareHtml, commercialSnapshot, diffRevisions, revisionBody, revisionDocId, revisionNeeded, revisionsPanelHtml } from "./quote-revisions.js";
+import { customerAcceptedNote } from "./quote-public.js";
 import { deviceOnline, needsSignal } from "./offline.js";
 // Rates from meta/quoteRates only — never invent business rates.
 // Draft/Accepted are explicit quoteStatus fields.
@@ -659,7 +660,7 @@ export function quotesViewHtml(ui, esc, $$, helpers = {}) {
     <td><b>${esc(q.client || "")}</b><div class="sub">${esc(q.address || "")}</div>${mach(q)}</td>
     <td>${esc(q.description || q.type || "")}</td>
     <td>${q.totalEx != null ? money(q.totalEx) : ratesNeededHtml(q, esc)}</td>
-    <td>${q.quoteStatus === "Draft" ? `<button type="button" class="sm-btn primary qaccept" data-qaccept="${esc(q.id)}">Quote accepted</button>` : `<span class="sub">Job ${esc(q.jobId || "—")}</span>`}</td></tr>`;
+    <td>${q.quoteStatus === "Draft" ? `${helpers.isAdmin && helpers.isAdmin() ? `<button type="button" class="sm-btn" data-qsend="${esc(q.id)}">Send quote</button>` : ""}${customerAcceptedNote(q)}<button type="button" class="sm-btn primary qaccept" data-qaccept="${esc(q.id)}">${q.customerAccepted && q.customerAccepted.name ? "Convert to job" : "Quote accepted"}</button>` : `<span class="sub">Job ${esc(q.jobId || "—")}</span>`}</td></tr>`;
   return `<div class="sm-head"><h1>Quotes</h1>
     <div class="row gap"><button type="button" class="sm-btn primary" id="newquote">＋ New quote</button>
     ${editRates ? `<button type="button" class="sm-btn" id="editrates">Quote rates &amp; depot</button>` : `<span class="sub pad">Rates are set by an admin or a manager · depot ${esc(rates.yardAddress || DEFAULT_DEPOT.yardAddress)}</span>`}</div></div>
@@ -710,6 +711,17 @@ function bindAdminExtras(ctx) {
     ev.stopPropagation();
     const q = (ui.quotes || []).find(x => x.id === b.dataset.qaccept);
     if (q) openQuoteWizard(q, { jumpToPrice: true });
+  });
+  A.querySelectorAll("[data-qsend]").forEach(b => b.onclick = async ev => {
+    ev.stopPropagation();
+    if (!api.isAdmin || !api.isAdmin()) { api.toast("Only an admin can send a quote."); return; }
+    const to = window.prompt("Customer email");
+    if (!to) return;
+    if (typeof api.sendCustomerQuote !== "function") { api.toast("Sending is not available in this build."); return; }
+    try {
+      const result = await api.sendCustomerQuote(b.dataset.qsend, to.trim());
+      api.toast(result && result.held ? "Link saved. Email is held until sending is turned on." : "Quote emailed.");
+    } catch (e) { api.toast((e && e.message) || "Quote was not emailed."); }
   });
 }
 
@@ -1403,8 +1415,9 @@ export function acceptedQuoteBannerHtml(quote, esc) {
 }
 
 /** Prominent accept control. Stays tappable when the quote is not ready yet. */
-export function quoteAcceptedButtonHtml(ready) {
-  return `<button type="button" class="qw-accept" id="qwaccept" data-can-accept="${ready ? "1" : "0"}"><span class="qw-accept-label">Quote accepted</span><span class="qw-accept-sub">Turns this quote into a job</span></button>`;
+export function quoteAcceptedButtonHtml(ready, { convert = false } = {}) {
+  const label = convert ? "Convert to job" : "Quote accepted";
+  return `<button type="button" class="qw-accept" id="qwaccept" data-can-accept="${ready ? "1" : "0"}"><span class="qw-accept-label">${label}</span><span class="qw-accept-sub">Turns this quote into a job</span></button>`;
 }
 
 /**
@@ -1625,7 +1638,7 @@ function openQuoteWizard(existing, opts = {}) {
       d.innerHTML = `<form method="dialog" id="qwf" class="jc qw"><div class="jc-top q-quote"><div><div class="jc-no">${existing && step !== 0 ? "Edit quote" : esc(titles[step] || "Quote")}</div>
         <div class="jc-q">${esc(subs[step] || "")}</div></div>
         <button value="cancel" formnovalidate class="jc-x" aria-label="Close">✕</button></div>
-        <div class="qw-acceptbar">${already ? acceptedQuoteBannerHtml(existing, esc) : quoteAcceptedButtonHtml(acceptReady)}</div>
+        <div class="qw-acceptbar">${customerAcceptedNote(existing)}${already ? acceptedQuoteBannerHtml(existing, esc) : quoteAcceptedButtonHtml(acceptReady, { convert: !!(existing && existing.customerAccepted && existing.customerAccepted.name) })}</div>
         <div class="jc-body qw-body"><div class="qw-steps" aria-label="Quote steps">${phases.map((s, i) => `<span class="qw-phase ${i === step ? "on" : i < step ? "done" : ""}"><b>${i + 1}</b> ${s}</span>`).join("")}</div>
         <div class="qw-bar" aria-hidden="true"><span style="width:${Math.round(((step + 1) / phases.length) * 100)}%"></span></div>
         ${stepHtml(step, state, calc, rates, esc, CLIENTS, canSeeMoney, $$, canEditRates())}
@@ -1637,7 +1650,8 @@ function openQuoteWizard(existing, opts = {}) {
           <button type="button" class="sm-btn" id="qwback" ${step === 0 ? "disabled" : ""}>Back</button>
           ${step < 2 ? `<button type="button" class="sm-btn primary" id="qwnext">${step === 0 ? "Section details" : "Review quote"}</button>
              <button type="button" class="sm-btn qw-later" id="qwsave">Save &amp; finish later</button>` :
-            `<button type="button" class="sm-btn qw-later" id="qwsave">Save draft</button>`}
+            `<button type="button" class="sm-btn qw-later" id="qwsave">Save draft</button>
+             ${api.isAdmin && api.isAdmin() && existing && existing.id ? `<button type="button" class="sm-btn" id="qwsend">Send quote</button>` : ""}`}
         </div></form>`;
       d.showModal();
       $("#qwback").onclick = () => { syncFormToState(); step--; paint(); };
@@ -1647,6 +1661,16 @@ function openQuoteWizard(existing, opts = {}) {
         step++; paint();
       });
       $("#qwsave")?.addEventListener("click", () => { syncFormToState(); saveQuote(false); });
+      $("#qwsend")?.addEventListener("click", async () => {
+        if (!api.isAdmin || !api.isAdmin()) { toast("Only an admin can send a quote."); return; }
+        if (!existing || !existing.id) { toast("Save the draft first."); return; }
+        const to = window.prompt("Customer email");
+        if (!to || typeof api.sendCustomerQuote !== "function") return;
+        try {
+          const result = await api.sendCustomerQuote(existing.id, to.trim());
+          toast(result && result.held ? "Link saved. Email is held until sending is turned on." : "Quote emailed.");
+        } catch (e) { toast((e && e.message) || "Quote was not emailed."); }
+      });
       $("#qwaccept")?.addEventListener("click", () => {
         syncFormToState();
         const gap = acceptGap(state, calcSections(state, rates), rates);

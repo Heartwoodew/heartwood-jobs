@@ -108,6 +108,12 @@ import { deletionErrorMessage } from "./billing/owner-company.js";
 import { applyVeoliaReceiptWrite, applyVeoliaReimbursementCreate } from "./receipt-reimburse.js";
 import { handleInboundWebhook, saveInboundDecision } from "./inbound-email.js";
 export { pauseRetentionSweep } from "./pause-retention.js";
+// Quote links, repeating jobs and certificate email. Not deployed from this branch.
+// sendCustomerQuote and sendCertificateEmail use RESEND_API_KEY. publicQuotePage is the
+// public read-only page. recurrenceOnSave and recurrenceSweep add visits for 60 days.
+export { sendCustomerQuote, publicQuotePage } from "./quote-public.js";
+export { recurrenceOnSave, recurrenceSweep } from "./recurrence-fn.js";
+export { sendCertificateEmail } from "./certificate-email.js";
 
 const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
 // Resend API key for staff invite email. Always declared so a deploy binds it even if

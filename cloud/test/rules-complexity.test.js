@@ -51,7 +51,7 @@ test("production rules are a smaller scope tree than the file that 503s", () => 
   assert.ok(after.scopeWeight < BEFORE.scopeWeight / 4, `scope weight ${after.scopeWeight}`);
   assert.ok(after.maxFunctionsVisible < 80, `widest scope sees ${after.maxFunctionsVisible}`);
   assert.ok(after.maxCallDepth < BEFORE.maxCallDepth);
-  assert.ok(after.bytes < 256 * 1024, "rules must stay under the 256KB ruleset limit");
+  assert.ok(after.bytes < 245000, `rules are ${after.bytes} bytes; keep the compiled rules under 245000`);
 });
 
 test("money and crew privacy text is unchanged", () => {
