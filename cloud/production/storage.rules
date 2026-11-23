@@ -601,5 +601,29 @@ service firebase.storage {
       allow update, delete: if false;
     }
 // END TAKE 5 PHOTO RULES
+
+// BEGIN INBOUND MAIL FILE RULES
+    // Plain-text copy of a forwarded email. Admin SDK writes it. Office of that
+    // company can read the bytes. Crew cannot. Another company cannot.
+    // One profile read, and only when the caller is not Alex or Patrick.
+    function inboundFileOffice(companyId) {
+      return signedIn() && (
+        (companyId == "heartwood" && (isAlex() || isPatrick()))
+        || inboundFileProfile(companyId)
+      );
+    }
+    function inboundFileProfile(companyId) {
+      let p = firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
+      let company = "companyId" in p && p.companyId is string && p.companyId.size() > 0
+        ? p.companyId
+        : ("tenantId" in p && p.tenantId is string && p.tenantId.size() > 0 ? p.tenantId : "heartwood");
+      return company == companyId && "role" in p && p.role in ["admin", "manager", "supervisor"];
+    }
+    match /companies/{companyId}/inbound/{messageId}/{file} {
+      allow read: if file == "body.txt" && inboundFileOffice(companyId);
+      allow list: if false;
+      allow write: if false;
+    }
+// END INBOUND MAIL FILE RULES
   }
 }

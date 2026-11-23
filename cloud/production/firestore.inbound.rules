@@ -1,0 +1,122 @@
+// BEGIN INBOUND FORWARD RULES
+    // Per-company forwarded mail and job drafts. Written by inboundEmailWebhook
+    // (Admin SDK). Office of that company (admin, manager, supervisor) can read.
+    // Crew cannot. Another company cannot. The route index is not listable.
+    // No price fields on a draft. Paste into the live rules. Do not deploy this file.
+    function inboundCompanyOf(p) {
+      return p.get("companyId", "") is string && p.get("companyId", "") != ""
+        ? p.get("companyId", "")
+        : (p.get("tenantId", "") is string && p.get("tenantId", "") != "" ? p.get("tenantId", "") : "heartwood");
+    }
+    function inboundBootstrap(companyId) {
+      return companyId == "heartwood" && signedIn() && (
+        request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"
+        || request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"
+      );
+    }
+    function inboundProfileOffice(companyId) {
+      let p = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      return p.get("role", "") in ["admin", "manager", "supervisor"] && inboundCompanyOf(p) == companyId;
+    }
+    function inboundProfileMinter(companyId) {
+      let p = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      return p.get("role", "") in ["admin", "manager"] && inboundCompanyOf(p) == companyId;
+    }
+    function inboundOffice(companyId) {
+      return inboundBootstrap(companyId) || (signedIn() && inboundProfileOffice(companyId));
+    }
+    function inboundMinter(companyId) {
+      return inboundBootstrap(companyId) || (signedIn() && inboundProfileMinter(companyId));
+    }
+    function inboundMoneyFree(data) {
+      return !data.keys().hasAny(["poAmount", "poAmountBasis", "poAmountSource", "quoteAmount", "poLookupCandidates", "invoiceAmount", "xeroCheck", "amountInc", "totalEx", "gst", "totalInc", "priceOverrides", "lines"]);
+    }
+    function inboundLocalOk(companyId, localPart) {
+      return companyId is string
+        && companyId.matches('^[a-z0-9][a-z0-9-]{0,39}$')
+        && localPart is string
+        && localPart.matches("^" + companyId + "-[a-z0-9]{8}$");
+    }
+
+    match /companies/{companyId}/inbound/{docId} {
+      allow get: if docId == "config" && inboundOffice(companyId)
+        && (resource == null || resource.data.companyId == companyId);
+      allow list: if false;
+      allow create: if docId == "config" && inboundMinter(companyId)
+        && request.resource.data.keys().hasOnly(["companyId", "address", "localPart", "domain", "createdBy", "createdAt"])
+        && request.resource.data.companyId == companyId
+        && inboundLocalOk(companyId, request.resource.data.localPart)
+        && request.resource.data.domain == "inbound.callupapp.com.au"
+        && request.resource.data.address == request.resource.data.localPart + "@inbound.callupapp.com.au"
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+    }
+    match /companies/{companyId}/inboundMail/{messageId} {
+      allow get: if inboundOffice(companyId) && resource.data.companyId == companyId;
+      allow list: if inboundOffice(companyId) && resource.data.companyId == companyId;
+      allow update: if resource != null
+        && inboundOffice(companyId)
+        && resource.data.companyId == companyId
+        && resource.data.kind == "verification"
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["dismissed", "dismissedAt"])
+        && request.resource.data.dismissed == true
+        && request.resource.data.dismissedAt == request.time;
+      allow create, delete: if false;
+    }
+    match /companies/{companyId}/jobDrafts/{draftId} {
+      function draftTextOk(d) {
+        return d.client is string && d.client.size() <= 120
+          && d.address is string && d.address.size() <= 200
+          && d.notes is string && d.notes.size() <= 800
+          && d.description is string && d.description.size() <= 800
+          && d.po is string && d.po.size() <= 40
+          && d.type is string && d.type.size() <= 40
+          && (!("date" in d) || d.date == "" || d.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$'))
+          && (!("supervisorName" in d) || (d.supervisorName is string && d.supervisorName.size() <= 80))
+          && (!("supervisorEmail" in d) || (d.supervisorEmail is string && d.supervisorEmail.size() <= 120))
+          && (!("supervisorPhone" in d) || (d.supervisorPhone is string && d.supervisorPhone.size() <= 40));
+      }
+      allow get: if inboundOffice(companyId) && resource.data.companyId == companyId;
+      allow list: if inboundOffice(companyId) && resource.data.companyId == companyId;
+      allow update: if resource != null
+        && inboundOffice(companyId)
+        && resource.data.companyId == companyId
+        && request.resource.data.companyId == companyId
+        && resource.data.status == "pending"
+        && resource.data.source == "inbound-forward"
+        && request.resource.data.messageId == resource.data.messageId
+        && inboundMoneyFree(request.resource.data)
+        && (
+          (request.resource.data.status == "pending"
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["client", "address", "lot", "street", "suburb", "type", "typeLabel", "costCode", "date", "po", "description", "notes", "supervisorName", "supervisorEmail", "supervisorPhone", "updatedAt"])
+            && draftTextOk(request.resource.data))
+          || (request.resource.data.status == "approved"
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["client", "address", "lot", "street", "suburb", "type", "typeLabel", "costCode", "date", "po", "description", "notes", "supervisorName", "supervisorEmail", "supervisorPhone", "updatedAt", "status", "jobId", "approvedBy", "approvedAt"])
+            && draftTextOk(request.resource.data)
+            && request.resource.data.get("jobId", "") is string
+            && request.resource.data.get("jobId", "").matches('^fwd[A-Za-z0-9]{8,40}$')
+            && request.resource.data.approvedBy == request.auth.uid
+            && request.resource.data.approvedAt == request.time)
+          || (request.resource.data.status == "discarded"
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "discardedBy", "discardedAt"])
+            && request.resource.data.discardedBy == request.auth.uid
+            && request.resource.data.discardedAt == request.time)
+        );
+      allow create, delete: if false;
+    }
+    match /inboundRoutes/{localPart} {
+      allow read: if false;
+      allow create: if signedIn()
+        && inboundMinter(request.resource.data.companyId)
+        && request.resource.data.keys().hasOnly(["companyId", "address", "createdBy", "createdAt"])
+        && inboundLocalOk(request.resource.data.companyId, localPart)
+        && request.resource.data.address == localPart + "@inbound.callupapp.com.au"
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+    }
+    match /inboundSeen/{id} {
+      allow read, write: if false;
+    }
+// END INBOUND FORWARD RULES

@@ -49,6 +49,11 @@
  * Referral bonus: ensureReferralCode mints a company's share code on first use.
  * attachSignupReferral records referredBy at signup. stripeWebhook grants the
  * referrer 2 months free on the referred company's first paid invoice.
+ *
+ * inboundEmailWebhook receives Resend email.received events for
+ * <company>-<token>@inbound.callupapp.com.au. It verifies the Svix signature,
+ * matches the sender to that company's saved supervisors, and stores a draft.
+ * It does not send email. DNS is not changed here. Do not deploy it from this branch.
  */
 import { onDocumentCreated, onDocumentWritten } from "firebase-functions/v2/firestore";
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
@@ -101,6 +106,7 @@ import {
 import { deleteCompanyAccountData } from "./owner-company.js";
 import { deletionErrorMessage } from "./billing/owner-company.js";
 import { applyVeoliaReceiptWrite, applyVeoliaReimbursementCreate } from "./receipt-reimburse.js";
+import { handleInboundWebhook, saveInboundDecision } from "./inbound-email.js";
 export { pauseRetentionSweep } from "./pause-retention.js";
 
 const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
@@ -108,6 +114,9 @@ const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
 // INVITE_EMAIL_ENABLED is not set in the analyze-time environment. Runtime INVITE_EMAIL_ENABLED
 // and INVITE_EMAIL_ALLOW_TO still control whether mail is actually sent.
 const RESEND_API_KEY = defineSecret("RESEND_API_KEY");
+// Svix signing secret for Resend inbound (email.received). Declared so a later
+// deploy binds it. The handler rejects any request it cannot verify. Never log it.
+const RESEND_INBOUND_WEBHOOK_SECRET = defineSecret("RESEND_INBOUND_WEBHOOK_SECRET");
 const INVITE_MAIL_ON = process.env.INVITE_EMAIL_ENABLED === "true";
 const STRIPE_WEBHOOK_SECRET = defineSecret("STRIPE_WEBHOOK_SECRET");
 // Live Stripe. Only declared, bound and required in Secret Manager when STRIPE_MODE=live in functions/.env.heartwood-9f37f
@@ -877,6 +886,53 @@ export const veoliaReimbursementGuard = onDocumentCreated(
       const row = await db.collection("receipts").doc(String(id)).get();
       return row.exists ? (row.data() || null) : null;
     });
+  },
+);
+
+function brisbaneToday(now = Date.now()) {
+  return new Date(now + 10 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
+export const inboundEmailWebhook = onRequest(
+  {
+    region: INVITE_REGION,
+    secrets: [RESEND_INBOUND_WEBHOOK_SECRET, RESEND_API_KEY],
+    invoker: "public",
+    timeoutSeconds: 60,
+    memory: "256MiB",
+  },
+  async (req, res) => {
+    if (req.method !== "POST") {
+      res.status(405).send("POST");
+      return;
+    }
+    // Unit tests import this module. They must not call Resend or write mail.
+    if (process.env.NODE_TEST_CONTEXT) {
+      res.status(503).json({ error: "disabled" });
+      return;
+    }
+    ensureAdmin();
+    const db = getFirestore();
+    const outcome = await handleInboundWebhook({
+      rawBody: req.rawBody,
+      headers: req.headers,
+      secret: RESEND_INBOUND_WEBHOOK_SECRET.value(),
+      apiKey: RESEND_API_KEY.value(),
+      today: brisbaneToday(),
+      findRoute: async local => {
+        const snap = await db.collection("inboundRoutes").doc(local).get();
+        return snap.exists ? snap.data() : null;
+      },
+      loadSupervisors: async companyId => {
+        const ref = companyId === "heartwood"
+          ? db.collection("meta").doc("supervisors")
+          : db.collection("companyMeta").doc(`${companyId}_supervisors`);
+        const snap = await ref.get();
+        return snap.exists ? snap.data() : {};
+      },
+      saveResult: decision => saveInboundDecision(db, getStorage().bucket(), decision),
+    });
+    res.status(outcome.status).json(outcome.body);
   },
 );
 
