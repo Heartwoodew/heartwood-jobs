@@ -469,6 +469,16 @@ No functions deploy, no Storage change, no rules deploy, no index deploy, no Str
 
 This shell is `callup-shell-v150-help-video-5`, so the Stripe GST work noted above now needs `callup-shell-v151` or later.
 
+## Push banner and FCM error codes (not deployed)
+
+Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production.
+
+After review, deploy hosting and the push functions. Service worker `callup-shell-v151-push-banner`. The banner hides once notifications are on, and a failed send logs the FCM error code without the device token.
+
+Functions in australia-southeast1 that send with `fcmMessage`: `chatMessagePush`, `dailyJobPush`, `dailyJobChangePush`, `prestartJobPush`, `prestartAssetPush`, `prestartTimesheetPush`, `remindLocationSharing`, and `supportTicketCreated`.
+
+No rules deploy, no index deploy, no Storage change, no Stripe change, no backfill.
+
 ## Admin password reset (15 Nov 2026)
 
 Do not deploy from this branch. When it is deployed: hosting (service worker `callup-shell-v108-password-reset`) and the function `adminSendPasswordReset` in australia-southeast1. It uses the same `RESEND_API_KEY` and `INVITE_EMAIL_ENABLED` gate as `inviteEmailWorker`. The reset link is emailed to the staff member and is not returned to the browser. Firestore `passwordResetRate/{uid}` is Admin SDK only (client read and write denied). Rebased onto main's `callup-shell-v106-multi-category-quotes`; this branch stays `callup-shell-v108-password-reset`.

@@ -4,7 +4,7 @@
 
 import { doc, setDoc, getDocs, collection, deleteDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import {
-  PUSH_ORIGINS, blockedNotificationSteps, iosOpenedFromHomeScreen, iosPushHint, isIosDevice, notifyPanelHtml, permissionResultMessage, pushBannerHtml, pushEnableError, pushTargetFromUrl, shouldRequestOnTap, shouldToast, tokenDocId, vapidReady,
+  PUSH_ORIGINS, blockedNotificationSteps, foregroundPushText, iosOpenedFromHomeScreen, iosPushHint, isIosDevice, notifyPanelHtml, permissionResultMessage, pushBannerHtml, pushEnableError, pushTargetFromUrl, shouldRequestOnTap, shouldToast, tokenDocId, vapidReady,
 } from "./push-logic.js";
 
 export { notifyPanelHtml, pushBannerHtml, pushTargetFromUrl, shouldToast, tokenDocId, vapidReady };
@@ -122,8 +122,8 @@ async function bindMessaging(messaging) {
   if (messagingBound) return;
   const { onMessage } = await import("https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging.js");
   onMessage(messaging, payload => {
-    const data = (payload && payload.data) || {};
-    showToast(data.title, data.body, data.threadId || "");
+    const text = foregroundPushText(payload);
+    showToast(text.title, text.body, text.threadId);
   });
   messagingBound = true;
 }
@@ -225,9 +225,10 @@ async function continueAfterGrant(permissionPromise) {
       say("Couldn't turn on notifications. No push token was saved for this phone.");
       return;
     }
-    await writePrefs({ muteChat: state.muteChat === true, muteDaily: state.muteDaily === true });
     state.enabled = true;
+    await writePrefs({ muteChat: state.muteChat === true, muteDaily: state.muteDaily === true });
     paint();
+    if (deps && deps.rerender) deps.rerender();
     say("Notifications are on for this phone.");
   } catch (err) {
     say(pushEnableError(err));

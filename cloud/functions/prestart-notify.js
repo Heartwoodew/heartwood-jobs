@@ -9,7 +9,7 @@
 // machine on that day, or for that job, is left alone. No prices are copied.
 
 import {
-  HEARTWOOD_COMPANY, PUSH_ORIGINS, fcmMessage, jobCompany, jobPlace, staleTargets, userCompany,
+  HEARTWOOD_COMPANY, PUSH_ORIGINS, fcmMessage, jobCompany, jobPlace, logPushException, logPushSend, staleTargets, userCompany,
 } from "./chat-push.js";
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -418,6 +418,7 @@ export async function deliverPrestartNotices({ notices, claim, sendEach, deleteT
     try {
       const result = await sendEach(notice.messages);
       const responses = (result && result.responses) || [];
+      logPushSend("prestart", responses, notice.targets, [notice.companyId, notice.day]);
       const drop = staleTargets(responses, notice.targets);
       for (const target of drop) {
         try { await deleteToken(target); } catch { /* the next send tries again */ }
@@ -425,8 +426,10 @@ export async function deliverPrestartNotices({ notices, claim, sendEach, deleteT
       dropped += drop.length;
       const failed = responses.filter(row => row && row.success === false).length;
       sent += Math.max(0, notice.messages.length - failed);
-    } catch {
+    } catch (err) {
       // The notice is the in-app fallback. A later save of the same pairing does not push again.
+      logPushException("prestart", err);
+      console.log("prestart", notice.companyId, notice.day, "targets", (notice.targets || []).length, "sent", 0, "dropped", 0);
     }
   }
   return { sent, noticed, skipped, dropped };

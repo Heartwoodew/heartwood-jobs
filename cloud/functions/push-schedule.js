@@ -10,7 +10,7 @@ import { onSchedule } from "firebase-functions/v2/scheduler";
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getMessaging } from "firebase-admin/messaging";
-import { dispatchChatPush, jobCompany } from "./chat-push.js";
+import { dispatchChatPush, jobCompany, logPushException } from "./chat-push.js";
 import {
   affectedUids, brisbaneDate, companySkipped, digestDocId, dispatchDailyChange, dispatchDailyJobs,
   scheduleFieldsChanged,
@@ -148,6 +148,16 @@ function deleteToken(db, target) {
   return db.collection("users").doc(target.uid).collection("fcmTokens").doc(target.tokenId).delete();
 }
 
+// A thrown handler used to end with no line of our own. Log the code, then fail the invocation.
+async function runPush(label, fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    logPushException(label, err);
+    throw err;
+  }
+}
+
 export const chatMessagePush = onDocumentCreated(
   {
     document: "tenants/{tenantId}/chats/{threadId}/messages/{messageId}",
@@ -157,25 +167,27 @@ export const chatMessagePush = onDocumentCreated(
   },
   async (event) => {
     if (process.env.NODE_TEST_CONTEXT) return;
-    const snap = event.data;
-    if (!snap) return;
-    const message = snap.data() || {};
-    const { tenantId, threadId } = event.params;
-    ensureAdmin();
-    const db = getFirestore();
-    const result = await dispatchChatPush({
-      tenantId,
-      threadId,
-      message,
-      loadJob: async (jobId) => {
-        const jobSnap = await db.collection("jobs").doc(jobId).get();
-        return jobSnap.exists ? { id: jobSnap.id, ...jobSnap.data() } : null;
-      },
-      loadPeople: () => loadChatPeople(db, tenantId),
-      sendEach: (messages) => getMessaging().sendEach(messages),
-      deleteToken: (target) => deleteToken(db, target),
+    await runPush("chat push", async () => {
+      const snap = event.data;
+      if (!snap) return;
+      const message = snap.data() || {};
+      const { tenantId, threadId } = event.params;
+      ensureAdmin();
+      const db = getFirestore();
+      const result = await dispatchChatPush({
+        tenantId,
+        threadId,
+        message,
+        loadJob: async (jobId) => {
+          const jobSnap = await db.collection("jobs").doc(jobId).get();
+          return jobSnap.exists ? { id: jobSnap.id, ...jobSnap.data() } : null;
+        },
+        loadPeople: () => loadChatPeople(db, tenantId),
+        sendEach: (messages) => getMessaging().sendEach(messages),
+        deleteToken: (target) => deleteToken(db, target),
+      });
+      if (result.skipped) console.log("chat push", tenantId, threadId, "skipped", result.skipped);
     });
-    console.log("chat push", tenantId, threadId, result.sent, result.dropped, result.skipped || "");
   },
 );
 
@@ -189,20 +201,22 @@ export const dailyJobPush = onSchedule(
   },
   async () => {
     if (process.env.NODE_TEST_CONTEXT) return;
-    ensureAdmin();
-    const db = getFirestore();
-    const date = brisbaneDate(new Date());
-    const result = await dispatchDailyJobs({
-      date,
-      loadCompanies: () => loadDailyCompanies(db),
-      loadJobs: (companyId, day) => loadDailyJobs(db, companyId, day),
-      loadPeople: companyId => loadChatPeople(db, companyId),
-      loadRunSheet: (uid, day, companyId) => loadRunSheet(db, uid, day, companyId),
-      claim: digest => claimDailyDigest(db, digest),
-      sendEach: messages => getMessaging().sendEach(messages),
-      deleteToken: target => deleteToken(db, target),
+    await runPush("daily jobs", async () => {
+      ensureAdmin();
+      const db = getFirestore();
+      const date = brisbaneDate(new Date());
+      const result = await dispatchDailyJobs({
+        date,
+        loadCompanies: () => loadDailyCompanies(db),
+        loadJobs: (companyId, day) => loadDailyJobs(db, companyId, day),
+        loadPeople: companyId => loadChatPeople(db, companyId),
+        loadRunSheet: (uid, day, companyId) => loadRunSheet(db, uid, day, companyId),
+        claim: digest => claimDailyDigest(db, digest),
+        sendEach: messages => getMessaging().sendEach(messages),
+        deleteToken: target => deleteToken(db, target),
+      });
+      console.log("daily jobs", date, "sent", result.sent, "skipped", result.skipped, "dropped", result.dropped);
     });
-    console.log("daily jobs", date, result.sent, result.skipped, result.dropped);
   },
 );
 
@@ -210,44 +224,45 @@ export const dailyJobChangePush = onDocumentWritten(
   { document: "jobs/{jobId}", region: REGION, timeoutSeconds: 60, memory: "256MiB" },
   async (event) => {
     if (process.env.NODE_TEST_CONTEXT) return;
-    const beforeSnap = event.data && event.data.before;
-    const afterSnap = event.data && event.data.after;
-    const before = beforeSnap && beforeSnap.exists ? { id: event.params.jobId, ...beforeSnap.data() } : null;
-    const after = afterSnap && afterSnap.exists ? { id: event.params.jobId, ...afterSnap.data() } : null;
-    if (!scheduleFieldsChanged(before, after)) return;
-    const date = brisbaneDate(new Date());
-    const companies = new Set();
-    if (before && String(before.date || "") === date) companies.add(jobCompany(before));
-    if (after && String(after.date || "") === date) companies.add(jobCompany(after));
-    if (!companies.size) return;
-    ensureAdmin();
-    const db = getFirestore();
-    for (const companyId of companies) {
-      if (!companyId) continue;
-      const companySnap = await db.collection("companies").doc(companyId).get();
-      if (companySnap.exists && companySkipped(companySnap.data())) continue;
-      const uids = affectedUids(before, after, date, companyId);
-      if (!uids.length) continue;
-      const jobs = await loadDailyJobs(db, companyId, date);
-      for (const uid of uids) {
-        const person = await loadOnePerson(db, uid);
-        person.sheet = await loadRunSheet(db, uid, date, companyId);
-        const digestId = digestDocId(companyId, date, uid);
-        const existingSnap = await db.collection("dailyJobDigest").doc(digestId).get();
-        const result = await dispatchDailyChange({
-          companyId,
-          date,
-          uid,
-          jobs,
-          person,
-          existing: existingSnap.exists ? existingSnap.data() : null,
-          claimUpdate: patch => claimDailyUpdate(db, patch),
-          sendEach: messages => getMessaging().sendEach(messages),
-          deleteToken: target => deleteToken(db, target),
-        });
-        if (result.sent || result.skipped === "send") console.log("daily change", companyId, result.sent, result.skipped || "");
+    await runPush("daily change", async () => {
+      const beforeSnap = event.data && event.data.before;
+      const afterSnap = event.data && event.data.after;
+      const before = beforeSnap && beforeSnap.exists ? { id: event.params.jobId, ...beforeSnap.data() } : null;
+      const after = afterSnap && afterSnap.exists ? { id: event.params.jobId, ...afterSnap.data() } : null;
+      if (!scheduleFieldsChanged(before, after)) return;
+      const date = brisbaneDate(new Date());
+      const companies = new Set();
+      if (before && String(before.date || "") === date) companies.add(jobCompany(before));
+      if (after && String(after.date || "") === date) companies.add(jobCompany(after));
+      if (!companies.size) return;
+      ensureAdmin();
+      const db = getFirestore();
+      for (const companyId of companies) {
+        if (!companyId) continue;
+        const companySnap = await db.collection("companies").doc(companyId).get();
+        if (companySnap.exists && companySkipped(companySnap.data())) continue;
+        const uids = affectedUids(before, after, date, companyId);
+        if (!uids.length) continue;
+        const jobs = await loadDailyJobs(db, companyId, date);
+        for (const uid of uids) {
+          const person = await loadOnePerson(db, uid);
+          person.sheet = await loadRunSheet(db, uid, date, companyId);
+          const digestId = digestDocId(companyId, date, uid);
+          const existingSnap = await db.collection("dailyJobDigest").doc(digestId).get();
+          await dispatchDailyChange({
+            companyId,
+            date,
+            uid,
+            jobs,
+            person,
+            existing: existingSnap.exists ? existingSnap.data() : null,
+            claimUpdate: patch => claimDailyUpdate(db, patch),
+            sendEach: messages => getMessaging().sendEach(messages),
+            deleteToken: target => deleteToken(db, target),
+          });
+        }
       }
-    }
+    });
   },
 );
 
@@ -297,25 +312,27 @@ async function runPrestart(db, companyId, assignments) {
     sendEach: messages => getMessaging().sendEach(messages),
     deleteToken: target => deleteToken(db, target),
   });
-  console.log("prestart", companyId, result.noticed, result.sent, result.skipped);
+  console.log("prestart", companyId, "noticed", result.noticed, "sent", result.sent, "skipped", result.skipped, "dropped", result.dropped);
 }
 
 export const prestartJobPush = onDocumentWritten(
   { document: "jobs/{jobId}", region: REGION, timeoutSeconds: 60, memory: "256MiB" },
   async (event) => {
     if (process.env.NODE_TEST_CONTEXT) return;
-    const beforeSnap = event.data && event.data.before;
-    const afterSnap = event.data && event.data.after;
-    const before = beforeSnap && beforeSnap.exists ? { id: event.params.jobId, ...beforeSnap.data() } : null;
-    const after = afterSnap && afterSnap.exists ? { id: event.params.jobId, ...afterSnap.data() } : null;
-    const assignments = changedJobAssignments(before, after);
-    if (!assignments.length) return;
-    ensureAdmin();
-    const db = getFirestore();
-    const companies = [...new Set(assignments.map(row => row.companyId))];
-    for (const companyId of companies) {
-      await runPrestart(db, companyId, assignments.filter(row => row.companyId === companyId));
-    }
+    await runPush("prestart", async () => {
+      const beforeSnap = event.data && event.data.before;
+      const afterSnap = event.data && event.data.after;
+      const before = beforeSnap && beforeSnap.exists ? { id: event.params.jobId, ...beforeSnap.data() } : null;
+      const after = afterSnap && afterSnap.exists ? { id: event.params.jobId, ...afterSnap.data() } : null;
+      const assignments = changedJobAssignments(before, after);
+      if (!assignments.length) return;
+      ensureAdmin();
+      const db = getFirestore();
+      const companies = [...new Set(assignments.map(row => row.companyId))];
+      for (const companyId of companies) {
+        await runPrestart(db, companyId, assignments.filter(row => row.companyId === companyId));
+      }
+    });
   },
 );
 
@@ -323,18 +340,20 @@ export const prestartAssetPush = onDocumentWritten(
   { document: "tenants/{tenantId}/fleet/{assetId}", region: REGION, timeoutSeconds: 60, memory: "256MiB" },
   async (event) => {
     if (process.env.NODE_TEST_CONTEXT) return;
-    const beforeSnap = event.data && event.data.before;
-    const afterSnap = event.data && event.data.after;
-    const before = beforeSnap && beforeSnap.exists ? { id: event.params.assetId, ...beforeSnap.data() } : null;
-    const after = afterSnap && afterSnap.exists ? { id: event.params.assetId, ...afterSnap.data() } : null;
-    const assignments = changedAssetAssignments(before, after, {
-      assetId: event.params.assetId,
-      companyId: event.params.tenantId,
-      day: brisbaneDate(new Date()),
+    await runPush("prestart", async () => {
+      const beforeSnap = event.data && event.data.before;
+      const afterSnap = event.data && event.data.after;
+      const before = beforeSnap && beforeSnap.exists ? { id: event.params.assetId, ...beforeSnap.data() } : null;
+      const after = afterSnap && afterSnap.exists ? { id: event.params.assetId, ...afterSnap.data() } : null;
+      const assignments = changedAssetAssignments(before, after, {
+        assetId: event.params.assetId,
+        companyId: event.params.tenantId,
+        day: brisbaneDate(new Date()),
+      });
+      if (!assignments.length) return;
+      ensureAdmin();
+      await runPrestart(getFirestore(), event.params.tenantId, assignments);
     });
-    if (!assignments.length) return;
-    ensureAdmin();
-    await runPrestart(getFirestore(), event.params.tenantId, assignments);
   },
 );
 
@@ -342,18 +361,20 @@ export const prestartTimesheetPush = onDocumentWritten(
   { document: "timesheets/{sheetId}", region: REGION, timeoutSeconds: 60, memory: "256MiB" },
   async (event) => {
     if (process.env.NODE_TEST_CONTEXT) return;
-    const beforeSnap = event.data && event.data.before;
-    const afterSnap = event.data && event.data.after;
-    const before = beforeSnap && beforeSnap.exists ? beforeSnap.data() : null;
-    const after = afterSnap && afterSnap.exists ? afterSnap.data() : null;
-    const uid = String((after && after.uid) || String(event.params.sheetId || "").split("_")[0] || "");
-    const assignments = changedTimesheetAssignments(before, after, uid);
-    if (!assignments.length) return;
-    ensureAdmin();
-    const db = getFirestore();
-    const companies = [...new Set(assignments.map(row => row.companyId))];
-    for (const companyId of companies) {
-      await runPrestart(db, companyId, assignments.filter(row => row.companyId === companyId));
-    }
+    await runPush("prestart", async () => {
+      const beforeSnap = event.data && event.data.before;
+      const afterSnap = event.data && event.data.after;
+      const before = beforeSnap && beforeSnap.exists ? beforeSnap.data() : null;
+      const after = afterSnap && afterSnap.exists ? afterSnap.data() : null;
+      const uid = String((after && after.uid) || String(event.params.sheetId || "").split("_")[0] || "");
+      const assignments = changedTimesheetAssignments(before, after, uid);
+      if (!assignments.length) return;
+      ensureAdmin();
+      const db = getFirestore();
+      const companies = [...new Set(assignments.map(row => row.companyId))];
+      for (const companyId of companies) {
+        await runPrestart(db, companyId, assignments.filter(row => row.companyId === companyId));
+      }
+    });
   },
 );
