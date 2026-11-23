@@ -209,13 +209,15 @@ export function repeatFieldHtml(job, { admin = false, suggestion = "" } = {}) {
   }
   const freq = (id, label) => `<option value="${id}"${rule.freq === id ? " selected" : ""}>${label}</option>`;
   const endMode = rule.endDate ? "date" : (rule.count ? "count" : "");
+  const open = occurrence || on;
+  const hide = open ? "" : " hidden";
   return `<fieldset class="repeat-box" id="repeatbox">
     <legend>Repeat</legend>
     ${occurrence ? `<p class="sub">This visit is part of a series.</p>
       <label class="ck"><input type="radio" name="repeatScope" value="one" checked> This visit only</label>
       <label class="ck"><input type="radio" name="repeatScope" value="series"> This visit and the rest of the series</label>
       <label class="ck"><input type="checkbox" name="repeatSkip"> Skip this visit</label>` : `<label class="ck"><input type="checkbox" name="repeatOn"${on ? " checked" : ""}> This job repeats</label>`}
-    <label>How often<select name="repeatFreq">
+    <label class="repeat-more"${hide}>How often<select name="repeatFreq">
       ${freq("weekly", "Weekly")}
       ${freq("fortnightly", "Fortnightly")}
       ${freq("monthly", "Monthly")}
@@ -223,7 +225,7 @@ export function repeatFieldHtml(job, { admin = false, suggestion = "" } = {}) {
       ${freq("yearly", "Yearly")}
       ${freq("every", "Every…")}
     </select></label>
-    <div class="row">
+    <div class="row repeat-more"${hide}>
       <label>Every<input name="repeatEvery" type="number" min="1" max="52" value="${esc(rule.interval || 1)}"></label>
       <label>Unit<select name="repeatUnit">
         <option value="days"${rule.unit === "days" ? " selected" : ""}>days</option>
@@ -231,17 +233,39 @@ export function repeatFieldHtml(job, { admin = false, suggestion = "" } = {}) {
         <option value="months"${rule.unit === "months" ? " selected" : ""}>months</option>
       </select></label>
     </div>
-    <label>End<select name="repeatEnd">
+    <label class="repeat-more"${hide}>End<select name="repeatEnd">
       <option value=""${endMode === "" ? " selected" : ""}>No end date</option>
       <option value="date"${endMode === "date" ? " selected" : ""}>On a date</option>
       <option value="count"${endMode === "count" ? " selected" : ""}>After a number of visits</option>
     </select></label>
-    <div class="row">
+    <div class="row repeat-more"${hide}>
       <label>End date<input type="date" name="repeatEndDate" value="${esc(rule.endDate || "")}"></label>
       <label>Visits<input type="number" min="1" max="104" name="repeatCount" value="${esc(rule.count || "")}"></label>
     </div>
-    <p class="sub">Visits are added for the next ${HORIZON_DAYS} days. Skip or edit one visit without changing the rest.${suggestion ? " " + esc(suggestion) : ""}</p>
+    <p class="sub repeat-more"${hide}>Visits are added for the next ${HORIZON_DAYS} days. Skip or edit one visit without changing the rest.${suggestion ? " " + esc(suggestion) : ""}</p>
   </fieldset>`;
+}
+
+export function wireRepeatBox(root) {
+  const box = repeatBox(root);
+  if (!box || box.dataset.repeatWired) return;
+  box.dataset.repeatWired = "1";
+  const apply = () => {
+    const toggle = box.querySelector('input[name="repeatOn"]');
+    const hide = !!(toggle && !toggle.checked);
+    for (const el of box.querySelectorAll(".repeat-more")) el.hidden = hide;
+  };
+  apply();
+  box.addEventListener("change", event => {
+    const target = event && event.target;
+    if (target && target.name === "repeatOn") apply();
+  });
+}
+
+function repeatBox(root) {
+  if (!root || typeof root.querySelector !== "function") return null;
+  if (root.id === "repeatbox") return root;
+  return root.querySelector("#repeatbox");
 }
 
 export function recurrenceFromForm(form, job) {

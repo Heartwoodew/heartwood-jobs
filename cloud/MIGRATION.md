@@ -414,6 +414,14 @@ After review, deploy hosting only. Service worker `callup-shell-v144-pest-trade`
 
 No functions deploy until that email refusal is reviewed. No Storage change, no rules deploy, no index deploy, no Stripe change, no backfill.
 
+## Repeat box stays compact until a job repeats (not deployed)
+
+Do not deploy from this branch. Nothing here writes to production.
+
+After review, deploy hosting only. Service worker `callup-shell-v145-repeat-fields`. In the job modal, How often, Every, Unit, End, End date, Visits, and the repeat help text stay hidden until an admin checks This job repeats. A job that already repeats opens with the box checked and those fields visible. Saving a job is unchanged.
+
+No functions deploy, no Storage change, no rules deploy, no index deploy, no Stripe change, no backfill.
+
 ## Admin password reset (15 Nov 2026)
 
 Do not deploy from this branch. When it is deployed: hosting (service worker `callup-shell-v108-password-reset`) and the function `adminSendPasswordReset` in australia-southeast1. It uses the same `RESEND_API_KEY` and `INVITE_EMAIL_ENABLED` gate as `inviteEmailWorker`. The reset link is emailed to the staff member and is not returned to the browser. Firestore `passwordResetRate/{uid}` is Admin SDK only (client read and write denied). Rebased onto main's `callup-shell-v106-multi-category-quotes`; this branch stays `callup-shell-v108-password-reset`.

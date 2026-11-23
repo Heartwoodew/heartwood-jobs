@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { addMonths, occurrenceDates, occurrenceId, planSeries, sanitizeRecurrence } from "../app/features/recurrence.js";
+import { readFileSync } from "node:fs";
+import { addMonths, occurrenceDates, occurrenceId, planSeries, recurrenceFromForm, repeatFieldHtml, sanitizeRecurrence, wireRepeatBox } from "../app/features/recurrence.js";
 
 const MONEY = ["poAmount", "quoteAmount", "invoiceAmount", "totalEx", "gst", "totalInc"];
 
@@ -52,4 +53,131 @@ test("a bad repeat is refused and a count of visits stops the series", () => {
   assert.equal(sanitizeRecurrence({ freq: "every", interval: 0, unit: "days" }), null);
   const dates = occurrenceDates({ freq: "weekly", count: 2 }, "2026-11-01", "2026-11-01", 90);
   assert.deepEqual(dates, ["2026-11-08"]);
+});
+
+function repeatMoreTags(html) {
+  const tags = [];
+  for (const match of html.matchAll(/<([a-z0-9]+)([^>]*)>/gi)) {
+    if (/class="[^"]*\brepeat-more\b/.test(match[2])) tags.push(match[0]);
+  }
+  return tags;
+}
+
+test("repeat schedule stays hidden until This job repeats is checked", () => {
+  const off = repeatFieldHtml({ date: "2026-11-23" }, { admin: true, suggestion: "Pest control is often monthly." });
+  assert.match(off, /This job repeats/);
+  assert.equal(off.includes('name="repeatOn" checked'), false);
+  assert.doesNotMatch(off, /<label class="ck"[^>]*hidden/);
+  const hidden = repeatMoreTags(off);
+  assert.equal(hidden.length, 5);
+  assert.ok(hidden.every(tag => /\shidden(?:\s|>)/.test(tag)));
+  for (const name of ["repeatFreq", "repeatEvery", "repeatUnit", "repeatEnd", "repeatEndDate", "repeatCount"]) {
+    assert.match(off, new RegExp(`name="${name}"`));
+  }
+  assert.match(off, /How often/);
+  assert.match(off, />Every</);
+  assert.match(off, />Unit</);
+  assert.match(off, />End</);
+  assert.match(off, />End date</);
+  assert.match(off, />Visits</);
+  assert.match(off, /<p class="sub repeat-more" hidden>Visits are added for the next 60 days\.[^<]*Pest control is often monthly\.<\/p>/);
+
+  const on = repeatFieldHtml({ date: "2026-11-23", recurrence: { freq: "monthly", anchor: "2026-11-23" } }, { admin: true });
+  assert.match(on, /name="repeatOn" checked/);
+  const shown = repeatMoreTags(on);
+  assert.equal(shown.length, 5);
+  assert.ok(shown.every(tag => !/\shidden(?:\s|>)/.test(tag)));
+  assert.match(on, /<option value="monthly" selected>Monthly<\/option>/);
+
+  const visit = repeatFieldHtml({ seriesRole: "occurrence", recurrence: { freq: "weekly" } }, { admin: true });
+  assert.match(visit, /This visit is part of a series/);
+  assert.doesNotMatch(visit, /name="repeatOn"/);
+  assert.equal(repeatMoreTags(visit).length, 5);
+  assert.ok(repeatMoreTags(visit).every(tag => !/\shidden(?:\s|>)/.test(tag)));
+
+  const crew = repeatFieldHtml({ recurrence: { freq: "weekly" } }, { admin: false });
+  assert.match(crew, /Repeats Weekly/);
+  assert.doesNotMatch(crew, /repeat-more|repeatOn|How often/);
+  assert.equal(repeatFieldHtml({}, { admin: false }), "");
+});
+
+test("checking and unchecking This job repeats shows and hides the schedule", () => {
+  const more = [{ hidden: true }, { hidden: true }, { hidden: true }, { hidden: true }, { hidden: true }];
+  const toggle = { name: "repeatOn", checked: false };
+  let onChange = null;
+  const box = {
+    id: "repeatbox",
+    dataset: {},
+    querySelector(sel) { return String(sel).includes("repeatOn") ? toggle : null; },
+    querySelectorAll(sel) { return String(sel).includes("repeat-more") ? more : []; },
+    addEventListener(type, fn) { if (type === "change") onChange = fn; },
+  };
+  wireRepeatBox(box);
+  assert.equal(box.dataset.repeatWired, "1");
+  assert.ok(more.every(el => el.hidden === true));
+  toggle.checked = true;
+  onChange({ target: toggle });
+  assert.ok(more.every(el => el.hidden === false));
+  toggle.checked = false;
+  onChange({ target: { name: "repeatFreq" } });
+  assert.ok(more.every(el => el.hidden === false));
+  onChange({ target: toggle });
+  assert.ok(more.every(el => el.hidden === true));
+  wireRepeatBox(box);
+  assert.equal(onChange !== null, true);
+
+  const visitMore = [{ hidden: true }];
+  const visit = {
+    id: "repeatbox",
+    dataset: {},
+    querySelector() { return null; },
+    querySelectorAll() { return visitMore; },
+    addEventListener() {},
+  };
+  wireRepeatBox(visit);
+  assert.equal(visitMore[0].hidden, false);
+  assert.equal(wireRepeatBox(null), undefined);
+});
+
+function formFields({ checked = false, occurrence = false, skip = false, scope = "one", freq = "weekly", interval = "2", unit = "weeks", end = "date", endDate = "2027-01-01", count = "6", date = "2026-11-23" } = {}) {
+  return {
+    repeatOn: occurrence ? undefined : { checked },
+    repeatScope: { value: scope },
+    repeatSkip: { checked: skip },
+    repeatFreq: { value: freq },
+    repeatEvery: { value: interval },
+    repeatUnit: { value: unit },
+    repeatEnd: { value: end },
+    repeatEndDate: { value: endDate },
+    repeatCount: { value: count },
+    date: { value: date },
+  };
+}
+
+test("hiding the repeat fields does not change what a save stores", () => {
+  assert.deepEqual(recurrenceFromForm(formFields({ checked: false, freq: "yearly", interval: "9" }), { date: "2026-11-23" }), {
+    ok: true, recurrence: null, skip: false, scope: "one",
+  });
+  assert.deepEqual(recurrenceFromForm(formFields({ checked: true }), { date: "2026-11-23" }), {
+    ok: true,
+    recurrence: { freq: "weekly", interval: 1, unit: "", endDate: "2027-01-01", count: null, anchor: "2026-11-23" },
+    skip: false,
+    scope: "one",
+  });
+  assert.equal(recurrenceFromForm(formFields({ checked: true, freq: "every", interval: "0", unit: "days", end: "" }), {}).ok, false);
+  const skipped = recurrenceFromForm(formFields({ occurrence: true, skip: true, scope: "one", end: "" }), { seriesRole: "occurrence", date: "2026-11-23" });
+  assert.equal(skipped.ok, true);
+  assert.equal(skipped.skip, true);
+  assert.equal(skipped.scope, "one");
+  assert.equal(skipped.recurrence.freq, "weekly");
+});
+
+test("the job modal wires the repeat box and the shell is callup-shell-v145-repeat-fields", () => {
+  const app = readFileSync(new URL("../app/app.js", import.meta.url), "utf8");
+  assert.match(app, /wireRepeatBox\(f\)/);
+  const css = readFileSync(new URL("../app/styles.css", import.meta.url), "utf8");
+  assert.match(css, /\.repeat-box \.repeat-more\[hidden\]\{display:none !important\}/);
+  const sw = readFileSync(new URL("../app/sw.js", import.meta.url), "utf8");
+  assert.match(sw, /callup-shell-v145-repeat-fields/);
+  assert.match(sw, /features\/recurrence\.js/);
 });
