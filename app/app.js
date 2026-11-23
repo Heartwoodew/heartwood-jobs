@@ -4,7 +4,8 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/fireba
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, signOut, connectAuthEmulator, setPersistence, browserLocalPersistence }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator,
-  collection, doc, getDoc, getDocFromCache, getDocs, query, where, orderBy, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, deleteField, serverTimestamp, arrayUnion, runTransaction, Timestamp }
+  collection, doc, getDoc, getDocFromCache, getDocs, getDocsFromCache, query, where, orderBy, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, deleteField, serverTimestamp, arrayUnion, runTransaction, Timestamp,
+  disableNetwork, enableNetwork }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { getStorage, ref as storageRef, uploadBytes, uploadBytesResumable, deleteObject, connectStorageEmulator, listAll, getMetadata, getBlob }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
@@ -30,6 +31,7 @@ import {
   canSendPasswordReset, canRemindLocation, forgotPasswordMessage, GOOGLE_ONLY_RESET,
 } from "./features/staff-invites.js";
 import { saveGuard, settleOrQueue } from "./features/pending-write.js";
+import { bootStallHtml, bootWatchdog, readOrCache, trackRead, withTimeout } from "./features/boot-guard.js";
 import {
   SAVED_ON_PHONE, deviceOnline, needsSignal, actionForCall, emailOutboxAllowed,
   jobsToWarm, warmReads, profileMiss, makeUpload, makeOutbox, classifyUploadError,
@@ -211,7 +213,7 @@ let INBOUND_DOMAIN = "inbound.callupapp.com.au";
 let startDesktopInstall = () => {};
 let refreshDesktopBanner = () => {};
 let desktopBannerWouldShow = () => false;
-let SHELL_VERSION = "callup-shell-v148-crew-map";
+let SHELL_VERSION = "callup-shell-v149-boot-timeout";
 let prepareTicket = () => ({ ok: false, reason: "loading" });
 let ticketDialogHtml = () => "";
 let ticketFailureText = () => "The ticket could not be sent. Try again.";
@@ -287,19 +289,14 @@ setPersistence(auth, browserLocalPersistence).catch(() => {});
 const db = initializeFirestore(fb, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) });
 const storage = getStorage(fb);
 // One in-flight read per document. Company and staff docs are asked for from the boot path and again from offline warm-up.
+// A boot timeout drops the stored read so Retry starts a new server read instead of joining the stalled one.
 const docReads = new Map();
-function cachedGetDoc(ref) {
+let bootGuard = null;
+let bootGen = 0;
+function cachedGetDoc(ref, ms = 0, label = "") {
   const key = ref && (ref.path || ref._path);
-  if (!key) return getDoc(ref);
-  let pending = docReads.get(key);
-  if (!pending) {
-    pending = getDoc(ref).then(snap => snap, err => {
-      if (docReads.get(key) === pending) docReads.delete(key);
-      throw err;
-    });
-    docReads.set(key, pending);
-  }
-  return pending;
+  if (!key) return ms ? withTimeout(getDoc(ref), ms, label || "doc") : getDoc(ref);
+  return trackRead(docReads, key, () => getDoc(ref), ms, label || key);
 }
 if (useEmulator) {
   connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
@@ -391,8 +388,14 @@ function openSyncList() {
 }
 const syncChip = document.querySelector("#syncchip");
 if (syncChip) syncChip.onclick = () => openSyncList();
-window.addEventListener("online", () => { ui.warmKey = ""; paintSync(); flushOffline().catch(() => {}); warmUpcoming().catch(() => {}); });
+function wakeNetwork() {
+  enableNetwork(db).catch(err => console.warn("enableNetwork", err && (err.code || err.message)));
+}
+window.addEventListener("online", () => { ui.warmKey = ""; paintSync(); flushOffline().catch(() => {}); warmUpcoming().catch(() => {}); wakeNetwork(); });
 window.addEventListener("offline", () => paintSync());
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") wakeNetwork();
+});
 if (navigator.serviceWorker) navigator.serviceWorker.addEventListener("message", ev => {
   if (ev.data && ev.data.type === "callup-sync") flushOffline().catch(() => {});
 });
@@ -404,6 +407,14 @@ const TYPES = { spoil: "Spoil removal", backslab: "Backslab", waterproof: "Water
 const STATUSES = ["Scheduled", "In progress", "Done", "Cancelled"];
 const TZ = "Australia/Brisbane";
 const $ = (s, el = document) => el.querySelector(s);
+function paintApp(html) {
+  if (bootGuard) {
+    bootGuard.stage("first paint");
+    bootGuard.done();
+  }
+  const root = $("#app");
+  if (root) root.innerHTML = html;
+}
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const ymd = d => new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(d);           // YYYY-MM-DD in Brisbane
 const todayStr = () => (window.HW_TODAY || ymd(new Date()));
@@ -613,14 +624,22 @@ async function beginDeferredStartup() {
   if (me.role === "admin" && !ui.myJobs) renderAdmin();
   else renderOperator();
 }
+bootGuard = startBootWatch();
 paintSync();
 
 // ------------------------------------------------------------------ auth
 try { captureReferralParam(location.search, localStorage); } catch { /* private mode */ }
 $("#logout").onclick = () => signOut(auth);
 $("#helpbtn")?.addEventListener("click", () => openHelp());
-onAuthStateChanged(auth, async user => {
+onAuthStateChanged(auth, user => {
+  bootSignedIn(user).catch(err => console.warn("boot", err && (err.code || err.message || err)));
+});
+
+async function bootSignedIn(user) {
   if (signingUp) return;
+  const gen = ++bootGen;
+  const live = () => gen === bootGen;
+  if (bootGuard) bootGuard.stage("auth");
   if (!user || (me && user && me.uid !== user.uid)) liveShareStop(false);
   if (unsub) { unsub(); unsub = null; }
   CHAT.stop();
@@ -640,12 +659,15 @@ onAuthStateChanged(auth, async user => {
   // users/{uid}.role: "labourer" / "operator" (crew, no $, same access) | "supervisor" (staff shell + canSeeMoney)
   // | "manager" (supervisor, plus company rates, leave decisions and staff up to manager) | "admin".
   // A manager cannot change billing, the plan, company details, or an admin. A manager can change the trade list. Patrick is rules-admin with an operator profile (bookable).
+  if (bootGuard) bootGuard.stage("profile");
   let snap = null;
-  try { snap = await cachedGetDoc(doc(db, "users", user.uid)); }
+  const userRef = doc(db, "users", user.uid);
+  try { snap = await cachedGetDoc(userRef, 8000, "users/" + user.uid); }
   catch {
-    try { snap = await getDocFromCache(doc(db, "users", user.uid)); }
+    try { snap = await getDocFromCache(userRef); }
     catch { snap = null; }
   }
+  if (!live()) return;
   const prof = snap && snap.exists() ? snap.data() : null;
   // No signal and no saved profile: stay signed in. Do not show the "no company" screen.
   if (!prof && profileMiss({ online: deviceOnline(), cached: false }).action === "offline-hold") {
@@ -655,7 +677,16 @@ onAuthStateChanged(auth, async user => {
   // Heartwood admins list only Heartwood profiles (rules deny every other company's staff).
   // Other companies' admins/supervisors use their own profile role below, so this list is Heartwood-only.
   let users = null;
-  if (docCompanyId(prof || {}) === "heartwood") users = await getDocs(query(collection(db, "users"), where("companyId", "==", "heartwood"))).catch(() => null);
+  if (docCompanyId(prof || {}) === "heartwood") {
+    const usersQ = query(collection(db, "users"), where("companyId", "==", "heartwood"));
+    users = await readOrCache(
+      () => getDocs(usersQ),
+      () => getDocsFromCache(usersQ),
+      8000,
+      "users",
+    ).catch(() => null);
+  }
+  if (!live()) return;
   if (!prof && !users) { renderNoAccess(user); return; }
   const bootstrapAdmin = user.uid === ALEX_UID || user.uid === "R7t41e54Ykcdk9WPdVZnDd697iI2";
   const roleAdmin = !!(prof && prof.role === "admin");
@@ -665,7 +696,8 @@ onAuthStateChanged(auth, async user => {
   me.cloudProfile = prof;
   FOREIGN_UIDS = new Set();
   HOME_UIDS = users ? users.docs.filter(d => docCompanyId(d.data()) === "heartwood").map(d => d.id) : [];
-  const token = await user.getIdTokenResult().catch(() => null);
+  const token = await withTimeout(user.getIdTokenResult(), 6000, "id-token").catch(() => null);
+  if (!live()) return;
   me.platformOwner = isPlatformOwner({
     uid: user.uid,
     email: user.email,
@@ -677,8 +709,16 @@ onAuthStateChanged(auth, async user => {
   let sessionStore = null;
   try { sessionStore = sessionStorage; } catch { sessionStore = null; }
   const returnMaster = takeReturnMasterFlag(sessionStore);
+  if (bootGuard) bootGuard.stage("company");
   if (me.platformOwner) {
-    const sess = await getDoc(doc(db, "platformSessions", user.uid)).catch(() => null);
+    const sessRef = doc(db, "platformSessions", user.uid);
+    const sess = await readOrCache(
+      () => getDoc(sessRef),
+      () => getDocFromCache(sessRef),
+      8000,
+      "platformSessions/" + user.uid,
+    ).catch(() => null);
+    if (!live()) return;
     sessionCompanyId = sess && sess.exists() ? String(sess.data().companyId || "").trim() : "";
   }
   const companyView = bootCompanyView({
@@ -690,12 +730,13 @@ onAuthStateChanged(auth, async user => {
   });
   let companyViewClearFailed = false;
   if (companyView.clearSession) {
-    try { await setDoc(doc(db, "platformSessions", user.uid), clearedCompanySession()); }
+    try { await withTimeout(setDoc(doc(db, "platformSessions", user.uid), clearedCompanySession()), 5000, "platformSessions"); }
     catch (e) {
       companyViewClearFailed = true;
       console.warn("leave company view", e && (e.code || e.message));
     }
   }
+  if (!live()) return;
   if (companyView.action === "stay" || companyView.action === "stay-and-mark" || (companyViewClearFailed && sessionCompanyId)) {
     me.testCompanyId = companyViewClearFailed ? sessionCompanyId : companyView.companyId;
     try { sessionStorage.setItem(IN_COMPANY_VIEW_KEY, "1"); } catch { /* private mode: the session doc still restores this view */ }
@@ -713,6 +754,7 @@ onAuthStateChanged(auth, async user => {
     try { history.replaceState({ callupView: "home" }, "", withCompanyViewParam(location.href, false)); } catch { /* the param is only a marker */ }
   }
   await loadCompanyBrand();
+  if (!live()) return;
   $("#who").textContent = `${me.name} · ${me.role}`; showAccountChrome(true);
   if (ui.companyAccess && ui.companyAccess.paused) {
     renderAccountPaused();
@@ -746,6 +788,7 @@ onAuthStateChanged(auth, async user => {
     if (ui.ticketFocus && me.platformOwner && !me.testCompanyId) ui.view = "master";
     const companyId = myCompanyId();
     const staffSnap = (companyId === "heartwood" && users) || await getDocs(query(collection(db, "users"), where("companyId", "==", companyId))).catch(() => null);
+    if (!live()) return;
     // When the unscoped users list is denied, still know this company's own staff so legacy (no companyId) Heartwood sheets load.
     if (!users && staffSnap) HOME_UIDS = staffSnap.docs.filter(d => docCompanyId(d.data()) === companyId).map(d => d.id);
     const logins = (staffSnap ? staffSnap.docs : []).map(d => ({ uid: d.id, ...d.data() }))
@@ -810,7 +853,44 @@ onAuthStateChanged(auth, async user => {
       unsub = () => { u1(); u3(); u4(); u6(); stopCap(); moneyStop(); stopShared(); };
     });
   }
-});
+}
+
+function startBootWatch() {
+  return bootWatchdog({
+    ms: 12000,
+    onStall(stage) { renderBootStall(stage); },
+  });
+}
+function renderBootStall(stage) {
+  const where = stage || "start";
+  console.warn("Stuck at: " + where);
+  const root = $("#app");
+  if (!root) return;
+  root.innerHTML = bootStallHtml(where);
+  const retry = $("#bootretry");
+  const reload = $("#bootreload");
+  const out = $("#bootsignout");
+  if (retry) retry.onclick = () => { retryBoot().catch(err => console.warn("boot retry", err && (err.code || err.message || err))); };
+  if (reload) reload.onclick = () => location.reload();
+  if (out) out.onclick = () => signOut(auth);
+}
+let bootRetrying = false;
+async function retryBoot() {
+  if (bootRetrying) return;
+  bootRetrying = true;
+  try {
+    docReads.clear();
+    try { await disableNetwork(db); }
+    catch (e) { console.warn("boot retry", e && (e.code || e.message)); }
+    try { await enableNetwork(db); }
+    catch (e) { console.warn("boot retry", e && (e.code || e.message)); }
+    if (bootGuard) bootGuard.done();
+    bootGuard = startBootWatch();
+    await bootSignedIn(auth.currentUser || null);
+  } finally {
+    bootRetrying = false;
+  }
+}
 
 function myCompanyId() {
   if (me && me.testCompanyId) return me.testCompanyId;
@@ -905,7 +985,15 @@ async function saveTradeSetup(next) {
 }
 async function loadCompanyBrand() {
   const id = myCompanyId();
-  const snap = await cachedGetDoc(doc(db, "companies", id)).catch(() => null);
+  const companyRef = doc(db, "companies", id);
+  let snap = null;
+  try { snap = await cachedGetDoc(companyRef, 8000, "companies/" + id); }
+  catch (err) {
+    if (err && err.code === "boot-timeout") {
+      try { snap = await getDocFromCache(companyRef); }
+      catch { snap = null; }
+    }
+  }
   const loaded = snap && snap.exists() ? { ...snap.data(), companyId: id } : null;
   ui.companyRecord = loaded;
   ui.companyStatus = loaded ? String(loaded.status || "") : "";
@@ -1062,11 +1150,11 @@ function renderInviteSignedIn() {
   paintBrand();
   $("#who").textContent = "";
   showAccountChrome(true);
-  $("#app").innerHTML = `<form class="card login" id="invitebusy">
+  paintApp(`<form class="card login" id="invitebusy">
     <h2>Staff invite</h2>
     <p>This link creates a new login. Sign out, then open it again to set a password.</p>
     <button class="big primary" type="button" id="invitesignout">Sign out</button>
-  </form>`;
+  </form>`);
   $("#invitesignout").onclick = () => signOut(auth);
 }
 async function openBilling(name, extra = {}) {
@@ -1086,9 +1174,9 @@ function renderAccountPaused() {
   $("#who").textContent = `${me.name} · ${me.role}`;
   showAccountChrome(true);
   const access = ui.companyAccess || {};
-  $("#app").innerHTML = access.ownerPaused
+  paintApp(access.ownerPaused
     ? pausedOwnerHtml({ platformOwner: !!(me && me.platformOwner) })
-    : (me.role === "admin" ? pausedAdminHtml(access) : pausedStaffHtml());
+    : (me.role === "admin" ? pausedAdminHtml(access) : pausedStaffHtml()));
   const out = $("#pausedout");
   if (out) out.onclick = () => signOut(auth);
   const home = $("#pausedhome");
@@ -1233,18 +1321,18 @@ function renderInviteAccept(token) {
   paintBrand();
   const preview = window.HW_INVITE_PREVIEW;
   if (preview) {
-    $("#app").innerHTML = acceptViewHtml(acceptScreenModel(preview, inviteDisplayNow()));
+    paintApp(acceptViewHtml(acceptScreenModel(preview, inviteDisplayNow())));
     return bindInviteAccept(token, true);
   }
-  $("#app").innerHTML = acceptLoadingHtml();
+  paintApp(acceptLoadingHtml());
   callInvite("previewStaffInvite", { token }).then(result => {
     const model = result && result.ok ? acceptScreenModel(result, inviteDisplayNow()) : {
       ok: false, reason: (result && result.reason) || "invalid", name: result && result.name, email: result && result.email,
     };
-    $("#app").innerHTML = acceptViewHtml(model);
+    paintApp(acceptViewHtml(model));
     if (model.ok) bindInviteAccept(token, false, model.email);
   }).catch(e => {
-    $("#app").innerHTML = acceptViewHtml({ ok: false, reason: (e && e.code) || "server-error" });
+    paintApp(acceptViewHtml({ ok: false, reason: (e && e.code) || "server-error" }));
   });
 }
 function bindInviteAccept(token, previewOnly, email) {
@@ -1326,12 +1414,12 @@ function renderOfflineSignedIn(user) {
   paintBrand();
   $("#who").textContent = user.email || "Signed in";
   showAccountChrome(true);
-  $("#app").innerHTML = `<form class="card login" id="offlinehold">
+  paintApp(`<form class="card login" id="offlinehold">
     <h2>You're still signed in</h2>
     <p>This phone has no signal, and your profile is not saved on it yet.</p>
     <p class="sub">Open CallUp once with signal. After that, your jobs stay on the phone and you are not asked to sign in again.</p>
     <button class="big ghost" type="button" id="offlineout">Sign out</button>
-  </form>`;
+  </form>`);
   $("#offlineout").onclick = () => signOut(auth);
   paintSync();
 }
@@ -1339,12 +1427,12 @@ function renderNoAccess(user) {
   paintBrand();
   $("#who").textContent = user.email || "";
   showAccountChrome(true);
-  $("#app").innerHTML = `<form class="card login" id="noaccess">
+  paintApp(`<form class="card login" id="noaccess">
     <h2>No company yet</h2>
     <p>${esc(user.email)} is signed in, but it isn't linked to a company in ${esc(PRODUCT_NAME)}.</p>
     <p class="sub">If you work for a business that uses ${esc(PRODUCT_NAME)}, ask your admin to send you an invite link. If you were creating a new company, sign out and create it again.</p>
     <button class="big primary" type="button" id="noaccessout">Sign out</button>
-  </form>`;
+  </form>`);
   $("#noaccessout").onclick = () => signOut(auth);
 }
 function signInFailureText(e) {
@@ -1359,7 +1447,7 @@ function signInFailureText(e) {
 function renderLogin(prefill) {
   paintBrand();
   const email = typeof prefill === "string" ? prefill : "";
-  $("#app").innerHTML = `<form id="login" class="card login">
+  paintApp(`<form id="login" class="card login">
     <div class="login-brand"><div class="wordmark" aria-label="${esc(PRODUCT_NAME)}">Call<span>Up</span></div></div>
     <h2>Sign in</h2>
     <p class="sub">Use the email your company gave you.</p>
@@ -1369,7 +1457,7 @@ function renderLogin(prefill) {
     <button class="ghost" type="button" id="forgotpw">Forgot password?</button>
     <button class="big ghost" type="button" id="opencreate">Create a company</button>
     <p id="lerr" class="err"></p>
-    <p class="powered">${esc(POWERED_BY)}</p></form>`;
+    <p class="powered">${esc(POWERED_BY)}</p></form>`);
   $("#login").onsubmit = async ev => {
     ev.preventDefault(); const f = ev.target;
     try { await signInWithEmailAndPassword(auth, f.e.value.trim(), f.p.value); }
@@ -1382,7 +1470,7 @@ function renderLogin(prefill) {
 function renderForgot(prefill) {
   paintBrand();
   const email = String(prefill || "").trim();
-  $("#app").innerHTML = `<form id="forgot" class="card login" autocomplete="on">
+  paintApp(`<form id="forgot" class="card login" autocomplete="on">
     <div class="login-brand"><div class="wordmark" aria-label="${esc(PRODUCT_NAME)}">Call<span>Up</span></div></div>
     <h2>Reset password</h2>
     <p class="sub">Enter the email you use to sign in.</p>
@@ -1390,7 +1478,7 @@ function renderForgot(prefill) {
     <button class="big primary" type="submit">Email reset link</button>
     <button class="ghost" type="button" id="forgotback">Back to sign in</button>
     <p id="ferr" class="err"></p>
-    <p class="powered">${esc(POWERED_BY)}</p></form>`;
+    <p class="powered">${esc(POWERED_BY)}</p></form>`);
   const form = $("#forgot");
   $("#forgotback").onclick = () => renderLogin(form.e.value);
   form.onsubmit = async ev => {
@@ -1414,7 +1502,7 @@ function renderForgot(prefill) {
 }
 function renderSignup(friendCode = "") {
   paintBrand();
-  $("#app").innerHTML = signupFormHtml({ friend: friendCodeOk(friendCode) });
+  paintApp(signupFormHtml({ friend: friendCodeOk(friendCode) }));
   if (friendCode && !friendCodeOk(friendCode)) {
     const err = $("#signuperr");
     if (err) err.textContent = "That friend invite code is not valid.";
@@ -5402,7 +5490,7 @@ function renderAdmin() {
   const staffHtml = ui.view === "staff" ? staffPageHtml() : null;
   paintBrand();
   refreshAutofillLists();
-  $("#app").innerHTML = shell(staffHtml != null ? staffHtml : ui.view === "master" ? masterView() : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "capacity" ? capacityScreen() : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "take5" ? take5Page() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "forward" ? forwardView() : ui.view === "chat" ? CHAT.teamHtml() : ui.view === "crew" ? crewMapScreen() : quotesHtml != null ? quotesHtml : jobsView(all));
+  paintApp(shell(staffHtml != null ? staffHtml : ui.view === "master" ? masterView() : ui.view === "settings" ? settingsView() : ui.view === "dispatch" ? dispatchView(all) : ui.view === "capacity" ? capacityScreen() : ui.view === "invoices" ? invoicesView() : ui.view === "reimb" ? reimbView() : ui.view === "leave" ? leaveView() : ui.view === "claims" ? claimsView() : ui.view === "timesheet" ? tsView() : ui.view === "completed" ? completedView(all) : ui.view === "unscheduled" ? unscheduledView(all) : ui.view === "home" ? homeView(all) : ui.view === "compliance" || ui.view === "prestart" ? COMP.adminHtml() : ui.view === "take5" ? take5Page() : ui.view === "safety" ? safetyView() : ui.view === "swms" ? swmsView() : ui.view === "clients" ? clientsView() : ui.view === "inbox" ? inboxView(all) : ui.view === "forward" ? forwardView() : ui.view === "chat" ? CHAT.teamHtml() : ui.view === "crew" ? crewMapScreen() : quotesHtml != null ? quotesHtml : jobsView(all)));
   const A = $("#app"); inboxBadge(); bindTrialBanner(A); bindMasterReturn(A);
   CHAT.watch([...(jobs || []), ...(ui.undated || [])]);
   if (ui.view === "chat") CHAT.mount(A);
@@ -7252,8 +7340,8 @@ function renderOperator() {
   if (ui.opTab === "capacity" && !canSeeCapacity()) ui.opTab = "more";
   if (ui.opTab === "quotes") {
     const qhtml = adminViewRouter("quotes", ui, { esc, $$, staff, jobs: mine, todayStr, rerender: () => renderOperator(), canEditQuoteRates, isAdmin: () => !!(me && me.role === "admin") });
-    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Quotes</div><div class="mob-sub">Guided pricing · ex GST</div></div>
-      <div class="pad">${qhtml || ""}</div>${opTabs("quotes")}</div>`;
+    paintApp(`<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Quotes</div><div class="mob-sub">Guided pricing · ex GST</div></div>
+      <div class="pad">${qhtml || ""}</div>${opTabs("quotes")}</div>`);
     bindOp(mine);
     QG.bindAdmin({ ui: { ...ui, view: "quotes" }, A: $("#app") });
     return;
@@ -7261,33 +7349,33 @@ function renderOperator() {
   if (!ui.tsForce && ui.opTab === "hours" && (ui.tsBusy || ui.tsAsk || (ui.tsMachineShift && document.getElementById("tsmachine"))) && !ui.opSel) return;
   if (!ui.tsForce && ui.opTab === "hours" && (ui.tsDirty || ui.tsEdit) && ($("#tsman") || $("#tsf")) && !ui.opSel) return;
   if (ui.opTab === "hours" && !ui.opSel) {
-    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">My hours</div><div class="mob-sub">Clock on, or enter hours manually</div></div>
-      <div class="pad">${locationNoticeHtml()}${tsEditor()}</div>${opTabs("hours")}</div>`;
+    paintApp(`<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">My hours</div><div class="mob-sub">Clock on, or enter hours manually</div></div>
+      <div class="pad">${locationNoticeHtml()}${tsEditor()}</div>${opTabs("hours")}</div>`);
     bindOp(mine); bindTs($("#app"), renderOperator); return;
   }
   if (ui.opTab === "leave" && document.activeElement?.closest?.("#leaveform, .lv-decide")) return;
   if (ui.opTab === "leave" && !ui.opSel) {
-    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Leave</div><div class="mob-sub">Annual, sick, or other</div></div>
-      <div class="pad">${leaveScreenHtml({ requests: ui.leave || [], uid: me.uid, canDecide: leaveCanDecide(), canOpenCert: leaveCanOpen() })}</div>${opTabs("more")}</div>`;
+    paintApp(`<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Leave</div><div class="mob-sub">Annual, sick, or other</div></div>
+      <div class="pad">${leaveScreenHtml({ requests: ui.leave || [], uid: me.uid, canDecide: leaveCanDecide(), canOpenCert: leaveCanOpen() })}</div>${opTabs("more")}</div>`);
     bindOp(mine); bindLeave($("#app")); return;
   }
   if (ui.opTab === "claims" && document.activeElement?.closest?.("#claimform, .rc-decide")) return;
   if (ui.opTab === "claims" && !ui.opSel) {
-    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Reimbursements</div><div class="mob-sub">Claim back what you paid for</div></div>
-      <div class="pad">${claimsScreenHtml(claimsArgs())}</div>${opTabs("more")}</div>`;
+    paintApp(`<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Reimbursements</div><div class="mob-sub">Claim back what you paid for</div></div>
+      <div class="pad">${claimsScreenHtml(claimsArgs())}</div>${opTabs("more")}</div>`);
     bindOp(mine); bindClaims($("#app"), renderOperator); return;
   }
   if (ui.opTab === "prestart" && COMP.canPrestart()) {
-    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Prestart</div><div class="mob-sub">Any machine · before you use it</div></div>
-      ${COMP.staffHtml()}${opTabs("prestart")}</div>`;
+    paintApp(`<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Prestart</div><div class="mob-sub">Any machine · before you use it</div></div>
+      ${COMP.staffHtml()}${opTabs("prestart")}</div>`);
     bindOp(mine);
     COMP.bind($("#app"));
     return;
   }
   if (ui.opTab === "prestart") ui.opTab = "more";
   if (ui.opTab === "fleet" && COMP.canSee()) {
-    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Compliance</div><div class="mob-sub">${COMP.canEditService() ? "Fleet and servicing" : "Fleet and servicing · read only"}</div></div>
-      ${COMP.staffHtml()}${opTabs("fleet")}</div>`;
+    paintApp(`<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Compliance</div><div class="mob-sub">${COMP.canEditService() ? "Fleet and servicing" : "Fleet and servicing · read only"}</div></div>
+      ${COMP.staffHtml()}${opTabs("fleet")}</div>`);
     bindOp(mine);
     COMP.bind($("#app"));
     return;
@@ -7297,44 +7385,44 @@ function renderOperator() {
     const body = canViewTake5(me)
       ? take5ListHtml(ui.take5s || [], { empty: "No Take 5s yet. Open a job and tap Start Take 5." })
       : `<p class="pad">A Take 5 is the five-step check before you start work: stop, look, assess, control, proceed. Open a job and tap <b>Start Take 5</b>.</p>`;
-    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Take 5s</div><div class="mob-sub">Stop, look, assess, control, proceed</div></div>
-      <div class="pad">${body}</div>${opTabs("more")}</div>`;
+    paintApp(`<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Take 5s</div><div class="mob-sub">Stop, look, assess, control, proceed</div></div>
+      <div class="pad">${body}</div>${opTabs("more")}</div>`);
     bindOp(mine); return;
   }
   if (ui.opTab === "take5") ui.opTab = "more";
   if (ui.opTab === "staff" && document.activeElement?.closest?.("#invitef")) return;
   if (ui.opTab === "staff" && canInvite()) {
-    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Staff</div><div class="mob-sub">Logins and invites</div></div>
-      <div class="pad">${staffPageHtml()}</div>${opTabs("more")}</div>`;
+    paintApp(`<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Staff</div><div class="mob-sub">Logins and invites</div></div>
+      <div class="pad">${staffPageHtml()}</div>${opTabs("more")}</div>`);
     bindOp(mine); bindStaff($("#app")); return;
   }
   if (ui.opTab === "staff") ui.opTab = "more";
   if (ui.opTab === "inbox" && canImport()) {
     const pool = loadedJobs();
-    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Inbox</div><div class="mob-sub">Import builder emails as jobs</div></div>
-      ${inboxView(pool)}${opTabs("more")}</div>`;
+    paintApp(`<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Inbox</div><div class="mob-sub">Import builder emails as jobs</div></div>
+      ${inboxView(pool)}${opTabs("more")}</div>`);
     bindInbox($("#app")); bindOp(mine); return;
   }
   if (ui.opTab === "inbox") ui.opTab = "more";
   if (ui.opTab === "forward" && canForward()) {
-    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Job email</div><div class="mob-sub">Forwarded mail waiting for approval</div></div>
-      ${forwardView()}${opTabs("more")}</div>`;
+    paintApp(`<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Job email</div><div class="mob-sub">Forwarded mail waiting for approval</div></div>
+      ${forwardView()}${opTabs("more")}</div>`);
     bindForward($("#app")); bindOp(mine); return;
   }
   if (ui.opTab === "forward") ui.opTab = "more";
   if (ui.opTab === "settings" && canEditTitles()) {
-    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Company</div><div class="mob-sub">Trades</div></div>
-      <div class="pad">${settingsView()}</div>${opTabs("more")}</div>`;
+    paintApp(`<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Company</div><div class="mob-sub">Trades</div></div>
+      <div class="pad">${settingsView()}</div>${opTabs("more")}</div>`);
     bindOp(mine); bindSettings($("#app")); return;
   }
   if (ui.opTab === "settings") ui.opTab = "more";
   if (ui.opTab === "crew" && canSeeCrewMap(me) && !ui.opSel) {
-    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Crew map</div><div class="mob-sub">Who is clocked on</div></div>
-      <div class="pad">${crewMapScreen()}</div>${opTabs("more")}</div>`;
+    paintApp(`<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Crew map</div><div class="mob-sub">Who is clocked on</div></div>
+      <div class="pad">${crewMapScreen()}</div>${opTabs("more")}</div>`);
     bindOp(mine); openCrewScreen(); return;
   }
   if (ui.opTab === "capacity" && canSeeCapacity()) {
-    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="pad">${capacityScreen()}</div>${opTabs("more")}</div>`;
+    paintApp(`<div class="mob">${adminBack()}<div class="pad">${capacityScreen()}</div>${opTabs("more")}</div>`);
     bindOp(mine);
     $("#app").querySelectorAll("[data-cap]").forEach(b => b.onclick = () => { ui.capWk = +b.dataset.cap === 0 ? 0 : (ui.capWk || 0) + +b.dataset.cap; renderOperator(); });
     return;
@@ -7347,7 +7435,7 @@ function renderOperator() {
     const staffBtn = canInvite() ? `<button type="button" class="mob-more" data-go="staff"><b>Staff</b><small>Everyone with a login or an invite</small></button>` : "";
     const inboxBtn = canImport() ? `<button type="button" class="mob-more" data-go="inbox"><b>Inbox</b><small>Import builder emails as jobs</small></button>` : "";
     const forwardBtn = canForward() ? `<button type="button" class="mob-more" data-go="forward"><b>Job email</b><small>Forwarded mail to approve</small></button>` : "";
-    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">More</div><div class="mob-sub">${esc(me.name || "")} · ${esc(orgSettings().name)}</div></div>
+    paintApp(`<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">More</div><div class="mob-sub">${esc(me.name || "")} · ${esc(orgSettings().name)}</div></div>
       <div class="mob-menu">
         ${crewBtn}
         <button type="button" class="mob-more" data-go="hours"><b>Hours</b><small>Clock on, or add hours manually</small></button>
@@ -7372,23 +7460,23 @@ function renderOperator() {
         <p class="powered pad">${esc(orgSettings().name)} · ${esc(POWERED_BY)}</p>
       </div>
       ${myIncidentsHtml()}
-      ${opTabs("more")}</div>`;
+      ${opTabs("more")}</div>`);
     bindOp(mine); return;
   }
   if (ui.opTab === "chat") {
-    $("#app").innerHTML = `<div class="mob">${adminBack()}
+    paintApp(`<div class="mob">${adminBack()}
       ${CHAT.teamHtml()}
-      ${opTabs("chat")}</div>`;
+      ${opTabs("chat")}</div>`);
     bindOp(mine);
     CHAT.mount($("#app"));
     return;
   }
   if (ui.opTab === "photos") {
     const list = mine.filter(j => j.status !== "Cancelled");
-    $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Photos</div><div class="mob-sub">Email site photos to the office</div></div>
+    paintApp(`<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Photos</div><div class="mob-sub">Email site photos to the office</div></div>
       <p class="muted pad">Choose a job to add photos. They are emailed to the office, and a private cloud copy is saved when storage accepts them.</p>
       <div class="mob-list">${list.map(j => `${opCard(j)}<button type="button" class="mnote op-photo" data-photo="${esc(j.id)}">${ICO.photos}<span>Add photos</span></button><div data-photoslot="${esc(j.id)}" data-photorole="cloud"></div>${emailedPhotosNote(j) ? `<div class="pad">${emailedPhotosNote(j)}</div>` : ""}`).join("") || `<p class="muted pad">No jobs to photograph.</p>`}</div>
-      ${opTabs("photos")}</div>`;
+      ${opTabs("photos")}</div>`);
     list.forEach(j => { rememberJob(j); watchJobPhotos(j); }); paintPhotoSlots(); bindOp(mine); return;
   }
   const isDone = j => queueOf(j) === "Completed" || queueOf(j) === "Unsuccessful";
@@ -7399,7 +7487,7 @@ function renderOperator() {
     const todayJobs = withRunOrder(open.filter(j => j.date === t0 || (j.date < t0 && j.status === "In progress")));
     const todaySheet = readRunSheet(me.uid, t0);
     const n = todayJobs.length;
-    $("#app").innerHTML = `<div class="mob">${adminBack()}${bannerSlotHtml()}
+    paintApp(`<div class="mob">${adminBack()}${bannerSlotHtml()}
       <div class="mob-intro"><div class="mob-kicker">Today · ${esc(orgSettings().name)}</div><div class="mob-date">${esc(longDate(t0))}</div>
         <h1 class="mob-hello">${esc(greet())}, ${first}</h1><p class="mob-count">${n} job${n === 1 ? "" : "s"} today</p>${todaySheet ? `<p class="run-note">Approved driving order${todaySheet.returnToDepot ? " · back to the depot" : ""}</p>` : ""}${opSeg("today")}</div>
       ${COMP.staffBannerHtml()}
@@ -7408,7 +7496,7 @@ function renderOperator() {
       ${locationNoticeHtml()}
       ${homeCrewCard()}
       <div class="mob-list">${todayJobs.map(opCard).join("") || `<p class="muted pad">Nothing booked for ${esc(orgSettings().name)}.</p>`}</div>
-      ${opTabs("today")}</div>`;
+      ${opTabs("today")}</div>`);
     bindOp(mine);
     if (!ui.holdSideWork && homeCrewSlot(me) === "crew") openCrewScreen();
     return;
@@ -7420,10 +7508,10 @@ function renderOperator() {
     ? `<div class="mob-bar"><div class="mob-title">Completed</div><div class="mob-sub">Last 30 days</div></div>`
     : `<div class="mob-intro"><div class="mob-kicker">Jobs</div><div class="mob-date">Upcoming</div>
         <h1 class="mob-hello">This week</h1><p class="mob-count">${upcomingN} job${upcomingN === 1 ? "" : "s"}</p>${opSeg("week")}</div>`;
-  $("#app").innerHTML = `<div class="mob">${adminBack()}${head}
+  paintApp(`<div class="mob">${adminBack()}${head}
     ${groups.map(([g, js]) => `<div class="mob-sec mday">${esc(g)} <span>${js.length}</span></div>
       ${js.map(opCard).join("") || `<p class="muted pad">Nothing booked for ${esc(orgSettings().name)}.</p>`}`).join("") || `<p class="muted pad">${ui.opTab === "done" ? "No completed jobs in the last 30 days." : "Nothing booked for " + orgSettings().name + " this week."}</p>`}
-    ${opTabs(ui.opTab)}</div>`;
+    ${opTabs(ui.opTab)}</div>`);
   bindOp(mine);
 }
 function renderOpDetail(j) {
@@ -7433,7 +7521,7 @@ function renderOpDetail(j) {
   const type = jobTypeText(j) || TYPES[j.type] || "Job";
   const addrLine = [p.street, p.place].filter(Boolean).join(", ") || p.full || j.address || "";
   const onChat = ui.jobPane === "chat";
-  $("#app").innerHTML = `<div class="mob">${companyViewBanner()}<div class="mob-bar det ${QCLS[q]}"><button class="mback" id="back" type="button">${ICO.back}<span class="sr">Jobs</span></button>
+  paintApp(`<div class="mob">${companyViewBanner()}<div class="mob-bar det ${QCLS[q]}"><button class="mback" id="back" type="button">${ICO.back}<span class="sr">Jobs</span></button>
       <div class="mob-bar-txt"><div class="mob-title">Job details</div>${started ? ipTop(j, "onbar") : ""}<div class="mob-sub">${done ? "Completed" : started ? "In progress" : "Scheduled"} · #${esc(jobNo(j))}</div>
         <div class="mob-brandline"><span class="wordmark" aria-label="${esc(PRODUCT_NAME)}">Call<span>Up</span></span><span class="orgbit">${esc(orgSettings().name)}</span></div></div></div>
     <div class="job-switch" role="tablist" aria-label="Job sections">
@@ -7468,7 +7556,7 @@ function renderOpDetail(j) {
       <button type="button" class="mbtn mnote op-photo" id="emailph">${ICO.photos}<span>Add photos</span></button>
       <button type="button" class="mbtn outline" id="emailjob">Email job</button>
       <a class="mcard link mbtn outline" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener">${ICO.pin}<span>Get directions</span></a>
-    </div></div>`;
+    </div></div>`);
   rememberJob(j); bindMasterReturn($("#app")); $("#emailph").onclick = () => emailPhotos(j); $("#emailjob").onclick = () => { openJobEmail(j).catch(e => toast(e.message || "Couldn't open the email")); }; const startTake = $("#starttake5"); if (startTake) startTake.onclick = () => openTake5(j); wireJobReceipts(j); fillSupCard(j); watchJobPhotos(j); paintPhotoSlots();
   wireJobDocuments(document.querySelector("[data-job-docs]"), j);
   if (!hasTake5(ui.take5s, me.uid, j.id)) rememberOwnTake5(j);
