@@ -84,10 +84,11 @@ test("the raise-ticket form is on Help, More, settings and the header, and crew 
   assert.equal(pushTargetFromUrl("https://app.callupapp.com.au/app/?ticket=short"), null);
 });
 
-test("SUPPORT_TICKET_EMAIL is a comma-separated list and defaults to both inboxes", () => {
-  assert.equal(DEFAULT_SUPPORT_TICKET_EMAIL, "admin@callupapp.com.au,alex@heartwoodew.com");
-  assert.deepEqual(supportTicketRecipients({}), ["admin@callupapp.com.au", "alex@heartwoodew.com"]);
-  assert.deepEqual(supportTicketRecipients({ SUPPORT_TICKET_EMAIL: "  " }), ["admin@callupapp.com.au", "alex@heartwoodew.com"]);
+test("SUPPORT_TICKET_EMAIL is a comma-separated list and defaults to the CallUp admin inbox", () => {
+  assert.equal(DEFAULT_SUPPORT_TICKET_EMAIL, "admin@callupapp.com.au");
+  assert.deepEqual(supportTicketRecipients({}), ["admin@callupapp.com.au"]);
+  assert.deepEqual(supportTicketRecipients({ SUPPORT_TICKET_EMAIL: "  " }), ["admin@callupapp.com.au"]);
+  assert.equal(supportTicketRecipients({}).includes("alex@heartwoodew.com"), false);
   assert.deepEqual(
     supportTicketRecipients({ SUPPORT_TICKET_EMAIL: " callup932+one@example.com, callup932+two@example.com, not-an-email, callup932+one@example.com " }),
     ["callup932+one@example.com", "callup932+two@example.com"],
