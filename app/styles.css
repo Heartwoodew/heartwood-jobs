@@ -1034,6 +1034,9 @@ body.operator .job-chat .chat-screen{height:calc(100dvh - 168px - env(safe-area-
 .inviterow[data-staff-status="expired"] .staff-status{color:#8a2a2a}
 .inviterow[data-staff-status="active"] .staff-status{color:#1b7a3a}
 .inviteacts{display:flex;gap:6px;flex-wrap:wrap}
+.gps-state{display:inline-block;margin-left:8px;font-size:12px;font-weight:700;padding:2px 8px;border-radius:999px;vertical-align:2px}
+.gps-state[data-gps="on"]{background:#e5f6ea;color:#1b7a3a}
+.gps-state[data-gps="off"]{background:#f8efe6;color:#8a5a00}
 .invite-link{font-size:12px;word-break:break-all;color:var(--sm-mut);margin:6px 0 0;user-select:all}
 .invite-who{margin:0 0 4px}
 @media (max-width:760px){

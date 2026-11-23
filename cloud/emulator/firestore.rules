@@ -1964,7 +1964,8 @@ service cloud.firestore {
     // One live doc per person (latest position only). Heartwood: liveLocations/{uid}.
     // Every other company: companies/{id}/liveLocations/{uid}. Written only while that
     // person's timesheet shift is clocked on (open or on a break). Clock off deletes it.
-    // Manager and admin of the same company read. Supervisor and below do not. No other company does.
+    // Admin, manager and supervisor of the same company read. Operator and labourer do not.
+    // Supervisors read it so the Staff roster can show who is sharing. The crew map stays manager and admin. No other company does.
     // Heartwood: status "paused" blocks locations (llPaused). Other companies use companyNotPaused,
     // the same trial and billing pause as the rest of the app. No company document means not paused.
     match /liveLocations/{id} {
@@ -1979,7 +1980,7 @@ service cloud.firestore {
         return signedIn() && callerCompany() != "" && (
           isAlex()
           || (isPatrick() && callerCompany() == "heartwood")
-          || (hasProfile() && (llRole() == "admin" || llRole() == "manager"))
+          || (hasProfile() && (llRole() == "admin" || llRole() == "manager" || llRole() == "supervisor"))
         );
       }
       function llGps(d) {
@@ -2029,7 +2030,7 @@ service cloud.firestore {
         return signedIn() && callerCompany() != "" && (
           isAlex()
           || (isPatrick() && callerCompany() == "heartwood")
-          || (hasProfile() && (llRole() == "admin" || llRole() == "manager"))
+          || (hasProfile() && (llRole() == "admin" || llRole() == "manager" || llRole() == "supervisor"))
         );
       }
       function llGps(d) {
@@ -2087,6 +2088,15 @@ service cloud.firestore {
       allow create, update, delete: if false;
     }
 // END PRESTART NOTICE RULES
+
+// BEGIN LOCATION REMIND RULES
+    // Written by remindLocationSharing. The person reads their own company only.
+    // sentAtMs is the 30-minute rate limit. Clients cannot write.
+    match /users/{uid}/locationNotices/{noticeId} {
+      allow read: if signedIn() && request.auth.uid == uid && resource.data.companyId == callerCompany();
+      allow create, update, delete: if false;
+    }
+// END LOCATION REMIND RULES
 
 // BEGIN QUOTE WRITE RULES
     // Same quote create/update as cloud/firestore.production.rules: one profile read,

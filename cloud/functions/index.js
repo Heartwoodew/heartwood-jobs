@@ -18,6 +18,10 @@
  * adminSendPasswordReset emails a password reset link to a staff login in the
  * caller's own company. The link is never returned to the browser.
  *
+ * remindLocationSharing asks one staff login in the caller's company to turn
+ * GPS sharing on. Admins and supervisors only. It sends one web push and writes
+ * users/{uid}/locationNotices/current. One reminder per person each 30 minutes.
+ *
  * sendJobEmail emails one job. The default From is "<Company> via CallUp
  * <noreply@callupapp.com.au>". A per-company override is the non-secret env var
  * JOB_EMAIL_FROM_OVERRIDES, used only when that address's domain is in
@@ -61,6 +65,7 @@ import { defineSecret } from "firebase-functions/params";
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
+import { getMessaging } from "firebase-admin/messaging";
 import { getStorage } from "firebase-admin/storage";
 import { handlePhotoIntake } from "./lib/photo-intake.js";
 import {
@@ -73,6 +78,11 @@ import {
   profileFromInvite,
 } from "./shared/staff-invites.js";
 import { adminSendPasswordReset as sendPasswordReset, rateDecision, resetFailureText } from "./password-reset.js";
+import {
+  remindLocationSharing as sendLocationReminder,
+  remindRateOk,
+  reminderNotice,
+} from "./location-remind.js";
 import { jobEmailFailureText, jobEmailRateDecision, sendJobEmail as deliverJobEmail } from "./job-email.js";
 import { authorizeCallable, handleHelperAsk } from "./helper/ask.js";
 import { adminReader } from "./helper/reader.js";
@@ -365,6 +375,77 @@ export const adminSendPasswordReset = onCall(
       throw new HttpsError(code, resetFailureText(reason));
     }
     return { ok: true };
+  },
+);
+
+export const remindLocationSharing = onCall(
+  { region: INVITE_REGION },
+  async request => {
+    if (!request.auth || !request.auth.uid) throw new HttpsError("unauthenticated", "Sign in to send a reminder.");
+    if (process.env.NODE_TEST_CONTEXT) throw new HttpsError("failed-precondition", "Couldn't send that reminder.");
+    ensureAdmin();
+    const db = getFirestore();
+    let result;
+    try {
+      result = await sendLocationReminder({
+        callerUid: request.auth.uid,
+        targetUid: request.data && request.data.uid,
+      }, {
+        now: () => new Date(),
+        async getUser(uid) {
+          const [snap, grant] = await Promise.all([
+            db.collection("users").doc(uid).get(),
+            db.collection("heartwoodAdmins").doc(uid).get(),
+          ]);
+          return {
+            profile: snap.exists ? (snap.data() || null) : null,
+            heartwoodGrant: grant.exists && (grant.data() || {}).role === "admin",
+          };
+        },
+        async getLive(companyId, uid) {
+          const ref = companyId === "heartwood"
+            ? db.collection("liveLocations").doc(uid)
+            : db.collection("companies").doc(companyId).collection("liveLocations").doc(uid);
+          const snap = await ref.get();
+          return snap.exists ? (snap.data() || null) : null;
+        },
+        async claimNotice({ uid, companyId, now }) {
+          const ref = db.collection("users").doc(uid).collection("locationNotices").doc("current");
+          return db.runTransaction(async tx => {
+            const snap = await tx.get(ref);
+            const prev = snap.exists ? (snap.data() || {}).sentAtMs : null;
+            const decision = remindRateOk(prev, now);
+            if (!decision.ok) return { ok: false };
+            tx.set(ref, {
+              ...reminderNotice(companyId, decision.at),
+              createdAt: FieldValue.serverTimestamp(),
+            });
+            return { ok: true, at: decision.at };
+          });
+        },
+        async loadTokens(uid) {
+          const snap = await db.collection("users").doc(uid).collection("fcmTokens").get();
+          return snap.docs.map(docSnap => {
+            const data = docSnap.data() || {};
+            return { id: docSnap.id, token: data.token, companyId: data.companyId, origin: data.origin };
+          });
+        },
+        sendEach: messages => getMessaging().sendEach(messages),
+        deleteToken: target => db.collection("users").doc(target.uid).collection("fcmTokens").doc(target.tokenId).delete(),
+      });
+    } catch (err) {
+      console.error("location remind", err && err.code ? err.code : "failed");
+      throw new HttpsError("internal", "Couldn't send that reminder.");
+    }
+    if (!result || !result.ok) {
+      const reason = result && result.reason;
+      const code = reason === "rate-limited" ? "resource-exhausted"
+        : reason === "already-sharing" ? "failed-precondition"
+        : reason === "unauthenticated" ? "unauthenticated"
+        : "permission-denied";
+      throw new HttpsError(code, (result && result.message) || "You can't send that reminder.");
+    }
+    return { ok: true, message: result.message, sent: result.sent || 0 };
   },
 );
 
