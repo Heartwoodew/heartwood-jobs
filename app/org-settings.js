@@ -32,6 +32,17 @@ const STORE_KEY = "callup.org.v1";
 const FIELDS = ["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "jobPrefix", "accountsName"];
 let activeCompany = null;
 
+function copyAddressParts(source) {
+  const raw = source && source.addressParts;
+  if (!raw || typeof raw !== "object") return null;
+  const street = String(raw.street || "").trim().slice(0, 80);
+  const suburb = String(raw.suburb || "").trim().slice(0, 40);
+  const state = String(raw.state || "").trim().toUpperCase().slice(0, 3);
+  const postcode = String(raw.postcode || "").trim().slice(0, 4);
+  if (!street && !suburb && !state && !postcode) return null;
+  return { street, suburb, state, postcode };
+}
+
 function clean(source) {
   const out = {};
   if (!source || typeof source !== "object") return out;
@@ -63,8 +74,10 @@ export function setActiveCompany(company) {
     return orgSettings();
   }
   const billing = company.billing && typeof company.billing === "object" ? company.billing : null;
+  const addressParts = copyAddressParts(company);
   activeCompany = {
     ...clean(company),
+    ...(addressParts ? { addressParts } : {}),
     companyId: typeof company.companyId === "string" && company.companyId ? company.companyId : DEFAULT_ORG.companyId,
     isTest: company.isTest === true,
     plan: typeof company.plan === "string" ? company.plan : "",

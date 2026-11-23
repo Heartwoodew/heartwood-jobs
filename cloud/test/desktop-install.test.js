@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import {
   WINDOWS_DOWNLOAD_URL, desktopInstallHtml, desktopInstallModel, readDesktopEnv, safeDownloadUrl, startDesktopInstall,
 } from "../../app/features/desktop-install.js";
+import { pickDashboardBanner } from "../../app/features/dashboard-banners.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const desktopChrome = {
@@ -111,7 +112,7 @@ test("startDesktopInstall shows Download for Windows at once and adds Install on
   assert.match(host.innerHTML, /Install on this PC/);
 });
 
-test("the manifest can be installed on a desktop, and the shell is callup-shell-v145-repeat-fields", () => {
+test("the manifest can be installed on a desktop, and the shell is callup-shell-v146-signup-polish", () => {
   const manifest = JSON.parse(readFileSync(join(ROOT, "app/manifest.webmanifest"), "utf8"));
   assert.equal(manifest.display, "standalone");
   assert.equal(manifest.start_url, "/app/");
@@ -120,10 +121,22 @@ test("the manifest can be installed on a desktop, and the shell is callup-shell-
   const sizes = manifest.icons.map(icon => icon.sizes);
   assert.ok(sizes.includes("192x192") && sizes.includes("512x512"));
   const sw = readFileSync(join(ROOT, "app/sw.js"), "utf8");
-  assert.match(sw, /callup-shell-v145-repeat-fields/);
+  assert.match(sw, /callup-shell-v146-signup-polish/);
   assert.match(sw, /features\/desktop-install\.js/);
   const app = readFileSync(join(ROOT, "app/app.js"), "utf8");
   assert.match(app, /startDesktopInstall/);
+});
+
+test("the dashboard shows one banner, trial first, then notifications, then Windows", () => {
+  assert.equal(pickDashboardBanner({ trial: true, notifications: true, windows: true }), "trial");
+  assert.equal(pickDashboardBanner({ expired: true, notifications: true, windows: true }), "trial");
+  assert.equal(pickDashboardBanner({ trial: false, notifications: true, windows: true }), "notifications");
+  assert.equal(pickDashboardBanner({ notifications: false, windows: true }), "windows");
+  assert.equal(pickDashboardBanner({}), "");
+  const app = readFileSync(join(ROOT, "app/app.js"), "utf8");
+  assert.match(app, /pickDashboardBanner/);
+  assert.match(app, /bannerSlotHtml\(\)/);
+  assert.doesNotMatch(app, /trialBannerNow\(\)\$\{PUSH\.bannerHtml\(\)\}/);
 });
 
 test("the Windows workflow builds both installers and only drafts a release for a desktop-v tag", () => {

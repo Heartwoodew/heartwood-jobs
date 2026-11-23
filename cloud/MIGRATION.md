@@ -422,6 +422,17 @@ After review, deploy hosting only. Service worker `callup-shell-v145-repeat-fiel
 
 No functions deploy, no Storage change, no rules deploy, no index deploy, no Stripe change, no backfill.
 
+## Signup address, Civil trade, one dashboard banner (not deployed)
+
+Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production. Existing companies keep the single `address` string. No backfill.
+
+After review:
+
+1. Publish `cloud/firestore.production.rules`. Signup and company settings may store `addressParts` (`street`, `suburb`, `state`, `postcode`) as well as the combined `address`. `traffic-control` and `civil-earthworks` are allowed trade ids, and the stored id `traffic-civil` still validates so current companies are not rewritten. The owner profile accepts every selectable trade as `jobTitleId`. Do not publish `cloud/emulator/firestore.rules`.
+2. Deploy hosting. Service worker `callup-shell-v146-signup-polish`.
+
+No functions deploy, no Storage change, no index deploy, no Stripe change, no backfill.
+
 ## Admin password reset (15 Nov 2026)
 
 Do not deploy from this branch. When it is deployed: hosting (service worker `callup-shell-v108-password-reset`) and the function `adminSendPasswordReset` in australia-southeast1. It uses the same `RESEND_API_KEY` and `INVITE_EMAIL_ENABLED` gate as `inviteEmailWorker`. The reset link is emailed to the staff member and is not returned to the browser. Firestore `passwordResetRate/{uid}` is Admin SDK only (client read and write denied). Rebased onto main's `callup-shell-v106-multi-category-quotes`; this branch stays `callup-shell-v108-password-reset`.

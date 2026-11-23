@@ -261,7 +261,7 @@ test("the app module and the function module stay the same file", () => {
   assert.equal(index.includes("whsec_"), false);
   assert.equal(rules.includes(fragment.trim()), true);
   const sw = readFileSync(new URL("../../app/sw.js", import.meta.url), "utf8");
-  assert.match(sw, /callup-shell-v145-repeat-fields/);
+  assert.match(sw, /callup-shell-v146-signup-polish/);
   assert.match(sw, /features\/inbound-forward\.js/);
   assert.equal(createHash("sha256").update(app).digest("hex").length, 64);
 });

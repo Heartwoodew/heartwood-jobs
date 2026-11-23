@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   DEFAULT_TRADE, LAZY_EARTHWORKS_IDS, TRADES, QUOTE_PACKS,
-  addTitle, companyTradesDoc, defaultTitles, levelForTitleName, measureQty, normalizeTrade, quotePack, quoteTradeSwitchHtml,
+  addTitle, companyTradesDoc, defaultTitles, expandTradeId, filterTrades, levelForTitleName, measureQty, normalizeTrade, quotePack, quoteTradeSwitchHtml,
   chooseTitleLevel, readTradeList, readyJobTypeMap, removeTitle, renameTitle, resolveCompanySetup, sanitizeSkills, setTitleLevel,
   signupTradesHtml, tradeSettingsHtml, tradeToolsHtml,
 } from "../app/features/trades.js";
@@ -86,7 +86,7 @@ test("a shared title keeps the lower level unless the primary mapping is already
 });
 
 test("every preloaded title maps to the permission level named in the sprint", () => {
-  assert.equal(TRADES.length, 16);
+  assert.equal(TRADES.length, 17);
   const counts = {};
   for (const trade of TRADES) {
     const titles = defaultTitles([trade.id]);
@@ -231,4 +231,41 @@ test("earthworks calculator helpers do not change the plant quote total", () => 
   };
   const q = calcQuote({ hoursOnSite: 2, machines: ["truck", "skid"], includeLabourer: false, travelKm: 0, materialQty: 0, tipLoads: 0 }, rates);
   assert.equal(q.totalEx, 2 * 100 + 2 * 80);
+});
+
+test("civil is its own trade and a stored traffic-civil company keeps both packs", () => {
+  const civil = filterTrades("civil");
+  assert.deepEqual(civil.map(row => row.id), ["civil-earthworks"]);
+  assert.match(civil[0].label, /Civil/);
+  assert.equal(filterTrades("traffic").some(row => row.id === "traffic-control"), true);
+  assert.equal(filterTrades("CIVIL").some(row => row.id === "earthworks"), false);
+  const html = signupTradesHtml([]);
+  assert.match(html, /data-trade-search/);
+  assert.match(html, /Civil and earthworks/);
+  assert.match(html, /value="traffic-control"/);
+  assert.doesNotMatch(html, /value="traffic-civil"/);
+  assert.deepEqual(expandTradeId("traffic-civil"), ["traffic-control", "civil-earthworks"]);
+  const heartwood = resolveCompanySetup({ companyId: "heartwood" }, null);
+  assert.deepEqual(heartwood.enabled, ["earthworks"]);
+  const stored = resolveCompanySetup({ companyId: "heartwood", trades: ["traffic-civil"] }, {
+    trades: ["traffic-civil"],
+    titles: [{ id: "traffic-civil:traffic-controller", name: "Traffic controller", level: "operator", trade: "traffic-civil", custom: false }],
+    checklists: [{ id: "tc-prestart", label: "Plant prestart done before the shift", jobTypes: ["tc-traffic"], custom: false, trade: "traffic-civil" }],
+    photoSteps: [{ id: "tc-setup", label: "Site setup photo", jobTypes: ["tc-traffic"], required: true, custom: false, trade: "traffic-civil" }],
+  });
+  assert.deepEqual(stored.enabled, ["traffic-control", "civil-earthworks"]);
+  assert.equal(stored.titles.some(row => row.name === "Traffic controller" && row.trade === "traffic-control"), true);
+  assert.equal(stored.checklists.some(row => row.id === "tc-prestart"), true);
+  assert.equal(stored.photoSteps.some(row => row.id === "tc-setup"), true);
+  assert.equal(stored.checklists.some(row => row.trade === "civil-earthworks"), true);
+  const legacy = quotePack("traffic-civil");
+  assert.equal(legacy.ready, true);
+  assert.equal(legacy.label, "Traffic control and civil");
+  assert.ok(legacy.lineItems.some(row => row.label === "Civil works"));
+  assert.ok(legacy.lineItems.some(row => row.label === "Traffic controller"));
+  assert.equal(quotePack("civil-earthworks").label, "Civil and earthworks");
+  assert.equal(quotePack("traffic-control").label, "Traffic control");
+  const doc = companyTradesDoc("civil-co", ["traffic-civil"], "u");
+  assert.deepEqual(doc.trades, ["traffic-control", "civil-earthworks"]);
+  assert.equal(doc.trade, "traffic-control");
 });

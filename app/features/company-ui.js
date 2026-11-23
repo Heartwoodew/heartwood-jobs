@@ -2,7 +2,7 @@
 // Master rows are account-level only. This file does not read jobs, photos, or money.
 
 import { POWERED_BY, PRODUCT_NAME } from "../org-settings.js";
-import { companyFieldErrors, derivedJobPrefix, filterMaster, friendInviteLink, masterTotals } from "./company.js";
+import { AU_STATES, addressFieldsFromCompany, companyFieldErrors, derivedJobPrefix, filterMaster, friendInviteLink, masterTotals } from "./company.js";
 import { inputAttrs } from "./autofill.js";
 import { LOGO_ACCEPT, acceptLogoValue, isLogoStoragePath } from "./company-logo.js";
 import { signupTradesHtml, tradeSettingsHtml } from "./trades.js";
@@ -47,6 +47,25 @@ function fieldErr(name) {
   return `<p class="field-err" data-err="${name}" hidden></p>`;
 }
 
+function addressFieldsHtml(fields = {}, { required = false, locked = false } = {}) {
+  const lock = locked ? " disabled" : "";
+  const star = label => (required ? req(label) : label);
+  const must = required ? " required" : "";
+  const state = String(fields.state || "");
+  const options = AU_STATES.map(([code, name]) => `<option value="${code}"${code === state ? " selected" : ""}>${code} — ${esc(name)}</option>`).join("");
+  return `<div class="addr-fields">
+    <label>${star("Street address")}<input name="street" maxlength="160" autocomplete="street-address" value="${esc(fields.street || "")}"${must}${lock}></label>
+    ${required ? fieldErr("street") : ""}
+    <label>${star("Suburb")}<input name="suburb" maxlength="40" autocomplete="address-level2" value="${esc(fields.suburb || "")}"${must}${lock}></label>
+    ${required ? fieldErr("suburb") : ""}
+    <div class="addr-line">
+      <label>${star("State")}<select name="state" autocomplete="address-level1"${must}${lock}><option value="">Choose state</option>${options}</select></label>
+      <label>${star("Postcode")}<input name="postcode" maxlength="4" inputmode="numeric" autocomplete="postal-code" pattern="[0-9]{4}" value="${esc(fields.postcode || "")}"${must}${lock}></label>
+    </div>
+    ${required ? fieldErr("state") + fieldErr("postcode") + fieldErr("address") : ""}
+  </div>`;
+}
+
 export function signupFormHtml({ friend = false } = {}) {
   return `<form id="signup" class="card login signup" novalidate>
     <div class="login-brand"><div class="wordmark" aria-label="${esc(PRODUCT_NAME)}">Call<span>Up</span></div>
@@ -73,8 +92,7 @@ export function signupFormHtml({ friend = false } = {}) {
     ${fieldErr("legalName")}
     <label>${req("ABN")}<span class="sub">Required, including on a trial. Digits, spaces allowed (for example 00 000 000 000). The company record needs an ABN.</span><input name="abn" required maxlength="20" inputmode="numeric" placeholder="00 000 000 000"></label>
     ${fieldErr("abn")}
-    <label>${req("Address")}<input name="address" required maxlength="160"></label>
-    ${fieldErr("address")}
+    ${addressFieldsHtml({}, { required: true })}
     <label>Phone<span class="sub">Optional.</span><input name="phone" maxlength="40" inputmode="tel"></label>
     ${fieldErr("phone")}
     <label>${req("Email")}<input name="email" type="email" required maxlength="120"></label>
@@ -117,7 +135,16 @@ export function signupFieldErrors(input = {}) {
   if (!trades.length) add("trades", SIGNUP_FIELD_TEXT.trades);
   const email = String(input.email || "").trim();
   const accountsEmail = String(input.accountsEmail || "").trim() || email;
-  for (const code of companyFieldErrors({ ...input, legalName: input.legalName, accountsEmail, signoff: input.name })) {
+  for (const code of companyFieldErrors({
+    ...input,
+    street: input.street ?? "",
+    suburb: input.suburb ?? "",
+    state: input.state ?? "",
+    postcode: input.postcode ?? "",
+    legalName: input.legalName,
+    accountsEmail,
+    signoff: input.name,
+  })) {
     const field = code === "hubdoc" ? "hubdocAddress" : code;
     const message = code === "abn"
       ? "Enter the ABN as digits, with or without spaces. A trial company still needs an ABN."
@@ -147,6 +174,7 @@ export function clientFormHtml() {
 
 export function companySettingsHtml(org, { canEdit = false, trades = [], canEditTrades = false } = {}) {
   const lock = canEdit ? "" : " disabled";
+  const address = addressFieldsFromCompany(org);
   return `<div class="sm-head"><h1>Company</h1></div>
     <p class="sub">These details replace the company name on the header, hours spreadsheet, quotes, SWMS, PDFs and emails for everyone in this company. Billing and these details stay with an admin. Admins and managers can change the trade list.</p>
     ${tradeSettingsHtml(trades, { canEdit: canEditTrades })}
@@ -154,7 +182,7 @@ export function companySettingsHtml(org, { canEdit = false, trades = [], canEdit
       <label>Company name<input name="name" required maxlength="80" value="${esc(org.name)}"${lock}></label>
       <label>Legal name<input name="legalName" required maxlength="120" value="${esc(org.legalName)}"${lock}></label>
       <label>ABN<input name="abn" required maxlength="20" value="${esc(org.abn)}"${lock}></label>
-      <label>Address<input name="address" required maxlength="160" value="${esc(org.address || "")}"${lock}></label>
+      ${addressFieldsHtml(address, { locked: !canEdit })}
       <label>Phone<input name="phone" maxlength="40" value="${esc(org.phone || "")}"${lock}></label>
       <label>Email<input name="email" type="email" required maxlength="120" value="${esc(org.email || "")}"${lock}></label>
       <label>Accounts email<span class="sub">Hours spreadsheets go here.</span><input name="accountsEmail" type="email" required maxlength="120" value="${esc(org.accountsEmail || "")}"${lock}></label>
@@ -474,6 +502,10 @@ export function failureText(code) {
     legalName: "Enter the legal name.",
     abn: "Enter the ABN as digits, with or without spaces.",
     address: "Enter the company address.",
+    street: "Enter the street address.",
+    suburb: "Enter the suburb.",
+    state: "Choose a state.",
+    postcode: "Enter a 4-digit postcode.",
     phone: "Check the phone number.",
     email: "Enter a valid company email.",
     accountsEmail: "Enter the accounts email that should receive hours spreadsheets.",

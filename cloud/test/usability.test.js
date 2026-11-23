@@ -65,13 +65,20 @@ test("sign-up marks required fields and reports each missing one", () => {
   assert.match(html, /name="addCard"/);
   assert.doesNotMatch(html, /name="trades"[^>]*checked/);
   const errors = signupFieldErrors({});
-  for (const field of ["ownerName", "ownerEmail", "password", "trades", "name", "legalName", "abn", "address", "email"]) {
+  assert.match(html, /name="street"/);
+  assert.match(html, /name="suburb"/);
+  assert.match(html, /name="state"/);
+  assert.match(html, /name="postcode"/);
+  assert.match(html, /QLD — Queensland/);
+  assert.doesNotMatch(html, /name="address"/);
+  for (const field of ["ownerName", "ownerEmail", "password", "trades", "name", "legalName", "abn", "street", "suburb", "state", "postcode", "email"]) {
     assert.ok(errors.some(row => row.field === field), field);
   }
   const filled = signupFieldErrors({
     ownerName: "Ada", ownerEmail: "ada@example.com", password: "long-enough", trades: ["plumbing"],
     name: "Ada Plumbing", legalName: "Ada Plumbing Pty Ltd", abn: "12 345 678 901",
-    address: "1 Creek St", email: "office@ada.example", accountsEmail: "",
+    street: "1 Creek St", suburb: "Chuwar", state: "QLD", postcode: "4306",
+    email: "office@ada.example", accountsEmail: "",
   });
   assert.deepEqual(filled, []);
 });
@@ -162,6 +169,6 @@ test("help answers every role from the knowledge list and hides money from crew"
   const officeAnswer = await askHelp("How do I add a job?", office, async () => ({ enabled: true, reply: "Open Jobs and tap New Job." }));
   assert.equal(officeAnswer.source, "helper");
   assert.equal(helpVisible({ uid: "owner", role: "admin", companyId: "brand-new" }), true);
-  assert.match(sw, /callup-shell-v145-repeat-fields/);
+  assert.match(sw, /callup-shell-v146-signup-polish/);
   assert.match(sw, /features\/help\.js/);
 });

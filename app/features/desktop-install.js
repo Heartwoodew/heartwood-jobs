@@ -71,7 +71,18 @@ export function desktopInstallHtml(model) {
   </div>`;
 }
 
-export function startDesktopInstall(doc = typeof document !== "undefined" ? document : null, win = typeof window !== "undefined" ? window : null) {
+let repaintDesktop = () => {};
+let desktopWanted = false;
+
+export function desktopBannerWouldShow() {
+  return desktopWanted;
+}
+
+export function refreshDesktopBanner() {
+  repaintDesktop();
+}
+
+export function startDesktopInstall(doc = typeof document !== "undefined" ? document : null, win = typeof window !== "undefined" ? window : null, allow) {
   if (!doc || !win || !doc.getElementById) return;
   const host = doc.getElementById("desktopinstall");
   if (!host) return;
@@ -80,12 +91,13 @@ export function startDesktopInstall(doc = typeof document !== "undefined" ? docu
   try { dismissed = !!(win.sessionStorage && win.sessionStorage.getItem("callup.desktopInstall") === "hide"); } catch { dismissed = false; }
 
   function paint() {
-    if (dismissed) { host.hidden = true; host.innerHTML = ""; return; }
     const model = desktopInstallModel({
       env: { window: win, navigator: win.navigator, tauri: win.__CALLUP_DESKTOP__ === true },
       promptReady: !!prompt,
     });
-    if (!model.show) { host.hidden = true; host.innerHTML = ""; return; }
+    desktopWanted = !dismissed && !!(model && model.show);
+    const permitted = desktopWanted && (typeof allow !== "function" || allow() !== false);
+    if (!permitted) { host.hidden = true; host.innerHTML = ""; return; }
     host.hidden = false;
     host.innerHTML = desktopInstallHtml(model);
     const installBtn = host.querySelector && host.querySelector("#desktopinstallbtn");
@@ -106,6 +118,7 @@ export function startDesktopInstall(doc = typeof document !== "undefined" ? docu
     };
   }
 
+  repaintDesktop = paint;
   win.addEventListener("beforeinstallprompt", event => {
     const surface = readDesktopEnv({ window: win, navigator: win.navigator, tauri: win.__CALLUP_DESKTOP__ === true });
     // Phones keep the browser's own install prompt. A desktop browser, and the Windows program, use ours or none.
