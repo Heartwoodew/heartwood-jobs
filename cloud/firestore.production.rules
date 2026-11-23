@@ -3133,6 +3133,50 @@ service cloud.firestore {
               : "heartwood";
           }
 
+    // Support tickets. The person who raised it can create and read their own.
+    // The platform owner (Master) can list, read and close every ticket.
+    // Another company, and another person in the same company, cannot read it.
+    // No prices are stored here. The screenshot path is empty or this ticket's file.
+    match /supportTickets/{ticketId} {
+      function ticketOwn() {
+        return signedIn()
+          && resource.data.uid == request.auth.uid
+          && resource.data.companyId == callerCompany();
+      }
+      function ticketCreate() {
+        let d = request.resource.data;
+        let company = callerCompany();
+        return signedIn()
+          && ticketId.matches('^[A-Za-z0-9]{16,28}$')
+          && company is string && company.size() > 1 && company.size() <= 40
+          && d.keys().hasOnly(["subject", "description", "uid", "name", "email", "role", "companyId", "companyName", "appVersion", "swVersion", "userAgent", "page", "createdAt", "status", "screenshotPath"])
+          && d.subject is string && d.subject.size() > 0 && d.subject.size() <= 120
+          && d.description is string && d.description.size() > 0 && d.description.size() <= 4000
+          && d.uid == request.auth.uid
+          && d.name is string && d.name.size() <= 80
+          && d.email is string && d.email.size() <= 120
+          && d.role is string && d.role.size() <= 40
+          && d.companyId == company
+          && d.companyName is string && d.companyName.size() <= 80
+          && d.appVersion is string && d.appVersion.size() <= 80
+          && d.swVersion is string && d.swVersion.size() <= 80
+          && d.userAgent is string && d.userAgent.size() <= 300
+          && d.page is string && d.page.size() <= 200
+          && d.createdAt == request.time
+          && d.status == "open"
+          && d.screenshotPath is string && d.screenshotPath.size() <= 240
+          && (d.screenshotPath == "" || d.screenshotPath == "supportTickets/" + company + "/" + request.auth.uid + "/" + ticketId + "/shot.jpg");
+      }
+
+      allow create: if ticketCreate();
+      allow get, list: if platformOwner() || ticketOwn();
+      allow update: if platformOwner()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "updatedAt"])
+        && request.resource.data.status in ["open", "closed"]
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
     match /{document=**} { allow read, write: if false; }
   }
 }

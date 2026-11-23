@@ -625,5 +625,49 @@ service firebase.storage {
       allow write: if false;
     }
 // END INBOUND MAIL FILE RULES
+
+    // Support screenshot. Private. One profile read (exists + get), which is the
+    // production cap. The submitter reads and writes only their own file in their
+    // company. The platform owner reads every file and may upload their own
+    // screenshot while viewing another company. storagePlatformOwner reads
+    // email_verified directly, so a token without that claim must not call it.
+    function supportFileOwner() {
+      return signedIn()
+        && "email_verified" in request.auth.token
+        && "email" in request.auth.token
+        && storagePlatformOwner();
+    }
+    function supportCallerCompany() {
+      let path = /databases/(default)/documents/users/$(request.auth.uid);
+      let listed = request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"
+        || request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2";
+      let missing = !firestore.exists(path);
+      let p = missing ? {} : firestore.get(path).data;
+      let company = p.get("companyId", "");
+      let tenant = p.get("tenantId", "");
+      return company is string && company != "" ? company
+        : (tenant is string && tenant != "" ? tenant : ((listed || !missing) ? "heartwood" : ""));
+    }
+    function supportShotFile(companyId, uid, ticketId, file) {
+      return signedIn()
+        && request.auth.uid == uid
+        && file == "shot.jpg"
+        && ticketId.matches('^[A-Za-z0-9]{16,28}$')
+        && companyId.matches('^[a-z0-9][a-z0-9-]{0,39}$')
+        && request.resource.size > 0
+        && request.resource.size <= 5 * 1024 * 1024
+        && request.resource.contentType == "image/jpeg"
+        && request.resource.metadata.purpose == "support-ticket"
+        && request.resource.metadata.uploaderUid == request.auth.uid
+        && request.resource.metadata.companyId == companyId
+        && request.resource.metadata.ticketId == ticketId;
+    }
+    match /supportTickets/{companyId}/{uid}/{ticketId}/{file} {
+      allow read: if signedIn() && request.auth.uid == uid && supportCallerCompany() == companyId;
+      allow read: if supportFileOwner();
+      allow create: if supportShotFile(companyId, uid, ticketId, file) && supportCallerCompany() == companyId;
+      allow create: if supportShotFile(companyId, uid, ticketId, file) && supportFileOwner();
+      allow update, delete: if false;
+    }
   }
 }

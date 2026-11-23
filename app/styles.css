@@ -1292,6 +1292,12 @@ abbr.req{color:#9b2c2c;text-decoration:none;font-weight:700}
 .callup-help-form input{flex:1;min-width:0}
 .callup-help-card{margin:8px;padding:10px;background:#f7f1e8;border-radius:8px}
 #helpbtn{min-width:40px;font-weight:700}
+#ticketbtn{font-weight:700}
+.ticketbox textarea{width:100%;font:inherit;padding:8px;border:1px solid var(--sm-line);border-radius:8px}
+.ticket-row{margin:8px 0;padding-top:8px;border-top:1px solid var(--sm-line)}
+.ticket-row p{white-space:pre-wrap}
+.ticket-focus{outline:2px solid #8a5a2b;border-radius:8px}
+.ticket-row img{max-width:100%;height:auto;border-radius:8px}
 #desktopinstall{max-width:1150px;margin:0 auto;padding:8px 12px 0}
 #desktopinstall[hidden]{display:none}
 #desktopinstall .desktop-install-card{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;padding:10px 12px}

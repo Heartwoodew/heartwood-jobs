@@ -208,11 +208,20 @@ let normalizeSupervisorEmail = () => "";
 let readDraftEdits = (root, draft) => draft;
 let INBOUND_DOMAIN = "inbound.callupapp.com.au";
 let startDesktopInstall = () => {};
+let SHELL_VERSION = "callup-shell-v143-industries";
+let prepareTicket = () => ({ ok: false, reason: "loading" });
+let ticketDialogHtml = () => "";
+let ticketFailureText = () => "The ticket could not be sent. Try again.";
+let newTicketId = () => "";
+let compressTicketShot = async () => { throw Object.assign(new Error("loading"), { code: "compress" }); };
+let screenshotUploadPlan = () => ({ path: "", contentType: "image/jpeg", metadata: {} });
+let masterTicketsHtml = () => "";
+let ticketPage = () => "";
 let featuresOn = false;
 let packPromise = null;
 function loadFeaturePack() {
   if (!packPromise) packPromise = (async () => {
-    const [quotes, help, capacity, cloudStorage, retention, jobEmail, gallery, capture, documents, chatUi, push, compliance, performance, take5, exportsMod, receipts, leave, hours, claims, inbox, desktop, inbound] = await Promise.all([
+    const [quotes, help, capacity, cloudStorage, retention, jobEmail, gallery, capture, documents, chatUi, push, compliance, performance, take5, exportsMod, receipts, leave, hours, claims, inbox, desktop, inbound, supportTickets] = await Promise.all([
       import("./features/quotes.js"),
       import("./features/help.js"),
       import("./features/capacity.js"),
@@ -235,6 +244,7 @@ function loadFeaturePack() {
       import("./features/inbox-import.js"),
       import("./features/desktop-install.js"),
       import("./features/inbound-forward.js"),
+      import("./features/support-ticket.js"),
     ]);
     ({ installQuotes, adminViewRouter, quoteRatesSettingsBlurb, setDefaultDepot, setQuoteTradeSetup, setQuoteFocus } = quotes);
     ({ askHelp, helpAnswerHtml, helpPanelHtml, helpVisible } = help);
@@ -258,6 +268,7 @@ function loadFeaturePack() {
     ({ addressWithSuburb, bulkCandidates, canImportInbox, composeAddress, defaultImportMode, duplicateWarning, findExistingJob, isImported, parseInboxEmail } = inbox);
     ({ startDesktopInstall } = desktop);
     ({ forwardScreenHtml, jobFromDraft, inboundToken, collectSupervisorEmails, normalizeSupervisorEmail, readDraftEdits, INBOUND_DOMAIN } = inbound);
+    ({ SHELL_VERSION, prepareTicket, ticketDialogHtml, ticketFailureText, newTicketId, compressTicketShot, screenshotUploadPlan, masterTicketsHtml, ticketPage } = supportTickets);
     featuresOn = true;
     mountFeatureApps();
   })();
@@ -407,6 +418,7 @@ function showAccountChrome(on) {
   $("#logout")?.classList.toggle("hidden", !on);
   const signedIn = on && (me ? helpVisible(me) : true);
   $("#helpbtn")?.classList.toggle("hidden", !signedIn);
+  $("#ticketbtn")?.classList.toggle("hidden", !(on && me));
 }
 function helpContext() {
   return {
@@ -446,8 +458,9 @@ function goHelp(view) {
   ui.opTab = tabs[view] || "more";
   renderOperator();
 }
-function openHelp() {
+async function openHelp() {
   if (!helpVisible(me || { uid: "signed-in" })) return;
+  await loadFeaturePack();
   let panel = $("#helppanel");
   if (panel) { panel.remove(); return; }
   document.body.insertAdjacentHTML("beforeend", helpPanelHtml());
@@ -469,6 +482,79 @@ document.addEventListener("click", ev => {
   const open = ev.target.closest && ev.target.closest("[data-open-help]");
   if (open) { ev.preventDefault(); openHelp(); }
 });
+document.addEventListener("click", ev => {
+  const btn = ev.target.closest && ev.target.closest("[data-raise-ticket]");
+  if (!btn) return;
+  ev.preventDefault();
+  openTicketDialog();
+});
+const ticketShotUrls = new Set();
+async function openTicketDialog() {
+  if (!me) return;
+  await loadFeaturePack();
+  document.querySelectorAll(".ticketover").forEach(node => node.remove());
+  const v = document.createElement("div");
+  v.className = "emdlg ticketover";
+  v.innerHTML = ticketDialogHtml();
+  document.body.appendChild(v);
+  const close = () => v.remove();
+  v.querySelector("[data-x]").onclick = close;
+  v.onclick = ev => { if (ev.target === v) close(); };
+  const form = v.querySelector("#ticketform");
+  form.onsubmit = async ev => {
+    ev.preventDefault();
+    const err = form.querySelector("#ticketerr");
+    const file = form.shot.files && form.shot.files[0];
+    let id = "";
+    try { id = newTicketId(); } catch { if (err) err.textContent = ticketFailureText("save"); return; }
+    const prepared = prepareTicket({
+      id,
+      subject: form.subject.value,
+      description: form.description.value,
+      file: file || null,
+      uid: me.uid,
+      name: me.name,
+      email: auth.currentUser && auth.currentUser.email,
+      role: me.staffRole || me.role,
+      companyId: myCompanyId(),
+      companyName: orgSettings().name,
+      appVersion: SHELL_VERSION,
+      swVersion: SHELL_VERSION,
+      userAgent: navigator.userAgent,
+      page: ticketPage(location, (me.role === "admin" && !ui.myJobs) ? ui.view : ui.opTab),
+    });
+    if (!prepared.ok) { if (err) err.textContent = ticketFailureText(prepared.reason); return; }
+    const submit = form.querySelector("[type=submit]");
+    if (submit) submit.disabled = true;
+    try {
+      if (prepared.screenshotPath) {
+        const blob = await compressTicketShot(file);
+        const plan = screenshotUploadPlan(prepared.screenshotPath, { uid: me.uid, companyId: myCompanyId(), ticketId: prepared.id });
+        await uploadBytes(storageRef(storage, plan.path), blob, { contentType: plan.contentType, customMetadata: plan.metadata });
+      }
+      await setDoc(doc(db, "supportTickets", prepared.id), { ...prepared.doc, createdAt: serverTimestamp() });
+      close();
+      toast("Ticket sent. CallUp support has been notified.");
+    } catch (e) {
+      if (submit) submit.disabled = false;
+      const code = e && (e.code || "");
+      if (err) err.textContent = ticketFailureText(String(code).includes("storage/") ? "upload" : (e && e.code) || "save");
+    }
+  };
+}
+function paintTicketShots(root) {
+  for (const url of ticketShotUrls) URL.revokeObjectURL(url);
+  ticketShotUrls.clear();
+  root.querySelectorAll("[data-ticket-shot]").forEach(img => {
+    const path = img.dataset.ticketShot;
+    if (!path) return;
+    getBlob(storageRef(storage, path)).then(blob => {
+      const url = URL.createObjectURL(blob);
+      ticketShotUrls.add(url);
+      img.src = url;
+    }).catch(() => { img.alt = "Screenshot unavailable"; });
+  });
+}
 // Firestore retries a transaction, then fails with failed-precondition when someone else wrote first.
 function txFail(e) {
   const code = String((e && (e.code || e.message)) || "");
@@ -652,6 +738,9 @@ onAuthStateChanged(auth, async user => {
     if (window.HW_PREVIEW_VIEW === "settings" || window.HW_PREVIEW_VIEW === "company") ui.view = "settings";
     if (window.HW_PREVIEW_VIEW === "master" && me.platformOwner) ui.view = "master";
     if (ui.landOnMaster && me.platformOwner) ui.view = "master";
+    const ticketQ = new URLSearchParams(location.search).get("ticket") || "";
+    if (/^[A-Za-z0-9]{16,28}$/.test(ticketQ)) ui.ticketFocus = ticketQ;
+    if (ui.ticketFocus && me.platformOwner && !me.testCompanyId) ui.view = "master";
     const companyId = myCompanyId();
     const staffSnap = (companyId === "heartwood" && users) || await getDocs(query(collection(db, "users"), where("companyId", "==", companyId))).catch(() => null);
     // When the unscoped users list is denied, still know this company's own staff so legacy (no companyId) Heartwood sheets load.
@@ -1435,7 +1524,8 @@ function settingsView() {
   return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin"), trades, canEditTrades: canEditTitles() })
     + presetEditorHtml(setup, { canEdit: canEditTitles() })
     + rates + perfSet + PUSH.panelHtml()
-    + dispatchSettingsHtml(dispatchSettingsNow(), { canEdit: canEditTitles() });
+    + dispatchSettingsHtml(dispatchSettingsNow(), { canEdit: canEditTitles() })
+    + `<section class="pad"><h3>Support</h3><p class="sub">Send a note to CallUp. Anyone signed in can raise a ticket.</p><button type="button" class="sm-btn" data-raise-ticket>Raise ticket</button></section>`;
 }
 async function saveDispatchForm(form) {
   if (!canEditTitles()) { toast("An admin or a manager can change dispatch times."); return; }
@@ -1652,7 +1742,8 @@ function bindSettings(A) {
 }
 function masterView() {
   const rows = ui.masterRows || [];
-  return masterPageHtml(rows, ui.masterFilters || {}, ui.friendInvites || [], location.origin, ui.friendOut || "");
+  return masterPageHtml(rows, ui.masterFilters || {}, ui.friendInvites || [], location.origin, ui.friendOut || "")
+    + masterTicketsHtml(ui.supportTickets || [], { focusId: ui.ticketFocus || "" });
 }
 function bindMaster(A) {
   const form = A.querySelector("#masterf");
@@ -1675,6 +1766,16 @@ function bindMaster(A) {
     try { await navigator.clipboard.writeText(b.dataset.friendCopy); toast("Link copied. Mail was not sent."); }
     catch { toast("Select the link to copy it. Mail was not sent."); }
   });
+  A.querySelectorAll("[data-ticket-toggle]").forEach(btn => btn.onclick = async () => {
+    const id = btn.dataset.ticketToggle;
+    const next = btn.dataset.ticketNext === "closed" ? "closed" : "open";
+    try {
+      await updateDoc(doc(db, "supportTickets", id), { status: next, updatedAt: serverTimestamp() });
+    } catch (e) { toast((e && (e.code || e.message)) || "Not saved"); }
+  });
+  const focus = A.querySelector(".ticket-focus");
+  if (focus && focus.scrollIntoView) focus.scrollIntoView({ block: "nearest" });
+  paintTicketShots(A);
   A.querySelectorAll(".master-row").forEach(tr => {
     tr.onclick = () => {
       const row = (ui.masterRows || []).find(r => r.id === tr.dataset.company);
@@ -1929,6 +2030,10 @@ function watchMaster() {
     ui.friendInvites = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     if (ui.view === "master") renderAdmin();
   }, () => { ui.friendInvites = []; });
+  ui.ticketUnsub = onSnapshot(query(collection(db, "supportTickets"), orderBy("createdAt", "desc")), snap => {
+    ui.supportTickets = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (ui.view === "master") renderAdmin();
+  }, () => { ui.supportTickets = []; if (ui.view === "master") renderAdmin(); });
 }
 
 // ------------------------------------------------------------------ admin
@@ -1981,7 +2086,7 @@ function shell(inner) {
     return `<div class="sm-grp ${open ? "open" : ""} ${has ? "has" : ""}"><button class="sm-gh" data-grp="${g}" aria-expanded="${open}"><span class="ic">${ic}</span><span class="lbl">${n}</span><span class="car">${open ? "▾" : "▸"}</span></button>
       <div class="sm-gi">${ks.map(item).join("")}</div></div>`; };
   return `${companyViewBanner()}<div class="sm-layout ${ui.navOpen ? "navopen" : ""}"><div class="sm-burgerbar"><button class="sm-burger" id="burger" aria-label="Menu">☰</button><b>${esc(cur ? (NAV_LBL[cur[0]] || cur[2]) : "")}</b></div>
-    <nav class="sm-side">${NAV_TOP.map(item).join("")}${NAV_GROUPS.map(grp).join("")}${NAV_FOOT.map(item).join("")}</nav>
+    <nav class="sm-side">${NAV_TOP.map(item).join("")}${NAV_GROUPS.map(grp).join("")}${NAV_FOOT.map(item).join("")}<button type="button" class="sm-nav" data-raise-ticket title="Raise ticket"><span class="ic">?</span><span class="lbl">Raise ticket</span></button></nav>
     <section class="sm-main">${trialBannerNow()}${PUSH.bannerHtml()}${inner}</section></div>`;
 }
 // ---- Mixed work: a job whose description lines are different task types (spoil vs backslab vs waterproofing vs clean)
@@ -7127,6 +7232,7 @@ function renderOperator() {
         ${canEditTitles() ? `<button type="button" class="mob-more" data-go="settings"><b>Company</b><small>Add or remove trades. Details and billing stay with an admin.</small></button>` : ""}
         ${inboxBtn}
         ${forwardBtn}
+        <button type="button" class="mob-more" data-raise-ticket><b>Raise ticket</b><small>Tell CallUp support what went wrong</small></button>
         ${PUSH.panelHtml()}
         ${skillsEditorHtml((me.cloudProfile && me.cloudProfile.skills) || [], { canEdit: true })}
         <p class="powered pad">${esc(orgSettings().name)} · ${esc(POWERED_BY)}</p>
@@ -8411,9 +8517,19 @@ function openPushTarget(target) {
       url.searchParams.delete("psjob");
       if (url.searchParams.get("jobs") === "today") url.searchParams.delete("jobs");
       if (url.searchParams.get("open") === "today" || url.searchParams.get("open") === "chat" || url.searchParams.get("open") === "timesheet") url.searchParams.delete("open");
+      url.searchParams.delete("ticket");
       history.replaceState(null, "", url.pathname + url.search + url.hash);
     } catch { /* keep the current address */ }
   };
+  if (target.kind === "ticket") {
+    if (me.platformOwner && !me.testCompanyId) {
+      ui.myJobs = false;
+      ui.view = "master";
+      ui.ticketFocus = target.ticketId;
+    }
+    strip();
+    return true;
+  }
   if (target.kind === "timesheet") {
     ui.opSel = null;
     if (me.role === "admin" && !ui.myJobs) ui.view = "timesheet";

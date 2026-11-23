@@ -228,6 +228,7 @@ export function pausedAdminHtml(access = {}) {
     ${access.manageBilling
       ? `<button class="big primary" type="button" id="billportal">Manage billing</button>`
       : `<button class="big primary" type="button" id="billsub">Subscribe</button>`}
+    <button class="big ghost" type="button" data-raise-ticket>Raise ticket</button>
     <button class="big ghost" type="button" id="pausedout">Sign out</button>
   </form>`;
 }
@@ -236,6 +237,7 @@ export function pausedStaffHtml() {
   return `<form class="card login" id="paused">
     <h2>Account paused</h2>
     <p>This company's account is paused. Ask your admin to subscribe.</p>
+    <button class="big ghost" type="button" data-raise-ticket>Raise ticket</button>
     <button class="big ghost" type="button" id="pausedout">Sign out</button>
   </form>`;
 }
@@ -245,6 +247,7 @@ export function pausedOwnerHtml({ platformOwner = false } = {}) {
     <h2>Account paused</h2>
     <p>This account has been paused.</p>
     ${platformOwner ? `<button class="big primary" type="button" id="pausedhome">Back to Master</button>` : ""}
+    <button class="big ghost" type="button" data-raise-ticket>Raise ticket</button>
     <button class="big ghost" type="button" id="pausedout">Sign out</button>
   </form>`;
 }

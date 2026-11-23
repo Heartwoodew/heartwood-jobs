@@ -54,6 +54,12 @@
  * attachSignupReferral records referredBy at signup. stripeWebhook grants the
  * referrer 2 months free on the referred company's first paid invoice.
  *
+ * supportTicketCreated runs when someone raises a ticket. It pushes the
+ * platform owner and emails SUPPORT_TICKET_EMAIL (comma-separated; default
+ * admin@callupapp.com.au,alex@heartwoodew.com) through Resend. Mail stays off
+ * unless INVITE_EMAIL_ENABLED is "true". A TEST company is not emailed.
+ * INVITE_EMAIL_ALLOW_TO still applies, so a test run only reaches callup932+.
+ *
  * inboundEmailWebhook receives Resend email.received events for
  * <company>-<token>@inbound.callupapp.com.au. It verifies the Svix signature,
  * matches the sender to that company's saved supervisors, and stores a draft.
@@ -117,6 +123,7 @@ import { deleteCompanyAccountData } from "./owner-company.js";
 import { deletionErrorMessage } from "./billing/owner-company.js";
 import { applyVeoliaReceiptWrite, applyVeoliaReimbursementCreate } from "./receipt-reimburse.js";
 import { handleInboundWebhook, saveInboundDecision } from "./inbound-email.js";
+import { deliverSupportTicket, notifyPatch, SUPPORT_OWNER_UID } from "./support-ticket.js";
 export { pauseRetentionSweep } from "./pause-retention.js";
 // Quote links, repeating jobs and certificate email. Not deployed from this branch.
 // sendCustomerQuote and sendCertificateEmail use RESEND_API_KEY. publicQuotePage is the
@@ -1020,6 +1027,46 @@ export const inboundEmailWebhook = onRequest(
       saveResult: decision => saveInboundDecision(db, getStorage().bucket(), decision),
     });
     res.status(outcome.status).json(outcome.body);
+  },
+);
+
+export const supportTicketCreated = onDocumentCreated(
+  { document: "supportTickets/{ticketId}", region: "australia-southeast1", secrets: [RESEND_API_KEY] },
+  async (event) => {
+    if (process.env.NODE_TEST_CONTEXT) return;
+    const snap = event.data;
+    if (!snap) return;
+    ensureAdmin();
+    const db = getFirestore();
+    const ticket = { id: snap.id, ...(snap.data() || {}) };
+    let company = null;
+    if (ticket.companyId) {
+      const companySnap = await db.collection("companies").doc(String(ticket.companyId)).get();
+      company = companySnap.exists ? (companySnap.data() || null) : null;
+    }
+    const tokenSnap = await db.collection("users").doc(SUPPORT_OWNER_UID).collection("fcmTokens").get();
+    const tokens = tokenSnap.docs.map(docSnap => ({ id: docSnap.id, ...(docSnap.data() || {}) }));
+    const result = await deliverSupportTicket(ticket, {
+      company,
+      tokens,
+      env: process.env,
+      allowLiveMail: process.env.INVITE_EMAIL_ENABLED === "true",
+      now: () => new Date().toISOString(),
+      sendResend: payload => sendViaResend({
+        apiKey: RESEND_API_KEY.value(),
+        payload,
+        fetchImpl: fetch,
+        idempotencyKey: "support-" + snap.id,
+      }),
+      sendEach: messages => getMessaging().sendEach(messages),
+      deleteToken: target => db.collection("users").doc(SUPPORT_OWNER_UID).collection("fcmTokens").doc(target.tokenId).delete(),
+      signScreenshot: async (path) => {
+        const file = getStorage().bucket().file(String(path || ""));
+        const [url] = await file.getSignedUrl({ action: "read", expires: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+        return url;
+      },
+    });
+    await snap.ref.set({ notify: notifyPatch(result) }, { merge: true });
   },
 );
 

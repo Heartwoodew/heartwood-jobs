@@ -36,6 +36,8 @@ export function pushTargetFromUrl(href) {
   } catch {
     return null;
   }
+  const ticket = params.get("ticket") || "";
+  if (/^[A-Za-z0-9]{16,28}$/.test(ticket)) return { kind: "ticket", ticketId: ticket };
   if (params.get("jobs") === "today" || params.get("open") === "today") return { kind: "today" };
   if (params.get("open") === "timesheet") return { kind: "timesheet" };
   const prestart = params.get("prestart");
