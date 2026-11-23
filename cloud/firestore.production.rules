@@ -1239,63 +1239,6 @@ service cloud.firestore {
     }
 
     match /tenants/{tenantId}/chats/{threadId} {
-      function chatCallerTenant() {
-        return chatExplicitTenant()
-          ? profile().tenantId
-          : (((signedIn() && hasProfile()) || isAlex() || isPatrick()) ? "heartwood" : "");
-      }
-      function chatMember(tenantId) {
-        return signedIn()
-          && tenantId is string
-          && tenantId.matches('^[a-z0-9][a-z0-9-]{0,39}$')
-          && chatCallerTenant() == tenantId;
-      }
-      function chatJobPath(jobId) { return /databases/$(database)/documents/jobs/$(jobId); }
-      function chatJob(jobId) { return get(chatJobPath(jobId)).data; }
-      function chatJobTenant(jobId) {
-        return "tenantId" in chatJob(jobId) && chatJob(jobId).tenantId is string && chatJob(jobId).tenantId.size() > 0
-          ? chatJob(jobId).tenantId
-          : "heartwood";
-      }
-      function chatAccountTenant() {
-        return chatExplicitTenant() ? profile().tenantId : "heartwood";
-      }
-      function chatAssigned(jobId) {
-        return "assigned" in chatJob(jobId) && chatJob(jobId).assigned is list && request.auth.uid in chatJob(jobId).assigned;
-      }
-      function chatCustomerOk(jobId) {
-        return !(signedIn() && hasProfile())
-          || !("customerIds" in profile())
-          || !(profile().customerIds is list)
-          || profile().customerIds.size() == 0
-          || ("client" in chatJob(jobId) && chatJob(jobId).client is string && chatJob(jobId).client in profile().customerIds);
-      }
-      function chatAccountCanSee(tenantId, jobId) {
-        return (signedIn() && hasProfile())
-          && chatAccountTenant() == tenantId
-          && (("role" in profile() && profile().role == "admin") || chatAssigned(jobId))
-          && chatCustomerOk(jobId);
-      }
-      function chatCanSeeJob(tenantId, jobId) {
-        return signedIn()
-          && jobId is string
-          && jobId.size() > 0
-          && jobId.size() <= 200
-          && chatJobTenant(jobId) == tenantId
-          && ((tenantId == "heartwood" && (isAlex() || isPatrick())) || chatAccountCanSee(tenantId, jobId));
-      }
-      function chatThreadOk(threadId) {
-        return threadId == "staff"
-          || (threadId is string && threadId.size() <= 210 && threadId.matches('^job_[A-Za-z0-9_-]{1,200}$'));
-      }
-      function chatJobId(threadId) { return threadId[4:threadId.size()]; }
-      function chatCanAccess(tenantId, threadId) {
-        return companyOpen(tenantId) && chatThreadOk(threadId) && (
-          threadId == "staff"
-            ? chatMember(tenantId)
-            : chatCanSeeJob(tenantId, chatJobId(threadId))
-        );
-      }
       function chatHeadOk() {
         return request.resource.data.keys().hasOnly(["lastAt", "lastSenderUid", "lastSenderName", "preview"])
           && request.resource.data.lastSenderUid == request.auth.uid
@@ -1313,63 +1256,6 @@ service cloud.firestore {
     }
 
     match /tenants/{tenantId}/chats/{threadId}/messages/{messageId} {
-      function chatCallerTenant() {
-        return chatExplicitTenant()
-          ? profile().tenantId
-          : (((signedIn() && hasProfile()) || isAlex() || isPatrick()) ? "heartwood" : "");
-      }
-      function chatMember(tenantId) {
-        return signedIn()
-          && tenantId is string
-          && tenantId.matches('^[a-z0-9][a-z0-9-]{0,39}$')
-          && chatCallerTenant() == tenantId;
-      }
-      function chatJobPath(jobId) { return /databases/$(database)/documents/jobs/$(jobId); }
-      function chatJob(jobId) { return get(chatJobPath(jobId)).data; }
-      function chatJobTenant(jobId) {
-        return "tenantId" in chatJob(jobId) && chatJob(jobId).tenantId is string && chatJob(jobId).tenantId.size() > 0
-          ? chatJob(jobId).tenantId
-          : "heartwood";
-      }
-      function chatAccountTenant() {
-        return chatExplicitTenant() ? profile().tenantId : "heartwood";
-      }
-      function chatAssigned(jobId) {
-        return "assigned" in chatJob(jobId) && chatJob(jobId).assigned is list && request.auth.uid in chatJob(jobId).assigned;
-      }
-      function chatCustomerOk(jobId) {
-        return !(signedIn() && hasProfile())
-          || !("customerIds" in profile())
-          || !(profile().customerIds is list)
-          || profile().customerIds.size() == 0
-          || ("client" in chatJob(jobId) && chatJob(jobId).client is string && chatJob(jobId).client in profile().customerIds);
-      }
-      function chatAccountCanSee(tenantId, jobId) {
-        return (signedIn() && hasProfile())
-          && chatAccountTenant() == tenantId
-          && (("role" in profile() && profile().role == "admin") || chatAssigned(jobId))
-          && chatCustomerOk(jobId);
-      }
-      function chatCanSeeJob(tenantId, jobId) {
-        return signedIn()
-          && jobId is string
-          && jobId.size() > 0
-          && jobId.size() <= 200
-          && chatJobTenant(jobId) == tenantId
-          && ((tenantId == "heartwood" && (isAlex() || isPatrick())) || chatAccountCanSee(tenantId, jobId));
-      }
-      function chatThreadOk(threadId) {
-        return threadId == "staff"
-          || (threadId is string && threadId.size() <= 210 && threadId.matches('^job_[A-Za-z0-9_-]{1,200}$'));
-      }
-      function chatJobId(threadId) { return threadId[4:threadId.size()]; }
-      function chatCanAccess(tenantId, threadId) {
-        return companyOpen(tenantId) && chatThreadOk(threadId) && (
-          threadId == "staff"
-            ? chatMember(tenantId)
-            : chatCanSeeJob(tenantId, chatJobId(threadId))
-        );
-      }
       function chatAdmin(tenantId) {
         return chatMember(tenantId) && (
           isAlex() || isPatrick() || ((signedIn() && hasProfile()) && "role" in profile() && profile().role == "admin")
@@ -1410,63 +1296,6 @@ service cloud.firestore {
     }
 
     match /tenants/{tenantId}/chatSeen/{uid}/threads/{threadId} {
-      function chatCallerTenant() {
-        return chatExplicitTenant()
-          ? profile().tenantId
-          : (((signedIn() && hasProfile()) || isAlex() || isPatrick()) ? "heartwood" : "");
-      }
-      function chatMember(tenantId) {
-        return signedIn()
-          && tenantId is string
-          && tenantId.matches('^[a-z0-9][a-z0-9-]{0,39}$')
-          && chatCallerTenant() == tenantId;
-      }
-      function chatJobPath(jobId) { return /databases/$(database)/documents/jobs/$(jobId); }
-      function chatJob(jobId) { return get(chatJobPath(jobId)).data; }
-      function chatJobTenant(jobId) {
-        return "tenantId" in chatJob(jobId) && chatJob(jobId).tenantId is string && chatJob(jobId).tenantId.size() > 0
-          ? chatJob(jobId).tenantId
-          : "heartwood";
-      }
-      function chatAccountTenant() {
-        return chatExplicitTenant() ? profile().tenantId : "heartwood";
-      }
-      function chatAssigned(jobId) {
-        return "assigned" in chatJob(jobId) && chatJob(jobId).assigned is list && request.auth.uid in chatJob(jobId).assigned;
-      }
-      function chatCustomerOk(jobId) {
-        return !(signedIn() && hasProfile())
-          || !("customerIds" in profile())
-          || !(profile().customerIds is list)
-          || profile().customerIds.size() == 0
-          || ("client" in chatJob(jobId) && chatJob(jobId).client is string && chatJob(jobId).client in profile().customerIds);
-      }
-      function chatAccountCanSee(tenantId, jobId) {
-        return (signedIn() && hasProfile())
-          && chatAccountTenant() == tenantId
-          && (("role" in profile() && profile().role == "admin") || chatAssigned(jobId))
-          && chatCustomerOk(jobId);
-      }
-      function chatCanSeeJob(tenantId, jobId) {
-        return signedIn()
-          && jobId is string
-          && jobId.size() > 0
-          && jobId.size() <= 200
-          && chatJobTenant(jobId) == tenantId
-          && ((tenantId == "heartwood" && (isAlex() || isPatrick())) || chatAccountCanSee(tenantId, jobId));
-      }
-      function chatThreadOk(threadId) {
-        return threadId == "staff"
-          || (threadId is string && threadId.size() <= 210 && threadId.matches('^job_[A-Za-z0-9_-]{1,200}$'));
-      }
-      function chatJobId(threadId) { return threadId[4:threadId.size()]; }
-      function chatCanAccess(tenantId, threadId) {
-        return companyOpen(tenantId) && chatThreadOk(threadId) && (
-          threadId == "staff"
-            ? chatMember(tenantId)
-            : chatCanSeeJob(tenantId, chatJobId(threadId))
-        );
-      }
 
       allow read: if signedIn() && request.auth.uid == uid && chatCanAccess(tenantId, threadId);
       allow create, update: if signedIn()
@@ -1670,11 +1499,8 @@ service cloud.firestore {
     // Nothing else on the machine can change this way. A lower reading stays on the prestart only.
 
     match /tenants/{tenantId}/fleet/{assetId} {
-      function fleetExplicitTenant() {
-        return (signedIn() && hasProfile()) && "tenantId" in profile() && profile().tenantId is string && profile().tenantId.size() > 0;
-      }
       function fleetCallerTenant() {
-        return fleetExplicitTenant()
+        return chatExplicitTenant()
           ? profile().tenantId
           : (((signedIn() && hasProfile()) || isAlex() || isPatrick()) ? "heartwood" : "");
       }
@@ -1739,11 +1565,8 @@ service cloud.firestore {
     }
 
     match /tenants/{tenantId}/policies/{policyId} {
-      function fleetExplicitTenant() {
-        return (signedIn() && hasProfile()) && "tenantId" in profile() && profile().tenantId is string && profile().tenantId.size() > 0;
-      }
       function fleetCallerTenant() {
-        return fleetExplicitTenant()
+        return chatExplicitTenant()
           ? profile().tenantId
           : (((signedIn() && hasProfile()) || isAlex() || isPatrick()) ? "heartwood" : "");
       }
@@ -1798,25 +1621,11 @@ service cloud.firestore {
           || ((signedIn() && hasProfile()) && "role" in profile()
             && (profile().role == "admin" || profile().role == "supervisor" || profile().role == "manager"));
       }
-      function inviteCallerTenant() {
-        return isAlex() || isPatrick()
-          ? "heartwood"
-          : ((signedIn() && hasProfile()) && "tenantId" in profile() && profile().tenantId is string && profile().tenantId.size() > 0
-            ? profile().tenantId
-            : ((signedIn() && hasProfile()) ? "heartwood" : ""));
-      }
       function inviteEmailOk(email) {
         return email is string
           && email.size() >= 6
           && email.size() <= 120
           && email.matches('^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$');
-      }
-      function inviteFullAdmin() {
-        return inviteCallerTenant() == "heartwood"
-          ? (isAlex() || isPatrick()
-            || (exists(/databases/$(database)/documents/heartwoodAdmins/$(request.auth.uid))
-              && (signedIn() && hasProfile()) && profile().get("role", "") == "admin"))
-          : ((signedIn() && hasProfile()) && "role" in profile() && profile().role == "admin");
       }
       function inviteRoleOk() {
         return request.resource.data.role in ["labourer", "operator", "supervisor"]
@@ -1919,25 +1728,11 @@ service cloud.firestore {
           || ((signedIn() && hasProfile()) && "role" in profile()
             && (profile().role == "admin" || profile().role == "supervisor" || profile().role == "manager"));
       }
-      function inviteCallerTenant() {
-        return isAlex() || isPatrick()
-          ? "heartwood"
-          : ((signedIn() && hasProfile()) && "tenantId" in profile() && profile().tenantId is string && profile().tenantId.size() > 0
-            ? profile().tenantId
-            : ((signedIn() && hasProfile()) ? "heartwood" : ""));
-      }
       function inviteEmailOk(email) {
         return email is string
           && email.size() >= 6
           && email.size() <= 120
           && email.matches('^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$');
-      }
-      function inviteFullAdmin() {
-        return inviteCallerTenant() == "heartwood"
-          ? (isAlex() || isPatrick()
-            || (exists(/databases/$(database)/documents/heartwoodAdmins/$(request.auth.uid))
-              && (signedIn() && hasProfile()) && profile().get("role", "") == "admin"))
-          : ((signedIn() && hasProfile()) && "role" in profile() && profile().role == "admin");
       }
       function inviteRoleOk() {
         return request.resource.data.role in ["labourer", "operator", "supervisor"]
@@ -2024,11 +1819,8 @@ service cloud.firestore {
 // BEGIN SERVICING RULES
 
     match /tenants/{tenantId}/servicing/{recordId} {
-      function svcExplicitTenant() {
-        return (signedIn() && hasProfile()) && "tenantId" in profile() && profile().tenantId is string && profile().tenantId.size() > 0;
-      }
       function svcCallerTenant() {
-        return svcExplicitTenant()
+        return chatExplicitTenant()
           ? profile().tenantId
           : (((signedIn() && hasProfile()) || isAlex() || isPatrick()) ? "heartwood" : "");
       }
@@ -2053,14 +1845,11 @@ service cloud.firestore {
       function svcUnit(v) {
         return v == "" || v == "hours" || v == "km";
       }
-      function svcDate(v) {
-        return v is string && v.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
-      }
       function svcRecordOk() {
         return request.resource.data.keys().hasOnly(["assetId", "doneOn", "reading", "readingUnit", "serviceType", "servicedBy", "notes", "updatedAt", "updatedBy"])
           && request.resource.data.assetId is string
           && request.resource.data.assetId.matches('^[A-Za-z0-9_-]{1,80}$')
-          && svcDate(request.resource.data.doneOn)
+          && lvDate(request.resource.data.doneOn)
           && svcInt(request.resource.data.reading, 10000000)
           && svcUnit(request.resource.data.readingUnit)
           && (request.resource.data.reading == 0 || request.resource.data.readingUnit == "hours" || request.resource.data.readingUnit == "km")
@@ -2079,11 +1868,8 @@ service cloud.firestore {
     }
 
     match /tenants/{tenantId}/servicePlans/{assetId} {
-      function svcExplicitTenant() {
-        return (signedIn() && hasProfile()) && "tenantId" in profile() && profile().tenantId is string && profile().tenantId.size() > 0;
-      }
       function svcCallerTenant() {
-        return svcExplicitTenant()
+        return chatExplicitTenant()
           ? profile().tenantId
           : (((signedIn() && hasProfile()) || isAlex() || isPatrick()) ? "heartwood" : "");
       }
@@ -2125,11 +1911,8 @@ service cloud.firestore {
     }
 
     match /tenants/{tenantId}/serviceCosts/{recordId} {
-      function svcExplicitTenant() {
-        return (signedIn() && hasProfile()) && "tenantId" in profile() && profile().tenantId is string && profile().tenantId.size() > 0;
-      }
       function svcCallerTenant() {
-        return svcExplicitTenant()
+        return chatExplicitTenant()
           ? profile().tenantId
           : (((signedIn() && hasProfile()) || isAlex() || isPatrick()) ? "heartwood" : "");
       }
@@ -2166,11 +1949,8 @@ service cloud.firestore {
 // BEGIN PRESTART RULES
 
     match /tenants/{tenantId}/prestarts/{id} {
-      function psExplicitTenant() {
-        return (signedIn() && hasProfile()) && "tenantId" in profile() && profile().tenantId is string && profile().tenantId.size() > 0;
-      }
       function psCallerTenant() {
-        return psExplicitTenant()
+        return chatExplicitTenant()
           ? profile().tenantId
           : (((signedIn() && hasProfile()) || isAlex() || isPatrick()) ? "heartwood" : "");
       }
@@ -2259,11 +2039,8 @@ service cloud.firestore {
     }
 
     match /tenants/{tenantId}/prestartTemplates/{assetType} {
-      function psExplicitTenant() {
-        return (signedIn() && hasProfile()) && "tenantId" in profile() && profile().tenantId is string && profile().tenantId.size() > 0;
-      }
       function psCallerTenant() {
-        return psExplicitTenant()
+        return chatExplicitTenant()
           ? profile().tenantId
           : (((signedIn() && hasProfile()) || isAlex() || isPatrick()) ? "heartwood" : "");
       }
@@ -2507,35 +2284,11 @@ service cloud.firestore {
     // Read-only mirror so clock-on can list machines and today's prestart.
     // Creates and edits stay with the compliance PR. allow write: if false does not veto those rules.
     match /tenants/{tenantId}/fleet/{assetId} {
-      function tsFleetReader(tenantId) {
-        return signedIn()
-          && tenantId is string
-          && tenantId.matches('^[a-z0-9][a-z0-9-]{0,39}$')
-          && (
-            ((isAlex() || isPatrick()) && tenantId == "heartwood")
-            || (hasProfile() && (
-              ("tenantId" in profile() && profile().tenantId == tenantId)
-              || (!("tenantId" in profile()) && tenantId == "heartwood")
-            ))
-          );
-      }
 
       allow read: if tsFleetReader(tenantId);
       allow write: if false;
     }
     match /tenants/{tenantId}/prestarts/{id} {
-      function tsFleetReader(tenantId) {
-        return signedIn()
-          && tenantId is string
-          && tenantId.matches('^[a-z0-9][a-z0-9-]{0,39}$')
-          && (
-            ((isAlex() || isPatrick()) && tenantId == "heartwood")
-            || (hasProfile() && (
-              ("tenantId" in profile() && profile().tenantId == tenantId)
-              || (!("tenantId" in profile()) && tenantId == "heartwood")
-            ))
-          );
-      }
 
       allow read: if tsFleetReader(tenantId);
       allow write: if false;
@@ -2545,89 +2298,12 @@ service cloud.firestore {
 // BEGIN LEAVE RULES
 
     match /leaveRequests/{id} {
-      function lvHeartwood() {
-        return signedIn() && (
-          isAlex() || isPatrick() || (
-            hasProfile() && (!("tenantId" in profile()) || profile().tenantId == "heartwood")
-          )
-        );
-      }
       function lvDecider() {
         return lvHeartwood() && (
           isAlex() || isPatrick() || (
             hasProfile() && (profile().role == "admin" || profile().role == "supervisor" || profile().role == "manager")
           )
         );
-      }
-      function lvDate(v) {
-        return v is string && v.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
-      }
-      function lvHalf(v) {
-        return v == "" || v == "am" || v == "pm";
-      }
-      function lvHalves() {
-        return lvHalf(request.resource.data.startHalf)
-          && lvHalf(request.resource.data.endHalf)
-          && (
-            (request.resource.data.start == request.resource.data.end
-              && request.resource.data.startHalf == request.resource.data.endHalf)
-            || (request.resource.data.start < request.resource.data.end
-              && (request.resource.data.startHalf == "" || request.resource.data.startHalf == "pm")
-              && (request.resource.data.endHalf == "" || request.resource.data.endHalf == "am"))
-          );
-      }
-      function lvCertPath(uid, id) {
-        return request.resource.data.certificatePath == ""
-          || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.pdf"
-          || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.jpg"
-          || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.png"
-          || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.webp";
-      }
-      function lvCreateBody(id) {
-        return id.matches('^lv[a-z0-9]{16}$')
-          && request.resource.data.keys().hasOnly(["uid", "name", "type", "start", "end", "startHalf", "endHalf", "reason", "certificatePath", "certificateName", "status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "createdAt", "updatedAt"])
-          && request.resource.data.uid == request.auth.uid
-          && request.resource.data.name is string
-          && request.resource.data.name.size() > 0
-          && request.resource.data.name.size() <= 80
-          && (request.resource.data.type == "annual" || request.resource.data.type == "sick" || request.resource.data.type == "other")
-          && lvDate(request.resource.data.start)
-          && lvDate(request.resource.data.end)
-          && request.resource.data.end >= request.resource.data.start
-          && lvHalves()
-          && request.resource.data.reason is string
-          && request.resource.data.reason.size() > 0
-          && request.resource.data.reason.size() <= 500
-          && lvCertPath(request.auth.uid, id)
-          && request.resource.data.certificateName is string
-          && request.resource.data.certificateName.size() <= 120
-          && (request.resource.data.certificatePath == ""
-            ? request.resource.data.certificateName == ""
-            : request.resource.data.certificateName.size() > 0)
-          && request.resource.data.status == "pending"
-          && request.resource.data.decisionNote == ""
-          && request.resource.data.decidedBy == ""
-          && request.resource.data.decidedByName == ""
-          && request.resource.data.decidedAt == null
-          && request.resource.data.createdAt == request.time
-          && request.resource.data.updatedAt == request.time;
-      }
-      function lvDecisionBody() {
-        return resource.data.status == "pending"
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "updatedAt"])
-          && (request.resource.data.status == "approved" || request.resource.data.status == "declined")
-          && request.resource.data.decisionNote is string
-          && request.resource.data.decisionNote.size() > 0
-          && request.resource.data.decisionNote.size() <= 500
-          && request.resource.data.decidedBy == request.auth.uid
-          && request.resource.data.decidedByName is string
-          && request.resource.data.decidedByName.size() > 0
-          && request.resource.data.decidedByName.size() <= 80
-          && request.resource.data.decidedAt == request.time
-          && request.resource.data.updatedAt == request.time
-          && same("uid") && same("name") && same("type") && same("start") && same("end")
-          && same("startHalf") && same("endHalf") && same("reason")
-          && same("certificatePath") && same("certificateName") && same("createdAt");
       }
 
       allow read: if lvHeartwood() && (
@@ -2644,76 +2320,6 @@ service cloud.firestore {
     match /companies/{c}/leaveRequests/{id} {
       function cmRole() {
         return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("role", "");
-      }
-      function lvDate(v) {
-        return v is string && v.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
-      }
-      function lvHalf(v) {
-        return v == "" || v == "am" || v == "pm";
-      }
-      function lvHalves() {
-        return lvHalf(request.resource.data.startHalf)
-          && lvHalf(request.resource.data.endHalf)
-          && (
-            (request.resource.data.start == request.resource.data.end
-              && request.resource.data.startHalf == request.resource.data.endHalf)
-            || (request.resource.data.start < request.resource.data.end
-              && (request.resource.data.startHalf == "" || request.resource.data.startHalf == "pm")
-              && (request.resource.data.endHalf == "" || request.resource.data.endHalf == "am"))
-          );
-      }
-      function lvCertPath(uid, id) {
-        return request.resource.data.certificatePath == ""
-          || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.pdf"
-          || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.jpg"
-          || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.png"
-          || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.webp";
-      }
-      function lvCreateBody(id) {
-        return id.matches('^lv[a-z0-9]{16}$')
-          && request.resource.data.keys().hasOnly(["uid", "name", "type", "start", "end", "startHalf", "endHalf", "reason", "certificatePath", "certificateName", "status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "createdAt", "updatedAt"])
-          && request.resource.data.uid == request.auth.uid
-          && request.resource.data.name is string
-          && request.resource.data.name.size() > 0
-          && request.resource.data.name.size() <= 80
-          && (request.resource.data.type == "annual" || request.resource.data.type == "sick" || request.resource.data.type == "other")
-          && lvDate(request.resource.data.start)
-          && lvDate(request.resource.data.end)
-          && request.resource.data.end >= request.resource.data.start
-          && lvHalves()
-          && request.resource.data.reason is string
-          && request.resource.data.reason.size() > 0
-          && request.resource.data.reason.size() <= 500
-          && lvCertPath(request.auth.uid, id)
-          && request.resource.data.certificateName is string
-          && request.resource.data.certificateName.size() <= 120
-          && (request.resource.data.certificatePath == ""
-            ? request.resource.data.certificateName == ""
-            : request.resource.data.certificateName.size() > 0)
-          && request.resource.data.status == "pending"
-          && request.resource.data.decisionNote == ""
-          && request.resource.data.decidedBy == ""
-          && request.resource.data.decidedByName == ""
-          && request.resource.data.decidedAt == null
-          && request.resource.data.createdAt == request.time
-          && request.resource.data.updatedAt == request.time;
-      }
-      function lvDecisionBody() {
-        return resource.data.status == "pending"
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "updatedAt"])
-          && (request.resource.data.status == "approved" || request.resource.data.status == "declined")
-          && request.resource.data.decisionNote is string
-          && request.resource.data.decisionNote.size() > 0
-          && request.resource.data.decisionNote.size() <= 500
-          && request.resource.data.decidedBy == request.auth.uid
-          && request.resource.data.decidedByName is string
-          && request.resource.data.decidedByName.size() > 0
-          && request.resource.data.decidedByName.size() <= 80
-          && request.resource.data.decidedAt == request.time
-          && request.resource.data.updatedAt == request.time
-          && same("uid") && same("name") && same("type") && same("start") && same("end")
-          && same("startHalf") && same("endHalf") && same("reason")
-          && same("certificatePath") && same("certificateName") && same("createdAt");
       }
       function lvCoDecider(c) { return incStaffOf(c) && cmRole() in ["admin", "supervisor", "manager"]; }
 
@@ -2732,101 +2338,16 @@ service cloud.firestore {
 
 
     match /reimbursementClaims/{id} {
-      function rcStaff() {
-        return signedIn() && (
-          isAlex() || isPatrick() || (
-            hasProfile() && (!("tenantId" in profile()) || profile().tenantId == "heartwood")
-          )
-        );
-      }
       function rcAdmin() {
-        return rcStaff() && (isAlex() || isPatrick() || (hasProfile() && (profile().role == "admin" || profile().role == "manager")));
-      }
-      function rcReceiptPath(uid, id) {
-        return request.resource.data.receiptPath == ""
-          || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.pdf"
-          || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.jpg"
-          || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.png"
-          || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.webp";
-      }
-      function rcCreateBody(id) {
-        return id.matches('^rc[a-z0-9]{16}$')
-          && request.resource.data.keys().hasOnly(["uid", "name", "date", "amountCents", "supplier", "category", "notes", "paidWith", "jobId", "jobLabel", "receiptPath", "receiptName", "status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "paidAt", "createdAt", "updatedAt"])
-          && request.resource.data.uid == request.auth.uid
-          && request.resource.data.name is string
-          && request.resource.data.name.size() > 0
-          && request.resource.data.name.size() <= 80
-          && request.resource.data.date is string
-          && request.resource.data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
-          && request.resource.data.amountCents is int
-          && request.resource.data.amountCents > 0
-          && request.resource.data.amountCents <= 10000000
-          && request.resource.data.supplier is string
-          && request.resource.data.supplier.size() > 0
-          && request.resource.data.supplier.size() <= 120
-          && (request.resource.data.category == "fuel" || request.resource.data.category == "tip-fees" || request.resource.data.category == "parts" || request.resource.data.category == "tools" || request.resource.data.category == "consumables" || request.resource.data.category == "other")
-          && request.resource.data.notes is string
-          && request.resource.data.notes.size() <= 1000
-          && (request.resource.data.paidWith == "personal-card" || request.resource.data.paidWith == "cash")
-          && request.resource.data.jobId is string
-          && request.resource.data.jobId.matches('^[A-Za-z0-9_-]{0,80}$')
-          && request.resource.data.jobLabel is string
-          && request.resource.data.jobLabel.size() <= 160
-          && rcReceiptPath(request.auth.uid, id)
-          && request.resource.data.receiptName is string
-          && request.resource.data.receiptName.size() <= 120
-          && (request.resource.data.receiptPath == ""
-            ? request.resource.data.receiptName == ""
-            : request.resource.data.receiptName.size() > 0)
-          && request.resource.data.status == "submitted"
-          && request.resource.data.decisionNote == ""
-          && request.resource.data.decidedBy == ""
-          && request.resource.data.decidedByName == ""
-          && request.resource.data.decidedAt == null
-          && request.resource.data.paidAt == null
-          && request.resource.data.createdAt == request.time
-          && request.resource.data.updatedAt == request.time;
-      }
-      function rcStep() {
-        return (resource.data.status == "submitted" && (request.resource.data.status == "approved" || request.resource.data.status == "declined" || request.resource.data.status == "paid"))
-          || (resource.data.status == "approved" && (request.resource.data.status == "paid" || request.resource.data.status == "declined"));
-      }
-      function rcDecisionBody() {
-        return rcStep()
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "paidAt", "updatedAt", "hubdocStatus"])
-          && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(["hubdocStatus"])
-            || (request.resource.data.status == "paid"
-              && request.resource.data.hubdocStatus == (resource.data.receiptPath == "" ? "no-receipt" : "queued")))
-          && request.resource.data.decisionNote is string
-          && request.resource.data.decisionNote.size() <= 500
-          && request.resource.data.decidedBy == request.auth.uid
-          && request.resource.data.decidedByName is string
-          && request.resource.data.decidedByName.size() > 0
-          && request.resource.data.decidedByName.size() <= 80
-          && request.resource.data.decidedAt == request.time
-          && request.resource.data.updatedAt == request.time
-          && (request.resource.data.status == "paid"
-            ? request.resource.data.paidAt == request.time
-            : request.resource.data.paidAt == null);
-      }
-      function rcHubdoc() {
-        return isSync()
-          && resource.data.status == "paid"
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["hubdocStatus", "hubdocAttempts", "hubdocUpdatedAt", "hubdocSentAt", "hubdocMessageId", "hubdocVia", "hubdocError"])
-          && request.resource.data.hubdocStatus in ["sending", "sent", "failed", "no-receipt"]
-          && request.resource.data.get("hubdocAttempts", 0) is int
-          && request.resource.data.get("hubdocError", "") is string
-          && request.resource.data.get("hubdocError", "").size() <= 300
-          && request.resource.data.get("hubdocMessageId", "") is string
-          && request.resource.data.get("hubdocMessageId", "").size() <= 100;
+        return lvHeartwood() && (isAlex() || isPatrick() || (hasProfile() && (profile().role == "admin" || profile().role == "manager")));
       }
 
-      allow read: if (isSync() && resource != null && resource.data.status == "paid") || rcStaff() && (
+      allow read: if (isSync() && resource != null && resource.data.status == "paid") || lvHeartwood() && (
         rcAdmin()
         || (resource != null && resource.data.uid == request.auth.uid)
         || (resource == null && id.matches('^rc[a-z0-9]{16}$'))
       );
-      allow create: if (rcStaff() && rcCreateBody(id));
+      allow create: if (lvHeartwood() && rcCreateBody(id));
       allow update: if (rcAdmin() && rcDecisionBody()) || rcHubdoc();
       allow delete: if false;
     }
@@ -2835,84 +2356,6 @@ service cloud.firestore {
     match /companies/{c}/reimbursementClaims/{id} {
       function rcCompanyDecider(c) {
         return incStaffOf(c) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("role", "") in ["admin", "manager"];
-      }
-      function rcReceiptPath(uid, id) {
-        return request.resource.data.receiptPath == ""
-          || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.pdf"
-          || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.jpg"
-          || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.png"
-          || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.webp";
-      }
-      function rcCreateBody(id) {
-        return id.matches('^rc[a-z0-9]{16}$')
-          && request.resource.data.keys().hasOnly(["uid", "name", "date", "amountCents", "supplier", "category", "notes", "paidWith", "jobId", "jobLabel", "receiptPath", "receiptName", "status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "paidAt", "createdAt", "updatedAt"])
-          && request.resource.data.uid == request.auth.uid
-          && request.resource.data.name is string
-          && request.resource.data.name.size() > 0
-          && request.resource.data.name.size() <= 80
-          && request.resource.data.date is string
-          && request.resource.data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
-          && request.resource.data.amountCents is int
-          && request.resource.data.amountCents > 0
-          && request.resource.data.amountCents <= 10000000
-          && request.resource.data.supplier is string
-          && request.resource.data.supplier.size() > 0
-          && request.resource.data.supplier.size() <= 120
-          && (request.resource.data.category == "fuel" || request.resource.data.category == "tip-fees" || request.resource.data.category == "parts" || request.resource.data.category == "tools" || request.resource.data.category == "consumables" || request.resource.data.category == "other")
-          && request.resource.data.notes is string
-          && request.resource.data.notes.size() <= 1000
-          && (request.resource.data.paidWith == "personal-card" || request.resource.data.paidWith == "cash")
-          && request.resource.data.jobId is string
-          && request.resource.data.jobId.matches('^[A-Za-z0-9_-]{0,80}$')
-          && request.resource.data.jobLabel is string
-          && request.resource.data.jobLabel.size() <= 160
-          && rcReceiptPath(request.auth.uid, id)
-          && request.resource.data.receiptName is string
-          && request.resource.data.receiptName.size() <= 120
-          && (request.resource.data.receiptPath == ""
-            ? request.resource.data.receiptName == ""
-            : request.resource.data.receiptName.size() > 0)
-          && request.resource.data.status == "submitted"
-          && request.resource.data.decisionNote == ""
-          && request.resource.data.decidedBy == ""
-          && request.resource.data.decidedByName == ""
-          && request.resource.data.decidedAt == null
-          && request.resource.data.paidAt == null
-          && request.resource.data.createdAt == request.time
-          && request.resource.data.updatedAt == request.time;
-      }
-      function rcStep() {
-        return (resource.data.status == "submitted" && (request.resource.data.status == "approved" || request.resource.data.status == "declined" || request.resource.data.status == "paid"))
-          || (resource.data.status == "approved" && (request.resource.data.status == "paid" || request.resource.data.status == "declined"));
-      }
-      function rcDecisionBody() {
-        return rcStep()
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "paidAt", "updatedAt", "hubdocStatus"])
-          && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(["hubdocStatus"])
-            || (request.resource.data.status == "paid"
-              && request.resource.data.hubdocStatus == (resource.data.receiptPath == "" ? "no-receipt" : "queued")))
-          && request.resource.data.decisionNote is string
-          && request.resource.data.decisionNote.size() <= 500
-          && request.resource.data.decidedBy == request.auth.uid
-          && request.resource.data.decidedByName is string
-          && request.resource.data.decidedByName.size() > 0
-          && request.resource.data.decidedByName.size() <= 80
-          && request.resource.data.decidedAt == request.time
-          && request.resource.data.updatedAt == request.time
-          && (request.resource.data.status == "paid"
-            ? request.resource.data.paidAt == request.time
-            : request.resource.data.paidAt == null);
-      }
-      function rcHubdoc() {
-        return isSync()
-          && resource.data.status == "paid"
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["hubdocStatus", "hubdocAttempts", "hubdocUpdatedAt", "hubdocSentAt", "hubdocMessageId", "hubdocVia", "hubdocError"])
-          && request.resource.data.hubdocStatus in ["sending", "sent", "failed", "no-receipt"]
-          && request.resource.data.get("hubdocAttempts", 0) is int
-          && request.resource.data.get("hubdocError", "") is string
-          && request.resource.data.get("hubdocError", "").size() <= 300
-          && request.resource.data.get("hubdocMessageId", "") is string
-          && request.resource.data.get("hubdocMessageId", "").size() <= 100;
       }
 
       allow read: if (isSync() && resource != null && resource.data.status == "paid") || incStaffOf(c) && (
@@ -3403,6 +2846,274 @@ service cloud.firestore {
       allow read, write: if false;
     }
 // END INBOUND FORWARD RULES
+
+
+    // More shared helpers. Same checks as the copies they replace.
+
+    function lvDate(v) {
+            return v is string && v.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+          }
+
+    function lvHalves() {
+            return (request.resource.data.startHalf == "" || request.resource.data.startHalf == "am" || request.resource.data.startHalf == "pm")
+              && (request.resource.data.endHalf == "" || request.resource.data.endHalf == "am" || request.resource.data.endHalf == "pm")
+              && (
+                (request.resource.data.start == request.resource.data.end
+                  && request.resource.data.startHalf == request.resource.data.endHalf)
+                || (request.resource.data.start < request.resource.data.end
+                  && (request.resource.data.startHalf == "" || request.resource.data.startHalf == "pm")
+                  && (request.resource.data.endHalf == "" || request.resource.data.endHalf == "am"))
+              );
+          }
+
+    function lvCreateBody(id) {
+            return id.matches('^lv[a-z0-9]{16}$')
+              && request.resource.data.keys().hasOnly(["uid", "name", "type", "start", "end", "startHalf", "endHalf", "reason", "certificatePath", "certificateName", "status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "createdAt", "updatedAt"])
+              && request.resource.data.uid == request.auth.uid
+              && request.resource.data.name is string
+              && request.resource.data.name.size() > 0
+              && request.resource.data.name.size() <= 80
+              && (request.resource.data.type == "annual" || request.resource.data.type == "sick" || request.resource.data.type == "other")
+              && lvDate(request.resource.data.start)
+              && lvDate(request.resource.data.end)
+              && request.resource.data.end >= request.resource.data.start
+              && lvHalves()
+              && request.resource.data.reason is string
+              && request.resource.data.reason.size() > 0
+              && request.resource.data.reason.size() <= 500
+              && lvCertPath(request.auth.uid, id)
+              && request.resource.data.certificateName is string
+              && request.resource.data.certificateName.size() <= 120
+              && (request.resource.data.certificatePath == ""
+                ? request.resource.data.certificateName == ""
+                : request.resource.data.certificateName.size() > 0)
+              && request.resource.data.status == "pending"
+              && request.resource.data.decisionNote == ""
+              && request.resource.data.decidedBy == ""
+              && request.resource.data.decidedByName == ""
+              && request.resource.data.decidedAt == null
+              && request.resource.data.createdAt == request.time
+              && request.resource.data.updatedAt == request.time;
+          }
+
+    function chatJobId(threadId) { return threadId[4:threadId.size()]; }
+
+    function chatThreadOk(threadId) {
+            return threadId == "staff"
+              || (threadId is string && threadId.size() <= 210 && threadId.matches('^job_[A-Za-z0-9_-]{1,200}$'));
+          }
+
+    function chatCanAccess(tenantId, threadId) {
+            return companyOpen(tenantId) && chatThreadOk(threadId) && (
+              threadId == "staff"
+                ? chatMember(tenantId)
+                : chatCanSeeJob(tenantId, chatJobId(threadId))
+            );
+          }
+
+    function inviteCallerTenant() {
+            return isAlex() || isPatrick()
+              ? "heartwood"
+              : ((signedIn() && hasProfile()) && "tenantId" in profile() && profile().tenantId is string && profile().tenantId.size() > 0
+                ? profile().tenantId
+                : ((signedIn() && hasProfile()) ? "heartwood" : ""));
+          }
+
+    function inviteFullAdmin() {
+            return inviteCallerTenant() == "heartwood"
+              ? (isAlex() || isPatrick()
+                || (exists(/databases/$(database)/documents/heartwoodAdmins/$(request.auth.uid))
+                  && (signedIn() && hasProfile()) && profile().get("role", "") == "admin"))
+              : ((signedIn() && hasProfile()) && "role" in profile() && profile().role == "admin");
+          }
+
+    function lvHeartwood() {
+            return signedIn() && (
+              isAlex() || isPatrick() || (
+                hasProfile() && (!("tenantId" in profile()) || profile().tenantId == "heartwood")
+              )
+            );
+          }
+
+    // Shared helpers. Each used to be copied into several matches.
+    // One copy, same checks. Callers and access are unchanged.
+    function rcCreateBody(id) {
+            return id.matches('^rc[a-z0-9]{16}$')
+              && request.resource.data.keys().hasOnly(["uid", "name", "date", "amountCents", "supplier", "category", "notes", "paidWith", "jobId", "jobLabel", "receiptPath", "receiptName", "status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "paidAt", "createdAt", "updatedAt"])
+              && request.resource.data.uid == request.auth.uid
+              && request.resource.data.name is string
+              && request.resource.data.name.size() > 0
+              && request.resource.data.name.size() <= 80
+              && request.resource.data.date is string
+              && request.resource.data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+              && request.resource.data.amountCents is int
+              && request.resource.data.amountCents > 0
+              && request.resource.data.amountCents <= 10000000
+              && request.resource.data.supplier is string
+              && request.resource.data.supplier.size() > 0
+              && request.resource.data.supplier.size() <= 120
+              && (request.resource.data.category == "fuel" || request.resource.data.category == "tip-fees" || request.resource.data.category == "parts" || request.resource.data.category == "tools" || request.resource.data.category == "consumables" || request.resource.data.category == "other")
+              && request.resource.data.notes is string
+              && request.resource.data.notes.size() <= 1000
+              && (request.resource.data.paidWith == "personal-card" || request.resource.data.paidWith == "cash")
+              && request.resource.data.jobId is string
+              && request.resource.data.jobId.matches('^[A-Za-z0-9_-]{0,80}$')
+              && request.resource.data.jobLabel is string
+              && request.resource.data.jobLabel.size() <= 160
+              && rcReceiptPath(request.auth.uid, id)
+              && request.resource.data.receiptName is string
+              && request.resource.data.receiptName.size() <= 120
+              && (request.resource.data.receiptPath == ""
+                ? request.resource.data.receiptName == ""
+                : request.resource.data.receiptName.size() > 0)
+              && request.resource.data.status == "submitted"
+              && request.resource.data.decisionNote == ""
+              && request.resource.data.decidedBy == ""
+              && request.resource.data.decidedByName == ""
+              && request.resource.data.decidedAt == null
+              && request.resource.data.paidAt == null
+              && request.resource.data.createdAt == request.time
+              && request.resource.data.updatedAt == request.time;
+          }
+
+    function rcReceiptPath(uid, id) {
+            return request.resource.data.receiptPath == ""
+              || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.pdf"
+              || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.jpg"
+              || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.png"
+              || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.webp";
+          }
+
+    function lvDecisionBody() {
+            return resource.data.status == "pending"
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "updatedAt"])
+              && (request.resource.data.status == "approved" || request.resource.data.status == "declined")
+              && request.resource.data.decisionNote is string
+              && request.resource.data.decisionNote.size() > 0
+              && request.resource.data.decisionNote.size() <= 500
+              && request.resource.data.decidedBy == request.auth.uid
+              && request.resource.data.decidedByName is string
+              && request.resource.data.decidedByName.size() > 0
+              && request.resource.data.decidedByName.size() <= 80
+              && request.resource.data.decidedAt == request.time
+              && request.resource.data.updatedAt == request.time
+              && same("uid") && same("name") && same("type") && same("start") && same("end")
+              && same("startHalf") && same("endHalf") && same("reason")
+              && same("certificatePath") && same("certificateName") && same("createdAt");
+          }
+
+    function rcDecisionBody() {
+            return rcStep()
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "paidAt", "updatedAt", "hubdocStatus"])
+              && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(["hubdocStatus"])
+                || (request.resource.data.status == "paid"
+                  && request.resource.data.hubdocStatus == (resource.data.receiptPath == "" ? "no-receipt" : "queued")))
+              && request.resource.data.decisionNote is string
+              && request.resource.data.decisionNote.size() <= 500
+              && request.resource.data.decidedBy == request.auth.uid
+              && request.resource.data.decidedByName is string
+              && request.resource.data.decidedByName.size() > 0
+              && request.resource.data.decidedByName.size() <= 80
+              && request.resource.data.decidedAt == request.time
+              && request.resource.data.updatedAt == request.time
+              && (request.resource.data.status == "paid"
+                ? request.resource.data.paidAt == request.time
+                : request.resource.data.paidAt == null);
+          }
+
+    function rcStep() {
+            return (resource.data.status == "submitted" && (request.resource.data.status == "approved" || request.resource.data.status == "declined" || request.resource.data.status == "paid"))
+              || (resource.data.status == "approved" && (request.resource.data.status == "paid" || request.resource.data.status == "declined"));
+          }
+
+    function rcHubdoc() {
+            return isSync()
+              && resource.data.status == "paid"
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["hubdocStatus", "hubdocAttempts", "hubdocUpdatedAt", "hubdocSentAt", "hubdocMessageId", "hubdocVia", "hubdocError"])
+              && request.resource.data.hubdocStatus in ["sending", "sent", "failed", "no-receipt"]
+              && request.resource.data.get("hubdocAttempts", 0) is int
+              && request.resource.data.get("hubdocError", "") is string
+              && request.resource.data.get("hubdocError", "").size() <= 300
+              && request.resource.data.get("hubdocMessageId", "") is string
+              && request.resource.data.get("hubdocMessageId", "").size() <= 100;
+          }
+
+    function lvCertPath(uid, id) {
+            return request.resource.data.certificatePath == ""
+              || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.pdf"
+              || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.jpg"
+              || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.png"
+              || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.webp";
+          }
+
+    function tsFleetReader(tenantId) {
+            return signedIn()
+              && tenantId is string
+              && tenantId.matches('^[a-z0-9][a-z0-9-]{0,39}$')
+              && (
+                ((isAlex() || isPatrick()) && tenantId == "heartwood")
+                || (hasProfile() && (
+                  ("tenantId" in profile() && profile().tenantId == tenantId)
+                  || (!("tenantId" in profile()) && tenantId == "heartwood")
+                ))
+              );
+          }
+
+    function chatMember(tenantId) {
+            return signedIn()
+              && tenantId is string
+              && tenantId.matches('^[a-z0-9][a-z0-9-]{0,39}$')
+              && chatCallerTenant() == tenantId;
+          }
+
+    function chatCallerTenant() {
+            return chatExplicitTenant()
+              ? profile().tenantId
+              : (((signedIn() && hasProfile()) || isAlex() || isPatrick()) ? "heartwood" : "");
+          }
+
+    function chatCanSeeJob(tenantId, jobId) {
+            return signedIn()
+              && jobId is string
+              && jobId.size() > 0
+              && jobId.size() <= 200
+              && chatJobTenant(jobId) == tenantId
+              && ((tenantId == "heartwood" && (isAlex() || isPatrick())) || chatAccountCanSee(tenantId, jobId));
+          }
+
+    function chatAccountCanSee(tenantId, jobId) {
+            return (signedIn() && hasProfile())
+              && chatAccountTenant() == tenantId
+              && (("role" in profile() && profile().role == "admin") || chatAssigned(jobId))
+              && chatCustomerOk(jobId);
+          }
+
+    function chatCustomerOk(jobId) {
+            return !(signedIn() && hasProfile())
+              || !("customerIds" in profile())
+              || !(profile().customerIds is list)
+              || profile().customerIds.size() == 0
+              || ("client" in chatJob(jobId) && chatJob(jobId).client is string && chatJob(jobId).client in profile().customerIds);
+          }
+
+    function chatJob(jobId) { return get(chatJobPath(jobId)).data; }
+
+    function chatJobPath(jobId) { return /databases/$(database)/documents/jobs/$(jobId); }
+
+    function chatAssigned(jobId) {
+            return "assigned" in chatJob(jobId) && chatJob(jobId).assigned is list && request.auth.uid in chatJob(jobId).assigned;
+          }
+
+    function chatAccountTenant() {
+            return chatExplicitTenant() ? profile().tenantId : "heartwood";
+          }
+
+    function chatJobTenant(jobId) {
+            return "tenantId" in chatJob(jobId) && chatJob(jobId).tenantId is string && chatJob(jobId).tenantId.size() > 0
+              ? chatJob(jobId).tenantId
+              : "heartwood";
+          }
+
     match /{document=**} { allow read, write: if false; }
   }
 }
