@@ -4,14 +4,14 @@
 // and the caller must pass allowLiveMail. INVITE_EMAIL_ALLOW_TO still limits
 // recipients (tests use callup932+). A TEST company never sends a real email.
 // SUPPORT_TICKET_EMAIL is a comma-separated list. When it is unset, mail goes
-// to admin@callupapp.com.au and alex@heartwoodew.com.
+// to admin@callupapp.com.au.
 
 import { ALEX_UID, fcmMessage, staleTargets, truncatePush, PUSH_ORIGINS } from "./chat-push.js";
 import { allowPrefixes } from "./shared/quote-public.js";
 
 export { staleTargets };
 export const SUPPORT_OWNER_UID = ALEX_UID;
-export const DEFAULT_SUPPORT_TICKET_EMAIL = ["admin@callupapp.com.au", "alex@heartwoodew.com"].join(",");
+export const DEFAULT_SUPPORT_TICKET_EMAIL = "admin@callupapp.com.au";
 export const SUPPORT_FROM = "CallUp <noreply@callupapp.com.au>";
 export const SUPPORT_APP_ORIGIN = "https://app.callupapp.com.au";
 

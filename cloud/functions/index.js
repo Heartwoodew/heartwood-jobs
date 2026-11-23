@@ -56,7 +56,7 @@
  *
  * supportTicketCreated runs when someone raises a ticket. It pushes the
  * platform owner and emails SUPPORT_TICKET_EMAIL (comma-separated; default
- * admin@callupapp.com.au,alex@heartwoodew.com) through Resend. Mail stays off
+ * admin@callupapp.com.au) through Resend. Mail stays off
  * unless INVITE_EMAIL_ENABLED is "true". A TEST company is not emailed.
  * INVITE_EMAIL_ALLOW_TO still applies, so a test run only reaches callup932+.
  *
