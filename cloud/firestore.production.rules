@@ -12,6 +12,14 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
+    // One trade catalogue. Company create and companyTrades both call these
+    // instead of repeating the list. Keep new industries in this list only.
+    function tradeIdOk(id) {
+      return id is string && id in ["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical", "concrete-cutting", "cleaning", "property-maintenance", "pest-control", "skip-bins", "pools", "solar-aircon", "traffic-civil"];
+    }
+    function tradeSetOk(list, min, max) {
+      return list is list && list.size() >= min && list.size() <= max && list.hasOnly(["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical", "concrete-cutting", "cleaning", "property-maintenance", "pest-control", "skip-bins", "pools", "solar-aircon", "traffic-civil"]);
+    }
     // Heartwood admins: the fixed list (Alex, the box sync user, Patrick) OR an accepted Heartwood admin invite.
     // heartwoodAdmins/{uid} is written by acceptStaffInvite (Admin SDK) or a Heartwood admin, never by the person.
     function isAdmin() { return request.auth != null && (request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "38SU5waAy4f9UI9N6JTqDMaYpQg2", "R7t41e54Ykcdk9WPdVZnDd697iI2"] || heartwoodAdminGrant()); }
@@ -127,14 +135,14 @@ service cloud.firestore {
           && data.billing.stripeSubscriptionId == null;
       }
       function oneTradeId(id) {
-        // One list lookup, not one comparison per trade: keeps multi-trade writes under the 1000-expression limit.
-        return id is string && id in ["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical", "concrete-cutting"];
+        // Shared catalogue, one list lookup, so a multi-trade write stays under the expression limit.
+        return tradeIdOk(id);
       }
       function tradeFieldOk(data) {
         return !("trade" in data) || oneTradeId(data.trade);
       }
       function tradesListOk(list) {
-        return list is list && list.size() >= 1 && list.size() <= 9 && list.hasOnly(["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical", "concrete-cutting"]);
+        return tradeSetOk(list, 1, 16);
       }
       function companyTradesEdit(companyId) {
         return signedIn()
@@ -948,22 +956,23 @@ service cloud.firestore {
     }
     match /companyTrades/{companyId} {
       function oneTradeId(id) {
-        // One list lookup, not one comparison per trade: keeps multi-trade writes under the 1000-expression limit.
-        return id is string && id in ["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical", "concrete-cutting"];
+        return tradeIdOk(id);
       }
       function tradeFieldOk(data) {
         return !("trade" in data) || oneTradeId(data.trade);
       }
       function tradesListOk(list) {
-        return list is list && list.size() >= 1 && list.size() <= 9 && list.hasOnly(["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical", "concrete-cutting"]);
+        return tradeSetOk(list, 1, 16);
       }
       function tradeDocOk(companyId) {
         let d = request.resource.data;
-        return d.keys().hasOnly(["companyId", "trade", "trades", "extraTrades", "titles", "updatedBy", "updatedAt"])
+        return d.keys().hasOnly(["companyId", "trade", "trades", "extraTrades", "titles", "checklists", "photoSteps", "updatedBy", "updatedAt"])
           && d.companyId == companyId
           && ("trade" in d) && tradeFieldOk(d) && (!("trades" in d) || tradesListOk(d.trades))
-          && d.extraTrades is list && d.extraTrades.size() <= 8 && d.extraTrades.hasOnly(["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical", "concrete-cutting"])
+          && tradeSetOk(d.extraTrades, 0, 15)
           && d.titles is list && d.titles.size() <= 80
+          && (!("checklists" in d) || (d.checklists is list && d.checklists.size() <= 60))
+          && (!("photoSteps" in d) || (d.photoSteps is list && d.photoSteps.size() <= 60))
           && d.updatedBy == request.auth.uid
           && d.updatedAt == request.time;
       }

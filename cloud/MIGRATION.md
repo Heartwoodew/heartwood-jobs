@@ -402,7 +402,7 @@ Order after merge:
 
 1. Publish `cloud/firestore.production.rules`. Supervisors of the same company may read `liveLocations` (Heartwood) or `companies/{companyId}/liveLocations` (everyone else) so the Staff roster can show Sharing location or Not sharing. Operators and labourers still cannot read it. The crew map stays manager and admin. `users/{uid}/locationNotices/{noticeId}` is written by `remindLocationSharing` only; the person can read their own company. Do not publish `cloud/emulator/firestore.rules` as the live ruleset.
 2. Deploy the function `remindLocationSharing` in australia-southeast1. No new secret. It reads `users/{uid}/fcmTokens`, deletes a token FCM reports as invalid, and writes `users/{uid}/locationNotices/current`. One reminder per person each 30 minutes (`sentAtMs` on that notice).
-3. Deploy hosting. Service worker `callup-shell-v140-gps-remind`. Phones keep the old Staff page until this shell is deployed.
+3. Deploy hosting. Service worker `callup-shell-v141-industries` (includes the GPS reminder and the industries, quotes, recurrence and certificates work). Phones keep the old Staff page until this shell is deployed.
 
 No Storage change, no index deploy, no Stripe change, no backfill.
 

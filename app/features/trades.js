@@ -12,6 +12,8 @@ import { TILING } from "./packs/tiling.js";
 import { PLUMBING } from "./packs/plumbing.js";
 import { ELECTRICAL } from "./packs/electrical.js";
 import { CONCRETE_CUTTING } from "./packs/concrete-cutting.js";
+import { SERVICE_PACKS, SERVICE_TRADES } from "./packs/service-trades.js";
+import { mergeIndustryPresets } from "./industry-presets.js";
 export { measureQty } from "./packs/money.js";
 
 export const DEFAULT_TRADE = "earthworks";
@@ -27,6 +29,7 @@ export const TRADES = Object.freeze([
   { id: "plumbing", label: "Plumbing" },
   { id: "electrical", label: "Electrical" },
   { id: "concrete-cutting", label: "Concrete Cutting" },
+  ...SERVICE_TRADES.map(row => ({ id: row.id, label: row.label })),
 ]);
 
 export const TRADE_IDS = Object.freeze(TRADES.map(t => t.id));
@@ -55,6 +58,7 @@ const TITLE_NAMES = Object.freeze({
   plumbing: ["Operations manager", "Project manager", "Licensed plumber", "Drainer", "Gas fitter", "Roof plumber", "Apprentice plumber", "Labourer"],
   electrical: ["Operations manager", "Project manager", "Licensed electrician", "Apprentice electrician", "Electrical trades assistant"],
   "concrete-cutting": ["Admin", "Manager", "Supervisor", "Concrete cutter / saw operator", "Core driller", "Labourer", "Apprentice"],
+  ...Object.fromEntries(SERVICE_TRADES.map(row => [row.id, row.titles])),
 });
 
 const EARTHWORKS_TYPES = Object.freeze([
@@ -85,6 +89,7 @@ const OTHER_TYPES = Object.freeze({
     ["cc-grind", "Floor grinding"],
     ["cc-scan", "Scanning/GPR"],
   ],
+  ...Object.fromEntries(SERVICE_TRADES.map(row => [row.id, row.jobTypes])),
 });
 
 // Earthworks pack is today's plant wizard and extras, described as data. Behaviour stays in quotes.js.
@@ -304,6 +309,7 @@ export const QUOTE_PACKS = Object.freeze({
   plumbing: measurePack(PLUMBING, OTHER_TYPES.plumbing),
   electrical: measurePack(ELECTRICAL, OTHER_TYPES.electrical),
   "concrete-cutting": measurePack(CONCRETE_CUTTING, OTHER_TYPES["concrete-cutting"]),
+  ...Object.fromEntries(SERVICE_TRADES.map(row => [row.id, measurePack(SERVICE_PACKS[row.id], OTHER_TYPES[row.id])])),
 });
 
 export function quotePack(id) {
@@ -341,7 +347,12 @@ export function resolveCompanySetup(company, stored) {
   const extraTrades = enabled.slice(1);
   const saved = !!(stored && Array.isArray(stored.titles) && stored.titles.length);
   const titles = saved ? sanitizeTitles(stored.titles) : defaultTitles(enabled);
-  return { trade, extraTrades, enabled, titles, saved, companyId: (company && company.companyId) || (stored && stored.companyId) || "" };
+  const presets = mergeIndustryPresets(stored, enabled);
+  return {
+    trade, extraTrades, enabled, titles, saved,
+    checklists: presets.checklists, photoSteps: presets.photoSteps,
+    companyId: (company && company.companyId) || (stored && stored.companyId) || "",
+  };
 }
 
 /** Categories grouped by trade. A label that exists on two trades is shown as "Plumbing – Other". */
@@ -479,12 +490,15 @@ export function sanitizeSkills(list) {
 export function companyTradesDoc(companyId, tradeOrList, uid) {
   const list = sanitizeTradeList(Array.isArray(tradeOrList) ? tradeOrList : [tradeOrList]);
   const trades = list.length ? list : [DEFAULT_TRADE];
+  const presets = mergeIndustryPresets(null, trades);
   return {
     companyId,
     trade: trades[0],
     trades,
     extraTrades: trades.slice(1),
     titles: defaultTitles(trades),
+    checklists: presets.checklists,
+    photoSteps: presets.photoSteps,
     updatedBy: uid || "",
   };
 }
@@ -492,7 +506,7 @@ export function companyTradesDoc(companyId, tradeOrList, uid) {
 export function signupTradesHtml(selected = [DEFAULT_TRADE]) {
   const on = new Set(selected == null ? [DEFAULT_TRADE] : sanitizeTradeList(selected));
   return `<fieldset class="tradepick"><legend>Trades</legend>
-    <p class="sub">Choose every trade this company does. At least one. Every trade includes a quote pack. Earthworks uses the plant wizard. The first ticked trade is the one quotes open on.</p>
+    <p class="sub">Choose every trade or industry this company does. At least one. Earthworks and site cleans stay the default pack. The first ticked trade is the one quotes open on. You can change this later without losing jobs or anything you have edited.</p>
     ${TRADES.map(t => `<label class="ck"><input type="checkbox" name="trades" value="${esc(t.id)}"${on.has(t.id) ? " checked" : ""}> ${esc(t.label)}${quotePack(t.id) && quotePack(t.id).ready ? "" : " <span class=\"sub\">quote pack coming soon</span>"}</label>`).join("")}
   </fieldset>`;
 }

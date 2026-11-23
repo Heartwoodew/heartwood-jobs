@@ -22,6 +22,13 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
+    // Same catalogue as cloud/firestore.production.rules. Do not keep a second copy of the ids.
+    function tradeIdOk(id) {
+      return id is string && id in ["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical", "concrete-cutting", "cleaning", "property-maintenance", "pest-control", "skip-bins", "pools", "solar-aircon", "traffic-civil"];
+    }
+    function tradeSetOk(list, min, max) {
+      return list is list && list.size() >= min && list.size() <= max && list.hasOnly(["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical", "concrete-cutting", "cleaning", "property-maintenance", "pest-control", "skip-bins", "pools", "solar-aircon", "traffic-civil"]);
+    }
     function isAlex() { return signedIn() && request.auth.uid == "1JKLsoxkQNfkphBBO0vDz2ziEyj2"; }
     function isPatrick() { return signedIn() && request.auth.uid == "R7t41e54Ykcdk9WPdVZnDd697iI2"; }
     function isHeartwoodFinance() { return isAlex() || isPatrick(); }
@@ -124,14 +131,13 @@ service cloud.firestore {
         && data.billing.stripeSubscriptionId == null;
     }
     function oneTradeId(id) {
-      // One list lookup, not one comparison per trade: keeps multi-trade writes under the 1000-expression limit.
-      return id is string && id in ["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical", "concrete-cutting"];
+      return tradeIdOk(id);
     }
     function tradeFieldOk(data) {
       return !("trade" in data) || oneTradeId(data.trade);
     }
     function tradesListOk(list) {
-      return list is list && list.size() >= 1 && list.size() <= 9 && list.hasOnly(["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical", "concrete-cutting"]);
+      return tradeSetOk(list, 1, 16);
     }
     function companyTradesEdit(companyId) {
       return signedIn()

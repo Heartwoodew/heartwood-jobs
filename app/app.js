@@ -51,6 +51,9 @@ import {
   sanitizeSkills, sanitizeTitles, sanitizeTradeList, setTitleLevel, skillsEditorHtml,
   titlesAfterTradeChange, titlesEditorHtml, tradeLabel, quotePack,
 } from "./features/trades.js";
+import { addPresetRow, jobStepsHtml, mergeIndustryPresets, presetEditorHtml, readPresetEditor, recurrenceHint, removePresetRow } from "./features/industry-presets.js";
+import { newSeriesId, planSeries, recurrenceFromForm, repeatFieldHtml, skipPatch } from "./features/recurrence.js";
+import { buildCertificate, bytesToBase64, certificatePanelHtml } from "./features/certificates.js";
 import { acceptLogoValue, compressLogo, isLogoStoragePath, logoFailureText, logoFileOk, logoUploadPlan } from "./features/company-logo.js";
 import {
   accuracyText, brisbaneHM, captureFix, coordText, daysForSheet, editList, entryList, locationConsent,
@@ -779,9 +782,11 @@ async function persistTrades(nextList) {
   const id = myCompanyId();
   const prev = ui.tradeSetup || resolveCompanySetup({ companyId: id }, null);
   const titles = titlesAfterTradeChange(prev.titles, prev.saved, trades);
+  const presets = mergeIndustryPresets(prev, trades);
   const catalog = {
     companyId: id, trade: trades[0], trades, extraTrades: trades.slice(1),
-    titles: sanitizeTitles(titles), updatedBy: me.uid, updatedAt: serverTimestamp(),
+    titles: sanitizeTitles(titles), checklists: presets.checklists, photoSteps: presets.photoSteps,
+    updatedBy: me.uid, updatedAt: serverTimestamp(),
   };
   await setDoc(doc(db, "companyTrades", id), catalog);
   try { await updateDoc(doc(db, "companies", id), { trades, trade: trades[0] }); }
@@ -798,6 +803,8 @@ async function saveTradeSetup(next) {
     trades,
     extraTrades: trades.slice(1),
     titles: sanitizeTitles(setup.titles),
+    checklists: (setup.checklists || []).slice(0, 60),
+    photoSteps: (setup.photoSteps || []).slice(0, 60),
     updatedBy: me.uid,
     updatedAt: serverTimestamp(),
   };
@@ -1424,7 +1431,10 @@ function settingsView() {
     ? `<section class="pad setrates"><h3>Quote rates</h3><p class="sub">${esc(quoteRatesSettingsBlurb(trades))}</p><button type="button" id="setrates" class="sm-btn">Edit quote rates</button></section>`
     : "";
   const perfSet = canEditPerformanceSettings(me) ? performanceSettingsHtml(ui.perfSettings || { weights: DEFAULT_WEIGHTS }, { take5On: ui.take5On !== false }) : "";
-  return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin"), trades, canEditTrades: canEditTitles() }) + rates + perfSet + PUSH.panelHtml()
+  const setup = ui.tradeSetup || resolveCompanySetup({ companyId: myCompanyId() }, null);
+  return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin"), trades, canEditTrades: canEditTitles() })
+    + presetEditorHtml(setup, { canEdit: canEditTitles() })
+    + rates + perfSet + PUSH.panelHtml()
     + dispatchSettingsHtml(dispatchSettingsNow(), { canEdit: canEditTitles() });
 }
 async function saveDispatchForm(form) {
@@ -1480,8 +1490,36 @@ function bindTradeList(A) {
   const sw = root.querySelector("#quotetrade");
   if (sw) sw.onchange = () => { setQuoteFocus(sw.value); redrawAfterSave(); };
 }
+function bindPresetEditor(A) {
+  const form = A.querySelector("#presetadd");
+  if (!form || !canEditTitles()) return;
+  const save = async (next) => {
+    await saveTradeSetup({ ...ui.tradeSetup, checklists: next.checklists, photoSteps: next.photoSteps });
+    toast("Checklist saved.");
+    redrawAfterSave();
+  };
+  form.onsubmit = async ev => {
+    ev.preventDefault();
+    const added = addPresetRow(ui.tradeSetup, { label: form.label.value, kind: form.kind.value });
+    const err = form.querySelector("#preseterr");
+    if (!added.ok) { if (err) err.textContent = "Add a short label."; return; }
+    try { await save(added); }
+    catch (e) { if (err) err.textContent = e.code || e.message; }
+  };
+  A.querySelectorAll("[data-preset-remove]").forEach(btn => btn.onclick = async () => {
+    const next = removePresetRow(readPresetEditor(A.querySelector("#preseteditor"), ui.tradeSetup), btn.dataset.presetRemove);
+    try { await save(next); }
+    catch (e) { toast("Not saved: " + (e.code || e.message)); }
+  });
+  A.querySelectorAll("[data-preset-label]").forEach(input => input.addEventListener("change", async () => {
+    const next = readPresetEditor(A.querySelector("#preseteditor"), ui.tradeSetup);
+    try { await save(next); }
+    catch (e) { toast("Not saved: " + (e.code || e.message)); }
+  }));
+}
 function bindSettings(A) {
   bindTradeList(A);
+  bindPresetEditor(A);
   loadReferralBox(A);
   if (canEditPerformanceSettings(me)) ensurePerfWatch();
   const take5Form = A.querySelector("#take5set");
@@ -5130,7 +5168,7 @@ function renderAdmin() {
   document.body.className = "admin";
   const fj = filtered(), und = (ui.undated || []).filter(j => jobHasType(j, ui.typeF));
   const all = [...fj, ...und.filter(u => !fj.some(j => j.id === u.id))];
-  const quotesHtml = ui.view === "quotes" ? adminViewRouter(ui.view, ui, { esc, $$, staff, jobs: all, todayStr, rerender: () => renderAdmin(), canEditQuoteRates }) : null;
+  const quotesHtml = ui.view === "quotes" ? adminViewRouter(ui.view, ui, { esc, $$, staff, jobs: all, todayStr, rerender: () => renderAdmin(), canEditQuoteRates, isAdmin: () => !!(me && me.role === "admin") }) : null;
   const staffHtml = ui.view === "staff" ? staffPageHtml() : null;
   paintBrand();
   refreshAutofillLists();
@@ -5535,6 +5573,115 @@ function wireReviewPrefill(root) {
     clientEl.addEventListener("blur", apply);
   });
 }
+function staffSkills(job) {
+  const names = new Set((job && job.assignedNames || []).map(name => String(name).toLowerCase()));
+  const ids = new Set(job && job.assigned || []);
+  const skills = [];
+  for (const row of staff || []) {
+    if (!ids.has(row.uid) && !names.has(String(row.name || "").toLowerCase())) continue;
+    if (Array.isArray(row.skills)) skills.push(...row.skills);
+  }
+  if (me && me.cloudProfile && Array.isArray(me.cloudProfile.skills)) skills.push(...me.cloudProfile.skills);
+  return skills;
+}
+function repeatWrite(job, form) {
+  if (!me || me.role !== "admin" || !form || (!form.repeatOn && !(job && job.seriesRole === "occurrence"))) return {};
+  const parsed = recurrenceFromForm(form, job);
+  if (!parsed.ok) return { error: "Check how often this job repeats." };
+  if (parsed.skip) return { patch: skipPatch() };
+  if (job && job.seriesRole === "occurrence" && parsed.scope !== "series") return { patch: { seriesException: true } };
+  if (!parsed.recurrence) {
+    if (job && job.recurrence) return { patch: { recurrence: null, seriesRole: null } };
+    return { patch: {} };
+  }
+  const seriesId = (job && job.seriesId) || newSeriesId();
+  if (job && job.seriesRole === "occurrence") {
+    return { patch: { recurrence: parsed.recurrence, seriesException: false }, templateId: job.templateId || "", series: parsed.recurrence };
+  }
+  return { patch: { recurrence: parsed.recurrence, seriesId, seriesRole: "template", seriesException: false, skipped: false } };
+}
+async function materialiseSeries(template) {
+  if (!template || template.seriesRole !== "template" || !template.seriesId || !template.recurrence) return;
+  const pool = typeof loadedJobs === "function" ? loadedJobs() : (jobs || []);
+  const existing = (pool || []).filter(row => row && row.seriesId === template.seriesId);
+  const plan = planSeries({ template, existing, today: todayStr() });
+  for (const row of plan.creates) {
+    const ref = doc(db, "jobs", row.id);
+    const snap = await getDoc(ref).catch(() => null);
+    if (snap && snapExists(snap)) continue;
+    await setDoc(ref, scopeRecord({ ...row.data, log: [], createdAt: serverTimestamp(), updatedAt: serverTimestamp(), updatedBy: me.uid }, myCompanyId()));
+  }
+  for (const row of plan.updates) {
+    await updateDoc(doc(db, "jobs", row.id), { ...row.data, updatedAt: serverTimestamp(), updatedBy: me.uid });
+  }
+}
+async function rememberSeries(jobId, data, repeat) {
+  if (repeat && repeat.templateId && repeat.series) {
+    await updateDoc(doc(db, "jobs", repeat.templateId), {
+      recurrence: repeat.series, seriesRole: "template", updatedAt: serverTimestamp(), updatedBy: me.uid,
+    }).catch(() => {});
+    const snap = await getDoc(doc(db, "jobs", repeat.templateId)).catch(() => null);
+    if (snap && snapExists(snap)) await materialiseSeries({ id: repeat.templateId, ...snap.data(), recurrence: repeat.series, seriesRole: "template" });
+    return;
+  }
+  if (data.seriesRole === "template") await materialiseSeries({ ...data, id: jobId });
+}
+async function callCompanyFunction(name, payload) {
+  const { getFunctions, httpsCallable, connectFunctionsEmulator } = await import("https://www.gstatic.com/firebasejs/10.14.1/firebase-functions.js");
+  const functions = getFunctions(fb, "australia-southeast1");
+  if (useEmulator) connectFunctionsEmulator(functions, "127.0.0.1", 5001);
+  return (await httpsCallable(functions, name)(payload)).data;
+}
+function wireCertificate(form, job) {
+  if (!form || !form.querySelector) return;
+  const show = () => {
+    const id = form.certTemplate && form.certTemplate.value;
+    form.querySelectorAll("[data-cert-for]").forEach(el => { el.hidden = el.getAttribute("data-cert-for") !== id; });
+  };
+  if (form.certTemplate) { form.certTemplate.addEventListener("change", show); show(); }
+  const collect = () => {
+    const raw = {};
+    form.querySelectorAll("[data-cert-field]").forEach(el => {
+      if (el.hidden) return;
+      const input = el.querySelector("input");
+      raw[el.getAttribute("data-cert-field")] = input ? input.value : "";
+    });
+    return raw;
+  };
+  const save = form.querySelector("#certsave");
+  if (save) save.onclick = async () => {
+    const err = form.querySelector("#certerr");
+    const built = buildCertificate({ company: orgSettings(), templateId: form.certTemplate.value, raw: collect(), skills: staffSkills(job), job });
+    if (!built.ok) { if (err) err.textContent = "Fill in " + built.missing.join(", ") + "."; return; }
+    if (!job || !job.id) { if (err) err.textContent = "Save the job first."; return; }
+    try {
+      const docs = await import("./features/job-documents.js");
+      const file = new File([built.pdf.bytes], built.fileName, { type: "application/pdf" });
+      const planned = docs.planDocumentUpload({
+        companyId: myCompanyId(), jobId: job.id, uid: me.uid, uploaderName: me.name || "Staff",
+        file, visibility: built.visibility, displayName: built.template.label,
+      });
+      if (!planned.ok) { if (err) err.textContent = "That file was not accepted."; return; }
+      await uploadBytes(storageRef(storage, planned.path), file, { contentType: "application/pdf", customMetadata: planned.metadata });
+      await setDoc(doc(db, "jobs", job.id, "documents", planned.id), { ...planned.firestore, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+      if (err) err.textContent = "";
+      toast("Certificate saved on the job.");
+    } catch (e) { if (err) err.textContent = (e && (e.message || e.code)) || "Not saved."; }
+  };
+  const email = form.querySelector("#certemail");
+  if (email) email.onclick = async () => {
+    const err = form.querySelector("#certerr");
+    if (!me || me.role !== "admin") { if (err) err.textContent = "Only an admin can email a certificate."; return; }
+    const built = buildCertificate({ company: orgSettings(), templateId: form.certTemplate.value, raw: collect(), skills: staffSkills(job), job });
+    if (!built.ok) { if (err) err.textContent = "Fill in " + built.missing.join(", ") + "."; return; }
+    try {
+      const result = await callCompanyFunction("sendCertificateEmail", {
+        jobId: job.id, to: form.certEmail.value, fileName: built.fileName, pdfBase64: bytesToBase64(built.pdf.bytes),
+      });
+      toast(result && result.held ? "Email held. Use a callup932+ test address when sending is on." : "Certificate emailed.");
+    } catch (e) { if (err) err.textContent = (e && e.message) || "Not emailed."; }
+  };
+}
 function editJob(j) {
   if (!featuresOn) { loadFeaturePack().then(() => editJob(j)); return; }
   const importing = !!(j && j._import);
@@ -5590,6 +5737,9 @@ function editJob(j) {
         <label>Start<input type="time" name="time" value="${esc(j.time)}"></label>
         <label>Hours<input type="number" step="any" min="0" max="999" inputmode="decimal" name="durationHrs" value="${esc(j.durationHrs)}"></label></div>
       <p class="sub">Change the start time to pin it. Leave it and the board spaces this job. Hours on the job do not change timesheets.</p>
+      ${repeatFieldHtml(j, { admin: !!(me && me.role === "admin"), suggestion: (recurrenceHint(j.type) || {}).label || "" })}
+      ${jobStepsHtml(j, ui.tradeSetup)}
+      ${!n && me && ["admin", "supervisor", "manager"].includes(me.role) ? certificatePanelHtml(j, { trades: (ui.tradeSetup && ui.tradeSetup.enabled) || [], skills: staffSkills(j), canEmail: me.role === "admin" }) : ""}
       ${!n && j.date && !["Done", "Cancelled"].includes(j.status) ? `<div class="row"><button type="button" id="unschbtn" class="btn">✕ Remove from dispatch board</button><span class="sub">Back to Unscheduled${usesSm8Sync() ? "; the booking is removed at the next sync" : ""} (the job stays).</span></div>` : ""}
       <fieldset class="staffs">${staff.map(s => `<label class="ck"><input type="checkbox" name="assigned" value="${esc(skey(s))}" ${namesOf(j).map(x => x.toLowerCase()).includes(s.name.toLowerCase()) ? "checked" : ""}> <span class="av">${esc(s.name[0])}</span>${esc(label(s.name))}</label>`).join("")}</fieldset>
       <p id="leavewarn" class="leave-warn" hidden></p>
@@ -5641,6 +5791,7 @@ function editJob(j) {
     queueMicrotask(() => QG.openQuoteWizard && QG.openQuoteWizard(null, { job: drafted }));
   };
   if (importing) wireImportForm(j, f);
+  wireCertificate(f, j);
   f.addEventListener("change", () => refreshJobLeaveWarn(f));
   refreshJobLeaveWarn(f);
   f.onsubmit = async ev => {
@@ -5667,6 +5818,9 @@ function editJob(j) {
       supervisorEmail: f.contactEmail.value.trim(),
     });
     if (data.status === "Done" && j.status !== "Done") Object.assign(data, { completedAt: serverTimestamp(), completedBy: me.uid });
+    const repeat = repeatWrite(j, f);
+    if (repeat.error) { $("#ferr").textContent = repeat.error; return; }
+    Object.assign(data, repeat.patch || {});
     if (!confirmIfOnLeave(data.date, data.assignedNames)) return;
     if (!guard.start()) return;
     const saveBtn = f.querySelector("button[value=save]");
@@ -5700,6 +5854,7 @@ function editJob(j) {
       });
       d.close(); toast(r.queued ? "Saved on this phone. It uploads when you have signal." : "Saved"); refreshAfterImport();
       const savedId = (j && j.id) || (newRef && newRef.id);
+      if (!r.queued) rememberSeries(savedId, data, repeat).catch(() => {});
       queueDispatchPersist([...(jobs || []).filter(x => x.id !== savedId), { ...j, ...data, id: savedId }], [data.date, j && j.date].filter(Boolean));
       if (!data.date && !r.queued) location.reload();
     } catch (e) { $("#ferr").textContent = e.message; }
@@ -6857,7 +7012,7 @@ function renderOperator() {
   if (ui.opTab === "quotes" && !(canQuote() && me.role !== "admin")) ui.opTab = "more";
   if (ui.opTab === "capacity" && !canSeeCapacity()) ui.opTab = "more";
   if (ui.opTab === "quotes") {
-    const qhtml = adminViewRouter("quotes", ui, { esc, $$, staff, jobs: mine, todayStr, rerender: () => renderOperator(), canEditQuoteRates });
+    const qhtml = adminViewRouter("quotes", ui, { esc, $$, staff, jobs: mine, todayStr, rerender: () => renderOperator(), canEditQuoteRates, isAdmin: () => !!(me && me.role === "admin") });
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">Quotes</div><div class="mob-sub">Guided pricing · ex GST</div></div>
       <div class="pad">${qhtml || ""}</div>${opTabs("quotes")}</div>`;
     bindOp(mine);
@@ -7057,6 +7212,7 @@ function renderOpDetail(j) {
         <div><dt>Purchase order</dt><dd><b>${esc(j.po || "—")}</b></dd></div>
         <div class="scope"><dt>Scope</dt><dd>${esc(crewText(j.description) || "—")}</dd></div>
         ${Array.isArray(j.workAmounts) && j.workAmounts.length ? `<div class="scope"><dt>Amounts</dt><dd>${workAmountsHtml(j, "det-amt")}</dd></div>` : ""}
+        ${jobStepsHtml(j, ui.tradeSetup) ? `<div class="scope"><dt>Checklist</dt><dd>${jobStepsHtml(j, ui.tradeSetup)}</dd></div>` : ""}
       </dl>
       <div class="mcard"><div class="mlbl">Diary</div>${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("") || `<div class="muted sub">No notes yet</div>`}
         <button class="mnote" type="button" data-act="note">Add note</button></div>
@@ -8414,6 +8570,7 @@ function mountQuotes() {
   wireClientPrefill: root => wireClientPrefill(root),
   remember: entries => rememberEntries(entries),
   isAdmin: () => !!(me && me.role === "admin"),
+  sendCustomerQuote: (quoteId, to) => callCompanyFunction("sendCustomerQuote", { quoteId, to }),
   saveExtraTrade: async (tradeId) => {
     const id = normalizeTrade(tradeId);
     if (!id || !canEditTitles()) { toast("Only an admin or a manager can change trades."); return; }
