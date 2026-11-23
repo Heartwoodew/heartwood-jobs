@@ -466,7 +466,7 @@ async function openHelp() {
   await loadFeaturePack();
   let panel = $("#helppanel");
   if (panel) { panel.remove(); return; }
-  document.body.insertAdjacentHTML("beforeend", helpPanelHtml());
+  document.body.insertAdjacentHTML("beforeend", helpPanelHtml(helpContext()));
   panel = $("#helppanel");
   $("#helpx").onclick = () => panel.remove();
   panel.querySelectorAll("[data-help-q]").forEach(btn => btn.onclick = () => submitHelpQuestion(btn.dataset.helpQ));

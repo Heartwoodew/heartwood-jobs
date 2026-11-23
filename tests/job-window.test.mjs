@@ -44,5 +44,4 @@ test("office app subscribes to older open jobs and merges them into the job list
   assert.match(sw, /"features\/job-window\.js"/);
 
   assert.match(sw, /callup-shell-v148-crew-map/);
-
 });

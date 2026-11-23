@@ -1298,6 +1298,9 @@ abbr.req{color:#9b2c2c;text-decoration:none;font-weight:700}
 .callup-help-ask,.callup-help-answer{margin:0}
 .callup-help-form{display:flex;gap:8px}
 .callup-help-form input{flex:1;min-width:0}
+.callup-help-video{display:inline-block;margin:6px 0;padding:6px 10px;border:1px solid #d9cbb8;border-radius:8px;background:#f7f1e8;color:#2b2118;text-decoration:none;font-weight:600}
+.callup-help-videos summary{cursor:pointer;font-weight:600}
+.callup-help-videos ul{margin:6px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px}
 .callup-help-card{margin:8px;padding:10px;background:#f7f1e8;border-radius:8px}
 #helpbtn{min-width:40px;font-weight:700}
 #ticketbtn{font-weight:700}

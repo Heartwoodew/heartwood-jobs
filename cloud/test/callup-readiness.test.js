@@ -31,7 +31,6 @@ test("app address: Heartwood stays on jobs.heartwoodew.com, others use the CallU
   const sw = readFileSync(new URL("../../app/sw.js", import.meta.url), "utf8");
 
   assert.match(sw, /callup-shell-v148-crew-map/);
-
 });
 
 test("Resend invites: off by default, Heartwood held, test recipients only when allow-listed", async () => {

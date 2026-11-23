@@ -266,7 +266,6 @@ test("opt-in stays a button press, and iPhone Safari shows the Home Screen hint"
   assert.equal(vapidReady("BMyCNKMjDvbOQW74GyjS7GlTo-Qe7r203dbshLNIPpuDcaafAuZmq-WSjX7Ptys4ZTXEH1GKy8QhtkNsaD1Zlk8"), true);
 
   assert.match(sw, /callup-shell-v148-crew-map/);
-
   assert.match(sw, /notificationclick/);
   assert.match(sw, /note\.title/);
   assert.match(sw, /showNotification/);

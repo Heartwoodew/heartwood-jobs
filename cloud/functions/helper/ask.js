@@ -7,6 +7,7 @@ import { buildHelperContext } from "./context.js";
 import { loadKnowledge } from "./knowledge.js";
 import { buildHelperPrompt, sanitiseReply } from "./prompt.js";
 import { cancelHelperAction, confirmHelperAction, proposeHelperAction } from "./proposals.js";
+import { matchVideo, videoById, videoListForModel } from "../shared/tutorial-videos.js";
 
 export const QUESTION_CAP = 2000;
 export const DISABLED_REPLY = "Helper is switched off, so I didn't ask a model. Nothing was changed.";
@@ -52,6 +53,17 @@ export async function authorizeCallable(request, verify) {
 
 function named(uid, profile) {
   return displayName(uid, profile);
+}
+
+export const VIDEO_LINE = /\n?\s*VIDEO:\s*(\d{1,3})\s*$/i;
+
+// Tutorial video for the reply. The model may end with "VIDEO: <id>", but only an id
+// from tutorial-videos.js that this viewer may see is kept; otherwise the question's keyword match is used.
+export function pickVideo(raw, question, viewer) {
+  const m = VIDEO_LINE.exec(String(raw || "").trim());
+  const named = m ? videoById(m[1], viewer) : null;
+  const video = named || matchVideo(question, viewer);
+  return video ? video.n : null;
 }
 
 export async function handleHelperAsk({
@@ -113,7 +125,13 @@ export async function handleHelperAsk({
     jobId: typeof data?.jobId === "string" ? data.jobId : "",
     today,
   });
+  const viewer = {
+    role: membership.role,
+    staffRole: profile && typeof profile.staffRole === "string" ? profile.staffRole : "",
+    canSeeMoney: membership.canSeeMoney,
+  };
   const prompt = buildHelperPrompt({
+    videos: videoListForModel(viewer),
     name: displayName(auth.uid, profile),
     role: membership.role,
     tenantId: membership.tenantId,
@@ -131,7 +149,8 @@ export async function handleHelperAsk({
   } catch {
     return { ok: true, enabled: true, reply: MODEL_FAILED, knowledge: pack.source };
   }
-  const reply = sanitiseReply(String(raw || "").replace(/HELPER_ACTION[\s\S]*$/g, ""), {
+  const videoId = pickVideo(raw, question, viewer);
+  const reply = sanitiseReply(String(raw || "").replace(/HELPER_ACTION[\s\S]*$/g, "").trim().replace(VIDEO_LINE, ""), {
     canary: prompt.canary, canSeeMoney: membership.canSeeMoney, tenantId: membership.tenantId,
   });
   return {
@@ -139,6 +158,7 @@ export async function handleHelperAsk({
     enabled: true,
     reply,
     proposal: null,
+    videoId,
     knowledge: pack.source,
   };
 }
