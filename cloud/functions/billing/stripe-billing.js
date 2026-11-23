@@ -2,11 +2,18 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { CALLUP_ORIGINS, HEARTWOOD_APP_ORIGIN, appOriginFor } from "../shared/staff-invites.js";
 
 // Stripe for CallUp (live since 11 Nov 2026 via STRIPE_MODE=live). One plan: A$50 includes 1 person, A$5 each extra person.
+// Heartwood Earthworx Pty Ltd (ABN 31 667 738 098), trading as CallUp, is the seller.
+// Stripe is the payment facilitator only. Checkout sets managed_payments.enabled to false.
+// GST is a fixed 10% exclusive tax rate (not Stripe Tax). Amounts stay A$50 and A$5.
+// Tax rate ids, sandbox and live separately, same pattern as the price ids:
+//   test: secret STRIPE_GST_TAX_RATE_ID (txr_). Not declared when STRIPE_MODE=live.
+//   live: secret STRIPE_LIVE_GST_TAX_RATE_ID (txr_). Declared only when STRIPE_MODE=live.
 // There is no second tier. Test companies, friend trials and Heartwood never call Stripe.
 // Test mode (default): the secret key must be an sk_test_ key and live events are refused.
-// Test secrets are STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in Secret Manager.
+// Test secrets are STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET and STRIPE_GST_TAX_RATE_ID in Secret Manager.
 // Live mode only when STRIPE_MODE=live is set in functions/.env.heartwood-9f37f AND the live secrets exist:
-// STRIPE_LIVE_SECRET_KEY (sk_live_), STRIPE_LIVE_WEBHOOK_SECRET, STRIPE_LIVE_BASE_PRICE_ID, STRIPE_LIVE_EXTRA_PRICE_ID.
+// STRIPE_LIVE_SECRET_KEY (sk_live_), STRIPE_LIVE_WEBHOOK_SECRET, STRIPE_LIVE_BASE_PRICE_ID, STRIPE_LIVE_EXTRA_PRICE_ID,
+// STRIPE_LIVE_GST_TAX_RATE_ID.
 // In live mode, test keys and test events are refused instead. See /workspace/callup/stripe-go-live-steps.md.
 // Webhook URL, after a human deploys: https://australia-southeast1-heartwood-9f37f.cloudfunctions.net/stripeWebhook
 
@@ -14,8 +21,31 @@ export const BASE_PRICE_ID = "price_1UcGvhHEbjZCMeDTkneG3K90";
 export const EXTRA_PRICE_ID = "price_1UZRdDHEbjZCMeDTrPHYbfnK";
 export const BASE_LOOKUP = "callup_base_monthly";
 export const EXTRA_LOOKUP = "callup_extra_staff_monthly";
-// Pinned Stripe API version. Managed Payments (live account) needs 2025-03-31.basil or newer.
+// Pinned Stripe API version. basil accepts managed_payments on Checkout, so a session can set
+// managed_payments.enabled to false. Heartwood Earthworx stays the seller. Stripe only collects the payment.
 export const STRIPE_API_VERSION = "2025-03-31.basil";
+const TAX_RATE_RE = /^txr_[A-Za-z0-9]+$/;
+
+// Fixed 10% exclusive GST tax rate for this mode. Live and sandbox ids are different Stripe objects.
+// Pass the Secret Manager value in configured. A blank or non-txr id refuses checkout rather than
+// opening a session with no GST. This does not create a tax rate and does not read a secret key.
+export function stripeGstTaxRateId(mode = "test", configured = {}) {
+  const raw = mode === "live" ? configured.live : configured.test;
+  const id = String(raw || "").trim();
+  if (!TAX_RATE_RE.test(id)) {
+    const err = new Error("stripe-gst-tax-rate-missing");
+    err.code = "failed-precondition";
+    throw err;
+  }
+  return id;
+}
+
+// Company's saved ABN, when it is 11 digits, as a Stripe customer tax id. Shorter values are skipped.
+export function auAbnTaxId(abn) {
+  const value = String(abn || "").replace(/\s/g, "");
+  if (!/^\d{11}$/.test(value)) return null;
+  return { type: "au_abn", value };
+}
 export const WEBHOOK_URL = "https://australia-southeast1-heartwood-9f37f.cloudfunctions.net/stripeWebhook";
 
 // Return address for Checkout / the billing portal. Only our own app addresses are accepted.
@@ -111,25 +141,28 @@ export function trialCheckoutFields(trialEndsAt, now = Date.now()) {
   return { trial_period_days: Math.max(2, Math.ceil((end - at) / 86400000)) };
 }
 
-export function checkoutParams({ companyId, company, staffCount, successUrl, cancelUrl, prices = stripePrices(), preserveTrial = false, now = Date.now(), referralCoupon = "", referralFor = "" }) {
+export function checkoutParams({ companyId, company, staffCount, successUrl, cancelUrl, prices = stripePrices(), taxRateId = "", preserveTrial = false, now = Date.now(), referralCoupon = "", referralFor = "" }) {
   const skip = billingSkipped(company, companyId);
   if (skip) return { ok: false, reason: skip };
   const billing = company.billing || {};
   if (billing.stripeSubscriptionId && (billing.status === "active" || billing.status === "trialing")) return { ok: false, reason: "already-subscribed" };
+  const rate = String(taxRateId || "").trim();
+  if (!TAX_RATE_RE.test(rate)) return { ok: false, reason: "gst-tax-rate-missing" };
   const extra = extraStaffQuantity(staffCount);
-  const lineItems = [{ price: prices.base, quantity: 1 }];
-  if (extra > 0) lineItems.push({ price: prices.extra, quantity: extra });
+  const lineItems = [{ price: prices.base, quantity: 1, tax_rates: [rate] }];
+  if (extra > 0) lineItems.push({ price: prices.extra, quantity: extra, tax_rates: [rate] });
   const params = {
     mode: "subscription",
     client_reference_id: companyId,
     line_items: lineItems,
-    automatic_tax: { enabled: true },
+    // Account default is Managed Payments. false keeps Heartwood Earthworx as the seller.
+    managed_payments: { enabled: false },
     tax_id_collection: { enabled: true },
     billing_address_collection: "required",
     success_url: successUrl,
     cancel_url: cancelUrl,
     metadata: { companyId },
-    subscription_data: { metadata: { companyId } },
+    subscription_data: { metadata: { companyId }, default_tax_rates: [rate] },
   };
   if (preserveTrial) {
     const trial = trialCheckoutFields(company && company.trialEndsAt, now);
@@ -248,6 +281,9 @@ export function applyStripeEvent(event, mode = "test") {
   return { ok: false, reason: "ignored-event" };
 }
 
+// Extra staff items do not set tax_rates here. Checkout puts the fixed GST rate on
+// subscription_data.default_tax_rates, and a later item with no tax_rates of its own uses that.
+// Existing Managed Payments subscriptions are not converted.
 export function staffItemChange({ subscription, staffCount, prices = stripePrices() }) {
   const quantity = extraStaffQuantity(staffCount);
   const items = (subscription && subscription.items && subscription.items.data) || [];
@@ -295,7 +331,7 @@ export async function syncStaffQuantity({ companyId, company, staffCount, stripe
   return { ok: true, change };
 }
 
-export async function handleCheckoutCall({ uid, companyId, origin, getContext, stripe, prices = stripePrices(), preserveTrial = false, now = Date.now(), referralCoupon = "", referralFor = "" }) {
+export async function handleCheckoutCall({ uid, companyId, origin, getContext, stripe, prices = stripePrices(), taxRateId = "", preserveTrial = false, now = Date.now(), referralCoupon = "", referralFor = "" }) {
   origin = billingOrigin(origin, companyId);
   const ctx = await getContext(uid, companyId);
   const authz = authorizeCompanyAdmin({ uid, profile: ctx.profile, company: ctx.company, companyId });
@@ -310,14 +346,48 @@ export async function handleCheckoutCall({ uid, companyId, origin, getContext, s
     successUrl: `${origin}/app/?billing=success`,
     cancelUrl: `${origin}/app/?billing=cancel`,
     prices,
+    taxRateId,
     preserveTrial: preserveTrial === true,
     now,
     referralCoupon,
     referralFor,
   });
   if (!built.ok) return built;
+  await prefillCustomerAbn({ stripe, params: built.params, company: ctx.company, companyId });
   const session = await stripe.checkout.sessions.create(built.params);
   return { ok: true, url: session.url };
+}
+
+// Optional. A saved 11-digit ABN is attached as au_abn so Checkout can show it.
+// An existing customer gets the tax id when it is missing. A new customer is created with it.
+// Any Stripe rejection leaves the session as checkoutParams built it. No charge is created here.
+export async function prefillCustomerAbn({ stripe, params, company, companyId }) {
+  const taxId = auAbnTaxId(company && company.abn);
+  if (!taxId || !params || !stripe || !stripe.customers) return params;
+  try {
+    if (params.customer) {
+      if (typeof stripe.customers.listTaxIds !== "function" || typeof stripe.customers.createTaxId !== "function") return params;
+      const listed = await stripe.customers.listTaxIds(params.customer, { limit: 20 });
+      const rows = (listed && listed.data) || [];
+      const have = rows.some(row => row && row.type === "au_abn" && String(row.value || "").replace(/\s/g, "") === taxId.value);
+      if (!have) await stripe.customers.createTaxId(params.customer, taxId);
+      return params;
+    }
+    if (typeof stripe.customers.create !== "function") return params;
+    const created = await stripe.customers.create({
+      email: params.customer_email || undefined,
+      name: (company && (company.legalName || company.name)) || undefined,
+      metadata: { companyId: String(companyId || params.client_reference_id || "") },
+      tax_id_data: [taxId],
+    }, { idempotencyKey: `callup-abn-${companyId || params.client_reference_id || "company"}` });
+    if (!created || !created.id) return params;
+    params.customer = created.id;
+    delete params.customer_email;
+    params.customer_update = { name: "auto", address: "auto" };
+  } catch {
+    // Prefill is optional. tax_id_collection still asks for a tax id at Checkout.
+  }
+  return params;
 }
 
 export async function handlePortalCall({ uid, companyId, origin, getContext, stripe }) {

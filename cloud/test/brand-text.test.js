@@ -54,6 +54,8 @@ const HEARTWOOD_OK = new Set([
   "Reset your Heartwood Jobs password",
   "Optional. Heartwood receipts still use the address on the Receipts page.",
   "Heartwood cannot be deleted.", // platform-owner delete refusal, not shown to a client company
+  // Seller of CallUp subscriptions. Admin billing and the paused-admin screen only. Crew markup does not include it.
+  "Tax invoices are issued by Heartwood Earthworx Pty Ltd (ABN 31 667 738 098).",
   "companies/heartwood", "tenants/heartwood", // deletion path guards, never shown
   // CallUp for Windows installer on the public GitHub release (the updater feed and installer publisher are already there)
   "https://github.com/Heartwoodew/heartwood-jobs/releases/download/desktop-v0.1.0/CallUp_0.1.0_x64-setup.exe",

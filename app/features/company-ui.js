@@ -169,6 +169,10 @@ export function companySettingsHtml(org, { canEdit = false, trades = [], canEdit
     ${billingCard(org, canEdit)}`;
 }
 
+// Admin billing copy only. Crew markup (pausedStaffHtml, and this card when canEdit is false) does not include it.
+const BILLING_PRICE = "CallUp is A$50 a month including 1 person, plus A$5 a month for each extra staff member. GST is added at checkout.";
+const BILLING_ISSUER = "Tax invoices are issued by Heartwood Earthworx Pty Ltd (ABN 31 667 738 098).";
+
 function billingCard(org, canEdit) {
   if (!canEdit || !org || org.companyId === "heartwood" || org.isTest || org.plan === "friend") return "";
   const status = (org.billing && org.billing.status) || "not-configured";
@@ -176,7 +180,8 @@ function billingCard(org, canEdit) {
   const label = status === "active" ? "Active" : status === "trialing" ? "Trialing" : status === "past_due" ? "Past due" : status === "canceled" ? "Canceled" : "Not set up";
   return `<div class="card" id="billingcard">
     <h2>Billing</h2>
-    <p class="sub">The trial is 14 days and does not ask for a card. CallUp is A$50 a month including 1 person, plus A$5 a month for each extra staff member. GST is added at checkout.</p>
+    <p class="sub">The trial is 14 days and does not ask for a card. ${BILLING_PRICE}</p>
+    <p class="sub">${BILLING_ISSUER}</p>
     <p>Status: <b>${esc(label)}</b></p>
     ${subscribed
       ? `<button type="button" class="primary" id="billportal">Manage billing</button>`
@@ -223,7 +228,8 @@ export function pausedAdminHtml(access = {}) {
     : "Subscribe to restore this company.";
   return `<form class="card login" id="paused">
     <h2>Your free trial has ended</h2>
-    <p>This account is paused. CallUp is A$50 a month including 1 person, plus A$5 a month for each extra staff member. GST is added at checkout.</p>
+    <p>This account is paused. ${BILLING_PRICE}</p>
+    <p>${BILLING_ISSUER}</p>
     <p>${esc(until)}</p>
     ${access.manageBilling
       ? `<button class="big primary" type="button" id="billportal">Manage billing</button>`

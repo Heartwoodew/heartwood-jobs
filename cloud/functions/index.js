@@ -49,6 +49,11 @@
  * Referral bonus: ensureReferralCode mints a company's share code on first use.
  * attachSignupReferral records referredBy at signup. stripeWebhook grants the
  * referrer 2 months free on the referred company's first paid invoice.
+ *
+ * CallUp subscriptions are sold by Heartwood Earthworx Pty Ltd (ABN 31 667 738 098),
+ * trading as CallUp. Checkout sets managed_payments.enabled to false. GST is a fixed
+ * 10% exclusive tax rate from STRIPE_GST_TAX_RATE_ID or STRIPE_LIVE_GST_TAX_RATE_ID,
+ * not Stripe Tax. Prices stay A$50 and A$5.
  */
 import { onDocumentCreated, onDocumentWritten } from "firebase-functions/v2/firestore";
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
@@ -81,6 +86,7 @@ import {
   stripeMode,
   STRIPE_API_VERSION,
   stripePrices,
+  stripeGstTaxRateId,
   handlePortalCall,
   handleStripeWebhook,
   syncStaffQuantity,
@@ -119,10 +125,17 @@ const STRIPE_LIVE_SECRET_KEY = STRIPE_LIVE ? defineSecret("STRIPE_LIVE_SECRET_KE
 const STRIPE_LIVE_WEBHOOK_SECRET = STRIPE_LIVE ? defineSecret("STRIPE_LIVE_WEBHOOK_SECRET") : null;
 const STRIPE_LIVE_BASE_PRICE_ID = STRIPE_LIVE ? defineSecret("STRIPE_LIVE_BASE_PRICE_ID") : null;
 const STRIPE_LIVE_EXTRA_PRICE_ID = STRIPE_LIVE ? defineSecret("STRIPE_LIVE_EXTRA_PRICE_ID") : null;
-const STRIPE_KEY_SECRETS = STRIPE_LIVE ? [STRIPE_LIVE_SECRET_KEY, STRIPE_LIVE_BASE_PRICE_ID, STRIPE_LIVE_EXTRA_PRICE_ID] : [STRIPE_SECRET_KEY];
+// Fixed 10% exclusive GST tax rate. Sandbox and live are different txr_ ids.
+// Only the active mode is declared, so deploy does not ask for the other secret.
+const STRIPE_GST_TAX_RATE_ID = STRIPE_LIVE ? null : defineSecret("STRIPE_GST_TAX_RATE_ID");
+const STRIPE_LIVE_GST_TAX_RATE_ID = STRIPE_LIVE ? defineSecret("STRIPE_LIVE_GST_TAX_RATE_ID") : null;
+const STRIPE_KEY_SECRETS = STRIPE_LIVE ? [STRIPE_LIVE_SECRET_KEY, STRIPE_LIVE_BASE_PRICE_ID, STRIPE_LIVE_EXTRA_PRICE_ID, STRIPE_LIVE_GST_TAX_RATE_ID] : [STRIPE_SECRET_KEY, STRIPE_GST_TAX_RATE_ID];
 const STRIPE_HOOK_SECRETS = STRIPE_LIVE ? [STRIPE_LIVE_WEBHOOK_SECRET] : [STRIPE_WEBHOOK_SECRET];
 function currentPrices() {
   return stripePrices(STRIPE_MODE, STRIPE_LIVE ? { base: STRIPE_LIVE_BASE_PRICE_ID.value(), extra: STRIPE_LIVE_EXTRA_PRICE_ID.value() } : {});
+}
+function currentGstTaxRateId() {
+  return stripeGstTaxRateId(STRIPE_MODE, STRIPE_LIVE ? { live: STRIPE_LIVE_GST_TAX_RATE_ID.value() } : { test: STRIPE_GST_TAX_RATE_ID.value() });
 }
 
 // firebase-functions creates its own "__admin__" app for Firestore triggers, so getApps().length is not enough:
@@ -600,7 +613,8 @@ async function testStripe() {
   const key = STRIPE_LIVE ? STRIPE_LIVE_SECRET_KEY.value() : STRIPE_SECRET_KEY.value();
   assertKeyForMode(key, STRIPE_MODE);
   const { default: Stripe } = await import("stripe");
-  // The live CallUp account uses Stripe Managed Payments, which Checkout refuses on API versions before basil.
+  // basil stays pinned so Checkout accepts managed_payments.enabled = false.
+  // Heartwood Earthworx Pty Ltd is the seller. Stripe is the payment facilitator. GST is the fixed tax rate.
   return new Stripe(key, { apiVersion: STRIPE_API_VERSION });
 }
 
@@ -715,6 +729,7 @@ export const createBillingCheckout = onCall(
       getContext: async () => ctx,
       stripe,
       prices: currentPrices(),
+      taxRateId: currentGstTaxRateId(),
       preserveTrial: request.data?.preserveTrial === true,
       referralCoupon,
       referralFor,

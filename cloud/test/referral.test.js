@@ -293,9 +293,12 @@ test("a referrer still on trial keeps the reward pending, then it is applied whe
   const checkout = checkoutParams({
     companyId: "acme", company: company(), staffCount: 1, successUrl: "https://app.callupapp.com.au/app/?billing=success",
     cancelUrl: "https://app.callupapp.com.au/app/?billing=cancel", referralCoupon: REFERRAL_COUPON_ID, referralFor: "bravo",
+    taxRateId: "txr_testgst10",
   });
   assert.deepEqual(checkout.params.discounts, [{ coupon: REFERRAL_COUPON_ID }]);
   assert.equal(checkout.params.metadata.referralFor, "bravo");
+  assert.equal(checkout.params.managed_payments.enabled, false);
+  assert.deepEqual(checkout.params.subscription_data.default_tax_rates, ["txr_testgst10"]);
   store.referrals.set("bravo", { ...store.referrals.get("bravo"), status: "earned", applyStatus: "pending" });
   const marked = await markCheckoutReward({ referredCompanyId: "bravo", subscriptionId: "sub_new", now: NOW, store });
   assert.equal(marked.applied, true);
@@ -356,6 +359,9 @@ test("billing settings show the referral to an admin and hide prices from crew",
   assert.match(adminHtml, /Refer another business\. When they start paying, you get 2 months free\./);
   assert.match(adminHtml, /id="referralbox"/);
   assert.match(adminHtml, /A\$50 a month/);
+  assert.match(adminHtml, /A\$5 a month/);
+  assert.match(adminHtml, /GST is added at checkout/);
+  assert.match(adminHtml, /Tax invoices are issued by Heartwood Earthworx Pty Ltd \(ABN 31 667 738 098\)/);
   const ready = referralBoxHtml({ code: CODE, link: referralLink(CODE), pending: 2, earned: 1 });
   assert.match(ready, /id="refcopy"/);
   assert.match(ready, new RegExp(CODE));
@@ -364,9 +370,13 @@ test("billing settings show the referral to an admin and hide prices from crew",
   const crew = companySettingsHtml(org, { canEdit: false });
   assert.doesNotMatch(crew, /referralbox/);
   assert.doesNotMatch(crew, /2 months free/);
-  assert.doesNotMatch(crew, /A\$20|A\$50/);
+  assert.doesNotMatch(crew, /A\$20|A\$50|A\$5/);
+  assert.doesNotMatch(crew, /Tax invoices are issued/);
   const staff = pausedStaffHtml();
-  assert.doesNotMatch(staff, /A\$20|A\$50/);
+  assert.doesNotMatch(staff, /A\$20|A\$50|A\$5/);
+  assert.doesNotMatch(staff, /Tax invoices are issued/);
+  const ui = readFileSync(new URL("../../app/features/company-ui.js", import.meta.url), "utf8");
+  assert.doesNotMatch(ui, /A\$20/);
   assert.doesNotMatch(staff, /referral/);
   assert.match(signupFormHtml(), /14-day trial/);
   assert.doesNotMatch(signupFormHtml(), /2 months free/);
@@ -385,6 +395,6 @@ test("billing settings show the referral to an admin and hide prices from crew",
   assert.match(index, /export const attachSignupReferral = onCall/);
   assert.match(index, /handleReferralWebhookEvent/);
   const sw = readFileSync(new URL("../../app/sw.js", import.meta.url), "utf8");
-  assert.match(sw, /callup-shell-v136-fastboot/);
+  assert.match(sw, /callup-shell-v137-gst-invoice/);
   assert.match(sw, /features\/referral\.js/);
 });

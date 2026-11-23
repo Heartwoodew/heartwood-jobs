@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
-  BASE_PRICE_ID, EXTRA_PRICE_ID, WEBHOOK_URL, applyStripeEvent, assertTestKey, authorizeCompanyAdmin,
+  BASE_PRICE_ID, EXTRA_PRICE_ID, WEBHOOK_URL, applyStripeEvent, assertTestKey, auAbnTaxId, authorizeCompanyAdmin,
   checkoutParams, companiesTouchedByUser, constructStripeEvent, extraStaffQuantity, handleCheckoutCall, trialCheckoutFields,
-  handlePortalCall, handleStripeWebhook, portalParams, staffItemChange, syncStaffQuantity,
+  handlePortalCall, handleStripeWebhook, portalParams, prefillCustomerAbn, staffItemChange, stripeGstTaxRateId, syncStaffQuantity,
 } from "../functions/billing/stripe-billing.js";
+
+const GST_RATE = "txr_testgst10";
 
 const company = {
   name: "Acme Civil", email: "office@acme.test", plan: "trial", status: "active", isTest: false,
@@ -23,19 +25,30 @@ function signed(secret, body, seconds = Math.floor(Date.now() / 1000)) {
 test("checkout uses the sandbox prices and skips test, friend and Heartwood companies", () => {
   assert.equal(extraStaffQuantity(1), 0);
   assert.equal(extraStaffQuantity(4), 3);
-  const one = checkoutParams({ companyId: "acme", company, staffCount: 1, successUrl: "https://jobs.heartwoodew.com/?billing=success", cancelUrl: "https://jobs.heartwoodew.com/?billing=cancel" });
+  const one = checkoutParams({ companyId: "acme", company, staffCount: 1, successUrl: "https://jobs.heartwoodew.com/?billing=success", cancelUrl: "https://jobs.heartwoodew.com/?billing=cancel", taxRateId: GST_RATE });
   assert.equal(one.ok, true);
   assert.equal(one.params.mode, "subscription");
   assert.equal(one.params.client_reference_id, "acme");
-  assert.equal(one.params.automatic_tax.enabled, true);
+  assert.equal(one.params.managed_payments.enabled, false);
+  assert.equal(one.params.automatic_tax, undefined);
   assert.equal(one.params.tax_id_collection.enabled, true);
   assert.equal(one.params.billing_address_collection, "required");
-  assert.deepEqual(one.params.line_items, [{ price: BASE_PRICE_ID, quantity: 1 }]);
-  const four = checkoutParams({ companyId: "acme", company, staffCount: 4, successUrl: "x", cancelUrl: "y" });
+  assert.deepEqual(one.params.subscription_data.default_tax_rates, [GST_RATE]);
+  assert.deepEqual(one.params.line_items, [{ price: BASE_PRICE_ID, quantity: 1, tax_rates: [GST_RATE] }]);
+  const four = checkoutParams({ companyId: "acme", company, staffCount: 4, successUrl: "x", cancelUrl: "y", taxRateId: GST_RATE });
   assert.deepEqual(four.params.line_items, [
-    { price: BASE_PRICE_ID, quantity: 1 },
-    { price: EXTRA_PRICE_ID, quantity: 3 },
+    { price: BASE_PRICE_ID, quantity: 1, tax_rates: [GST_RATE] },
+    { price: EXTRA_PRICE_ID, quantity: 3, tax_rates: [GST_RATE] },
   ]);
+  assert.deepEqual(four.params.subscription_data.default_tax_rates, [GST_RATE]);
+  assert.equal(checkoutParams({ companyId: "acme", company, staffCount: 1, successUrl: "x", cancelUrl: "y" }).reason, "gst-tax-rate-missing");
+  assert.equal(checkoutParams({ companyId: "acme", company, staffCount: 1, successUrl: "x", cancelUrl: "y", taxRateId: "price_notatax" }).reason, "gst-tax-rate-missing");
+  assert.equal(stripeGstTaxRateId("test", { test: " txr_sandbox1 " }), "txr_sandbox1");
+  assert.equal(stripeGstTaxRateId("live", { test: "txr_sandbox1", live: "txr_live1" }), "txr_live1");
+  assert.throws(() => stripeGstTaxRateId("live", { test: "txr_sandbox1" }), /stripe-gst-tax-rate-missing/);
+  assert.throws(() => stripeGstTaxRateId("test", { test: "" }), /stripe-gst-tax-rate-missing/);
+  assert.equal(auAbnTaxId("12 345 678 901").value, "12345678901");
+  assert.equal(auAbnTaxId("1"), null);
   assert.equal(checkoutParams({ companyId: "yard", company: { ...company, isTest: true }, staffCount: 2, successUrl: "x", cancelUrl: "y" }).reason, "test-company");
   assert.equal(checkoutParams({ companyId: "mate", company: { ...company, plan: "friend" }, staffCount: 2, successUrl: "x", cancelUrl: "y" }).reason, "friend-trial");
   assert.equal(checkoutParams({ companyId: "heartwood", company, staffCount: 8, successUrl: "x", cancelUrl: "y" }).reason, "heartwood");
@@ -131,11 +144,14 @@ test("webhook signature, plan and billing status, and staff prorations", async (
   const checkout = await handleCheckoutCall({
     uid: "adm", companyId: "acme", origin: "https://evil.example",
     getContext: async () => ({ company, profile: admin, staffCount: 1 }),
-    stripe,
+    stripe, taxRateId: GST_RATE,
   });
   assert.equal(checkout.url, "https://checkout.stripe.test/session");
   assert.equal(calls[1][1].success_url, "https://app.callupapp.com.au/app/?billing=success");
   assert.equal(calls[1][1].line_items[0].price, BASE_PRICE_ID);
+  assert.equal(calls[1][1].managed_payments.enabled, false);
+  assert.deepEqual(calls[1][1].line_items[0].tax_rates, [GST_RATE]);
+  assert.deepEqual(calls[1][1].subscription_data.default_tax_rates, [GST_RATE]);
   const portal = await handlePortalCall({
     uid: "adm", companyId: "acme", origin: "https://jobs.heartwoodew.com",
     getContext: async () => ({ company: paid, profile: admin, staffCount: 2 }),
@@ -147,7 +163,12 @@ test("webhook signature, plan and billing status, and staff prorations", async (
   const index = readFileSync(new URL("../functions/index.js", import.meta.url), "utf8");
   assert.match(index, /defineSecret\("STRIPE_SECRET_KEY"\)/);
   assert.match(index, /defineSecret\("STRIPE_WEBHOOK_SECRET"\)/);
+  assert.match(index, /defineSecret\("STRIPE_GST_TAX_RATE_ID"\)/);
+  assert.match(index, /defineSecret\("STRIPE_LIVE_GST_TAX_RATE_ID"\)/);
+  assert.match(index, /taxRateId: currentGstTaxRateId\(\)/);
+  assert.match(index, /STRIPE_LIVE_GST_TAX_RATE_ID/);
   assert.match(index, /stripeWebhook/);
+  assert.doesNotMatch(index, /uses Stripe Managed Payments/);
   assert.equal(WEBHOOK_URL, "https://australia-southeast1-heartwood-9f37f.cloudfunctions.net/stripeWebhook");
   assert.doesNotMatch(index, /sk_live_|whsec_[A-Za-z0-9]{8,}/);
 });
@@ -171,18 +192,20 @@ test("signup checkout keeps the company trial and still works when Stripe is not
     companyId: "acme", company: withTrial, staffCount: 2,
     successUrl: "https://app.callupapp.com.au/app/?billing=success",
     cancelUrl: "https://app.callupapp.com.au/app/?billing=cancel",
-    preserveTrial: true, now,
+    preserveTrial: true, now, taxRateId: GST_RATE,
   });
   assert.equal(kept.ok, true);
   assert.equal(kept.params.mode, "subscription");
   assert.equal(kept.params.payment_method_collection, "always");
   assert.equal(kept.params.subscription_data.trial_end, Math.floor(end.getTime() / 1000));
+  assert.deepEqual(kept.params.subscription_data.default_tax_rates, [GST_RATE]);
+  assert.equal(kept.params.managed_payments.enabled, false);
   assert.equal(kept.params.metadata.preserveTrial, "1");
   assert.deepEqual(trialCheckoutFields(end, now), { trial_end: Math.floor(end.getTime() / 1000) });
   const short = trialCheckoutFields(new Date(now + 20 * 60 * 60 * 1000), now);
   assert.equal(short.trial_period_days >= 2, true);
   assert.equal(trialCheckoutFields(new Date(now - 1000), now), null);
-  const plain = checkoutParams({ companyId: "acme", company: withTrial, staffCount: 1, successUrl: "x", cancelUrl: "y", now });
+  const plain = checkoutParams({ companyId: "acme", company: withTrial, staffCount: 1, successUrl: "x", cancelUrl: "y", now, taxRateId: GST_RATE });
   assert.equal(plain.params.subscription_data.trial_end, undefined);
   assert.equal(plain.params.payment_method_collection, undefined);
   const calls = [];
@@ -190,7 +213,7 @@ test("signup checkout keeps the company trial and still works when Stripe is not
   const opened = await handleCheckoutCall({
     uid: "adm", companyId: "acme", origin: "https://app.callupapp.com.au",
     getContext: async () => ({ company: withTrial, profile: admin, staffCount: 2 }),
-    stripe, preserveTrial: true, now,
+    stripe, preserveTrial: true, now, taxRateId: GST_RATE,
   });
   assert.equal(opened.ok, true);
   assert.equal(calls[0].subscription_data.trial_end, Math.floor(end.getTime() / 1000));
@@ -211,4 +234,81 @@ test("signup checkout keeps the company trial and still works when Stripe is not
     staffCount: 1, successUrl: "x", cancelUrl: "y",
   });
   assert.equal(already.reason, "already-subscribed");
+});
+
+test("checkout prefills a saved ABN and still opens when Stripe rejects the tax id", async () => {
+  const calls = [];
+  const stripe = {
+    customers: {
+      async listTaxIds(id) { calls.push(["list", id]); return { data: [] }; },
+      async createTaxId(id, body) { calls.push(["tax", id, body]); return { id: "txi_1" }; },
+      async create(body) { calls.push(["customer", body]); return { id: "cus_new" }; },
+    },
+    checkout: { sessions: { async create(params) { calls.push(["checkout", params]); return { url: "https://checkout.stripe.test/abn" }; } } },
+  };
+  const withAbn = {
+    ...company, abn: "12 345 678 901", legalName: "Acme Civil Pty Ltd",
+    billing: { ...company.billing, stripeCustomerId: "cus_test" },
+  };
+  const opened = await handleCheckoutCall({
+    uid: "adm", companyId: "acme", origin: "https://app.callupapp.com.au",
+    getContext: async () => ({ company: withAbn, profile: admin, staffCount: 1 }),
+    stripe, taxRateId: GST_RATE,
+  });
+  assert.equal(opened.ok, true);
+  assert.deepEqual(calls[0], ["list", "cus_test"]);
+  assert.deepEqual(calls[1], ["tax", "cus_test", { type: "au_abn", value: "12345678901" }]);
+  assert.equal(calls[2][1].customer, "cus_test");
+  assert.equal(calls[2][1].managed_payments.enabled, false);
+  assert.equal(calls[2][1].automatic_tax, undefined);
+  assert.deepEqual(calls[2][1].subscription_data.default_tax_rates, [GST_RATE]);
+
+  calls.length = 0;
+  stripe.customers.listTaxIds = async (id) => { calls.push(["list", id]); return { data: [{ type: "au_abn", value: "12 345 678 901" }] }; };
+  const again = await handleCheckoutCall({
+    uid: "adm", companyId: "acme", origin: "https://app.callupapp.com.au",
+    getContext: async () => ({ company: withAbn, profile: admin, staffCount: 1 }),
+    stripe, taxRateId: GST_RATE,
+  });
+  assert.equal(again.ok, true);
+  assert.equal(calls.some(row => row[0] === "tax"), false);
+
+  calls.length = 0;
+  const fresh = { ...company, abn: "51 824 753 556", legalName: "New Co Pty Ltd" };
+  const created = await handleCheckoutCall({
+    uid: "adm", companyId: "acme", origin: "https://app.callupapp.com.au",
+    getContext: async () => ({ company: fresh, profile: admin, staffCount: 1 }),
+    stripe, taxRateId: GST_RATE,
+  });
+  assert.equal(created.ok, true);
+  assert.equal(calls[0][0], "customer");
+  assert.deepEqual(calls[0][1].tax_id_data, [{ type: "au_abn", value: "51824753556" }]);
+  assert.equal(calls[1][1].customer, "cus_new");
+  assert.equal(calls[1][1].customer_email, undefined);
+  assert.deepEqual(calls[1][1].customer_update, { name: "auto", address: "auto" });
+
+  calls.length = 0;
+  stripe.customers.listTaxIds = async (id) => { calls.push(["list", id]); return { data: [] }; };
+  stripe.customers.createTaxId = async () => { throw new Error("tax-id-rejected"); };
+  const rejected = await handleCheckoutCall({
+    uid: "adm", companyId: "acme", origin: "https://app.callupapp.com.au",
+    getContext: async () => ({ company: withAbn, profile: admin, staffCount: 1 }),
+    stripe, taxRateId: GST_RATE,
+  });
+  assert.equal(rejected.url, "https://checkout.stripe.test/abn");
+  assert.equal(calls[0][0], "list");
+  assert.equal(calls[1][0], "checkout");
+  calls.length = 0;
+  const short = await handleCheckoutCall({
+    uid: "adm", companyId: "acme", origin: "https://app.callupapp.com.au",
+    getContext: async () => ({ company: { ...company, abn: "1", billing: { stripeCustomerId: "cus_short" } }, profile: admin, staffCount: 1 }),
+    stripe, taxRateId: GST_RATE,
+  });
+  assert.equal(short.ok, true);
+  assert.deepEqual(calls.map(row => row[0]), ["checkout"]);
+  const direct = { customer_email: "office@acme.test", client_reference_id: "acme" };
+  stripe.customers.create = async () => { throw new Error("customer-rejected"); };
+  await prefillCustomerAbn({ stripe, params: direct, company: fresh, companyId: "acme" });
+  assert.equal(direct.customer, undefined);
+  assert.equal(direct.customer_email, "office@acme.test");
 });

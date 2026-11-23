@@ -221,6 +221,7 @@ test("plan view: trial end pauses the company, paying and trialing do not, last 
   assert.match(admin, /Your free trial has ended/);
   assert.match(admin, /A\$50 a month including 1 person, plus A\$5 a month for each extra staff member/);
   assert.match(admin, /GST is added at checkout/);
+  assert.match(admin, /Tax invoices are issued by Heartwood Earthworx Pty Ltd \(ABN 31 667 738 098\)/);
   assert.match(admin, /Your data is kept until /);
   assert.match(admin, /id="billsub"/);
   assert.match(admin, /Sign out/);
@@ -230,6 +231,7 @@ test("plan view: trial end pauses the company, paying and trialing do not, last 
   const staff = pausedStaffHtml();
   assert.match(staff, /This company's account is paused\. Ask your admin to subscribe\./);
   assert.doesNotMatch(staff, /id="billsub"/);
+  assert.doesNotMatch(staff, /A\$|GST|Tax invoices/);
   const signup = signupFormHtml();
   assert.match(signup, /name="addCard"/);
   assert.match(signup, /Add a card now/);

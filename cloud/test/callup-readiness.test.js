@@ -30,7 +30,7 @@ test("app address: Heartwood stays on jobs.heartwoodew.com, others use the CallU
   assert.equal(billingOrigin(HEARTWOOD_APP_ORIGIN, "heartwood"), HEARTWOOD_APP_ORIGIN);
   const sw = readFileSync(new URL("../../app/sw.js", import.meta.url), "utf8");
 
-  assert.match(sw, /callup-shell-v136-fastboot/);
+  assert.match(sw, /callup-shell-v137-gst-invoice/);
 
 });
 
@@ -80,11 +80,15 @@ test("inviteEmailWorker always declares RESEND_API_KEY; sending stays behind the
   assert.match(index, /allowLiveMail: process\.env\.INVITE_EMAIL_ENABLED === "true"/);
 });
 
-test("Stripe client pins an API version that supports Managed Payments (basil or newer)", () => {
+test("Stripe client pins basil so Checkout can disable Managed Payments", () => {
   const index = readFileSync(new URL("../functions/index.js", import.meta.url), "utf8");
   const billing = readFileSync(new URL("../functions/billing/stripe-billing.js", import.meta.url), "utf8");
   assert.match(index, /new Stripe\(key, \{ apiVersion: STRIPE_API_VERSION \}\)/);
   assert.match(billing, /export const STRIPE_API_VERSION = "2025-03-31\.basil"/);
+  assert.match(billing, /managed_payments: \{ enabled: false \}/);
+  assert.doesNotMatch(billing, /automatic_tax/);
+  assert.doesNotMatch(index, /uses Stripe Managed Payments/);
+  assert.doesNotMatch(billing, /live account uses Stripe Managed Payments/);
 });
 
 test("Stripe stays in test mode until STRIPE_MODE=live and live prices exist", () => {
