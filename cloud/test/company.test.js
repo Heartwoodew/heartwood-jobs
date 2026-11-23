@@ -219,7 +219,7 @@ test("plan view: trial end pauses the company, paying and trialing do not, last 
   assert.match(late, />Subscribe</);
   const admin = pausedAdminHtml(ended);
   assert.match(admin, /Your free trial has ended/);
-  assert.match(admin, /A\$50 a month including 1 person, plus A\$5 a month for each extra staff member/);
+  assert.match(admin, /A\$20 a month including 1 person, plus A\$5 a month for each extra staff member/);
   assert.match(admin, /GST is added at checkout/);
   assert.match(admin, /Your data is kept until /);
   assert.match(admin, /id="billsub"/);

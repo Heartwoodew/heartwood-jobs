@@ -1,7 +1,9 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { CALLUP_ORIGINS, HEARTWOOD_APP_ORIGIN, appOriginFor } from "../shared/staff-invites.js";
 
-// Stripe for CallUp (live since 11 Nov 2026 via STRIPE_MODE=live). One plan: A$50 includes 1 person, A$5 each extra person.
+// Stripe for CallUp (live since 11 Nov 2026 via STRIPE_MODE=live). One plan: the base price includes 1 person, the extra price is each extra person.
+// Advertised price is A$20 a month plus A$5 a month per extra staff member, exclusive of GST.
+// This file does not set the dollar amount. Checkout uses the Stripe price ids below.
 // There is no second tier. Test companies, friend trials and Heartwood never call Stripe.
 // Test mode (default): the secret key must be an sk_test_ key and live events are refused.
 // Test secrets are STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in Secret Manager.

@@ -355,7 +355,7 @@ test("billing settings show the referral to an admin and hide prices from crew",
   const adminHtml = companySettingsHtml(org, { canEdit: true });
   assert.match(adminHtml, /Refer another business\. When they start paying, you get 2 months free\./);
   assert.match(adminHtml, /id="referralbox"/);
-  assert.match(adminHtml, /A\$50 a month/);
+  assert.match(adminHtml, /A\$20 a month/);
   const ready = referralBoxHtml({ code: CODE, link: referralLink(CODE), pending: 2, earned: 1 });
   assert.match(ready, /id="refcopy"/);
   assert.match(ready, new RegExp(CODE));

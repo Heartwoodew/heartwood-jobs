@@ -125,3 +125,8 @@ section{scroll-margin-top:88px}.eyebrow{color:var(--accent2);font-size:12px;font
 .shot-row .shot.phone .frame img{height:220px}
 }
 .foot nav{display:flex;flex-wrap:wrap;justify-content:center;row-gap:6px}
+.save-grid{margin-top:16px}
+.save-card p{margin-top:4px}
+.save-return{color:var(--green);font-weight:800;font-size:18px;margin-top:8px}
+.save-est{margin-top:4px;padding-top:8px;border-top:1px dashed #60452f}
+.save-est .small-note{margin-top:0;margin-bottom:2px}
