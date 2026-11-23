@@ -17,6 +17,9 @@ export function vapidReady(key) {
 }
 
 export const IOS_HOME_STEPS = "Add CallUp to your Home Screen first. In Safari, tap Share, then Add to Home Screen, then open CallUp from the icon.";
+export const IOS_BLOCKED_STEPS = "Notifications are blocked. On iPhone open Settings, then Notifications, then CallUp, then Allow Notifications.";
+export const ANDROID_BLOCKED_STEPS = "Notifications are blocked. On Android open the browser site settings for CallUp and allow Notifications.";
+export const PROMPT_MISSED = "The notification prompt was dismissed or didn't appear. Tap Turn on notifications to try again.";
 
 export function isIosDevice({ userAgent = "", platform = "", maxTouchPoints = 0 } = {}) {
   const ua = String(userAgent || "");
@@ -38,6 +41,25 @@ export function iosPushHint({
   const installed = standalone === true && notification !== false && pushManager !== false;
   if (installed) return "";
   return IOS_HOME_STEPS;
+}
+
+// A tap may call requestPermission only while the prompt can still appear.
+// Denied stays in Settings. A Safari tab never gets a prompt. Default is the only case that asks.
+export function shouldRequestOnTap({ permission = "default", iosHint = "", hasRequest = true } = {}) {
+  if (iosHint) return false;
+  if (!hasRequest) return false;
+  if (permission === "denied" || permission === "unsupported") return false;
+  return true;
+}
+
+export function blockedNotificationSteps({ ios = false } = {}) {
+  return ios ? IOS_BLOCKED_STEPS : ANDROID_BLOCKED_STEPS;
+}
+
+export function permissionResultMessage(result, { ios = false } = {}) {
+  if (result === "granted") return "";
+  if (result === "denied") return blockedNotificationSteps({ ios });
+  return PROMPT_MISSED;
 }
 
 export function pushEnableError(err) {

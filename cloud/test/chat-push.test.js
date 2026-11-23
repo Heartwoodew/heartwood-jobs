@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  IOS_HOME_STEPS, PUSH_ORIGINS as pageOrigins, iosOpenedFromHomeScreen, iosPushHint, pushDeliveryStatus, pushEnableError, pushTargetFromUrl, shouldToast, tokenDocId, vapidReady,
+  ANDROID_BLOCKED_STEPS, IOS_BLOCKED_STEPS, IOS_HOME_STEPS, PROMPT_MISSED, PUSH_ORIGINS as pageOrigins,
+  blockedNotificationSteps, iosOpenedFromHomeScreen, iosPushHint, permissionResultMessage, pushDeliveryStatus, pushEnableError, pushTargetFromUrl, shouldRequestOnTap, shouldToast, tokenDocId, vapidReady,
 } from "../../app/features/push-logic.js";
 import {
   ALEX_UID, PATRICK_UID, PUSH_BODY_MAX, PUSH_ORIGINS, canReceiveChat, chatOpenUrl, chatPushContent,
@@ -186,6 +187,24 @@ test("opt-in stays a button press, and iPhone Safari shows the Home Screen hint"
   assert.equal(background.mode, "background");
   assert.equal(background.label, "Background notifications on");
   assert.match(pushDeliveryStatus({ permission: "denied" }).steps, /On Android, allow notifications/);
+  assert.equal(shouldRequestOnTap({ permission: "default", hasRequest: true }), true);
+  assert.equal(shouldRequestOnTap({ permission: "granted", hasRequest: true }), true);
+  assert.equal(shouldRequestOnTap({ permission: "denied", hasRequest: true }), false);
+  assert.equal(shouldRequestOnTap({ permission: "default", iosHint: IOS_HOME_STEPS, hasRequest: true }), false);
+  assert.equal(shouldRequestOnTap({ permission: "default", hasRequest: false }), false);
+  assert.equal(blockedNotificationSteps({ ios: true }), IOS_BLOCKED_STEPS);
+  assert.equal(blockedNotificationSteps({ ios: false }), ANDROID_BLOCKED_STEPS);
+  assert.match(IOS_BLOCKED_STEPS, /Settings/);
+  assert.match(IOS_BLOCKED_STEPS, /Notifications/);
+  assert.match(IOS_BLOCKED_STEPS, /CallUp/);
+  assert.match(IOS_BLOCKED_STEPS, /Allow Notifications/);
+  assert.match(ANDROID_BLOCKED_STEPS, /site settings/);
+  assert.equal(permissionResultMessage("granted", { ios: true }), "");
+  assert.equal(permissionResultMessage("denied", { ios: true }), IOS_BLOCKED_STEPS);
+  assert.equal(permissionResultMessage("denied", { ios: false }), ANDROID_BLOCKED_STEPS);
+  assert.equal(permissionResultMessage("default", { ios: true }), PROMPT_MISSED);
+  assert.match(PROMPT_MISSED, /didn't appear/);
+  assert.match(PROMPT_MISSED, /try again/);
   assert.match(pushEnableError({ message: "push-service-error" }), /push-service-error/);
   assert.match(pushEnableError({ code: "permission-denied" }), /can't enable notifications/);
   const shown = fcmMessage(
@@ -224,7 +243,22 @@ test("opt-in stays a button press, and iPhone Safari shows the Home Screen hint"
   assert.match(logic, /Add CallUp to your Home Screen first/);
   assert.match(logic, /Background notifications on/);
   assert.match(logic, /In-app alerts only/);
-  assert.match(notify, /function onEnableClick[\s\S]*Notification\.requestPermission\(\)[\s\S]*enableNotifications\(button, pending\)/);
+  const tapStart = notify.indexOf("function onPushTap");
+  const tapEnd = notify.indexOf("async function continueAfterGrant");
+  const tap = notify.slice(tapStart, tapEnd);
+  assert.ok(tapStart >= 0 && tapEnd > tapStart);
+  assert.doesNotMatch(tap, /\bawait\b/);
+  assert.doesNotMatch(tap, /import\(|getToken|saveToken|serviceWorker\.ready|getDocs|setDoc/);
+  assert.match(tap, /Notification\.requestPermission\(\)/);
+  const askAt = tap.indexOf("Notification.requestPermission()");
+  assert.equal(tap.slice(0, askAt).includes("await"), false);
+  const after = notify.slice(tapEnd, notify.indexOf("function bindRoot"));
+  assert.doesNotMatch(after, /requestPermission/);
+  assert.match(after, /if \(perm !== "granted"\)/);
+  assert.match(after, /saveToken\(\)/);
+  assert.match(notify, /addEventListener\("click", onPushTap\)/);
+  assert.match(logic, /class="sm-btn primary push-enable"/);
+  assert.equal((logic.match(/push-enable/g) || []).length >= 2, true);
   assert.match(config, /export const vapidKey = "BMyCNKMjDvbOQW74GyjS7GlTo-Qe7r203dbshLNIPpuDcaafAuZmq-WSjX7Ptys4ZTXEH1GKy8QhtkNsaD1Zlk8"/);
   assert.doesNotMatch(config, /vapidKey = "REPLACE_WITH_WEB_PUSH_CERTIFICATE"/);
   assert.match(config, /Web Push certificates/);

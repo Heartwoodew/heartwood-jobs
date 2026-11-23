@@ -4,7 +4,7 @@
 
 import { doc, setDoc, getDocs, collection, deleteDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import {
-  PUSH_ORIGINS, iosOpenedFromHomeScreen, iosPushHint, notifyPanelHtml, pushBannerHtml, pushEnableError, pushTargetFromUrl, shouldToast, tokenDocId, vapidReady,
+  PUSH_ORIGINS, blockedNotificationSteps, iosOpenedFromHomeScreen, iosPushHint, isIosDevice, notifyPanelHtml, permissionResultMessage, pushBannerHtml, pushEnableError, pushTargetFromUrl, shouldRequestOnTap, shouldToast, tokenDocId, vapidReady,
 } from "./push-logic.js";
 
 export { notifyPanelHtml, pushBannerHtml, pushTargetFromUrl, shouldToast, tokenDocId, vapidReady };
@@ -160,71 +160,79 @@ async function refreshGrantedToken() {
   } catch { /* stay quiet; the app still works offline */ }
 }
 
-function onEnableClick(button) {
-  const hint = browserIosHint();
-  if (hint) {
-    if (deps && deps.toast) deps.toast(hint);
-    return;
-  }
-  if (!deps) return;
-  if (typeof Notification === "undefined" || typeof Notification.requestPermission !== "function" || !navigator.serviceWorker) {
-    deps.toast("This phone can't show notifications.");
-    return;
-  }
-  // iOS only shows the permission prompt when this call is on the tap itself, not after an await.
-  let pending;
-  try {
-    pending = Notification.requestPermission();
-  } catch (err) {
-    pending = Promise.reject(err);
-  }
-  enableNotifications(button, pending);
+function tapIos() {
+  if (typeof navigator === "undefined") return false;
+  return isIosDevice({
+    userAgent: navigator.userAgent,
+    platform: navigator.platform,
+    maxTouchPoints: navigator.maxTouchPoints || 0,
+  });
 }
 
-async function enableNotifications(button, permissionPromise) {
-  if (!deps) return;
-  if (deps.emulator) {
-    deps.toast("Notifications work on the installed phone app, not in the emulator.");
+function say(message) {
+  if (deps && deps.toast && message) deps.toast(message);
+}
+
+// Banner, Settings, and the More/chat notifications panel all use .push-enable.
+// The listener stays synchronous. requestPermission runs on this stack, before any await.
+function onPushTap() {
+  if (deps && deps.emulator) {
+    say("Notifications work on the installed phone app, not in the emulator.");
     return;
   }
   const hint = browserIosHint();
-  if (hint) {
-    deps.toast(hint);
+  const permission = typeof Notification === "undefined" ? "unsupported" : Notification.permission;
+  const hasRequest = typeof Notification !== "undefined" && typeof Notification.requestPermission === "function";
+  if (!shouldRequestOnTap({ permission, iosHint: hint, hasRequest })) {
+    say(hint || (permission === "denied" ? blockedNotificationSteps({ ios: tapIos() }) : "This phone can't show notifications."));
     return;
   }
-  if (!vapidReady(deps.vapidKey)) {
-    deps.toast("Add the Web Push certificate in the app config first.");
-    return;
-  }
-  if (!PUSH_ORIGINS.includes(location.origin)) {
-    deps.toast("Notifications are only available on the CallUp website.");
-    return;
-  }
-  if (typeof Notification === "undefined" || !navigator.serviceWorker) {
-    deps.toast("This phone can't show notifications.");
-    return;
-  }
-  if (button) button.disabled = true;
+  let asked;
   try {
-    const perm = permissionPromise ? await permissionPromise : await Notification.requestPermission();
+    asked = Notification.requestPermission();
+  } catch (err) {
+    asked = Promise.reject(err);
+  }
+  continueAfterGrant(asked);
+}
+
+async function continueAfterGrant(permissionPromise) {
+  if (!deps) return;
+  const buttons = typeof document !== "undefined" && document.querySelectorAll
+    ? [...document.querySelectorAll(".push-enable")] : [];
+  buttons.forEach(button => { button.disabled = true; });
+  try {
+    const perm = await permissionPromise;
     if (perm !== "granted") {
-      deps.toast(perm === "denied" ? "Notifications are blocked on this phone." : "Notifications stay off until you allow them.");
+      say(permissionResultMessage(perm, { ios: tapIos() }));
       paint();
+      return;
+    }
+    if (!vapidReady(deps.vapidKey)) {
+      say("Add the Web Push certificate in the app config first.");
+      return;
+    }
+    if (typeof location !== "undefined" && !PUSH_ORIGINS.includes(location.origin)) {
+      say("Notifications are only available on the CallUp website.");
+      return;
+    }
+    if (typeof navigator === "undefined" || !navigator.serviceWorker) {
+      say("This phone can't show notifications.");
       return;
     }
     const token = await saveToken();
     if (!token) {
-      deps.toast("Couldn't turn on notifications. No push token was saved for this phone.");
+      say("Couldn't turn on notifications. No push token was saved for this phone.");
       return;
     }
     await writePrefs({ muteChat: state.muteChat === true, muteDaily: state.muteDaily === true });
     state.enabled = true;
     paint();
-    deps.toast("Notifications are on for this phone.");
+    say("Notifications are on for this phone.");
   } catch (err) {
-    deps.toast(pushEnableError(err));
+    say(pushEnableError(err));
   } finally {
-    if (button) button.disabled = false;
+    buttons.forEach(button => { if (button.isConnected) button.disabled = false; });
   }
 }
 
@@ -233,7 +241,7 @@ function bindRoot(root) {
   root.querySelectorAll(".push-enable").forEach(button => {
     if (button.dataset.bound === "1") return;
     button.dataset.bound = "1";
-    button.addEventListener("click", () => onEnableClick(button));
+    button.addEventListener("click", onPushTap);
   });
   root.querySelectorAll(".push-later").forEach(button => {
     if (button.dataset.bound === "1") return;
