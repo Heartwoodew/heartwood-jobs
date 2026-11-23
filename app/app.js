@@ -51,9 +51,9 @@ import {
   sanitizeSkills, sanitizeTitles, sanitizeTradeList, setTitleLevel, skillsEditorHtml,
   titlesAfterTradeChange, titlesEditorHtml, tradeLabel, quotePack,
 } from "./features/trades.js";
-import { addPresetRow, jobStepsHtml, mergeIndustryPresets, presetEditorHtml, readPresetEditor, recurrenceHint, removePresetRow } from "./features/industry-presets.js";
+import { addPresetRow, jobStepsHtml, jobStepsScopeLabel, mergeIndustryPresets, pestControlOn, presetEditorHtml, readPresetEditor, recurrenceHint, removePresetRow } from "./features/industry-presets.js";
 import { newSeriesId, planSeries, recurrenceFromForm, repeatFieldHtml, skipPatch } from "./features/recurrence.js";
-import { buildCertificate, bytesToBase64, certificatePanelHtml } from "./features/certificates.js";
+import { buildCertificate, bytesToBase64, certificatePanelHtml, certificatesEnabled } from "./features/certificates.js";
 import { acceptLogoValue, compressLogo, isLogoStoragePath, logoFailureText, logoFileOk, logoUploadPlan } from "./features/company-logo.js";
 import {
   accuracyText, brisbaneHM, captureFix, coordText, daysForSheet, editList, entryList, locationConsent,
@@ -208,7 +208,7 @@ let normalizeSupervisorEmail = () => "";
 let readDraftEdits = (root, draft) => draft;
 let INBOUND_DOMAIN = "inbound.callupapp.com.au";
 let startDesktopInstall = () => {};
-let SHELL_VERSION = "callup-shell-v143-industries";
+let SHELL_VERSION = "callup-shell-v144-pest-trade";
 let prepareTicket = () => ({ ok: false, reason: "loading" });
 let ticketDialogHtml = () => "";
 let ticketFailureText = () => "The ticket could not be sent. Try again.";
@@ -1585,13 +1585,18 @@ function bindPresetEditor(A) {
   if (!form || !canEditTitles()) return;
   const save = async (next) => {
     await saveTradeSetup({ ...ui.tradeSetup, checklists: next.checklists, photoSteps: next.photoSteps });
-    toast("Checklist saved.");
+    toast(pestControlOn(ui.tradeSetup) ? "Checklist saved." : "Photos saved.");
     redrawAfterSave();
   };
   form.onsubmit = async ev => {
     ev.preventDefault();
-    const added = addPresetRow(ui.tradeSetup, { label: form.label.value, kind: form.kind.value });
     const err = form.querySelector("#preseterr");
+    const kind = form.kind ? form.kind.value : "photo";
+    if (kind !== "photo" && !pestControlOn(ui.tradeSetup)) {
+      if (err) err.textContent = "Checklists are only for pest control.";
+      return;
+    }
+    const added = addPresetRow(ui.tradeSetup, { label: form.label.value, kind });
     if (!added.ok) { if (err) err.textContent = "Add a short label."; return; }
     try { await save(added); }
     catch (e) { if (err) err.textContent = e.code || e.message; }
@@ -5737,8 +5742,12 @@ async function callCompanyFunction(name, payload) {
   if (useEmulator) connectFunctionsEmulator(functions, "127.0.0.1", 5001);
   return (await httpsCallable(functions, name)(payload)).data;
 }
+function certificateTrades() {
+  return (ui.tradeSetup && ui.tradeSetup.enabled) || [];
+}
 function wireCertificate(form, job) {
   if (!form || !form.querySelector) return;
+  if (!certificatesEnabled(certificateTrades())) return;
   const show = () => {
     const id = form.certTemplate && form.certTemplate.value;
     form.querySelectorAll("[data-cert-for]").forEach(el => { el.hidden = el.getAttribute("data-cert-for") !== id; });
@@ -5756,6 +5765,7 @@ function wireCertificate(form, job) {
   const save = form.querySelector("#certsave");
   if (save) save.onclick = async () => {
     const err = form.querySelector("#certerr");
+    if (!certificatesEnabled(certificateTrades())) { if (err) err.textContent = "Certificates are only for pest control."; return; }
     const built = buildCertificate({ company: orgSettings(), templateId: form.certTemplate.value, raw: collect(), skills: staffSkills(job), job });
     if (!built.ok) { if (err) err.textContent = "Fill in " + built.missing.join(", ") + "."; return; }
     if (!job || !job.id) { if (err) err.textContent = "Save the job first."; return; }
@@ -5777,6 +5787,7 @@ function wireCertificate(form, job) {
   if (email) email.onclick = async () => {
     const err = form.querySelector("#certerr");
     if (!me || me.role !== "admin") { if (err) err.textContent = "Only an admin can email a certificate."; return; }
+    if (!certificatesEnabled(certificateTrades())) { if (err) err.textContent = "Certificates are only for pest control."; return; }
     const built = buildCertificate({ company: orgSettings(), templateId: form.certTemplate.value, raw: collect(), skills: staffSkills(job), job });
     if (!built.ok) { if (err) err.textContent = "Fill in " + built.missing.join(", ") + "."; return; }
     try {
@@ -5844,7 +5855,7 @@ function editJob(j) {
       <p class="sub">Change the start time to pin it. Leave it and the board spaces this job. Hours on the job do not change timesheets.</p>
       ${repeatFieldHtml(j, { admin: !!(me && me.role === "admin"), suggestion: (recurrenceHint(j.type) || {}).label || "" })}
       ${jobStepsHtml(j, ui.tradeSetup)}
-      ${!n && me && ["admin", "supervisor", "manager"].includes(me.role) ? certificatePanelHtml(j, { trades: (ui.tradeSetup && ui.tradeSetup.enabled) || [], skills: staffSkills(j), canEmail: me.role === "admin" }) : ""}
+      ${!n && certificatesEnabled(certificateTrades()) && me && ["admin", "supervisor", "manager"].includes(me.role) ? certificatePanelHtml(j, { trades: certificateTrades(), skills: staffSkills(j), canEmail: me.role === "admin" }) : ""}
       ${!n && j.date && !["Done", "Cancelled"].includes(j.status) ? `<div class="row"><button type="button" id="unschbtn" class="btn">✕ Remove from dispatch board</button><span class="sub">Back to Unscheduled${usesSm8Sync() ? "; the booking is removed at the next sync" : ""} (the job stays).</span></div>` : ""}
       <fieldset class="staffs">${staff.map(s => `<label class="ck"><input type="checkbox" name="assigned" value="${esc(skey(s))}" ${namesOf(j).map(x => x.toLowerCase()).includes(s.name.toLowerCase()) ? "checked" : ""}> <span class="av">${esc(s.name[0])}</span>${esc(label(s.name))}</label>`).join("")}</fieldset>
       <p id="leavewarn" class="leave-warn" hidden></p>
@@ -7318,7 +7329,7 @@ function renderOpDetail(j) {
         <div><dt>Purchase order</dt><dd><b>${esc(j.po || "—")}</b></dd></div>
         <div class="scope"><dt>Scope</dt><dd>${esc(crewText(j.description) || "—")}</dd></div>
         ${Array.isArray(j.workAmounts) && j.workAmounts.length ? `<div class="scope"><dt>Amounts</dt><dd>${workAmountsHtml(j, "det-amt")}</dd></div>` : ""}
-        ${jobStepsHtml(j, ui.tradeSetup) ? `<div class="scope"><dt>Checklist</dt><dd>${jobStepsHtml(j, ui.tradeSetup)}</dd></div>` : ""}
+        ${jobStepsHtml(j, ui.tradeSetup) ? `<div class="scope"><dt>${esc(jobStepsScopeLabel(j, ui.tradeSetup))}</dt><dd>${jobStepsHtml(j, ui.tradeSetup)}</dd></div>` : ""}
       </dl>
       <div class="mcard"><div class="mlbl">Diary</div>${(j.log || []).map(l => `<div class="de"><span class="av">${esc((l.byName || "?")[0])}</span><div><small>${esc(l.byName)} · ${esc(l.at)}</small><div>${esc(l.text)}</div></div></div>`).join("") || `<div class="muted sub">No notes yet</div>`}
         <button class="mnote" type="button" data-act="note">Add note</button></div>

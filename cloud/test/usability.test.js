@@ -162,6 +162,6 @@ test("help answers every role from the knowledge list and hides money from crew"
   const officeAnswer = await askHelp("How do I add a job?", office, async () => ({ enabled: true, reply: "Open Jobs and tap New Job." }));
   assert.equal(officeAnswer.source, "helper");
   assert.equal(helpVisible({ uid: "owner", role: "admin", companyId: "brand-new" }), true);
-  assert.match(sw, /callup-shell-v143-industries/);
+  assert.match(sw, /callup-shell-v144-pest-trade/);
   assert.match(sw, /features\/help\.js/);
 });

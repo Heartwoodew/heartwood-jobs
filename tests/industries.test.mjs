@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { TRADES, DEFAULT_TRADE, QUOTE_PACKS, companyTradesDoc, defaultTitles, quotePack, resolveCompanySetup, signupTradesHtml } from "../app/features/trades.js";
-import { addPresetRow, mergeIndustryPresets, stepsForJob } from "../app/features/industry-presets.js";
+import { addPresetRow, jobStepsHtml, jobStepsScopeLabel, mergeIndustryPresets, pestControlOn, presetEditorHtml, readPresetEditor, stepsForJob } from "../app/features/industry-presets.js";
 import { RECURRENCE_HINTS } from "../app/features/packs/service-trades.js";
 import { calcMeasured } from "../app/features/packs/money.js";
 
@@ -82,6 +82,85 @@ test("pest, pool, lawn and cleaning visits suggest a repeat", () => {
   assert.equal(RECURRENCE_HINTS["po-service"].freq, "weekly");
   assert.equal(RECURRENCE_HINTS["pm-lawn"].freq, "fortnightly");
   assert.equal(RECURRENCE_HINTS["cl-commercial"].freq, "weekly");
+});
+
+test("Heartwood site cleans keep photos and hide the checklist", () => {
+  const setup = resolveCompanySetup({ companyId: "heartwood" }, null);
+  assert.equal(pestControlOn(setup), false);
+  assert.ok(setup.checklists.some(row => /Walk the site/.test(row.label)));
+  const job = { id: "HW-9233", type: "clean", client: "Torsion", address: "Torsion site clean" };
+  const html = jobStepsHtml(job, setup);
+  assert.match(html, /<h3>Photos<\/h3>/);
+  assert.match(html, /Before photo/);
+  assert.match(html, /After photo/);
+  assert.doesNotMatch(html, /Checklist/);
+  assert.doesNotMatch(html, /Walk the site/);
+  assert.equal(jobStepsScopeLabel(job, setup), "Photos");
+  const editor = presetEditorHtml(setup, { canEdit: true });
+  assert.match(editor, /<h2>Photos<\/h2>/);
+  assert.match(editor, /Before photo/);
+  assert.match(editor, /name="kind" value="photo"/);
+  assert.doesNotMatch(editor, /Checklist/);
+  assert.doesNotMatch(editor, /certificate/i);
+  assert.doesNotMatch(editor, /value="check"/);
+  const root = {
+    querySelectorAll(sel) {
+      if (sel !== "[data-preset-row]") return [];
+      return [{
+        getAttribute(name) {
+          if (name === "data-preset-kind") return "photo";
+          if (name === "data-preset-row") return "ew-clean-before";
+          return "";
+        },
+        querySelector() { return { value: "Before photo renamed" }; },
+      }];
+    },
+  };
+  const read = readPresetEditor(root, setup);
+  assert.ok(read.checklists.some(row => /Walk the site/.test(row.label)));
+  assert.ok(read.photoSteps.some(row => row.label === "Before photo renamed"));
+});
+
+test("a checklist shows only when the company includes pest control", () => {
+  const pest = resolveCompanySetup({ trades: ["pest-control"] }, null);
+  const pestJob = { type: "pc-general", address: "4 Garden Ave" };
+  const pestHtml = jobStepsHtml(pestJob, pest);
+  assert.match(pestHtml, /Checklist and photos/);
+  assert.match(pestHtml, /Identify the pest/);
+  assert.equal(jobStepsScopeLabel(pestJob, pest), "Checklist");
+  const pestEditor = presetEditorHtml(pest, { canEdit: true });
+  assert.match(pestEditor, /<h2>Checklists and photos<\/h2>/);
+  assert.match(pestEditor, /value="check"/);
+  assert.match(pestEditor, /certificate/i);
+  const mixed = resolveCompanySetup({ trades: ["earthworks", "pest-control"] }, null);
+  assert.equal(pestControlOn(mixed), true);
+  assert.match(jobStepsHtml({ type: "clean" }, mixed), /Checklist/);
+  for (const id of ["cleaning", "property-maintenance", "skip-bins", "pools", "solar-aircon", "traffic-civil", "plumbing", "electrical"]) {
+    const setup = resolveCompanySetup({ trades: [id] }, null);
+    assert.equal(pestControlOn(setup), false, id);
+    const type = setup.photoSteps[0] && setup.photoSteps[0].jobTypes && setup.photoSteps[0].jobTypes[0];
+    const html = jobStepsHtml({ type }, setup);
+    if (html) {
+      assert.match(html, /<h3>Photos<\/h3>/, id);
+      assert.doesNotMatch(html, /Checklist/, id);
+    }
+    const editor = presetEditorHtml(setup, { canEdit: true });
+    assert.doesNotMatch(editor, /Checklist/, id);
+    assert.doesNotMatch(editor, /certificate/i, id);
+    if (NEW_IDS.includes(id)) assert.ok(setup.checklists.length > 0, id);
+  }
+});
+
+test("quoting and repeating visits stay available outside pest control", () => {
+  assert.equal(quotePack("cleaning").ready, true);
+  assert.equal(quotePack("earthworks").ready, true);
+  assert.equal(RECURRENCE_HINTS["cl-commercial"].freq, "weekly");
+  assert.equal(RECURRENCE_HINTS["po-service"].freq, "weekly");
+  assert.equal(RECURRENCE_HINTS["pc-general"].freq, "quarterly");
+  const cleaning = resolveCompanySetup({ trades: ["cleaning"] }, null);
+  const added = addPresetRow(cleaning, { label: "Our extra room check", kind: "check" });
+  assert.equal(added.ok, true);
+  assert.ok(added.checklists.some(row => row.label === "Our extra room check"));
 });
 
 test("a new company document carries the industry presets", () => {
