@@ -218,6 +218,7 @@ export function helpPanelHtml() {
   return `<section class="callup-help" id="helppanel" role="dialog" aria-label="Help">
     <div class="callup-help-bar"><h2>Help</h2><button type="button" class="sm-btn" id="helpx">Close</button></div>
     <p class="sub">Ask how to use CallUp. This does not change any records.</p>
+    <p><button type="button" class="sm-btn" data-raise-ticket>Raise ticket</button></p>
     <div class="callup-help-ideas" id="helpideas">${ideas}</div>
     <div class="callup-help-log" id="helplog" role="log"></div>
     <form id="helpform" class="callup-help-form">

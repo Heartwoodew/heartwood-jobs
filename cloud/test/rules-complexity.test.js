@@ -45,8 +45,8 @@ test("production rules are a smaller scope tree than the file that 503s", () => 
   console.log(lines.join("\n"));
 
   assert.deepEqual(after.dead, []);
-  // locationNotices is the one match added for the GPS reminder the person reads.
-  assert.equal(after.matches, BEFORE.matches + 1);
+  // locationNotices is the GPS reminder the person reads. supportTickets is the raise-ticket collection.
+  assert.equal(after.matches, BEFORE.matches + 2);
   assert.equal(after.maxMatchNesting, BEFORE.maxMatchNesting);
   // Shared helpers live on the database match so each copy is compiled once.
   // 80 is still far under the 303-function ruleset that 503s the compiler.
