@@ -3,6 +3,9 @@
 // No trail, no route, and no writes once the shift is closed — the app deletes the doc on clock off.
 
 export const LIVE_SHARE_TEXT = "Your location is shared with your managers only while you're clocked on.";
+export const GPS_REMIND_BODY = "Please turn on location sharing — clock on in CallUp, allow location, and keep CallUp open on site.";
+export const GPS_REMIND_SENT = "Reminder sent";
+export const GPS_REMIND_NONE = "No device registered — ask them to open CallUp";
 export const LIVE_LIMIT_NOTE = "A phone browser can't keep sharing once the phone is locked or CallUp isn't on screen. The time is when that phone last sent a position.";
 export const SHARE_MIN_MS = 60000;
 export const SHARE_MIN_METRES = 50;
@@ -72,6 +75,16 @@ export function liveLocationBody({ uid, name, companyId, weekStart, entryId, fix
     body.accuracy = typeof fix.accuracy === "number" && fix.accuracy >= 0 && fix.accuracy <= 100000 ? fix.accuracy : 0;
   }
   return body;
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// The sentence an admin asked this person to see. Tapping it opens clock on.
+export function locationRemindBannerHtml(body) {
+  const text = String(body || GPS_REMIND_BODY);
+  return `<button type="button" class="swremind sw-due gps-remind" data-gps-open><span class="ic" aria-hidden="true">⌖</span><span>${esc(text)}</span><span class="chev">›</span></button>`;
 }
 
 export function shareIndicator({ clockedOn, sharing } = {}) {

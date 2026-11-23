@@ -109,8 +109,8 @@ test("live location rules match in the emulator model and the production rules",
   assert.equal(slice(read("../emulator/firestore.rules")), prod);
   assert.match(prod, /match \/liveLocations\/\{id\}/);
   assert.match(prod, /match \/companies\/\{c\}\/liveLocations\/\{id\}/);
-  assert.match(prod, /llRole\(\) == "admin" \|\| llRole\(\) == "manager"/);
-  assert.doesNotMatch(prod, /llRole\(\) == "supervisor"|llRole\(\) == "operator"|llRole\(\) == "labourer"/);
+  assert.match(prod, /llRole\(\) == "admin" \|\| llRole\(\) == "manager" \|\| llRole\(\) == "supervisor"/);
+  assert.doesNotMatch(prod, /llRole\(\) == "operator"|llRole\(\) == "labourer"/);
   assert.match(prod, /entry.status == "open" \|\| entry.status == "break"/);
   assert.match(prod, /allow delete: if signedIn\(\) && request.auth.uid == id/);
   assert.match(prod, /function llPaused\(id\)/);
@@ -150,7 +150,7 @@ test("the map library is not part of the offline shell", () => {
   const sw = read("../../app/sw.js");
   const app = read("../../app/app.js");
 
-  assert.match(sw, /callup-shell-v137-inbound-forward/);
+  assert.match(sw, /callup-shell-v140-gps-remind/);
 
   assert.match(sw, /features\/live-location\.js/);
   assert.doesNotMatch(sw, /leaflet|openstreetmap|unpkg\.com/i);

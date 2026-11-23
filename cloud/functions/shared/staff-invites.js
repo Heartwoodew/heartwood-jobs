@@ -128,6 +128,21 @@ export function canSendPasswordReset(person) {
   return profileRole !== "manager" && profileRole !== "supervisor";
 }
 
+// Staff roster: admins and supervisors. A manager does not get the button.
+// A rules-admin whose profile role is operator (Patrick) still counts as admin.
+export function canRemindLocation(person) {
+  if (!person) return false;
+  const profileRole = (person.cloudProfile && person.cloudProfile.role) || person.staffRole || "";
+  if (profileRole === "manager" || profileRole === "labourer") return false;
+  if (profileRole === "supervisor" || profileRole === "admin") return true;
+  return person.role === "admin" || person.role === "supervisor";
+}
+
+export function rosterShareState(doc) {
+  const sharing = !!(doc && doc.clockedOn === true && doc.sharing === "gps");
+  return { sharing, text: sharing ? "Sharing location" : "Not sharing" };
+}
+
 export const GOOGLE_ONLY_RESET = "This person signs in with Google, so there's no password to reset.";
 export const PASSWORD_RESET_NEUTRAL = "If that email has a CallUp login, a reset link is on its way.";
 
@@ -491,7 +506,7 @@ export function inviteEmailLine(status) {
   return "The invite email didn't go through. Copy the link and send it to them yourself (text or email).";
 }
 
-export function staffViewHtml(invites, { now = new Date(), error = "", origin = HEARTWOOD_APP_ORIGIN, emailStatus = null, roles = SUPERVISOR_INVITE_ROLES, titles = null, logins = null, companyId = "", loginsNote = "", resetPasswords = false, viewerUid = "" } = {}) {
+export function staffViewHtml(invites, { now = new Date(), error = "", origin = HEARTWOOD_APP_ORIGIN, emailStatus = null, roles = SUPERVISOR_INVITE_ROLES, titles = null, logins = null, companyId = "", loginsNote = "", resetPasswords = false, viewerUid = "", remindGps = false, locations = null } = {}) {
   const offer = INVITE_ROLES.filter(r => (roles || []).includes(r));
   const titleRows = (Array.isArray(titles) ? titles : []).filter(t => t && offer.includes(t.level) && t.name && t.id);
   const rows = mergeStaffRoster(logins || [], invites || [], { now, companyId });
@@ -499,24 +514,29 @@ export function staffViewHtml(invites, { now = new Date(), error = "", origin = 
     const actions = (row.status === "pending" || row.status === "expired") && row.inviteId;
     const link = actions && row.token ? inviteLink(row.token, origin) : "";
     const reset = resetPasswords === true && row.status === "active" && row.uid && row.uid !== String(viewerUid || "");
+    const gps = row.status === "active" && row.uid && locations && typeof locations === "object"
+      ? rosterShareState(locations[row.uid])
+      : null;
+    const remind = remindGps === true && !!gps && !gps.sharing;
     const tags = (row.tags || []).map(tag => `<span class="skill-tag">${esc(tag)}</span>`).join("");
     const mail = emailStatus && row.status === "pending"
       ? `<div class="sub invite-mail" data-invite-mail="${esc((emailStatus[row.inviteId] && emailStatus[row.inviteId].delivery) || "checking")}">${esc(inviteEmailLine(emailStatus[row.inviteId] || null))}</div>`
       : "";
     return `<article class="inviterow" data-staff-status="${esc(row.status)}" data-invite-status="${esc(row.status)}" data-staff-email="${esc(row.email)}" data-staff-uid="${esc(row.uid)}">
       <div>
-        <b>${esc(row.name)}</b>
+        <b>${esc(row.name)}</b>${gps ? ` <span class="gps-state" data-gps="${gps.sharing ? "on" : "off"}">${esc(gps.text)}</span>` : ""}
         <div class="sub">${esc(rosterDetail(row))}</div>
         <div class="sub staff-status">${esc(rosterStatusText(row))}</div>
         ${tags ? `<div class="skill-tags">${tags}</div>` : ""}
         ${mail}
         ${link ? `<p class="invite-link">${esc(link)}</p>` : ""}
       </div>
-      ${actions || reset ? `<div class="inviteacts">
+      ${actions || reset || remind ? `<div class="inviteacts">
         ${actions && link ? `<button type="button" data-invite-copy="${esc(link)}">Copy link</button>` : ""}
         ${actions ? `<button type="button" data-invite-resend="${esc(row.inviteId)}">Resend</button>
         <button type="button" data-invite-cancel="${esc(row.inviteId)}">Cancel</button>` : ""}
         ${reset ? `<button type="button" data-password-reset="${esc(row.uid)}" data-password-reset-name="${esc(row.name)}">Send password reset</button>` : ""}
+        ${remind ? `<button type="button" data-gps-remind="${esc(row.uid)}" data-gps-remind-name="${esc(row.name)}">Remind to turn on GPS</button>` : ""}
       </div>` : ""}
     </article>`;
   }).join("");
