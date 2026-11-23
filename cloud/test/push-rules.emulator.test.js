@@ -90,6 +90,21 @@ test("a prestart notice is only that operator's own company, and clients cannot 
   await assertFails(deleteDoc(doc(db("bOp"), "users/bOp/prestartNotices/bravo_2026-11-16_ex1")));
 });
 
+test("a location reminder is readable only by that person in that company", async () => {
+  const body = "Please turn on location sharing — clock on in CallUp, allow location, and keep CallUp open on site.";
+  await env.withSecurityRulesDisabled(async ctx => {
+    const d = ctx.firestore();
+    await setDoc(doc(d, "users/bOp/locationNotices/current"), { companyId: "bravo", kind: "location-sharing", body, sentAtMs: 1 });
+    await setDoc(doc(d, "users/hwOp/locationNotices/current"), { companyId: "heartwood", kind: "location-sharing", body, sentAtMs: 1 });
+  });
+  await assertSucceeds(getDoc(doc(db("bOp"), "users/bOp/locationNotices/current")));
+  await assertSucceeds(getDoc(doc(db("hwOp"), "users/hwOp/locationNotices/current")));
+  await assertFails(getDoc(doc(db("bAdm"), "users/bOp/locationNotices/current")));
+  await assertFails(getDoc(doc(db("cOp"), "users/bOp/locationNotices/current")));
+  await assertFails(setDoc(doc(db("bOp"), "users/bOp/locationNotices/current"), { companyId: "bravo", body: "changed" }));
+  await assertFails(deleteDoc(doc(db("bOp"), "users/bOp/locationNotices/current")));
+});
+
 test("the daily digest log is server only", async () => {
   for (const uid of [ALEX, "bAdm", "bOp"]) {
     await assertFails(getDoc(doc(db(uid), "dailyJobDigest/bravo_2026-11-12_bOp")));

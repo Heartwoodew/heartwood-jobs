@@ -84,21 +84,21 @@ test("own live location write is allowed only while clocked on, and only on that
   await assertFails(setDoc(doc(db("bOp"), "companies/charlie/liveLocations/bOp"), gps("bOp", "Bo", "charlie")));
 });
 
-test("manager and admin can read their own company's live crew; supervisor, operator and labourer cannot", async () => {
-  for (const uid of ["hwMgr", "hwAdm", ALEX]) {
+test("admin, manager and supervisor can read their own company's live crew; operator and labourer cannot", async () => {
+  for (const uid of ["hwMgr", "hwAdm", "sup1", ALEX]) {
     await assertSucceeds(getDoc(doc(db(uid), "liveLocations/op1")), uid);
     await assertSucceeds(getDocs(query(collection(db(uid), "liveLocations"), where("companyId", "==", "heartwood"))), uid);
   }
-  for (const uid of ["sup1", "op1", "lab1"]) {
+  for (const uid of ["op1", "lab1"]) {
     await assertFails(getDoc(doc(db(uid), "liveLocations/op1")), uid);
     await assertFails(getDoc(doc(db(uid), "liveLocations/" + uid)), uid + " own");
     await assertFails(getDocs(query(collection(db(uid), "liveLocations"), where("companyId", "==", "heartwood"))), uid);
   }
-  for (const uid of ["bMgr", "bAdm"]) {
+  for (const uid of ["bMgr", "bAdm", "bSup"]) {
     await assertSucceeds(getDoc(doc(db(uid), "companies/bravo/liveLocations/bOp")), uid);
     await assertSucceeds(getDocs(query(collection(db(uid), "companies/bravo/liveLocations"), where("companyId", "==", "bravo"))), uid);
   }
-  for (const uid of ["bSup", "bOp", "bLab"]) {
+  for (const uid of ["bOp", "bLab"]) {
     await assertFails(getDoc(doc(db(uid), "companies/bravo/liveLocations/bOp")), uid);
     await assertFails(getDocs(query(collection(db(uid), "companies/bravo/liveLocations"), where("companyId", "==", "bravo"))), uid);
   }

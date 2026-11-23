@@ -37,6 +37,7 @@ export function pushTargetFromUrl(href) {
     return null;
   }
   if (params.get("jobs") === "today" || params.get("open") === "today") return { kind: "today" };
+  if (params.get("open") === "timesheet") return { kind: "timesheet" };
   const prestart = params.get("prestart");
   if (prestart) {
     const assetId = prestart === "1" ? "" : prestart;

@@ -27,7 +27,7 @@ import { SWMS, SWMS_EMPTY, SWMS_VERSION, sigMs, sigExp, latestSig, statusOf, swm
 import {
   acceptLoadingHtml, acceptScreenModel, acceptViewHtml, buildInviteDraft, inviteFailureText,
   newInviteToken, pendingInviteForEmail, staffViewHtml, appOriginFor, invitableRoles, CREW_ROLES,
-  canSendPasswordReset, forgotPasswordMessage, GOOGLE_ONLY_RESET,
+  canSendPasswordReset, canRemindLocation, forgotPasswordMessage, GOOGLE_ONLY_RESET,
 } from "./features/staff-invites.js";
 import { saveGuard, settleOrQueue } from "./features/pending-write.js";
 import {
@@ -62,7 +62,7 @@ import {
 } from "./features/timesheet.js";
 import {
   LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, canSeeCrewMap, companySharesLocation, crewListHtml, crewMapModel,
-  homeCrewSlot, liveCollectionPath, liveLocationBody, shareIndicator, shouldSendPosition,
+  homeCrewSlot, liveCollectionPath, liveLocationBody, locationRemindBannerHtml, shareIndicator, shouldSendPosition,
 } from "./features/live-location.js";
 
 // Same price strip as features/quotes.js noDollars. Kept here so a crew run sheet never paints a dollar
@@ -515,6 +515,7 @@ async function beginDeferredStartup() {
   await loadFeaturePack();
   if (!me) return;
   watchPrestartNotices();
+  watchLocationNotice();
   watchTake5Flag();
   warmUpcoming(jobs).catch(() => {});
   loadTradeSetup(ui.companyRecord || { companyId: myCompanyId() }).catch(() => {});
@@ -666,7 +667,7 @@ onAuthStateChanged(auth, async user => {
     const setJobs = () => { jobs = mergeJobLists(windowJobs, staleJobs).map(withMoney); addNameOnlyStaff(jobs); };
     const nearQ = companyJobs([where("date", ">=", todayStr()), where("date", "<=", addDays(todayStr(), 1)), orderBy("date")]);
     let stopNear = onSnapshot(nearQ, s => { windowJobs = s.docs.map(d => ({ id: d.id, ...d.data() })); setJobs(); renderAdmin(); }, e => { console.warn("jobs", e.code, e.message); windowJobs = []; setJobs(); renderAdmin(); });
-    const stopShared = () => { CHAT.stop(); PUSH.stop(); COMP.stop(); stopPrestartNotices(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; };
+    const stopShared = () => { CHAT.stop(); PUSH.stop(); COMP.stop(); stopPrestartNotices(); stopLocationNotice(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; };
     unsub = () => { stopNear(); stopShared(); };
     queueStartup(() => {
       stopNear();
@@ -698,7 +699,7 @@ onAuthStateChanged(auth, async user => {
     // A date filter on top of array-contains needs an index this app does not add, so crew startup stays this query.
     const q = companyJobs([where("assigned", "array-contains", user.uid)]);
     const u1 = onSnapshot(q, s => { jobs = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); renderOperator(); });
-    const stopShared = () => { CHAT.stop(); PUSH.stop(); COMP.stop(); stopPrestartNotices(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); };
+    const stopShared = () => { CHAT.stop(); PUSH.stop(); COMP.stop(); stopPrestartNotices(); stopLocationNotice(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); };
     unsub = () => { u1(); stopShared(); };
     queueStartup(() => {
       // Company supervisors are office (they already read quotes); crew never subscribe and the rules refuse them.
@@ -3469,9 +3470,43 @@ async function hxRun(send) {
   ui.hxBusy = false;
   hxPaint();
 }
+function locationNoticeHtml() {
+  const note = ui.locationNotice;
+  if (!note || !me || note.companyId !== myCompanyId()) return "";
+  const live = ui.liveShare || {};
+  if (live.clockedOn === true && live.sharing === "gps") return "";
+  return locationRemindBannerHtml(note.body);
+}
+function openClockScreen() {
+  if (!me) return;
+  ui.opSel = null;
+  if (me.role === "admin" && !ui.myJobs) { ui.view = "timesheet"; renderAdmin(); }
+  else { ui.opTab = "hours"; renderOperator(); }
+}
+function stopLocationNotice() {
+  if (ui.locationNoticeUnsub) {
+    try { ui.locationNoticeUnsub(); } catch { /* already stopped */ }
+  }
+  ui.locationNoticeUnsub = null;
+  ui.locationNotice = null;
+}
+function watchLocationNotice() {
+  stopLocationNotice();
+  if (!me || !me.uid) return;
+  const companyId = myCompanyId();
+  ui.locationNoticeUnsub = onSnapshot(doc(db, "users", me.uid, "locationNotices", "current"), snap => {
+    const data = snap.exists() ? (snap.data() || null) : null;
+    ui.locationNotice = data && data.companyId === companyId ? data : null;
+    if (me.role === "admin" && !ui.myJobs) {
+      if (ui.view === "home" || ui.view === "timesheet") renderAdmin();
+      return;
+    }
+    if (!ui.opSel && ((ui.opTab || "today") === "today" || ui.opTab === "hours")) renderOperator();
+  }, () => { ui.locationNotice = null; });
+}
 function tsView() {
   const admin = me.role === "admin";
-  return `<div class="sm-head"><h1>Timesheet</h1><span class="sub">${admin ? "Clocked and manual hours" : "Clock on, or enter your hours"}</span></div><div class="ts-wrap">${admin ? tsAdmin() : tsEditor()}</div>`;
+  return `<div class="sm-head"><h1>Timesheet</h1><span class="sub">${admin ? "Clocked and manual hours" : "Clock on, or enter your hours"}</span></div>${locationNoticeHtml()}<div class="ts-wrap">${admin ? tsAdmin() : tsEditor()}</div>`;
 }
 function tsLeaveFor(uid, name, week) {
   return weekLeaveHtml(ui.leave || [], week || tsWeek(), { uid, name });
@@ -4550,7 +4585,7 @@ function homeBody(all, admin, btns) {
     ${js.map(homeRow).join("") || `<p class="muted pad">Nothing booked for ${esc(orgSettings().name)}.</p>`}</div>`;
   return `<div class="home"><div class="hhead"><h1>${greet()}, ${esc(String(me.name || "").split(" ")[0])}</h1><div class="muted">${esc(dayLabel(t0))} · ${esc(orgSettings().name)}</div></div>
     ${admin ? COMP.adminBannerHtml() : ""}${admin ? cloudExpiryNotice(all) : ""}
-    ${swmsReminderHtml()}${admin ? attentionHtml(all) + homeCrewCard() : `<div class="hbtns opbtns"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button><button class="hbtn" data-go="swms"><span class="ic">📋</span>SWMS</button></div>`}
+    ${swmsReminderHtml()}${locationNoticeHtml()}${admin ? attentionHtml(all) + homeCrewCard() : `<div class="hbtns opbtns"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button><button class="hbtn" data-go="swms"><span class="ic">📋</span>SWMS</button></div>`}
     <div class="hstats hidden">${stat(today.length, "Today", "q-wo")}${stat(ip, "In progress", "ip", admin ? "q-ip" : "")}${admin ? stat(ready, "Ready to invoice", "q-comp", "invoices") + stat(unal, "Unallocated", "q-uns", "dispatch") + (canImport() && ui.inbox ? stat(inboxUnread(), "Unread builder emails", "q-inbox", "inbox") : "") : stat(tomorrow.length, "Tomorrow", "q-quote")}</div>
     <div class="hbtns hidden"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button>${btns.map(([go, ic, n]) => `<button class="hbtn" data-go="${go}"><span class="ic">${ic}</span>${n}</button>`).join("")}</div>
     ${sec("Today", t0, byPlan(today))}${sec("Tomorrow", t1, byPlan(tomorrow))}${admin ? "" : myIncidentsHtml()}</div>`;
@@ -4607,7 +4642,16 @@ function withHeartwoodOwner(rows, companyId) {
 function watchStaffRoster() {
   if (!canInvite()) return () => {};
   const companyId = myCompanyId();
-  return onSnapshot(query(collection(db, "users"), where("companyId", "==", companyId)), s => {
+  const stopLive = onSnapshot(query(collection(db, ...liveCollectionPath(companyId)), where("companyId", "==", companyId)), s => {
+    const map = {};
+    s.docs.forEach(d => {
+      const data = d.data() || {};
+      map[d.id] = { clockedOn: data.clockedOn === true, sharing: data.sharing || "" };
+    });
+    ui.staffLive = map;
+    staffRerender();
+  }, () => { ui.staffLive = {}; staffRerender(); });
+  const stopLogins = onSnapshot(query(collection(db, "users"), where("companyId", "==", companyId)), s => {
     const rows = s.docs.map(d => ({ ...d.data(), uid: d.id })).filter(u => docCompanyId(u) === companyId);
     ui.staffLogins = withHeartwoodOwner(rows, companyId);
     ui.staffLoginsErr = "";
@@ -4624,6 +4668,7 @@ function watchStaffRoster() {
     ui.staffLoginsErr = "Some people with a login are not listed.";
     staffRerender();
   });
+  return () => { stopLogins(); stopLive(); };
 }
 function docData(snap) {
   if (!snap || typeof snap.exists !== "function" || !snap.exists() || typeof snap.data !== "function") return null;
@@ -4885,6 +4930,7 @@ function staffPageHtml() {
     emailStatus: inviteMailMap(), roles: myInviteRoles(), titles: setup.titles,
     logins: ui.staffLogins || [], companyId: myCompanyId(), loginsNote: ui.staffLoginsErr || "",
     resetPasswords: canSendPasswordReset(me), viewerUid: (me && me.uid) || "",
+    remindGps: canRemindLocation(me), locations: ui.staffLive || {},
   }) + titlesEditorHtml(setup.titles, { canEdit: canEditTitles() })
     + skillsEditorHtml((me && me.cloudProfile && me.cloudProfile.skills) || [], { canEdit: true });
 }
@@ -5010,6 +5056,19 @@ function bindStaff(A) {
     } catch (e) {
       const msg = String((e && e.message) || "");
       toast(msg && msg.length < 180 && !/https?:/i.test(msg) ? msg : "Couldn't email that reset link. Try again in a minute.");
+    } finally {
+      b.disabled = false;
+    }
+  });
+  A.querySelectorAll("[data-gps-remind]").forEach(b => b.onclick = async () => {
+    if (!canRemindLocation(me)) return;
+    b.disabled = true;
+    try {
+      const result = await callAuthed("remindLocationSharing", { uid: b.dataset.gpsRemind });
+      toast((result && result.message) || "Reminder sent");
+    } catch (e) {
+      const msg = String((e && e.message) || "");
+      toast(msg && msg.length < 180 && !/https?:/i.test(msg) ? msg : "Couldn't send that reminder. Try again in a minute.");
     } finally {
       b.disabled = false;
     }
@@ -6964,7 +7023,7 @@ function renderOperator() {
   if (!ui.tsForce && ui.opTab === "hours" && (ui.tsDirty || ui.tsEdit) && ($("#tsman") || $("#tsf")) && !ui.opSel) return;
   if (ui.opTab === "hours" && !ui.opSel) {
     $("#app").innerHTML = `<div class="mob">${adminBack()}<div class="mob-bar"><div class="mob-title">My hours</div><div class="mob-sub">Clock on, or enter hours manually</div></div>
-      <div class="pad">${tsEditor()}</div>${opTabs("hours")}</div>`;
+      <div class="pad">${locationNoticeHtml()}${tsEditor()}</div>${opTabs("hours")}</div>`;
     bindOp(mine); bindTs($("#app"), renderOperator); return;
   }
   if (ui.opTab === "leave" && document.activeElement?.closest?.("#leaveform, .lv-decide")) return;
@@ -7106,6 +7165,7 @@ function renderOperator() {
       ${COMP.staffBannerHtml()}
       ${swmsReminderHtml()}
       ${COMP.prestartReminder(ui.prestartNotices)}
+      ${locationNoticeHtml()}
       ${homeCrewCard()}
       <div class="mob-list">${todayJobs.map(opCard).join("") || `<p class="muted pad">Nothing booked for ${esc(orgSettings().name)}.</p>`}</div>
       ${opTabs("today")}</div>`;
@@ -8300,6 +8360,7 @@ function swmsDownloadHtml() {
     <button type="button" class="swbtn primary" data-swdl="${id}" ${v.length ? "" : "disabled"}>⬇ Download signed PDF</button></div>`; }).join("")}</div>`;
 }
 document.addEventListener("click", e => {
+  const gps = e.target.closest("[data-gps-open]"); if (gps) { e.preventDefault(); return openClockScreen(); }
   const a = e.target.closest("[data-swms]"); if (a) { e.preventDefault(); e.stopPropagation(); return swmsOverlay(a.dataset.swms || ""); }
   const sg = e.target.closest("[data-swsign]"); if (sg) { e.preventDefault(); e.stopPropagation(); return signSwms(sg.dataset.swsign, sg.dataset.job || ""); }
   const sv = e.target.closest("[data-swsig]"); if (sv) { e.preventDefault(); e.stopPropagation(); return sigDetail(sv.dataset.swsig); }
@@ -8349,10 +8410,17 @@ function openPushTarget(target) {
       url.searchParams.delete("day");
       url.searchParams.delete("psjob");
       if (url.searchParams.get("jobs") === "today") url.searchParams.delete("jobs");
-      if (url.searchParams.get("open") === "today" || url.searchParams.get("open") === "chat") url.searchParams.delete("open");
+      if (url.searchParams.get("open") === "today" || url.searchParams.get("open") === "chat" || url.searchParams.get("open") === "timesheet") url.searchParams.delete("open");
       history.replaceState(null, "", url.pathname + url.search + url.hash);
     } catch { /* keep the current address */ }
   };
+  if (target.kind === "timesheet") {
+    ui.opSel = null;
+    if (me.role === "admin" && !ui.myJobs) ui.view = "timesheet";
+    else ui.opTab = "hours";
+    strip();
+    return true;
+  }
   if (target.kind === "today") {
     ui.myJobs = me.role === "admin";
     ui.opTab = "today";

@@ -394,6 +394,18 @@ Order after merge:
 
 PRs 72 (crew map), 73 (quote packs), 74 (staff tab), 75 (chat and daily job push), 76 (capacity and quote revisions) and 77 (dispatch times) were merged together. One service worker name covers all of them: `callup-shell-v102-phase3-bundle`. The names in the sections above are superseded.
 
+## GPS reminder on the Staff roster (not deployed)
+
+Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production. Tests use mocks and the Firestore emulator only.
+
+Order after merge:
+
+1. Publish `cloud/firestore.production.rules`. Supervisors of the same company may read `liveLocations` (Heartwood) or `companies/{companyId}/liveLocations` (everyone else) so the Staff roster can show Sharing location or Not sharing. Operators and labourers still cannot read it. The crew map stays manager and admin. `users/{uid}/locationNotices/{noticeId}` is written by `remindLocationSharing` only; the person can read their own company. Do not publish `cloud/emulator/firestore.rules` as the live ruleset.
+2. Deploy the function `remindLocationSharing` in australia-southeast1. No new secret. It reads `users/{uid}/fcmTokens`, deletes a token FCM reports as invalid, and writes `users/{uid}/locationNotices/current`. One reminder per person each 30 minutes (`sentAtMs` on that notice).
+3. Deploy hosting. Service worker `callup-shell-v141-industries` (includes the GPS reminder and the industries, quotes, recurrence and certificates work). Phones keep the old Staff page until this shell is deployed.
+
+No Storage change, no index deploy, no Stripe change, no backfill.
+
 ## Admin password reset (15 Nov 2026)
 
 Do not deploy from this branch. When it is deployed: hosting (service worker `callup-shell-v108-password-reset`) and the function `adminSendPasswordReset` in australia-southeast1. It uses the same `RESEND_API_KEY` and `INVITE_EMAIL_ENABLED` gate as `inviteEmailWorker`. The reset link is emailed to the staff member and is not returned to the browser. Firestore `passwordResetRate/{uid}` is Admin SDK only (client read and write denied). Rebased onto main's `callup-shell-v106-multi-category-quotes`; this branch stays `callup-shell-v108-password-reset`.

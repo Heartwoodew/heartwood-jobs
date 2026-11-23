@@ -18,6 +18,7 @@ export const SERVER_ACTIONS = Object.freeze({
   billing: "Billing needs signal.",
   invite: "Sending a staff invite needs signal.",
   "password-reset": "Password reset needs signal.",
+  "gps-remind": "Sending a location reminder needs signal.",
   server: "This needs signal.",
 });
 
@@ -27,6 +28,7 @@ const CALL_ACTIONS = Object.freeze({
   createBillingPortal: "billing",
   helperAsk: "helper",
   adminSendPasswordReset: "password-reset",
+  remindLocationSharing: "gps-remind",
   attachSignupReferral: "server",
   ensureReferralCode: "server",
   deleteCompanyAccount: "server",
