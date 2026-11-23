@@ -52,7 +52,7 @@ import {
   titlesAfterTradeChange, titlesEditorHtml, tradeLabel, quotePack,
 } from "./features/trades.js";
 import { addPresetRow, jobStepsHtml, jobStepsScopeLabel, mergeIndustryPresets, pestControlOn, presetEditorHtml, readPresetEditor, recurrenceHint, removePresetRow } from "./features/industry-presets.js";
-import { newSeriesId, planSeries, recurrenceFromForm, repeatFieldHtml, skipPatch } from "./features/recurrence.js";
+import { newSeriesId, planSeries, recurrenceFromForm, repeatFieldHtml, skipPatch, wireRepeatBox } from "./features/recurrence.js";
 import { buildCertificate, bytesToBase64, certificatePanelHtml, certificatesEnabled } from "./features/certificates.js";
 import { acceptLogoValue, compressLogo, isLogoStoragePath, logoFailureText, logoFileOk, logoUploadPlan } from "./features/company-logo.js";
 import {
@@ -208,7 +208,7 @@ let normalizeSupervisorEmail = () => "";
 let readDraftEdits = (root, draft) => draft;
 let INBOUND_DOMAIN = "inbound.callupapp.com.au";
 let startDesktopInstall = () => {};
-let SHELL_VERSION = "callup-shell-v144-pest-trade";
+let SHELL_VERSION = "callup-shell-v145-repeat-fields";
 let prepareTicket = () => ({ ok: false, reason: "loading" });
 let ticketDialogHtml = () => "";
 let ticketFailureText = () => "The ticket could not be sent. Try again.";
@@ -5889,6 +5889,7 @@ function editJob(j) {
     splitJob(j, pick).catch(e => toast("Not split: " + (e.code || e.message))); };
   if (!n && $("#splitundo")) $("#splitundo").onclick = () => undoSplit(j).catch(e => toast("Undo failed: " + (e.code || e.message)));
   const f = $("#jf");
+  wireRepeatBox(f);
   if (f.time) f.time.addEventListener("input", () => { f.time.dataset.touched = "1"; });
   f.description.oninput = () => {
     if (!(n && !importing)) return;
