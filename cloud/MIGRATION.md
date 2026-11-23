@@ -433,6 +433,17 @@ After review:
 
 No functions deploy, no Storage change, no index deploy, no Stripe change, no backfill.
 
+## Help tutorial videos (not deployed)
+
+Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production. No data change, no rules change, no CSP change (videos are plain youtu.be links, not embeds).
+
+After review:
+
+1. Deploy hosting. Service worker `callup-shell-v147-help-videos`. PR 118 then needs `v148` or later.
+2. Optional: `helperAsk` from an isolated functions copy. It is still hard-off (`HELPER_HARD_OFF`), so this only matters when the helper is switched back on. It adds `cloud/functions/shared/tutorial-videos.js`.
+
+No Firestore rules, no Storage, no index deploy, no Stripe change, no backfill.
+
 ## Admin password reset (15 Nov 2026)
 
 Do not deploy from this branch. When it is deployed: hosting (service worker `callup-shell-v108-password-reset`) and the function `adminSendPasswordReset` in australia-southeast1. It uses the same `RESEND_API_KEY` and `INVITE_EMAIL_ENABLED` gate as `inviteEmailWorker`. The reset link is emailed to the staff member and is not returned to the browser. Firestore `passwordResetRate/{uid}` is Admin SDK only (client read and write denied). Rebased onto main's `callup-shell-v106-multi-category-quotes`; this branch stays `callup-shell-v108-password-reset`.
