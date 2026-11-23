@@ -28,6 +28,7 @@ test("the video list is well formed and unique", () => {
     ns.add(v.n); ids.add(v.youtubeId);
   }
   assert.equal(videoUrl(TUTORIAL_VIDEOS[0]), "https://youtu.be/kBowcNxUdZQ");
+  assert.equal(videoUrl(TUTORIAL_VIDEOS.find(v => v.n === 5)), "https://youtu.be/0GWlLkJpRD0");
   assert.equal(videoUrl({ youtubeId: "bad id\"><script>" }), "");
 });
 
@@ -39,6 +40,13 @@ test("questions map to the matching video", () => {
   assert.equal(matchVideo("how do I install callup", crew).n, 3);
   assert.equal(matchVideo("how do I turn on notifications", office).n, 4);
   assert.equal(matchVideo("how do I turn on notifications", crew).n, 4);
+  assert.equal(matchVideo("how do I add a client", office).n, 5);
+  assert.equal(matchVideo("How do I add a customer?", office).n, 5);
+  assert.equal(matchVideo("how do I book a job", office).n, 5);
+  assert.equal(matchVideo("how do I create a job", office).n, 5);
+  assert.equal(matchVideo("How do I add a job?", office).n, 5);
+  assert.equal(matchVideo("how do I add a client", crew), null);
+  assert.equal(matchVideo("how do I book a job", crew), null);
   assert.equal(matchVideo("How do I make a quote?", office), null);
   assert.equal(matchVideo("", office), null);
   assert.equal(matchVideo("staffing levels for leave", office), null);
@@ -49,8 +57,10 @@ test("crew are never pointed at office-only videos", () => {
   assert.equal(matchVideo("how do I create a company", operator), null);
   assert.deepEqual(videosFor(crew).map(v => v.n), [3, 4]);
   assert.deepEqual(videosFor({ role: "admin", staffRole: "labourer", canSeeMoney: true }).map(v => v.n), [3, 4]);
-  assert.deepEqual(videosFor(supervisor).map(v => v.n), [1, 2, 3, 4]);
+  assert.deepEqual(videosFor(supervisor).map(v => v.n), [1, 2, 3, 4, 5]);
   assert.equal(videoById(1, crew), null);
+  assert.equal(videoById(5, crew), null);
+  assert.equal(videoById(5, office).title, "Add a client and book a job");
   assert.equal(videoById(3, crew).n, 3);
   assert.equal(videoById(4, crew).title, "Turn on phone alerts");
   assert.deepEqual(videoListForModel(crew), [
@@ -76,16 +86,31 @@ test("Help answers carry a plain YouTube link, never an embed", () => {
   assert.equal(install.video.n, 3);
   assert.equal(videoLinkHtml({ n: 9, title: "x", url: "javascript:alert(1)" }), "");
   assert.equal(videoLinkHtml({ n: 9, title: "x", url: "https://evil.example/abcdefghijk" }), "");
+  const client = matchHelp("how do I add a client", office);
+  assert.equal(client.topic, "clients");
+  assert.equal(client.video.n, 5);
+  const clientHtml = helpAnswerHtml(client);
+  assert.match(clientHtml, /href="https:\/\/youtu\.be\/0GWlLkJpRD0"/);
+  assert.match(clientHtml, /target="_blank" rel="noopener noreferrer"/);
+  assert.match(clientHtml, /Video 5: Add a client and book a job/);
+  assert.doesNotMatch(clientHtml, /iframe|youtube-nocookie|embed/i);
+  const crewClient = matchHelp("how do I add a client", crew);
+  assert.equal(crewClient.video, null);
+  assert.doesNotMatch(helpAnswerHtml(crewClient), /youtu/);
+  assert.equal(matchHelp("how do I book a job", office).video.n, 5);
+  assert.equal(matchHelp("how do I create a job", office).video.n, 5);
+  assert.equal(matchHelp("How do I add a customer?", office).video.n, 5);
+  assert.equal(matchHelp("how do I book a job", crew).video, null);
 });
 
 test("the Help panel lists the videos this viewer may watch", () => {
   const officePanel = helpPanelHtml(office);
   assert.match(officePanel, /Video guides/);
-  for (const id of ["kBowcNxUdZQ", "AuuLkAaCZ-E", "uKLQKTpxVJA", "e7leDphA0no"]) assert.match(officePanel, new RegExp("youtu\\.be/" + id));
+  for (const id of ["kBowcNxUdZQ", "AuuLkAaCZ-E", "uKLQKTpxVJA", "e7leDphA0no", "0GWlLkJpRD0"]) assert.match(officePanel, new RegExp("youtu\\.be/" + id));
   const crewPanel = helpPanelHtml(crew);
   assert.match(crewPanel, /uKLQKTpxVJA/);
   assert.match(crewPanel, /e7leDphA0no/);
-  assert.doesNotMatch(crewPanel, /kBowcNxUdZQ|AuuLkAaCZ-E/);
+  assert.doesNotMatch(crewPanel, /kBowcNxUdZQ|AuuLkAaCZ-E|0GWlLkJpRD0/);
   assert.doesNotMatch(officePanel + crewPanel, /iframe|youtube-nocookie/i);
   assert.equal(helpVideosHtml({ role: "operator", canSeeMoney: false }).includes("Install the app"), true);
 });
@@ -105,6 +130,9 @@ test("helperAsk gives the model the filtered list and returns a checked videoId"
   assert.equal(pickVideo("Open Staff.\nVIDEO: 2", "how do I invite staff", office), 2);
   assert.equal(pickVideo("Sure.\nVIDEO: 99", "how do I invite staff", office), 2);
   assert.equal(pickVideo("Sure.\nVIDEO: 1", "how do I install", crew), 3);
+  assert.equal(pickVideo("Open Clients and tap Add client.\nVIDEO: 5", "how do I add a client", office), 5);
+  assert.equal(pickVideo("Sure.\nVIDEO: 99", "how do I add a customer", office), 5);
+  assert.equal(pickVideo("Sure.\nVIDEO: 5", "how do I book a job", crew), null);
   assert.equal(pickVideo("Sure.", "how do I make a quote", office), null);
   const store = sampleStore();
   const run = async (uid, question, reply) => {
@@ -118,7 +146,7 @@ test("helperAsk gives the model the filtered list and returns a checked videoId"
   const sup = await run("sup1", "how do I invite staff to callup", "Open Staff and send an invite.\nVIDEO: 2");
   assert.equal(sup.result.videoId, 2);
   assert.doesNotMatch(sup.result.reply, /VIDEO:/);
-  assert.deepEqual(sup.payload.tutorialVideos.map(v => v.id), [1, 2, 3, 4]);
+  assert.deepEqual(sup.payload.tutorialVideos.map(v => v.id), [1, 2, 3, 4, 5]);
   assert.match(sup.system, /VIDEO: <id>/);
   const lab = await run("lab1", "how do I invite staff", "Ask a supervisor.\nVIDEO: 2");
   assert.equal(lab.result.videoId, null);

@@ -459,6 +459,16 @@ No functions deploy, no Storage change, no rules deploy, no index deploy, no Str
 
 This shell is `callup-shell-v149-boot-timeout`, so the Stripe GST work noted above now needs `callup-shell-v150` or later.
 
+## Help video 5: add a client and book a job (not deployed)
+
+Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production. No functions, no rules, no indexes, no Firebase change.
+
+After review, deploy hosting only. Service worker `callup-shell-v150-help-video-5`. Video 5, "Add a client and book a job" (`https://youtu.be/0GWlLkJpRD0`), is in the Help list for office viewers. Questions about adding a client or customer, or booking or creating a job, link to that video. Links stay plain youtu.be links. `helperAsk` is still hard-off.
+
+No functions deploy, no Storage change, no rules deploy, no index deploy, no Stripe change, no backfill.
+
+This shell is `callup-shell-v150-help-video-5`, so the Stripe GST work noted above now needs `callup-shell-v151` or later.
+
 ## Admin password reset (15 Nov 2026)
 
 Do not deploy from this branch. When it is deployed: hosting (service worker `callup-shell-v108-password-reset`) and the function `adminSendPasswordReset` in australia-southeast1. It uses the same `RESEND_API_KEY` and `INVITE_EMAIL_ENABLED` gate as `inviteEmailWorker`. The reset link is emailed to the staff member and is not returned to the browser. Firestore `passwordResetRate/{uid}` is Admin SDK only (client read and write denied). Rebased onto main's `callup-shell-v106-multi-category-quotes`; this branch stays `callup-shell-v108-password-reset`.

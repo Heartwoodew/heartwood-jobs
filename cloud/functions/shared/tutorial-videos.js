@@ -17,6 +17,7 @@ export const TUTORIAL_VIDEOS = Object.freeze([
   { n: 2, title: "Invite your crew", youtubeId: "AuuLkAaCZ-E", audience: "office", keywords: ["invite", "add staff", "add a person", "add crew", "add my crew", "add team", "team member", "new staff", "crew login", "login for"] },
   { n: 3, title: "Install the app", youtubeId: "uKLQKTpxVJA", audience: "all", keywords: ["install", "download the app", "download callup", "home screen", "get the app", "add to phone", "app on my phone", "desktop app"] },
   { n: 4, title: "Turn on phone alerts", youtubeId: "e7leDphA0no", audience: "all", keywords: ["notifications", "alerts", "push", "turn on notifications", "mute", "morning job list"] },
+  { n: 5, title: "Add a client and book a job", youtubeId: "0GWlLkJpRD0", audience: "office", keywords: ["add a client", "add client", "new client", "add a customer", "add customer", "new customer", "book a job", "book job", "booking a job", "create a job", "create job", "creating a job", "add a job", "add job", "new job"] },
 ].map(v => Object.freeze({ ...v, keywords: Object.freeze([...v.keywords]) })));
 
 const ID_RE = /^[A-Za-z0-9_-]{11}$/;

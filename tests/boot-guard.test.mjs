@@ -187,7 +187,7 @@ test("the app bounds boot, shows the recovery card, and does not force long poll
   assert.doesNotMatch(APP, /experimentalForceLongPolling/);
   assert.doesNotMatch(APP, /persistentSingleTabManager/);
   assert.match(APP, /return trackRead\(docReads, key, \(\) => getDoc\(ref\), ms, label \|\| key\)/);
-  assert.match(SW, /callup-shell-v149-boot-timeout/);
+  assert.match(SW, /callup-shell-v150-help-video-5/);
   assert.match(SW, /features\/boot-guard\.js/);
   const card = bootStallHtml("profile");
   assert.match(card, /Still connecting…/);

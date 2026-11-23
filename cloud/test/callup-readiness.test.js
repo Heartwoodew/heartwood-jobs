@@ -30,7 +30,7 @@ test("app address: Heartwood stays on jobs.heartwoodew.com, others use the CallU
   assert.equal(billingOrigin(HEARTWOOD_APP_ORIGIN, "heartwood"), HEARTWOOD_APP_ORIGIN);
   const sw = readFileSync(new URL("../../app/sw.js", import.meta.url), "utf8");
 
-  assert.match(sw, /callup-shell-v149-boot-timeout/);
+  assert.match(sw, /callup-shell-v150-help-video-5/);
 });
 
 test("Resend invites: off by default, Heartwood held, test recipients only when allow-listed", async () => {

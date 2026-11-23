@@ -172,12 +172,12 @@ test("hiding the repeat fields does not change what a save stores", () => {
   assert.equal(skipped.recurrence.freq, "weekly");
 });
 
-test("the job modal wires the repeat box and the shell is callup-shell-v149-boot-timeout", () => {
+test("the job modal wires the repeat box and the shell is callup-shell-v150-help-video-5", () => {
   const app = readFileSync(new URL("../app/app.js", import.meta.url), "utf8");
   assert.match(app, /wireRepeatBox\(f\)/);
   const css = readFileSync(new URL("../app/styles.css", import.meta.url), "utf8");
   assert.match(css, /\.repeat-box \.repeat-more\[hidden\]\{display:none !important\}/);
   const sw = readFileSync(new URL("../app/sw.js", import.meta.url), "utf8");
-  assert.match(sw, /callup-shell-v149-boot-timeout/);
+  assert.match(sw, /callup-shell-v150-help-video-5/);
   assert.match(sw, /features\/recurrence\.js/);
 });
