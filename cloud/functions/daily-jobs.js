@@ -5,7 +5,7 @@
 // Copy is the count and the first stop. No prices.
 
 import {
-  HEARTWOOD_COMPANY, PUSH_ORIGINS, isStaleTokenError, jobCompany, jobPlace, staleTargets, userCompany,
+  HEARTWOOD_COMPANY, PUSH_ORIGINS, fcmMessage, isStaleTokenError, jobCompany, jobPlace, staleTargets, userCompany,
 } from "./chat-push.js";
 
 export { isStaleTokenError, jobCompany, jobPlace, staleTargets, userCompany };
@@ -125,11 +125,7 @@ export function dayFingerprint(jobs) {
 }
 
 function dailyMessage(token, content) {
-  return {
-    token,
-    data: content.data,
-    webpush: { fcmOptions: { link: content.url } },
-  };
+  return fcmMessage({ token }, content);
 }
 
 function copyFor(companyId, date, jobs, origin, kind) {

@@ -25,5 +25,5 @@ test("top-level code does not call $() or $$() before they are declared", () => 
 
 test("service worker version is bumped for the boot fix", () => {
   const sw = readFileSync(new URL("../app/sw.js", import.meta.url), "utf8");
-  assert.match(sw, /callup-shell-v146-signup-polish/);
+  assert.match(sw, /callup-shell-v148-crew-map/);
 });

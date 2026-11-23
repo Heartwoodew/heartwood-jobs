@@ -62,8 +62,8 @@ import {
   paidShift, prestartStatus, sheetHours, shiftHours, sortedEntries, stampText,
 } from "./features/timesheet.js";
 import {
-  LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, canSeeCrewMap, companySharesLocation, crewListHtml, crewMapModel,
-  homeCrewSlot, liveCollectionPath, liveLocationBody, locationRemindBannerHtml, shareIndicator, shouldSendPosition,
+  LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, SHARE_FIX_WAIT_MS, canSeeCrewMap, companySharesLocation, crewListHtml, crewMapModel,
+  crewMapNotice, homeCrewSlot, liveCollectionPath, liveLocationBody, locationRemindBannerHtml, mapFailureStatus, shareIndicator, shouldSendPosition,
 } from "./features/live-location.js";
 
 // Same price strip as features/quotes.js noDollars. Kept here so a crew run sheet never paints a dollar
@@ -211,7 +211,7 @@ let INBOUND_DOMAIN = "inbound.callupapp.com.au";
 let startDesktopInstall = () => {};
 let refreshDesktopBanner = () => {};
 let desktopBannerWouldShow = () => false;
-let SHELL_VERSION = "callup-shell-v146-signup-polish";
+let SHELL_VERSION = "callup-shell-v148-crew-map";
 let prepareTicket = () => ({ ok: false, reason: "loading" });
 let ticketDialogHtml = () => "";
 let ticketFailureText = () => "The ticket could not be sent. Try again.";
@@ -4071,6 +4071,8 @@ function disarmShareWatch() {
   shareRun.watch = null;
   if (shareRun.timer) clearInterval(shareRun.timer);
   shareRun.timer = null;
+  if (shareRun.gaveUp) clearTimeout(shareRun.gaveUp);
+  shareRun.gaveUp = null;
 }
 function positionFix(pos) {
   const c = pos && pos.coords;
@@ -4126,10 +4128,16 @@ function armShareWatch() {
       if (!shareRun || document.hidden || !navigator.geolocation || typeof navigator.geolocation.getCurrentPosition !== "function") return;
       navigator.geolocation.getCurrentPosition(
         pos => considerShareFix(positionFix(pos)),
-        () => {},
+        () => { if (shareRun && !shareRun.last) sendShareOff(); },
         { enableHighAccuracy: true, maximumAge: 15000, timeout: 20000 },
       );
-    }, 60000);
+    }, SHARE_MIN_MS);
+  }
+  if (!shareRun.gaveUp) {
+    shareRun.gaveUp = setTimeout(() => {
+      if (!shareRun || shareRun.last || shareRun.offSent) return;
+      sendShareOff();
+    }, SHARE_FIX_WAIT_MS);
   }
 }
 function liveShareStart(entryId, weekStart, firstFix) {
@@ -4163,12 +4171,20 @@ function clearStaleLive() {
   liveCleared = true;
   deleteDoc(doc(db, ...liveCollectionPath(myCompanyId()), me.uid)).catch(() => {});
 }
+function noteShareHidden() {
+  if (!shareRun || shareRun.last || shareRun.offSent) return;
+  sendShareOff();
+}
 document.addEventListener("visibilitychange", () => {
   if (!shareRun) return;
-  if (document.hidden) disarmShareWatch();
+  if (document.hidden) { noteShareHidden(); disarmShareWatch(); }
   else armShareWatch();
 });
-window.addEventListener("pagehide", () => { if (shareRun) disarmShareWatch(); });
+window.addEventListener("pagehide", () => {
+  if (!shareRun) return;
+  noteShareHidden();
+  disarmShareWatch();
+});
 function clockWatchStop() {
   ui.clockUnsub?.(); ui.clockPrevUnsub?.();
   ui.clockUnsub = ui.clockPrevUnsub = null;
@@ -4210,8 +4226,12 @@ function leaveCrewScreen() {
 function crewMapScreen() {
   return `<div class="crew-map-wrap">
     <p class="crew-note">${esc(LIVE_LIMIT_NOTE)} Clocking off removes someone straight away.</p>
-    <div id="crewmap" class="crew-map" role="region" aria-label="Live crew map"></div>
+    <div class="crew-map-frame">
+      <div id="crewmap" class="crew-map" role="region" aria-label="Live crew map"></div>
+      <p id="crewmapempty" class="crew-map-note" hidden></p>
+    </div>
     <p id="crewmapstatus" class="crew-note"></p>
+    <button type="button" id="crewmapretry" class="sm-btn" hidden>Retry</button>
     <p class="crew-legend"><span class="crew-dot crew"></span> Clocked on <span class="crew-dot job"></span> Today's job</p>
     <div id="crewlist"><p class="crew-note">Loading crew…</p></div>
   </div>`;
@@ -4246,6 +4266,43 @@ function openCrewScreen() {
   }
   paintCrew();
 }
+function paintCrewMapStatus(model, failure) {
+  const status = document.getElementById("crewmapstatus");
+  const retry = document.getElementById("crewmapretry");
+  const note = document.getElementById("crewmapempty");
+  const notice = crewMapNotice(model);
+  const gps = ((model && model.people) || []).some(p => p.sharing === "gps");
+  if (note) {
+    note.hidden = !notice || !!failure;
+    note.textContent = notice;
+  }
+  if (retry) retry.hidden = !(failure && failure.retry);
+  if (!status) return;
+  if (failure) { status.textContent = failure.text; return; }
+  if (ui.crewErr) { status.textContent = "The crew list isn't available on this sign-in."; return; }
+  if (notice && !gps) { status.textContent = notice; return; }
+  status.textContent = "Blue dots are people clocked on. Amber dots are today's jobs that already have a map pin.";
+}
+function bindCrewMapRetry() {
+  const btn = document.getElementById("crewmapretry");
+  if (!btn || btn.dataset.bound === "1") return;
+  btn.dataset.bound = "1";
+  btn.addEventListener("click", () => {
+    btn.disabled = true;
+    retryCrewMap().finally(() => { if (btn.isConnected) btn.disabled = false; });
+  });
+}
+async function retryCrewMap() {
+  if (!window.L) leafletPromise = null;
+  ui.crewTilesFailed = false;
+  if (ui.crewMap) {
+    try { ui.crewMap.remove(); } catch { /* already gone */ }
+    ui.crewMap = null;
+    ui.crewLayer = null;
+    ui.crewFitKey = "";
+  }
+  paintCrew();
+}
 function paintCrew() {
   const list = document.getElementById("crewlist");
   if (!list || !canSeeCrewMap(me)) return;
@@ -4253,33 +4310,57 @@ function paintCrew() {
   if (!companySharesLocation({ status: ui.companyStatus }) || ui.crewErr === "paused") {
     list.innerHTML = `<p class="crew-note">Location sharing is off while this company is paused.</p>`;
     if (status) status.textContent = "A paused company cannot see or share locations.";
+    const retry = document.getElementById("crewmapretry");
+    if (retry) retry.hidden = true;
+    const note = document.getElementById("crewmapempty");
+    if (note) note.hidden = true;
     if (ui.crewLayer) ui.crewLayer.clearLayers();
     return;
   }
   const model = crewMapModel({ locations: ui.crewLive || [], jobs: ui.crewJobs || [], today: todayStr(), now: new Date() });
   list.innerHTML = crewListHtml(model, esc);
-  if (status) status.textContent = ui.crewErr ? "The crew list isn't available on this sign-in." : "Blue dots are people clocked on. Amber dots are today's jobs that already have a map pin.";
+  bindCrewMapRetry();
   ensureCrewMap(model);
 }
 function crewIcon(L, color) {
   return L.divIcon({ className: "crew-pin", html: `<span style="background:${color}"></span>`, iconSize: [18, 18], iconAnchor: [9, 9] });
 }
+const LEAFLET_CSS = ["vendor/leaflet/leaflet.css", "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"];
+const LEAFLET_JS = ["vendor/leaflet/leaflet.js", "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"];
 let leafletPromise = null;
+function loadAsset(tag, src, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const el = document.createElement(tag);
+    const timer = setTimeout(() => {
+      el.onload = el.onerror = null;
+      reject(new Error("map-timeout"));
+    }, timeoutMs);
+    el.onload = () => { clearTimeout(timer); resolve(el); };
+    el.onerror = () => { clearTimeout(timer); reject(new Error("map-unavailable")); };
+    if (tag === "link") { el.rel = "stylesheet"; el.href = src; }
+    else { el.src = src; el.async = true; }
+    document.head.appendChild(el);
+  });
+}
 function loadLeaflet() {
   if (window.L) return Promise.resolve(window.L);
   if (leafletPromise) return leafletPromise;
-  leafletPromise = new Promise((resolve, reject) => {
-    const css = document.createElement("link");
-    css.rel = "stylesheet";
-    css.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
-    document.head.appendChild(css);
-    const script = document.createElement("script");
-    script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
-    script.async = true;
-    script.onload = () => (window.L ? resolve(window.L) : reject(new Error("map-unavailable")));
-    script.onerror = () => reject(new Error("map-unavailable"));
-    document.head.appendChild(script);
-  });
+  leafletPromise = (async () => {
+    let styled = false;
+    for (const href of LEAFLET_CSS) {
+      try { await loadAsset("link", href, 12000); styled = true; break; } catch { /* try the next copy */ }
+    }
+    let last = new Error(styled ? "map-unavailable" : "map-style");
+    for (const src of LEAFLET_JS) {
+      try {
+        await loadAsset("script", src, 12000);
+        if (window.L) return window.L;
+        last = new Error("map-unavailable");
+      } catch (err) { last = err; }
+    }
+    leafletPromise = null;
+    throw last;
+  })();
   return leafletPromise;
 }
 async function ensureCrewMap(model) {
@@ -4288,18 +4369,31 @@ async function ensureCrewMap(model) {
   const token = (ui.crewMapToken = (ui.crewMapToken || 0) + 1);
   let L;
   try { L = await loadLeaflet(); }
-  catch {
-    const status = document.getElementById("crewmapstatus");
-    if (status) status.textContent = "The map needs a connection. The list below still shows who is clocked on.";
+  catch (err) {
+    if (token !== ui.crewMapToken) return;
+    paintCrewMapStatus(model, mapFailureStatus({ online: deviceOnline(), reason: err && err.message }));
     return;
   }
   if (token !== ui.crewMapToken || !document.getElementById("crewmap") || !canSeeCrewMap(me)) return;
   if (!ui.crewMap) {
     ui.crewMap = L.map(el);
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    const tiles = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
     }).addTo(ui.crewMap);
+    let tilesOk = false;
+    const crewNow = () => crewMapModel({ locations: ui.crewLive || [], jobs: ui.crewJobs || [], today: todayStr(), now: new Date() });
+    tiles.on("tileload", () => {
+      const was = ui.crewTilesFailed;
+      tilesOk = true;
+      ui.crewTilesFailed = false;
+      if (was) paintCrewMapStatus(crewNow(), null);
+    });
+    tiles.on("tileerror", () => {
+      if (tilesOk) return;
+      ui.crewTilesFailed = true;
+      paintCrewMapStatus(crewNow(), mapFailureStatus({ online: deviceOnline(), reason: "tiles" }));
+    });
     ui.crewLayer = L.layerGroup().addTo(ui.crewMap);
   }
   ui.crewLayer.clearLayers();
@@ -4328,6 +4422,8 @@ async function ensureCrewMap(model) {
   else if (key !== ui.crewFitKey) ui.crewMap.fitBounds(bounds, { padding: [28, 28], maxZoom: 15 });
   ui.crewFitKey = key;
   setTimeout(() => { if (ui.crewMap) ui.crewMap.invalidateSize(); }, 50);
+  if (ui.crewTilesFailed) paintCrewMapStatus(model, mapFailureStatus({ online: deviceOnline(), reason: "tiles" }));
+  else paintCrewMapStatus(model, null);
 }
 async function tsPunch(kind) {
   const active = tsSheets();

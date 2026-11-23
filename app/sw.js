@@ -1,5 +1,5 @@
 // App-shell cache. Bump VERSION on every deploy so phones pick up the new files.
-const VERSION = "callup-shell-v146-signup-polish";
+const VERSION = "callup-shell-v148-crew-map";
 const SHELL = ["./", "index.html", "styles.css", "app.js", "org-settings.js", "firebase-config.js", "route-config.js", "features/quotes.js", "features/quote-revisions.js", "features/capacity.js", "features/suburb.js", "features/job-money.js", "features/job-documents.js", "features/job-email.js", "features/autofill.js", "features/job-window.js", "features/dispatch-times.js", "features/places.js", "maps-config.js", "features/route-order.js", "features/swms-sign.js", "features/cloud-storage.js", "features/cloud-retention.js", "features/photo-gallery.js", "features/photo-capture.js", "features/chat.js", "features/chat-ui.js", "features/push.js", "features/push-logic.js", "features/compliance.js", "features/servicing.js", "features/prestart.js", "features/timesheet.js", "features/live-location.js", "features/leave.js", "features/claims.js", "features/hours-export.js", "features/inbox-import.js", "features/inbound-forward.js", "features/company.js", "features/company-logo.js", "features/company-ui.js", "features/dashboard-banners.js", "features/company-exports.js", "features/referral.js", "features/receipts.js", "features/staff-invites.js", "features/trades.js", "features/industry-presets.js", "features/recurrence.js", "features/quote-public.js", "features/certificates.js", "features/packs/money.js", "features/packs/service-trades.js", "features/packs/landscaping.js", "features/packs/concreting.js", "features/packs/fencing.js", "features/packs/carpentry.js", "features/packs/tiling.js", "features/packs/plumbing.js", "features/packs/electrical.js", "features/packs/concrete-cutting.js", "features/packs/form.js", "features/pending-write.js", "features/offline.js", "features/performance.js", "features/take5.js", "features/help.js", "features/support-ticket.js", "features/desktop-install.js", "manifest.webmanifest", "icons/callup-wordmark.svg", "icons/apple-touch-icon-180.png",
   "icons/icon-192.png", "icons/icon-512.png", "vendor/pdf-lib.min.js"];
 // The Firebase SDK files the page imports. Precached so the app still opens offline straight after an update,
@@ -80,23 +80,29 @@ self.addEventListener("sync", event => {
 });
 // Background chat and job-list pushes. A visible page toasts instead, so this
 // does not raise a second system notification while the app is on screen.
+// This is the only service worker. app.js registers sw.js and passes that registration to getToken.
+// A data-only payload does not show on iOS once the page is closed, so the sender includes a
+// notification and this handler calls showNotification from that or from data.
 self.addEventListener("push", event => {
   let payload = {};
   try { payload = event.data ? event.data.json() : {}; } catch { payload = {}; }
-  const data = payload && payload.data ? payload.data : payload;
-  const title = data && typeof data.title === "string" ? data.title : "";
-  const body = data && typeof data.body === "string" ? data.body : "";
-  if (!title) return;
-  const url = data && typeof data.url === "string" ? data.url : "./";
-  const tag = data && typeof data.tag === "string" ? data.tag : "callup";
+  const data = payload && payload.data && typeof payload.data === "object" ? payload.data : {};
+  const note = payload && payload.notification && typeof payload.notification === "object" ? payload.notification : {};
+  const title = typeof data.title === "string" && data.title ? data.title : (typeof note.title === "string" ? note.title : "");
+  const body = typeof data.body === "string" && data.body ? data.body : (typeof note.body === "string" ? note.body : "");
+  const url = typeof data.url === "string" && data.url ? data.url : "./";
+  const tag = typeof data.tag === "string" && data.tag ? data.tag : "callup";
   event.waitUntil((async () => {
     const open = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-    if (open.some(client => client.visibilityState === "visible")) {
+    const visible = open.some(client => client.visibilityState === "visible");
+    if (visible && title) {
       for (const client of open) client.postMessage({ type: "push-toast", title, body, url, threadId: data.threadId || "" });
       return;
     }
-    await self.registration.showNotification(title, {
-      body, tag, renotify: true, icon: "icons/icon-192.png", data: { url, title, body },
+    const shownTitle = title || "CallUp";
+    const shownBody = body || "Open CallUp";
+    await self.registration.showNotification(shownTitle, {
+      body: shownBody, tag, renotify: true, icon: "icons/icon-192.png", data: { url, title: shownTitle, body: shownBody },
     });
   })());
 });

@@ -84,6 +84,8 @@ test("today's list is assigned people only, with no prices in the text", () => {
   assert.equal(byUid.op1.messages[0].data.invoiceAmount, undefined);
   assert.equal(byUid.scoped.messages[0].data.body, "1 job · Redbank Plains");
   assert.equal(byUid.op1.messages[0].webpush.fcmOptions.link, "https://jobs.heartwoodew.com/app/?jobs=today");
+  assert.equal(byUid.op1.messages[0].notification.title, "Your jobs for Wed 11 Nov");
+  assert.equal(byUid.op1.messages[0].webpush.notification.body, "2 jobs · Springfield");
   assert.equal(dailyOpenUrl("https://evil.example", "bravo"), "https://app.callupapp.com.au/app/?jobs=today");
   assert.equal(digestDocId("heartwood", day, "op1"), "heartwood_2026-11-11_op1");
   const ordered = orderNoticeJobs(

@@ -16,11 +16,52 @@ export function vapidReady(key) {
   return value.length >= 20 && value !== VAPID_PLACEHOLDER;
 }
 
-export function iosPushHint({ userAgent = "", platform = "", maxTouchPoints = 0, standalone = false } = {}) {
+export const IOS_HOME_STEPS = "Add CallUp to your Home Screen first. In Safari, tap Share, then Add to Home Screen, then open CallUp from the icon.";
+
+export function isIosDevice({ userAgent = "", platform = "", maxTouchPoints = 0 } = {}) {
   const ua = String(userAgent || "");
-  const iOS = /iPad|iPhone|iPod/.test(ua) || (platform === "MacIntel" && maxTouchPoints > 1);
-  if (!iOS || standalone) return "";
-  return "Add to Home Screen to get notifications";
+  return /iPad|iPhone|iPod/.test(ua) || (platform === "MacIntel" && Number(maxTouchPoints) > 1);
+}
+
+// navigator.standalone is false in an iOS Safari tab and true only from the Home Screen icon.
+// On iOS that flag wins. A display-mode match by itself can be wrong in a tab, and web push is then refused.
+export function iosOpenedFromHomeScreen({ navigatorStandalone, displayMode = false } = {}) {
+  if (navigatorStandalone === true) return true;
+  if (navigatorStandalone === false) return false;
+  return displayMode === true;
+}
+
+export function iosPushHint({
+  userAgent = "", platform = "", maxTouchPoints = 0, standalone = false, notification = true, pushManager = true,
+} = {}) {
+  if (!isIosDevice({ userAgent, platform, maxTouchPoints })) return "";
+  const installed = standalone === true && notification !== false && pushManager !== false;
+  if (installed) return "";
+  return IOS_HOME_STEPS;
+}
+
+export function pushEnableError(err) {
+  const raw = String((err && (err.code || err.message)) || "not-enabled");
+  if (/permission-denied|unauthorized/i.test(raw)) return "You can't enable notifications on this login.";
+  const detail = raw.replace(/^FirebaseError:\s*/i, "").replace(/^messaging\//, "").slice(0, 160);
+  if (!detail || detail === "not-enabled") return "Couldn't turn on notifications.";
+  return "Couldn't turn on notifications. " + detail;
+}
+
+// A saved push token is background. Everything else is the open page (chat listener and foreground toasts).
+export function pushDeliveryStatus({ iosHint = "", permission = "", subscribed = false } = {}) {
+  if (subscribed === true && !iosHint) return { mode: "background", label: "Background notifications on", steps: "" };
+  let steps = String(iosHint || "");
+  if (!steps && permission === "denied") {
+    steps = "Notifications are blocked on this phone. On Android, allow notifications. On iPhone, add CallUp to the Home Screen, open it from the icon, then allow notifications.";
+  } else if (!steps) {
+    steps = "On iPhone, add CallUp to the Home Screen and open it from the icon, then turn on notifications. On Android, allow notifications.";
+  }
+  return {
+    mode: "in-app",
+    label: "In-app alerts only — notifications arrive only while CallUp is open",
+    steps,
+  };
 }
 
 export function shouldToast({ visibility, viewingThread, threadId } = {}) {
@@ -67,6 +108,14 @@ function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+function deliveryBlock(model) {
+  const delivery = pushDeliveryStatus({
+    iosHint: model.iosHint, permission: model.permission, subscribed: model.enabled === true,
+  });
+  const steps = delivery.steps ? ` ${esc(delivery.steps)}` : "";
+  return `<p class="push-status" data-push-status="${esc(delivery.mode)}"><b>${esc(delivery.label)}</b>${steps}</p>`;
+}
+
 export function notifyPanelHtml(model = {}) {
   const hint = model.iosHint ? `<p class="push-ios">${esc(model.iosHint)}</p>` : "";
   const enable = model.enabled || model.iosHint
@@ -79,6 +128,7 @@ export function notifyPanelHtml(model = {}) {
   return `<section class="pad push-panel" data-push-panel>
     <h3>Notifications</h3>
     <p class="sub">Pings this phone for chat, and a morning list of your jobs.</p>
+    ${deliveryBlock(model)}
     ${enable}
     ${hint}
     <label class="ck"><input type="checkbox" data-mute-chat ${model.muteChat ? "checked" : ""}> Mute chat notifications</label>
@@ -90,9 +140,12 @@ export function notifyPanelHtml(model = {}) {
 
 export function pushBannerHtml(model = {}) {
   if (!model || model.enabled || model.dismissed) return "";
-  if (model.iosHint) return `<section class="push-banner" data-push-banner><p class="push-ios">${esc(model.iosHint)}</p></section>`;
+  const delivery = pushDeliveryStatus({ iosHint: model.iosHint, permission: model.permission, subscribed: false });
+  if (model.iosHint) {
+    return `<section class="push-banner" data-push-banner><p class="push-ios">${esc(delivery.label)}</p><p>${esc(model.iosHint)}</p></section>`;
+  }
   return `<section class="push-banner" data-push-banner>
-    <p>Chat messages need to ping this phone.</p>
+    <p><b>${esc(delivery.label)}</b> ${esc(delivery.steps)}</p>
     <button type="button" class="sm-btn primary push-enable">Turn on notifications</button>
     <button type="button" class="sm-btn push-later">Not now</button>
   </section>`;

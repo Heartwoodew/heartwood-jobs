@@ -116,6 +116,8 @@ test("the push opens the clock-on screen and drops a dead token", () => {
   assert.equal(push.message.data.title, "Turn on location sharing");
   assert.equal(push.message.data.url, "https://app.callupapp.com.au/app/?open=timesheet");
   assert.equal(push.message.webpush.fcmOptions.link, push.message.data.url);
+  assert.equal(push.message.notification.title, "Turn on location sharing");
+  assert.equal(push.message.webpush.notification.body, REMIND_BODY);
   assert.equal(push.message.token, TOKEN);
   assert.equal(locationOpenUrl("https://evil.example", "heartwood"), "https://jobs.heartwoodew.com/app/?open=timesheet");
   assert.equal(pushTargetFromUrl(push.message.data.url).kind, "timesheet");
@@ -256,9 +258,9 @@ test("the callable is wired, refuses tests, and the rules stay a read for the pe
   assert.match(emu, /match \/users\/\{uid\}\/locationNotices\/\{noticeId\}/);
   assert.match(rules, /allow create, update, delete: if false/);
   const sw = readFileSync(new URL("../../app/sw.js", import.meta.url), "utf8");
-  assert.match(sw, /callup-shell-v146-signup-polish/);
+  assert.match(sw, /callup-shell-v148-crew-map/);
   const migration = readFileSync(new URL("../MIGRATION.md", import.meta.url), "utf8");
   assert.match(migration, /remindLocationSharing/);
-  assert.match(migration, /callup-shell-v146-signup-polish/);
+  assert.match(migration, /callup-shell-v148-crew-map/);
   assert.match(migration, /Do not deploy from this branch/);
 });

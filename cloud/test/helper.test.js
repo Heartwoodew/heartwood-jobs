@@ -301,7 +301,7 @@ test("helper callable is hard-off and the phone has no helper UI", () => {
   assert.doesNotMatch(app, /installHelperApp|helper-ui|helperAsk|helper-launch|SpeechRecognition|speechSynthesis/);
   assert.doesNotMatch(sw, /features\/helper/);
 
-  assert.match(sw, /callup-shell-v146-signup-polish/);
+  assert.match(sw, /callup-shell-v148-crew-map/);
 
   assert.doesNotMatch(css, /helper-launch|helper-panel|helper-mic|helper-speech|Ask Helper/);
   assert.match(index, /region: "australia-southeast1"/);

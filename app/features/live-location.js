@@ -7,8 +7,13 @@ export const GPS_REMIND_BODY = "Please turn on location sharing — clock on in 
 export const GPS_REMIND_SENT = "Reminder sent";
 export const GPS_REMIND_NONE = "No device registered — ask them to open CallUp";
 export const LIVE_LIMIT_NOTE = "A phone browser can't keep sharing once the phone is locked or CallUp isn't on screen. The time is when that phone last sent a position.";
+export const CREW_UNSHARED = "Clocked on, location not shared";
+export const MAP_OFFLINE = "The map needs a connection. The list below still shows who is clocked on.";
+export const MAP_LIBRARY = "The map couldn't load. Tap Retry. The list below still shows who is clocked on.";
+export const MAP_TILES = "The map tiles didn't load. Tap Retry. The list below still shows who is clocked on.";
 export const SHARE_MIN_MS = 60000;
 export const SHARE_MIN_METRES = 50;
+export const SHARE_FIX_WAIT_MS = 20000;
 
 const CREW_ROLES = new Set(["labourer", "operator", "supervisor"]);
 
@@ -85,6 +90,22 @@ function esc(s) {
 export function locationRemindBannerHtml(body) {
   const text = String(body || GPS_REMIND_BODY);
   return `<button type="button" class="swremind sw-due gps-remind" data-gps-open><span class="ic" aria-hidden="true">⌖</span><span>${esc(text)}</span><span class="chev">›</span></button>`;
+}
+
+/** Offline is the only case that says the map needs a connection. A library or tile failure says so, and can be retried. */
+export function mapFailureStatus({ online = true, reason = "" } = {}) {
+  if (online === false) return { kind: "offline", text: MAP_OFFLINE, retry: true };
+  if (reason === "tiles") return { kind: "tiles", text: MAP_TILES, retry: true };
+  return { kind: "library", text: MAP_LIBRARY, retry: true };
+}
+
+/** Names of clocked-on people with no pin. Empty when everyone on the list has a position. */
+export function crewMapNotice(model) {
+  const people = (model && model.people) || [];
+  const quiet = people.filter(p => p.sharing !== "gps");
+  if (!quiet.length) return "";
+  const names = quiet.map(p => String(p.name || "").trim()).filter(Boolean);
+  return (names.length ? names.join(", ") + " — " : "") + CREW_UNSHARED;
 }
 
 export function shareIndicator({ clockedOn, sharing } = {}) {
@@ -194,7 +215,7 @@ export function crewListHtml(model, esc) {
   return `<div class="crew-list">${people.map(p => {
     const where = p.sharing === "gps"
       ? `${e(p.lastSeen)}${p.accuracy != null ? ` · ±${p.accuracy} m` : ""}`
-      : "Location off";
+      : CREW_UNSHARED;
     const jobs = p.jobs.length
       ? p.jobs.map(j => `<li>${j.time ? `${e(j.time)} · ` : ""}${e(j.label)}${j.jobNo ? ` · #${e(j.jobNo)}` : ""}${j.client ? ` · ${e(j.client)}` : ""}${j.lat == null && j.address ? " · no pin" : ""}</li>`).join("")
       : `<li>No job assigned today</li>`;

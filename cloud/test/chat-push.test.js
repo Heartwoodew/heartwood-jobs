@@ -1,10 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { PUSH_ORIGINS as pageOrigins, iosPushHint, pushTargetFromUrl, shouldToast, tokenDocId, vapidReady } from "../../app/features/push-logic.js";
+import {
+  IOS_HOME_STEPS, PUSH_ORIGINS as pageOrigins, iosOpenedFromHomeScreen, iosPushHint, pushDeliveryStatus, pushEnableError, pushTargetFromUrl, shouldToast, tokenDocId, vapidReady,
+} from "../../app/features/push-logic.js";
 import {
   ALEX_UID, PATRICK_UID, PUSH_BODY_MAX, PUSH_ORIGINS, canReceiveChat, chatOpenUrl, chatPushContent,
-  dispatchChatPush, isStaleTokenError, selectChatRecipients, staleTargets, truncatePush, userCompany,
+  dispatchChatPush, fcmMessage, isStaleTokenError, selectChatRecipients, staleTargets, truncatePush, userCompany,
 } from "../functions/chat-push.js";
 
 const heartwoodOp = { role: "operator", name: "Sam" };
@@ -163,9 +165,40 @@ test("notification copy is the sender and the chat, with text cut to about 100 c
 test("opt-in stays a button press, and iPhone Safari shows the Home Screen hint", async () => {
   assert.equal(iosPushHint({
     userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1",
-  }), "Add to Home Screen to get notifications");
+  }), IOS_HOME_STEPS);
+  assert.match(IOS_HOME_STEPS, /Add CallUp to your Home Screen first/);
+  assert.match(IOS_HOME_STEPS, /Share/);
+  assert.match(IOS_HOME_STEPS, /Add to Home Screen/);
+  assert.equal(iosOpenedFromHomeScreen({ navigatorStandalone: false, displayMode: true }), false);
+  assert.equal(iosOpenedFromHomeScreen({ navigatorStandalone: true, displayMode: false }), true);
+  assert.equal(iosOpenedFromHomeScreen({ displayMode: true }), true);
+  assert.equal(iosPushHint({ userAgent: "iPhone", standalone: true, displayMode: true }), "");
+  assert.equal(iosPushHint({ userAgent: "iPhone", standalone: true, pushManager: false }), IOS_HOME_STEPS);
+  assert.equal(iosPushHint({ userAgent: "iPhone", standalone: true, notification: false }), IOS_HOME_STEPS);
   assert.equal(iosPushHint({ userAgent: "Mozilla/5.0 (Linux; Android 14) Chrome/120.0.0.0" }), "");
   assert.equal(iosPushHint({ userAgent: "iPhone", standalone: true }), "");
+  const inApp = pushDeliveryStatus({ iosHint: IOS_HOME_STEPS, subscribed: false });
+  assert.equal(inApp.mode, "in-app");
+  assert.match(inApp.label, /In-app alerts only/);
+  assert.match(inApp.label, /while CallUp is open/);
+  assert.equal(inApp.steps, IOS_HOME_STEPS);
+  const background = pushDeliveryStatus({ permission: "granted", subscribed: true });
+  assert.equal(background.mode, "background");
+  assert.equal(background.label, "Background notifications on");
+  assert.match(pushDeliveryStatus({ permission: "denied" }).steps, /On Android, allow notifications/);
+  assert.match(pushEnableError({ message: "push-service-error" }), /push-service-error/);
+  assert.match(pushEnableError({ code: "permission-denied" }), /can't enable notifications/);
+  const shown = fcmMessage(
+    { token: "fcm-token-value-0123456789" },
+    { url: "https://jobs.heartwoodew.com/app/?chat=staff", data: { title: "Sam · Team chat", body: "On site", url: "https://jobs.heartwoodew.com/app/?chat=staff", kind: "chat" } },
+  );
+  assert.equal(shown.notification.title, "Sam · Team chat");
+  assert.equal(shown.notification.body, "On site");
+  assert.equal(shown.webpush.notification.title, "Sam · Team chat");
+  assert.equal(shown.webpush.notification.icon, "https://jobs.heartwoodew.com/app/icons/icon-192.png");
+  assert.equal(shown.webpush.fcmOptions.link, "https://jobs.heartwoodew.com/app/?chat=staff");
+  assert.equal(shown.webpush.headers.Urgency, "high");
+  assert.equal(shown.data.kind, "chat");
   assert.equal(shouldToast({ visibility: "visible", viewingThread: "staff", threadId: "staff" }), false);
   assert.equal(shouldToast({ visibility: "hidden", viewingThread: "", threadId: "staff" }), false);
   assert.equal(shouldToast({ visibility: "visible", viewingThread: "staff", threadId: "job_job1" }), true);
@@ -188,17 +221,22 @@ test("opt-in stays a button press, and iPhone Safari shows the Home Screen hint"
   assert.match(logic, /Turn on notifications/);
   assert.match(logic, /Mute chat notifications/);
   assert.match(logic, /Mute daily job list/);
-  assert.match(logic, /Add to Home Screen to get notifications/);
-  assert.match(notify, /Notification\.requestPermission/);
+  assert.match(logic, /Add CallUp to your Home Screen first/);
+  assert.match(logic, /Background notifications on/);
+  assert.match(logic, /In-app alerts only/);
+  assert.match(notify, /function onEnableClick[\s\S]*Notification\.requestPermission\(\)[\s\S]*enableNotifications\(button, pending\)/);
   assert.match(config, /export const vapidKey = "BMyCNKMjDvbOQW74GyjS7GlTo-Qe7r203dbshLNIPpuDcaafAuZmq-WSjX7Ptys4ZTXEH1GKy8QhtkNsaD1Zlk8"/);
   assert.doesNotMatch(config, /vapidKey = "REPLACE_WITH_WEB_PUSH_CERTIFICATE"/);
   assert.match(config, /Web Push certificates/);
   assert.doesNotMatch(config, /BEGIN PRIVATE|-----BEGIN/);
   assert.equal(vapidReady("BMyCNKMjDvbOQW74GyjS7GlTo-Qe7r203dbshLNIPpuDcaafAuZmq-WSjX7Ptys4ZTXEH1GKy8QhtkNsaD1Zlk8"), true);
 
-  assert.match(sw, /callup-shell-v146-signup-polish/);
+  assert.match(sw, /callup-shell-v148-crew-map/);
 
   assert.match(sw, /notificationclick/);
+  assert.match(sw, /note\.title/);
+  assert.match(sw, /showNotification/);
+  assert.match(readFileSync(new URL("../../app/app.js", import.meta.url), "utf8"), /serviceWorker\.register\("sw\.js"/);
   assert.match(sw, /visibilityState === "visible"/);
   assert.match(sw, /features\/push\.js/);
   assert.match(index, /chatMessagePush/);

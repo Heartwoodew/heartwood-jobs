@@ -4,7 +4,7 @@
 
 import { doc, setDoc, getDocs, collection, deleteDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import {
-  PUSH_ORIGINS, iosPushHint, notifyPanelHtml, pushBannerHtml, pushTargetFromUrl, shouldToast, tokenDocId, vapidReady,
+  PUSH_ORIGINS, iosOpenedFromHomeScreen, iosPushHint, notifyPanelHtml, pushBannerHtml, pushEnableError, pushTargetFromUrl, shouldToast, tokenDocId, vapidReady,
 } from "./push-logic.js";
 
 export { notifyPanelHtml, pushBannerHtml, pushTargetFromUrl, shouldToast, tokenDocId, vapidReady };
@@ -23,6 +23,7 @@ export function pushModel() {
     enabled: state.enabled === true,
     dismissed: state.dismissed === true,
     iosHint: browserIosHint(),
+    permission: typeof Notification === "undefined" ? "unsupported" : Notification.permission,
     vapidReady: vapidReady(deps && deps.vapidKey),
     emulator: !!(deps && deps.emulator),
   };
@@ -30,13 +31,18 @@ export function pushModel() {
 
 export function browserIosHint() {
   if (typeof navigator === "undefined") return "";
-  const standalone = navigator.standalone === true
-    || (typeof matchMedia === "function" && matchMedia("(display-mode: standalone)").matches);
+  const displayMode = typeof matchMedia === "function" && matchMedia("(display-mode: standalone)").matches;
+  const standalone = iosOpenedFromHomeScreen({
+    navigatorStandalone: navigator.standalone,
+    displayMode,
+  });
   return iosPushHint({
     userAgent: navigator.userAgent,
     platform: navigator.platform,
     maxTouchPoints: navigator.maxTouchPoints || 0,
     standalone,
+    notification: typeof Notification !== "undefined",
+    pushManager: typeof PushManager !== "undefined",
   });
 }
 
@@ -124,7 +130,7 @@ async function bindMessaging(messaging) {
 
 async function saveToken() {
   const { getMessaging, getToken, isSupported } = await import("https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging.js");
-  if (!(await isSupported())) return "";
+  if (!(await isSupported())) throw new Error("This phone can't subscribe to background notifications.");
   const reg = await navigator.serviceWorker.ready;
   const messaging = getMessaging(deps.app);
   const token = await getToken(messaging, { vapidKey: deps.vapidKey, serviceWorkerRegistration: reg });
@@ -154,14 +160,36 @@ async function refreshGrantedToken() {
   } catch { /* stay quiet; the app still works offline */ }
 }
 
-async function enableNotifications(button) {
+function onEnableClick(button) {
+  const hint = browserIosHint();
+  if (hint) {
+    if (deps && deps.toast) deps.toast(hint);
+    return;
+  }
+  if (!deps) return;
+  if (typeof Notification === "undefined" || typeof Notification.requestPermission !== "function" || !navigator.serviceWorker) {
+    deps.toast("This phone can't show notifications.");
+    return;
+  }
+  // iOS only shows the permission prompt when this call is on the tap itself, not after an await.
+  let pending;
+  try {
+    pending = Notification.requestPermission();
+  } catch (err) {
+    pending = Promise.reject(err);
+  }
+  enableNotifications(button, pending);
+}
+
+async function enableNotifications(button, permissionPromise) {
   if (!deps) return;
   if (deps.emulator) {
     deps.toast("Notifications work on the installed phone app, not in the emulator.");
     return;
   }
-  if (browserIosHint()) {
-    deps.toast("Add to Home Screen to get notifications");
+  const hint = browserIosHint();
+  if (hint) {
+    deps.toast(hint);
     return;
   }
   if (!vapidReady(deps.vapidKey)) {
@@ -178,14 +206,15 @@ async function enableNotifications(button) {
   }
   if (button) button.disabled = true;
   try {
-    const perm = await Notification.requestPermission();
+    const perm = permissionPromise ? await permissionPromise : await Notification.requestPermission();
     if (perm !== "granted") {
-      deps.toast("Notifications stay off until you allow them.");
+      deps.toast(perm === "denied" ? "Notifications are blocked on this phone." : "Notifications stay off until you allow them.");
+      paint();
       return;
     }
     const token = await saveToken();
     if (!token) {
-      deps.toast("Couldn't turn on notifications.");
+      deps.toast("Couldn't turn on notifications. No push token was saved for this phone.");
       return;
     }
     await writePrefs({ muteChat: state.muteChat === true, muteDaily: state.muteDaily === true });
@@ -193,8 +222,7 @@ async function enableNotifications(button) {
     paint();
     deps.toast("Notifications are on for this phone.");
   } catch (err) {
-    const code = (err && (err.code || err.message)) || "not-enabled";
-    deps.toast(/permission-denied|unauthorized/i.test(String(code)) ? "You can't enable notifications on this login." : "Couldn't turn on notifications.");
+    deps.toast(pushEnableError(err));
   } finally {
     if (button) button.disabled = false;
   }
@@ -205,7 +233,7 @@ function bindRoot(root) {
   root.querySelectorAll(".push-enable").forEach(button => {
     if (button.dataset.bound === "1") return;
     button.dataset.bound = "1";
-    button.addEventListener("click", () => enableNotifications(button));
+    button.addEventListener("click", () => onEnableClick(button));
   });
   root.querySelectorAll(".push-later").forEach(button => {
     if (button.dataset.bound === "1") return;

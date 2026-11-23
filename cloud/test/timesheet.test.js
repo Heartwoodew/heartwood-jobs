@@ -99,7 +99,8 @@ test("timesheet stamps stay one fix; live sharing watches only while the shift i
   assert.equal((feature.match(/\.getCurrentPosition\(/g) || []).length, 1);
   assert.match(feature, /maximumAge: 0/);
   assert.equal((app.match(/\.watchPosition\(/g) || []).length, 1);
-  assert.match(app, /if \(document\.hidden\) disarmShareWatch/);
+  assert.match(app, /if \(document\.hidden\) \{ noteShareHidden\(\); disarmShareWatch\(\); \}/);
+  assert.match(app, /function noteShareHidden\(\)/);
   assert.match(app, /if \(kind === "off"\) liveShareStop\(true\)/);
   assert.doesNotMatch(app + feature, /locationHistory|liveTrail/);
 });

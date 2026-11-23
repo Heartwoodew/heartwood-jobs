@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, SHARE_MIN_METRES, SHARE_MIN_MS,
-  canSeeCrewMap, companySharesLocation, crewListHtml, crewMapModel, haversineMetres, homeCrewSlot, jobPoint,
-  lastSeenLabel, liveCollectionPath, liveLocationBody, shareIndicator, shouldSendPosition,
+  CREW_UNSHARED, LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, MAP_LIBRARY, MAP_OFFLINE, MAP_TILES, SHARE_FIX_WAIT_MS, SHARE_MIN_METRES, SHARE_MIN_MS,
+  canSeeCrewMap, companySharesLocation, crewListHtml, crewMapModel, crewMapNotice, haversineMetres, homeCrewSlot, jobPoint,
+  lastSeenLabel, liveCollectionPath, liveLocationBody, mapFailureStatus, shareIndicator, shouldSendPosition,
 } from "../../app/features/live-location.js";
 
 const read = name => readFileSync(new URL(name, import.meta.url), "utf8");
@@ -86,7 +86,14 @@ test("the map shows clocked-on crew and today's job pins, with no prices", () =>
   assert.equal(model.people.find(p => p.uid === "lab1").jobs[0].lat, null);
   assert.equal(jobPoint({ address: "10 Creek Rd, Brisbane", geo: { lat: 1, lng: 2, query: "somewhere else" } }), null);
   const html = crewListHtml(model, s => String(s));
-  assert.match(html, /Location off/);
+  assert.match(html, /Clocked on, location not shared/);
+  assert.equal(crewMapNotice(model), "Lee — " + CREW_UNSHARED);
+  assert.equal(crewMapNotice({ people: [{ name: "Sam", sharing: "gps" }] }), "");
+  assert.equal(mapFailureStatus({ online: false, reason: "map-unavailable" }).text, MAP_OFFLINE);
+  assert.equal(mapFailureStatus({ online: true, reason: "map-timeout" }).text, MAP_LIBRARY);
+  assert.equal(mapFailureStatus({ online: true, reason: "tiles" }).text, MAP_TILES);
+  assert.equal(mapFailureStatus({ online: true, reason: "tiles" }).retry, true);
+  assert.equal(SHARE_FIX_WAIT_MS, 20000);
   assert.match(html, /Orbit/);
   assert.match(html, /no pin/);
   assert.doesNotMatch(html, /8800|1200|500|invoice|\$/);
@@ -150,11 +157,16 @@ test("the map library is not part of the offline shell", () => {
   const sw = read("../../app/sw.js");
   const app = read("../../app/app.js");
 
-  assert.match(sw, /callup-shell-v146-signup-polish/);
+  assert.match(sw, /callup-shell-v148-crew-map/);
 
   assert.match(sw, /features\/live-location\.js/);
   assert.doesNotMatch(sw, /leaflet|openstreetmap|unpkg\.com/i);
   assert.match(app, /LIVE_SHARE_TEXT/);
+  assert.match(app, /vendor\/leaflet\/leaflet\.js/);
   assert.match(app, /unpkg\.com\/leaflet@1\.9\.4\/dist\/leaflet\.js/);
+  assert.match(app, /mapFailureStatus/);
+  assert.match(app, /crewmapretry/);
+  assert.match(app, /noteShareHidden/);
+  assert.match(app, /SHARE_FIX_WAIT_MS/);
   assert.doesNotMatch(app, /import [^;]*leaflet/i);
 });

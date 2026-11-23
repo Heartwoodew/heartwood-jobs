@@ -433,6 +433,18 @@ After review:
 
 No functions deploy, no Storage change, no index deploy, no Stripe change, no backfill.
 
+## Crew map, notifications, and live location (not deployed)
+
+Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production.
+
+After review:
+
+1. Build a fresh hosting folder with `bash tools/build-callup-hosting.sh`.
+2. Deploy hosting only with `firebase deploy --only hosting --config cloud/firebase.hosting.json --project heartwood-9f37f`. Service worker `callup-shell-v148-crew-map`. No rules deploy and no index deploy.
+3. Background push copy is in Cloud Functions (`fcmMessage`). The predeploy hook in `cloud/firebase.json` still refuses a functions deploy. When that hook is lifted for a reviewed release, publish `chatMessagePush`, `dailyJobPush`, `dailyJobChangePush`, `prestartJobPush`, `prestartAssetPush`, `prestartTimesheetPush`, `remindLocationSharing`, and `supportTicketCreated` in australia-southeast1. Until then, phones keep the previous data-only payload.
+
+An open service worker on another branch will need `callup-shell-v149` or later after this one.
+
 ## Admin password reset (15 Nov 2026)
 
 Do not deploy from this branch. When it is deployed: hosting (service worker `callup-shell-v108-password-reset`) and the function `adminSendPasswordReset` in australia-southeast1. It uses the same `RESEND_API_KEY` and `INVITE_EMAIL_ENABLED` gate as `inviteEmailWorker`. The reset link is emailed to the staff member and is not returned to the browser. Firestore `passwordResetRate/{uid}` is Admin SDK only (client read and write denied). Rebased onto main's `callup-shell-v106-multi-category-quotes`; this branch stays `callup-shell-v108-password-reset`.
