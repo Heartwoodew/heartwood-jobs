@@ -6,10 +6,10 @@ import { DEFAULT_ORG, orgSettings, setActiveCompany } from "../../app/org-settin
 import { parseMigrateArgs, LIVE_PROJECT } from "../scripts/migrate-company-id.mjs";
 import {
   HEARTWOOD_ACCOUNTS_EMAIL, HEARTWOOD_COMPANY_ID, PAUSE_GRACE_DAYS, TRIAL_DAYS, TRIAL_REMINDER_DAYS, billingHook, buildCompanyCreate,
-  companyAccess, companyDetailPatch, docCompanyId, filterMaster, friendCodeOk, friendInviteLink, heartwoodSeed, hoursBrand, isPlatformOwner,
-  masterRow, masterTotals, planCompanyField, scopeRecord, trialEnd, validateCompanyInput,
+  addressFieldsFromCompany, companyAccess, companyDetailPatch, docCompanyId, filterMaster, friendCodeOk, friendInviteLink, formatCompanyAddress, heartwoodSeed, hoursBrand, isPlatformOwner,
+  masterRow, masterTotals, parseCompanyAddress, planCompanyField, scopeRecord, trialEnd, validateCompanyInput,
 } from "../../app/features/company.js";
-import { masterDetailHtml, masterPageHtml, pausedAdminHtml, pausedOwnerHtml, pausedStaffHtml, signupFormHtml, trialBannerHtml } from "../../app/features/company-ui.js";
+import { companySettingsHtml, masterDetailHtml, masterPageHtml, pausedAdminHtml, pausedOwnerHtml, pausedStaffHtml, signupFormHtml, trialBannerHtml } from "../../app/features/company-ui.js";
 import { locationConsent, TS_CONSENT } from "../../app/features/timesheet.js";
 import { CALLUP_APP_ORIGIN, CALLUP_FALLBACK_ORIGIN, HEARTWOOD_APP_ORIGIN, profileFromInvite } from "../../app/features/staff-invites.js";
 import { ACCOUNTS_TO, exportFileName, reportSheets, buildHoursReport } from "../../app/features/hours-export.js";
@@ -287,4 +287,47 @@ test("owner pause keeps the data, and the master page shows pause, reactivate an
   const hw = masterDetailHtml(masterRow("heartwood", { ...base, name: "Heartwood Earthworx", plan: "paid" }, now), { ownCompanyId: "heartwood" });
   assert.match(hw, /cannot be paused or deleted/);
   assert.doesNotMatch(hw, /id="ownerpause"/);
+});
+
+test("signup stores a street, suburb, state and postcode and keeps one address string", () => {
+  const parts = { street: "208-220 Holdsworth Rd", suburb: "Chuwar", state: "qld", postcode: "4306" };
+  const checked = validateCompanyInput({
+    name: "Heartwood Earthworx", legalName: "Heartwood Earthworx Pty Ltd", abn: "31 667 738 098",
+    ...parts, phone: "", email: "alex@heartwoodew.com", accountsEmail: "accounts@heartwoodew.com",
+    hubdocAddress: "", logoUrl: "", signoff: "Heartwood Earthworx",
+  });
+  assert.equal(checked.ok, true);
+  assert.equal(checked.value.address, "208-220 Holdsworth Rd, Chuwar QLD 4306");
+  assert.deepEqual(checked.value.addressParts, { street: "208-220 Holdsworth Rd", suburb: "Chuwar", state: "QLD", postcode: "4306" });
+  assert.equal(formatCompanyAddress(checked.value.addressParts), checked.value.address);
+  assert.deepEqual(parseCompanyAddress(checked.value.address), checked.value.addressParts);
+  const created = buildCompanyCreate(checked.value, { companyId: "hw-new", ownerUid: "u", signedUpAt: 1, trialEndsAt: 2, lastActivityAt: 1 });
+  assert.equal(created.address, checked.value.address);
+  assert.equal(created.addressParts.postcode, "4306");
+  const base = { name: checked.value.name, legalName: checked.value.legalName, abn: checked.value.abn, signoff: checked.value.signoff, logoUrl: "", phone: "", email: checked.value.email, accountsEmail: checked.value.accountsEmail, hubdocAddress: "", street: "208-220 Holdsworth Rd", suburb: "Chuwar", state: "QLD", postcode: "4306" };
+  assert.equal(validateCompanyInput({ ...base, postcode: "43" }).reason, "postcode");
+  assert.equal(validateCompanyInput({ ...base, state: "Queensland" }).reason, "state");
+  assert.equal(validateCompanyInput({ ...base, postcode: "0800", suburb: "Darwin", state: "NT", street: "1 Smith St" }).value.address, "1 Smith St, Darwin NT 0800");
+  const legacy = validateCompanyInput({
+    name: "Acme", legalName: "Acme Pty Ltd", abn: "12 345 678 901", address: "1 Yard St",
+    phone: "", email: "office@acme.test", accountsEmail: "accounts@acme.test", hubdocAddress: "", logoUrl: "", signoff: "Acme",
+  });
+  assert.equal(legacy.ok, true);
+  assert.equal(legacy.value.address, "1 Yard St");
+  assert.equal(legacy.value.addressParts, undefined);
+  const kept = companyDetailPatch(
+    { name: "Acme", legalName: "Acme Pty Ltd", abn: "12 345 678 901", address: "1 Yard St", email: "office@acme.test", accountsEmail: "accounts@acme.test", signoff: "Acme", phone: "", hubdocAddress: "", logoUrl: "" },
+    { street: "1 Yard St", suburb: "", state: "", postcode: "", phone: "0400111222" },
+  );
+  assert.equal(kept.ok, true);
+  assert.deepEqual(kept.patch, { phone: "0400111222" });
+  assert.equal(kept.value.addressParts, undefined);
+  const settings = companySettingsHtml({ companyId: "heartwood", name: "Heartwood Earthworx", legalName: "Heartwood Earthworx Pty Ltd", abn: "31 667 738 098", signoff: "Heartwood Earthworx", address: "208-220 Holdsworth Rd, Chuwar QLD 4306", phone: "", email: "alex@heartwoodew.com", accountsEmail: "accounts@heartwoodew.com" }, { canEdit: true });
+  assert.match(settings, /value="208-220 Holdsworth Rd"/);
+  assert.match(settings, /value="Chuwar"/);
+  assert.match(settings, /value="QLD" selected/);
+  assert.match(settings, /value="4306"/);
+  const old = companySettingsHtml({ companyId: "acme", name: "Acme", legalName: "Acme", abn: "1", signoff: "Acme", address: "1 Yard St", email: "office@acme.test", accountsEmail: "accounts@acme.test" }, { canEdit: true });
+  assert.match(old, /value="1 Yard St"/);
+  assert.deepEqual(addressFieldsFromCompany({ address: "1 Yard St" }).suburb, "");
 });

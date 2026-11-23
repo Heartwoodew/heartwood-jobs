@@ -70,6 +70,87 @@ function clip(value, max) {
   return String(value ?? "").trim().slice(0, max);
 }
 
+export const AU_STATES = Object.freeze([
+  ["ACT", "Australian Capital Territory"],
+  ["NSW", "New South Wales"],
+  ["NT", "Northern Territory"],
+  ["QLD", "Queensland"],
+  ["SA", "South Australia"],
+  ["TAS", "Tasmania"],
+  ["VIC", "Victoria"],
+  ["WA", "Western Australia"],
+]);
+export const AU_STATE_CODES = Object.freeze(AU_STATES.map(([code]) => code));
+const POSTCODE_RE = /^\d{4}$/;
+const ADDRESS_PART_KEYS = ["street", "suburb", "state", "postcode"];
+
+function hasAddressPartKeys(input) {
+  return ADDRESS_PART_KEYS.some(key => Object.prototype.hasOwnProperty.call(input || {}, key));
+}
+
+/** "208-220 Holdsworth Rd, Chuwar QLD 4306" → parts. Anything else stays a single address. */
+export function parseCompanyAddress(address) {
+  const text = clip(address, 160);
+  const match = text.match(/^(.*?),\s*([^,]+?)\s+(ACT|NSW|NT|QLD|SA|TAS|VIC|WA)\s+(\d{4})$/i);
+  if (!match) return null;
+  const street = clip(match[1], 80);
+  const suburb = clip(match[2], 40);
+  const state = match[3].toUpperCase();
+  const postcode = match[4];
+  if (!street || !suburb || !AU_STATE_CODES.includes(state) || !POSTCODE_RE.test(postcode)) return null;
+  if (formatCompanyAddress({ street, suburb, state, postcode }) !== text) return null;
+  return { street, suburb, state, postcode };
+}
+
+export function formatCompanyAddress({ street, suburb, state, postcode } = {}) {
+  const line = [clip(suburb, 40), clip(state, 3).toUpperCase(), clip(postcode, 4)].filter(Boolean).join(" ");
+  return clip([clip(street, 80), line].filter(Boolean).join(", "), 160);
+}
+
+export function addressFieldsFromCompany(company = {}) {
+  const raw = company && company.addressParts;
+  if (raw && typeof raw === "object") {
+    return {
+      street: clip(raw.street, 80),
+      suburb: clip(raw.suburb, 40),
+      state: clip(raw.state, 3).toUpperCase(),
+      postcode: clip(raw.postcode, 4),
+    };
+  }
+  return parseCompanyAddress(company && company.address) || {
+    street: clip(company && company.address, 160),
+    suburb: "",
+    state: "",
+    postcode: "",
+  };
+}
+
+function resolveAddress(input = {}) {
+  const address = clip(input.address, 160);
+  if (!hasAddressPartKeys(input)) {
+    if (!address) return { ok: false, errors: ["address"] };
+    return { ok: true, address, errors: [] };
+  }
+  const streetRaw = clip(input.street, 160);
+  const suburb = clip(input.suburb, 40);
+  const state = clip(input.state, 3).toUpperCase();
+  const postcode = clip(input.postcode, 4);
+  const storedParts = input.addressParts && typeof input.addressParts === "object";
+  if (!suburb && !state && !postcode && streetRaw && streetRaw === address && !storedParts) {
+    return { ok: true, address, errors: [] };
+  }
+  const street = clip(input.street, 80);
+  const errors = [];
+  if (!street) errors.push("street");
+  if (!suburb) errors.push("suburb");
+  if (!AU_STATE_CODES.includes(state)) errors.push("state");
+  if (!POSTCODE_RE.test(postcode)) errors.push("postcode");
+  const combined = formatCompanyAddress({ street, suburb, state, postcode });
+  if (!errors.length && !combined) errors.push("address");
+  if (errors.length) return { ok: false, errors };
+  return { ok: true, address: combined, addressParts: { street, suburb, state, postcode }, errors: [] };
+}
+
 export function safeLogo(url, companyId) {
   return acceptLogoValue(url, companyId);
 }
@@ -79,26 +160,25 @@ export function validateCompanyInput(input = {}) {
   const legalName = clip(input.legalName || input.name, 120);
   const abn = clip(input.abn, 20);
   const signoff = clip(input.signoff || name, 80);
-  const address = clip(input.address, 160);
   const phone = clip(input.phone, 40);
   const email = clip(input.email, 120).toLowerCase();
   const accountsEmail = clip(input.accountsEmail, 120).toLowerCase();
   const hubdocAddress = clip(input.hubdocAddress, 120).toLowerCase();
   const logoUrl = safeLogo(input.logoUrl, input.companyId);
+  const addr = resolveAddress(input);
   if (!name) return { ok: false, reason: "name" };
   if (!legalName) return { ok: false, reason: "legalName" };
   if (!abn) return { ok: false, reason: "abn" };
   if (abn && !/^[0-9 ]{1,20}$/.test(abn)) return { ok: false, reason: "abn" };
-  if (!address) return { ok: false, reason: "address" };
+  if (!addr.ok) return { ok: false, reason: addr.errors[0] };
   if (phone && !/^[0-9+() ./-]{3,40}$/.test(phone)) return { ok: false, reason: "phone" };
   if (!EMAIL_RE.test(email)) return { ok: false, reason: "email" };
   if (!EMAIL_RE.test(accountsEmail)) return { ok: false, reason: "accountsEmail" };
   if (hubdocAddress && !HUBDOC_RE.test(hubdocAddress)) return { ok: false, reason: "hubdoc" };
   if (input.logoUrl && String(input.logoUrl).trim() && !logoUrl) return { ok: false, reason: "logo" };
-  return {
-    ok: true,
-    value: { name, legalName, abn, signoff, logoUrl, address, phone, email, accountsEmail, hubdocAddress },
-  };
+  const value = { name, legalName, abn, signoff, logoUrl, address: addr.address, phone, email, accountsEmail, hubdocAddress };
+  if (addr.addressParts) value.addressParts = addr.addressParts;
+  return { ok: true, value };
 }
 
 /** Every company-field problem, not only the first. ABN stays required: the company record needs one. */
@@ -106,17 +186,17 @@ export function companyFieldErrors(input = {}) {
   const name = clip(input.name, 80);
   const legalName = clip(input.legalName || "", 120);
   const abn = clip(input.abn, 20);
-  const address = clip(input.address, 160);
   const phone = clip(input.phone, 40);
   const email = clip(input.email, 120).toLowerCase();
   const accountsEmail = clip(input.accountsEmail || input.email, 120).toLowerCase();
   const hubdocAddress = clip(input.hubdocAddress, 120).toLowerCase();
   const logoUrl = safeLogo(input.logoUrl, input.companyId);
+  const addr = resolveAddress(input);
   const errors = [];
   if (!name) errors.push("name");
   if (!legalName) errors.push("legalName");
   if (!abn || !/^[0-9 ]{1,20}$/.test(abn)) errors.push("abn");
-  if (!address) errors.push("address");
+  if (!addr.ok) errors.push(...addr.errors);
   if (phone && !/^[0-9+() ./-]{3,40}$/.test(phone)) errors.push("phone");
   if (!EMAIL_RE.test(email)) errors.push("email");
   if (!EMAIL_RE.test(accountsEmail)) errors.push("accountsEmail");
@@ -513,6 +593,11 @@ export function companyDetailPatch(current, input) {
   const patch = {};
   for (const key of COMPANY_DETAIL_KEYS) {
     if (checked.value[key] !== (current && current[key])) patch[key] = checked.value[key];
+  }
+  if (checked.value.addressParts) {
+    const prev = (current && current.addressParts) || {};
+    const next = checked.value.addressParts;
+    if (ADDRESS_PART_KEYS.some(key => next[key] !== (prev[key] || ""))) patch.addressParts = next;
   }
   // Optional settings fields. Only written when given, so Heartwood's record is untouched unless an admin sets them.
   for (const key of COMPANY_EXTRA_KEYS) {

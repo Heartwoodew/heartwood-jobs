@@ -46,8 +46,9 @@ import {
   supervisorsPath, docCompanyId, isHeartwoodCompany, buildClientCreate,
 } from "./features/company.js";
 import { adminViewBannerHtml, bootCompanyView, clearedCompanySession, companyHistoryState, historyStepOnEnter, historyStepOnMasterReturn, IN_COMPANY_VIEW_KEY, masterHistoryState, RETURN_MASTER_KEY, takeReturnMasterFlag, urlMarksCompanyView, withCompanyViewParam, clientFormHtml, companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, pausedAdminHtml, pausedOwnerHtml, pausedStaffHtml, referralBoxHtml, signupFieldErrors, signupFormHtml, trialBannerHtml } from "./features/company-ui.js";
+import { pickDashboardBanner } from "./features/dashboard-banners.js";
 import {
-  addTitle, companyTradesDoc, defaultJobCategory, jobCategorySelectHtml, jobTypeMap, normalizeTrade, readTradeList, removeTitle, renameTitle, resolveCompanySetup,
+  addTitle, bindTradeSearch, companyTradesDoc, defaultJobCategory, jobCategorySelectHtml, jobTypeMap, normalizeTrade, readTradeList, removeTitle, renameTitle, resolveCompanySetup,
   sanitizeSkills, sanitizeTitles, sanitizeTradeList, setTitleLevel, skillsEditorHtml,
   titlesAfterTradeChange, titlesEditorHtml, tradeLabel, quotePack,
 } from "./features/trades.js";
@@ -208,7 +209,9 @@ let normalizeSupervisorEmail = () => "";
 let readDraftEdits = (root, draft) => draft;
 let INBOUND_DOMAIN = "inbound.callupapp.com.au";
 let startDesktopInstall = () => {};
-let SHELL_VERSION = "callup-shell-v145-repeat-fields";
+let refreshDesktopBanner = () => {};
+let desktopBannerWouldShow = () => false;
+let SHELL_VERSION = "callup-shell-v146-signup-polish";
 let prepareTicket = () => ({ ok: false, reason: "loading" });
 let ticketDialogHtml = () => "";
 let ticketFailureText = () => "The ticket could not be sent. Try again.";
@@ -266,7 +269,7 @@ function loadFeaturePack() {
     ({ ACCOUNTS_TO, XLSX_MIME, buildHoursReport, deliverHoursFile, exportFileName, newExportId, reportSheets, xlsxBytes } = hours);
     ({ claimCreateBody, claimDecisionBody, claimsScreenHtml, newClaimId, receiptContentType, receiptDownloadName, receiptObjectName, receiptStoragePath, RECEIPT_MAX_BYTES } = claims);
     ({ addressWithSuburb, bulkCandidates, canImportInbox, composeAddress, defaultImportMode, duplicateWarning, findExistingJob, isImported, parseInboxEmail } = inbox);
-    ({ startDesktopInstall } = desktop);
+    ({ startDesktopInstall, refreshDesktopBanner, desktopBannerWouldShow } = desktop);
     ({ forwardScreenHtml, jobFromDraft, inboundToken, collectSupervisorEmails, normalizeSupervisorEmail, readDraftEdits, INBOUND_DOMAIN } = inbound);
     ({ SHELL_VERSION, prepareTicket, ticketDialogHtml, ticketFailureText, newTicketId, compressTicketShot, screenshotUploadPlan, masterTicketsHtml, ticketPage } = supportTickets);
     featuresOn = true;
@@ -1105,6 +1108,22 @@ function trialBannerNow() {
   try { if (sessionStorage.getItem(key) === "1") return ""; } catch { /* private mode: the banner stays */ }
   return trialBannerHtml(access);
 }
+function currentBanner() {
+  const notes = PUSH && typeof PUSH.bannerHtml === "function" ? PUSH.bannerHtml() : "";
+  // Days left and "trial ends in" share the trial slot. A trial that has already
+  // ended replaces the dashboard with the paused screen, so it is not a second banner.
+  return pickDashboardBanner({
+    trial: !!trialBannerNow(),
+    notifications: !!notes,
+    windows: typeof desktopBannerWouldShow === "function" && desktopBannerWouldShow(),
+  });
+}
+function bannerSlotHtml() {
+  const choice = currentBanner();
+  if (choice === "trial") return trialBannerNow();
+  if (choice === "notifications") return PUSH.bannerHtml();
+  return "";
+}
 function bindTrialBanner(root) {
   const bar = root && root.querySelector && root.querySelector("#trialbanner");
   if (!bar) return;
@@ -1113,7 +1132,8 @@ function bindTrialBanner(root) {
     const access = ui.companyAccess || {};
     const key = access.remind ? `callup.trialRemind.${myCompanyId()}` : `callup.trialBanner.${myCompanyId()}`;
     try { sessionStorage.setItem(key, "1"); } catch { /* the banner is gone for this paint either way */ }
-    bar.remove();
+    if (me && me.role === "admin" && !ui.myJobs) renderAdmin();
+    else renderOperator();
   };
   const sub = root.querySelector("#trialsub");
   if (sub) sub.onclick = () => openBilling("createBillingCheckout", { preserveTrial: true });
@@ -1400,6 +1420,7 @@ function renderSignup(friendCode = "") {
     if (err) err.textContent = "That friend invite code is not valid.";
   }
   $("#signupback").onclick = () => renderLogin();
+  bindTradeSearch($("#signup"));
   const tradeOrder = [];
   $("#signup").querySelectorAll("input[name=trades]").forEach(el => {
     el.addEventListener("change", () => {
@@ -1425,7 +1446,8 @@ function renderSignup(friendCode = "") {
     if (f.accountsEmail && !f.accountsEmail.value.trim() && f.email.value.trim()) f.accountsEmail.value = f.email.value.trim();
     const problems = signupFieldErrors({
       ownerName: f.ownerName.value, ownerEmail: f.ownerEmail.value, password: f.password.value, trades,
-      name: f.name.value, legalName: f.legalName.value, abn: f.abn.value, address: f.address.value,
+      name: f.name.value, legalName: f.legalName.value, abn: f.abn.value,
+      street: f.street.value, suburb: f.suburb.value, state: f.state.value, postcode: f.postcode.value,
       phone: f.phone.value, email: f.email.value, accountsEmail: f.accountsEmail.value, hubdocAddress: f.hubdocAddress.value,
     });
     f.querySelectorAll("[data-err]").forEach(slot => { slot.hidden = true; slot.textContent = ""; });
@@ -1445,7 +1467,8 @@ function renderSignup(friendCode = "") {
       return;
     }
     const checked = validateCompanyInput({
-      name: f.name.value, legalName: f.legalName.value, abn: f.abn.value, address: f.address.value,
+      name: f.name.value, legalName: f.legalName.value, abn: f.abn.value,
+      street: f.street.value, suburb: f.suburb.value, state: f.state.value, postcode: f.postcode.value,
       phone: f.phone.value, email: f.email.value, accountsEmail: f.accountsEmail.value,
       hubdocAddress: f.hubdocAddress.value, logoUrl: "", signoff: f.name.value,
     });
@@ -1722,7 +1745,8 @@ function bindSettings(A) {
     }
     if (form.logoUrl) form.logoUrl.value = logoUrl;
     const checked = companyDetailPatch(org, {
-      name: form.name.value, legalName: form.legalName.value, abn: form.abn.value, address: form.address.value,
+      name: form.name.value, legalName: form.legalName.value, abn: form.abn.value,
+      street: form.street.value, suburb: form.suburb.value, state: form.state.value, postcode: form.postcode.value,
       phone: form.phone.value, email: form.email.value, accountsEmail: form.accountsEmail.value,
       hubdocAddress: form.hubdocAddress.value, signoff: form.signoff.value, logoUrl,
       ...(form.jobPrefix ? { jobPrefix: form.jobPrefix.value } : {}), ...(form.accountsName ? { accountsName: form.accountsName.value } : {}),
@@ -2092,7 +2116,7 @@ function shell(inner) {
       <div class="sm-gi">${ks.map(item).join("")}</div></div>`; };
   return `${companyViewBanner()}<div class="sm-layout ${ui.navOpen ? "navopen" : ""}"><div class="sm-burgerbar"><button class="sm-burger" id="burger" aria-label="Menu">☰</button><b>${esc(cur ? (NAV_LBL[cur[0]] || cur[2]) : "")}</b></div>
     <nav class="sm-side">${NAV_TOP.map(item).join("")}${NAV_GROUPS.map(grp).join("")}${NAV_FOOT.map(item).join("")}<button type="button" class="sm-nav" data-raise-ticket title="Raise ticket"><span class="ic">?</span><span class="lbl">Raise ticket</span></button></nav>
-    <section class="sm-main">${trialBannerNow()}${PUSH.bannerHtml()}${inner}</section></div>`;
+    <section class="sm-main">${bannerSlotHtml()}${inner}</section></div>`;
 }
 // ---- Mixed work: a job whose description lines are different task types (spoil vs backslab vs waterproofing vs clean)
 const TASK_RX = [["waterproof", /water ?proof/i], ["spoil", /spoil|soil removal/i], ["backslab", /back ?slab|back ?blade|slab clean|level site/i], ["clean", /\b(site |final )?clean\b/i]];
@@ -5299,6 +5323,7 @@ function renderAdmin() {
   if (ui.view === "compliance" || ui.view === "prestart") COMP.bind(A);
   if (ui.view === "settings") bindSettings(A);
   PUSH.mount(A);
+  refreshDesktopBanner();
   if (ui.view === "master") bindMaster(A);
   if (!ui.holdSideWork && (ui.view === "crew" || (ui.view === "home" && homeCrewSlot(me) === "crew"))) openCrewScreen();
   A.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { ui.navOpen = false;
@@ -7043,6 +7068,7 @@ function opCard(j) {
 }
 function bindOp(mine) {
   PUSH.mount($("#app"));
+  refreshDesktopBanner();
   bindMasterReturn($("#app"));
   if ($("#toadmin")) $("#toadmin").onclick = () => { ui.myJobs = false; ui.opSel = null; renderAdmin(); };
   // A tab tap is a deliberate move: force the redraw, or an open Prestart/Compliance form keeps the screen (stuck until reload).
@@ -7277,7 +7303,7 @@ function renderOperator() {
     const todayJobs = withRunOrder(open.filter(j => j.date === t0 || (j.date < t0 && j.status === "In progress")));
     const todaySheet = readRunSheet(me.uid, t0);
     const n = todayJobs.length;
-    $("#app").innerHTML = `<div class="mob">${adminBack()}${PUSH.bannerHtml()}
+    $("#app").innerHTML = `<div class="mob">${adminBack()}${bannerSlotHtml()}
       <div class="mob-intro"><div class="mob-kicker">Today · ${esc(orgSettings().name)}</div><div class="mob-date">${esc(longDate(t0))}</div>
         <h1 class="mob-hello">${esc(greet())}, ${first}</h1><p class="mob-count">${n} job${n === 1 ? "" : "s"} today</p>${todaySheet ? `<p class="run-note">Approved driving order${todaySheet.returnToDepot ? " · back to the depot" : ""}</p>` : ""}${opSeg("today")}</div>
       ${COMP.staffBannerHtml()}
@@ -8726,6 +8752,6 @@ function mountFeatureApps() {
   setRouteDepot(depot, { heartwood: myCompanyId() === "heartwood" });
   setDefaultDepot(depot, { heartwood: myCompanyId() === "heartwood" });
   if (ui.tradeSetup) setQuoteTradeSetup(ui.tradeSetup);
-  startDesktopInstall();
+  startDesktopInstall(document, window, () => currentBanner() === "windows");
 }
 window.HW_QUOTES = QG;

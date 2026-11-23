@@ -37,6 +37,10 @@ test("a company can save the new industries and its own checklist", async () => 
   await assertFails(setDoc(doc(db("bAdm"), "companyTrades/bravo"), bad));
   const all = { ...companyTradesDoc("bravo", TRADES.map(row => row.id), "bAdm"), updatedAt: serverTimestamp() };
   await assertSucceeds(setDoc(doc(db("bAdm"), "companyTrades/bravo"), all));
+  const legacy = { ...companyTradesDoc("bravo", ["earthworks"], "bAdm"), updatedAt: serverTimestamp(), trade: "traffic-civil", trades: ["traffic-civil"], extraTrades: [] };
+  await assertSucceeds(setDoc(doc(db("bAdm"), "companyTrades/bravo"), legacy));
+  const civil = { ...companyTradesDoc("bravo", ["civil-earthworks"], "bAdm"), updatedAt: serverTimestamp() };
+  await assertSucceeds(setDoc(doc(db("bAdm"), "companyTrades/bravo"), civil));
 });
 
 test("office can store a repeating job without putting the price on it, and crew cannot read the money", async () => {

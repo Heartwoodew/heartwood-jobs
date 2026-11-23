@@ -5,9 +5,9 @@ import { addPresetRow, jobStepsHtml, jobStepsScopeLabel, mergeIndustryPresets, p
 import { RECURRENCE_HINTS } from "../app/features/packs/service-trades.js";
 import { calcMeasured } from "../app/features/packs/money.js";
 
-const NEW_IDS = ["cleaning", "property-maintenance", "pest-control", "skip-bins", "pools", "solar-aircon", "traffic-civil"];
+const NEW_IDS = ["cleaning", "property-maintenance", "pest-control", "skip-bins", "pools", "solar-aircon", "traffic-control", "civil-earthworks"];
 
-test("earthworks stays the default and the seven industries are selectable", () => {
+test("earthworks stays the default and the industries are selectable", () => {
   assert.equal(DEFAULT_TRADE, "earthworks");
   const ids = TRADES.map(row => row.id);
   assert.equal(ids[0], "earthworks");
@@ -19,7 +19,9 @@ test("earthworks stays the default and the seven industries are selectable", () 
   assert.match(html, /Skip bins and rubbish/);
   assert.match(html, /Pools and irrigation/);
   assert.match(html, /Solar and air conditioning/);
-  assert.match(html, /Traffic control and civil/);
+  assert.match(html, /Traffic control/);
+  assert.match(html, /Civil and earthworks/);
+  assert.doesNotMatch(html, /Traffic control and civil/);
   assert.match(html, /value="earthworks" checked/);
 });
 
@@ -135,7 +137,7 @@ test("a checklist shows only when the company includes pest control", () => {
   const mixed = resolveCompanySetup({ trades: ["earthworks", "pest-control"] }, null);
   assert.equal(pestControlOn(mixed), true);
   assert.match(jobStepsHtml({ type: "clean" }, mixed), /Checklist/);
-  for (const id of ["cleaning", "property-maintenance", "skip-bins", "pools", "solar-aircon", "traffic-civil", "plumbing", "electrical"]) {
+  for (const id of ["cleaning", "property-maintenance", "skip-bins", "pools", "solar-aircon", "traffic-control", "civil-earthworks", "plumbing", "electrical"]) {
     const setup = resolveCompanySetup({ trades: [id] }, null);
     assert.equal(pestControlOn(setup), false, id);
     const type = setup.photoSteps[0] && setup.photoSteps[0].jobTypes && setup.photoSteps[0].jobTypes[0];

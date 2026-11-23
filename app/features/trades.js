@@ -12,7 +12,7 @@ import { TILING } from "./packs/tiling.js";
 import { PLUMBING } from "./packs/plumbing.js";
 import { ELECTRICAL } from "./packs/electrical.js";
 import { CONCRETE_CUTTING } from "./packs/concrete-cutting.js";
-import { SERVICE_PACKS, SERVICE_TRADES } from "./packs/service-trades.js";
+import { SERVICE_PACKS, SERVICE_TRADES, TRAFFIC_CIVIL } from "./packs/service-trades.js";
 import { mergeIndustryPresets } from "./industry-presets.js";
 export { measureQty } from "./packs/money.js";
 
@@ -33,6 +33,15 @@ export const TRADES = Object.freeze([
 ]);
 
 export const TRADE_IDS = Object.freeze(TRADES.map(t => t.id));
+
+// Stored id from before Civil was its own trade. Reading it keeps both packs.
+// Nothing here rewrites a company document.
+export const LEGACY_TRADE_MAP = Object.freeze({
+  "traffic-civil": Object.freeze(["traffic-control", "civil-earthworks"]),
+});
+const LEGACY_TRADE_LABELS = Object.freeze({
+  "traffic-civil": "Traffic control and civil",
+});
 
 export const PERMISSION_LEVELS = Object.freeze(["labourer", "operator", "supervisor", "manager", "admin"]);
 const LEVEL_RANK = Object.freeze({ labourer: 0, operator: 1, supervisor: 2, manager: 3, admin: 4 });
@@ -123,12 +132,29 @@ export function tradeById(id) {
 }
 
 export function tradeLabel(id) {
-  return (tradeById(id) || {}).label || "";
+  const row = tradeById(id);
+  if (row) return row.label;
+  return LEGACY_TRADE_LABELS[String(id || "").trim().toLowerCase()] || "";
 }
 
 export function normalizeTrade(id) {
   const s = String(id || "").trim().toLowerCase();
   return TRADE_IDS.includes(s) ? s : "";
+}
+
+export function expandTradeId(id) {
+  const s = String(id || "").trim().toLowerCase();
+  if (LEGACY_TRADE_MAP[s]) return [...LEGACY_TRADE_MAP[s]];
+  const trade = normalizeTrade(s);
+  return trade ? [trade] : [];
+}
+
+/** Signup and settings search. "civil" matches Civil and earthworks. */
+export function filterTrades(query, list = TRADES) {
+  const q = String(query || "").trim().toLowerCase();
+  const rows = Array.isArray(list) ? list : TRADES;
+  if (!q) return rows.slice();
+  return rows.filter(row => `${row.label} ${row.id}`.toLowerCase().includes(q));
 }
 
 /** Admin -> admin; a manager title (including operations or project manager) -> manager; supervisor, leading hand or leading tiler -> supervisor; apprentices, labourers and trades assistants -> labourer; operators, drivers and licensed trades -> operator. */
@@ -149,9 +175,11 @@ function slug(name) {
 export function sanitizeTradeList(list) {
   const out = [];
   for (const id of Array.isArray(list) ? list : []) {
-    const trade = normalizeTrade(id);
-    if (!trade || out.includes(trade)) continue;
-    out.push(trade);
+    for (const trade of expandTradeId(id)) {
+      if (!trade || out.includes(trade)) continue;
+      out.push(trade);
+      if (out.length >= TRADE_IDS.length) break;
+    }
     if (out.length >= TRADE_IDS.length) break;
   }
   return out;
@@ -221,7 +249,7 @@ export function sanitizeTitles(list) {
     if (!row || typeof row !== "object") continue;
     const name = cleanName(row.name);
     const level = PERMISSION_LEVELS.includes(row.level) ? row.level : "";
-    const trade = normalizeTrade(row.trade) || DEFAULT_TRADE;
+    const trade = expandTradeId(row.trade)[0] || DEFAULT_TRADE;
     if (!name || !level) continue;
     const levelNote = typeof row.levelNote === "string" && row.levelNote.trim() && row.levelNote.length <= 200 && !/[\n\r\t<>]/.test(row.levelNote)
       ? row.levelNote.trim() : "";
@@ -310,33 +338,44 @@ export const QUOTE_PACKS = Object.freeze({
   electrical: measurePack(ELECTRICAL, OTHER_TYPES.electrical),
   "concrete-cutting": measurePack(CONCRETE_CUTTING, OTHER_TYPES["concrete-cutting"]),
   ...Object.fromEntries(SERVICE_TRADES.map(row => [row.id, measurePack(SERVICE_PACKS[row.id], OTHER_TYPES[row.id])])),
+  "traffic-civil": measurePack(TRAFFIC_CIVIL, [["tc-traffic", "Traffic control"], ["tc-civil", "Civil works"], ["tc-other", "Other"]]),
 });
 
 export function quotePack(id) {
-  return QUOTE_PACKS[normalizeTrade(id)] || null;
+  const key = String(id || "").trim().toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(QUOTE_PACKS, key)) return QUOTE_PACKS[key];
+  const trade = normalizeTrade(key);
+  return trade ? QUOTE_PACKS[trade] || null : null;
 }
 
 export function sanitizeExtraTrades(list, main) {
-  const primary = normalizeTrade(main) || DEFAULT_TRADE;
+  const primaryIds = expandTradeId(main);
+  const primary = primaryIds[0] || DEFAULT_TRADE;
   const out = [];
   for (const id of Array.isArray(list) ? list : []) {
-    const trade = normalizeTrade(id);
-    if (!trade || trade === primary || out.includes(trade)) continue;
-    out.push(trade);
+    for (const trade of expandTradeId(id)) {
+      if (!trade || primaryIds.includes(trade) || trade === primary || out.includes(trade)) continue;
+      out.push(trade);
+      if (out.length >= TRADE_IDS.length - 1) break;
+    }
     if (out.length >= TRADE_IDS.length - 1) break;
   }
   return out;
 }
 
-/** List of trades. `trades` wins, then the old single `trade`, then earthworks. Does not write. */
+/** List of trades. `trades` wins, then the old single `trade`, then earthworks. A stored traffic-civil id reads as Traffic control and Civil and earthworks. Does not write. */
 export function readTradeList(company, stored) {
   const listed = sanitizeTradeList(company && company.trades);
   if (listed.length) return listed;
   const storedList = sanitizeTradeList(stored && stored.trades);
   if (storedList.length) return storedList;
-  const primary = normalizeTrade(company && company.trade) || normalizeTrade(stored && stored.trade);
-  const extras = sanitizeExtraTrades((stored && stored.extraTrades) || (company && company.extraTrades), primary || DEFAULT_TRADE);
-  if (primary) return [primary, ...extras];
+  const primaryList = sanitizeTradeList([(company && company.trade) || (stored && stored.trade)].filter(Boolean));
+  const extras = sanitizeExtraTrades((stored && stored.extraTrades) || (company && company.extraTrades), primaryList[0] || DEFAULT_TRADE);
+  if (primaryList.length) {
+    const out = [...primaryList];
+    for (const id of extras) if (!out.includes(id)) out.push(id);
+    return out;
+  }
   return [DEFAULT_TRADE];
 }
 
@@ -507,8 +546,23 @@ export function signupTradesHtml(selected = [DEFAULT_TRADE]) {
   const on = new Set(selected == null ? [DEFAULT_TRADE] : sanitizeTradeList(selected));
   return `<fieldset class="tradepick"><legend>Trades</legend>
     <p class="sub">Choose every trade or industry this company does. At least one. Earthworks and site cleans stay the default pack. The first ticked trade is the one quotes open on. You can change this later without losing jobs or anything you have edited.</p>
-    ${TRADES.map(t => `<label class="ck"><input type="checkbox" name="trades" value="${esc(t.id)}"${on.has(t.id) ? " checked" : ""}> ${esc(t.label)}${quotePack(t.id) && quotePack(t.id).ready ? "" : " <span class=\"sub\">quote pack coming soon</span>"}</label>`).join("")}
+    <label class="trade-search">Search trades<input type="search" data-trade-search placeholder="Search, for example civil" autocomplete="off"></label>
+    ${TRADES.map(t => `<label class="ck" data-trade-choice="${esc(`${t.id} ${t.label}`)}"><input type="checkbox" name="trades" value="${esc(t.id)}"${on.has(t.id) ? " checked" : ""}> ${esc(t.label)}${quotePack(t.id) && quotePack(t.id).ready ? "" : " <span class=\"sub\">quote pack coming soon</span>"}</label>`).join("")}
   </fieldset>`;
+}
+
+export function bindTradeSearch(root) {
+  const input = root && root.querySelector && root.querySelector("[data-trade-search]");
+  if (!input || !input.addEventListener || !root.querySelectorAll) return;
+  const apply = () => {
+    const q = String(input.value || "").trim().toLowerCase();
+    root.querySelectorAll("[data-trade-choice]").forEach(el => {
+      const hay = String(el.getAttribute("data-trade-choice") || "").toLowerCase();
+      el.hidden = !!(q && !hay.includes(q));
+    });
+  };
+  input.addEventListener("input", apply);
+  input.addEventListener("keydown", ev => { if (ev.key === "Enter") ev.preventDefault(); });
 }
 
 export function tradeSelectHtml(selected = DEFAULT_TRADE) {

@@ -215,6 +215,7 @@ function bindRoot(root) {
       const key = dismissKey();
       try { if (key) localStorage.setItem(key, "1"); } catch { /* private mode */ }
       paint();
+      if (deps && deps.rerender) deps.rerender();
     });
   });
   root.querySelectorAll("[data-mute-chat]").forEach(box => {

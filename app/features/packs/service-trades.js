@@ -69,6 +69,18 @@ export const TRAFFIC_CIVIL = measured("traffic-civil", "Traffic control and civi
   shared({ id: "tc-swms-line", label: "SWMS and prestart", lineType: "compliance", measure: "each", unit: "each", defaultRate: 0 }),
 ]);
 
+export const TRAFFIC_CONTROL = measured("traffic-control", "Traffic control", [
+  shared({ id: "tc-traffic-line", label: "Traffic controller", lineType: "labour", measure: "hours", unit: "h", defaultRate: 72, qtyLabel: "Hours" }),
+  shared({ id: "tc-crew-line", label: "Crew allocation", lineType: "labour", measure: "hours", unit: "h", defaultRate: 68, qtyLabel: "Crew hours" }),
+  shared({ id: "tc-swms-line", label: "SWMS and prestart", lineType: "compliance", measure: "each", unit: "each", defaultRate: 0 }),
+]);
+
+export const CIVIL_EARTHWORKS = measured("civil-earthworks", "Civil and earthworks", [
+  shared({ id: "ce-civil-line", label: "Civil works", lineType: "hire", measure: "hours", unit: "h", defaultRate: 160, qtyLabel: "Hours" }),
+  shared({ id: "ce-plant-line", label: "Plant and operator", lineType: "hire", measure: "hours", unit: "h", defaultRate: 150, qtyLabel: "Hours" }),
+  shared({ id: "ce-swms-line", label: "SWMS and prestart", lineType: "compliance", measure: "each", unit: "each", defaultRate: 0 }),
+]);
+
 export const SERVICE_PACKS = Object.freeze({
   cleaning: CLEANING,
   "property-maintenance": PROPERTY_MAINTENANCE,
@@ -76,6 +88,8 @@ export const SERVICE_PACKS = Object.freeze({
   "skip-bins": SKIP_BINS,
   pools: POOLS,
   "solar-aircon": SOLAR_AIRCON,
+  "traffic-control": TRAFFIC_CONTROL,
+  "civil-earthworks": CIVIL_EARTHWORKS,
   "traffic-civil": TRAFFIC_CIVIL,
 });
 
@@ -124,11 +138,18 @@ export const SERVICE_TRADES = Object.freeze([
     jobTypes: [["sa-solar", "Solar install"], ["sa-ac", "Air conditioning"], ["sa-service", "Service call"], ["sa-other", "Other"]],
   },
   {
-    id: "traffic-civil",
-    label: "Traffic control and civil",
-    customers: "Civil contractors",
+    id: "traffic-control",
+    label: "Traffic control",
+    customers: "Civil contractors and councils",
     titles: ["Admin", "Operations manager", "Supervisor", "Traffic controller", "Leading hand", "Labourer"],
-    jobTypes: [["tc-traffic", "Traffic control"], ["tc-civil", "Civil works"], ["tc-other", "Other"]],
+    jobTypes: [["tc-traffic", "Traffic control"], ["tc-other", "Other"]],
+  },
+  {
+    id: "civil-earthworks",
+    label: "Civil and earthworks",
+    customers: "Civil contractors",
+    titles: ["Admin", "Operations manager", "Supervisor", "Leading hand", "Plant operator", "Labourer"],
+    jobTypes: [["tc-civil", "Civil works"], ["ce-earth", "Bulk earthworks"], ["ce-other", "Other"]],
   },
 ]);
 
@@ -214,6 +235,29 @@ export const INDUSTRY_PRESETS = Object.freeze({
       step("sa-before", "Before photo", ["sa-solar", "sa-ac", "sa-service", "sa-other"]),
       step("sa-board", "Switchboard photo", ["sa-solar", "sa-ac"]),
       step("sa-after", "After photo", ["sa-solar", "sa-ac", "sa-service", "sa-other"]),
+    ],
+  },
+  "traffic-control": {
+    checklists: [
+      check("tc-prestart", "Plant prestart done before the shift", ["tc-traffic", "tc-other"]),
+      check("tc-swms", "SWMS signed for this job", ["tc-traffic", "tc-other"]),
+      check("tc-crew", "Crew allocated on the job", ["tc-traffic", "tc-other"]),
+    ],
+    photoSteps: [
+      step("tc-setup", "Site setup photo", ["tc-traffic", "tc-other"]),
+      step("tc-signs", "Signs and devices photo", ["tc-traffic"]),
+      step("tc-pack", "Pack-down photo", ["tc-traffic", "tc-other"]),
+    ],
+  },
+  "civil-earthworks": {
+    checklists: [
+      check("ce-prestart", "Plant prestart done before the shift", ["tc-civil", "ce-earth", "ce-other"]),
+      check("ce-swms", "SWMS signed for this job", ["tc-civil", "ce-earth", "ce-other"]),
+      check("ce-services", "Services and existing surfaces noted", ["tc-civil", "ce-earth", "ce-other"]),
+    ],
+    photoSteps: [
+      step("ce-setup", "Site setup photo", ["tc-civil", "ce-earth", "ce-other"]),
+      step("ce-pack", "Pack-down photo", ["tc-civil", "ce-earth", "ce-other"]),
     ],
   },
   "traffic-civil": {

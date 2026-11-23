@@ -147,6 +147,48 @@ test("self-signup with several trades: the app's exact owner profile (jobTitle, 
   }
 });
 
+test("signup can store split address parts, and a company with only an address string can still be edited", async () => {
+  const owner = env.authenticatedContext("civilowner", { email: "owner@civil.test" }).firestore();
+  const checked = validateCompanyInput({
+    name: "Civil Co", legalName: "Civil Co Pty Ltd", abn: "12 345 678 901",
+    street: "12 Creek Rd", suburb: "Chuwar", state: "QLD", postcode: "4306",
+    phone: "", email: "office@civil.test", accountsEmail: "accounts@civil.test", hubdocAddress: "", logoUrl: "", signoff: "Civil Co",
+  });
+  assert.equal(checked.ok, true);
+  assert.equal(checked.value.address, "12 Creek Rd, Chuwar QLD 4306");
+  const companyId = "civil-co-zz01";
+  const trades = ["civil-earthworks"];
+  await assertSucceeds(setDoc(doc(owner, "companies", companyId), {
+    ...buildCompanyCreate(checked.value, {
+      companyId, ownerUid: "civilowner", signedUpAt: serverTimestamp(),
+      trialEndsAt: Timestamp.fromDate(trialEnd(new Date())), lastActivityAt: serverTimestamp(),
+    }),
+    trades, trade: trades[0],
+  }));
+  const profile = { ...ownerProfile(checked.value, companyId, "Cee"), email: "owner@civil.test", jobTitle: "Admin", jobTitleId: "civil-earthworks:admin" };
+  await assertSucceeds(setDoc(doc(owner, "users", "civilowner"), profile));
+  await assertSucceeds(updateDoc(doc(owner, "companies", companyId), {
+    address: "14 Creek Rd, Chuwar QLD 4306",
+    addressParts: { street: "14 Creek Rd", suburb: "Chuwar", state: "QLD", postcode: "4306" },
+  }));
+  await assertFails(updateDoc(doc(owner, "companies", companyId), {
+    addressParts: { street: "14 Creek Rd", suburb: "Chuwar", state: "QLD", postcode: "43" },
+  }));
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), "companies/legacyco"), {
+      name: "Legacy Co", legalName: "Legacy Co Pty Ltd", abn: "12 345 678 901", signoff: "Legacy",
+      logoUrl: "", address: "1 Yard St", phone: "", email: "office@legacy.test", accountsEmail: "accounts@legacy.test",
+      hubdocAddress: "", ownerUid: "legacyadm", createdBy: "legacyadm", status: "active", plan: "trial", origin: "signup",
+      isTest: false, staffCount: 1, jobCount: 0,
+      billing: { provider: null, status: "not-configured", stripeCustomerId: null, stripeSubscriptionId: null },
+    });
+    await setDoc(doc(ctx.firestore(), "users/legacyadm"), { role: "admin", name: "Lee", companyId: "legacyco", tenantId: "legacyco" });
+  });
+  const legacy = env.authenticatedContext("legacyadm").firestore();
+  await assertSucceeds(updateDoc(doc(legacy, "companies/legacyco"), { phone: "0400111222" }));
+  await assertSucceeds(updateDoc(doc(legacy, "companies/legacyco"), { address: "1 Yard Street" }));
+});
+
 test("a second company's admin can create a staff invite (the app adds companyId)", async () => {
   const bravo = db(BRAVO);
   const draft = buildInviteDraft({ name: "Bob New", email: "bob.new@bravo.test", role: "operator", createdBy: BRAVO, now: new Date(), token: newInviteToken(), tenantId: "bravo" });

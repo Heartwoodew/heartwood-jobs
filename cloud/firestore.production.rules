@@ -15,10 +15,10 @@ service cloud.firestore {
     // One trade catalogue. Company create and companyTrades both call these
     // instead of repeating the list. Keep new industries in this list only.
     function tradeIdOk(id) {
-      return id is string && id in ["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical", "concrete-cutting", "cleaning", "property-maintenance", "pest-control", "skip-bins", "pools", "solar-aircon", "traffic-civil"];
+      return id is string && id in ["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical", "concrete-cutting", "cleaning", "property-maintenance", "pest-control", "skip-bins", "pools", "solar-aircon", "traffic-control", "civil-earthworks", "traffic-civil"];
     }
     function tradeSetOk(list, min, max) {
-      return list is list && list.size() >= min && list.size() <= max && list.hasOnly(["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical", "concrete-cutting", "cleaning", "property-maintenance", "pest-control", "skip-bins", "pools", "solar-aircon", "traffic-civil"]);
+      return list is list && list.size() >= min && list.size() <= max && list.hasOnly(["earthworks", "landscaping", "concreting", "fencing", "carpentry", "tiling", "plumbing", "electrical", "concrete-cutting", "cleaning", "property-maintenance", "pest-control", "skip-bins", "pools", "solar-aircon", "traffic-control", "civil-earthworks", "traffic-civil"]);
     }
     // Heartwood admins: the fixed list (Alex, the box sync user, Patrick) OR an accepted Heartwood admin invite.
     // heartwoodAdmins/{uid} is written by acceptStaffInvite (Admin SDK) or a Heartwood admin, never by the person.
@@ -113,6 +113,16 @@ service cloud.firestore {
       function companyIdOk(id) {
         return id is string && id.size() >= 2 && id.size() <= 40 && id.matches('^[a-z0-9][a-z0-9-]{0,39}$');
       }
+      // Length only. A state list or postcode regex here pushes company edits over the 1000-expression cap.
+      // The app checks the eight state codes and a 4-digit postcode before it writes.
+      function addressPartsOk(data) {
+        return !("addressParts" in data) || (
+          data.addressParts.size() == 4
+          && data.addressParts.street.size() > 0 && data.addressParts.street.size() <= 80
+          && data.addressParts.suburb.size() > 0 && data.addressParts.suburb.size() <= 40
+          && data.addressParts.state.size() == 3
+          && data.addressParts.postcode.size() == 4);
+      }
       function companyDetailText(data) {
         return data.name is string && data.name.size() > 0 && data.name.size() <= 80
           && data.legalName is string && data.legalName.size() > 0 && data.legalName.size() <= 120
@@ -124,7 +134,8 @@ service cloud.firestore {
           && data.email is string && data.email.size() >= 6 && data.email.size() <= 120
           && data.accountsEmail is string && data.accountsEmail.size() >= 6 && data.accountsEmail.size() <= 120
           && data.hubdocAddress is string && data.hubdocAddress.size() <= 120
-          && (data.hubdocAddress == "" || data.hubdocAddress.matches('^[a-z0-9._+-]+@app[.]hubdoc[.]com$'));
+          && (data.hubdocAddress == "" || data.hubdocAddress.matches('^[a-z0-9._+-]+@app[.]hubdoc[.]com$'))
+          && addressPartsOk(data);
       }
       function companyBillingLocked(data) {
         return data.billing is map
@@ -142,7 +153,7 @@ service cloud.firestore {
         return !("trade" in data) || oneTradeId(data.trade);
       }
       function tradesListOk(list) {
-        return tradeSetOk(list, 1, 16);
+        return tradeSetOk(list, 1, 18);
       }
       function companyTradesEdit(companyId) {
         return signedIn()
@@ -166,7 +177,7 @@ service cloud.firestore {
           && !hasProfile()
           && companyIdOk(companyId)
           && companyId != "heartwood"
-          && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing", "trade", "trades"])
+          && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "addressParts", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing", "trade", "trades"])
           && companyDetailText(d) && tradeFieldOk(d) && (!("trades" in d) || tradesListOk(d.trades))
           && d.ownerUid == request.auth.uid
           && d.createdBy == request.auth.uid
@@ -190,7 +201,7 @@ service cloud.firestore {
         return signedIn()
           && companyId == callerCompany()
           && (isAlex() || isPatrick() || (hasProfile() && profile().role == "admin"))
-          && diff.hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "jobPrefix", "accountsName"])
+          && diff.hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "addressParts", "phone", "email", "accountsEmail", "hubdocAddress", "jobPrefix", "accountsName"])
           && companyDetailText(next)
           && (!("jobPrefix" in next) || (next.jobPrefix is string && (next.jobPrefix == "" || next.jobPrefix.matches('^[A-Z0-9]{1,5}$'))))
           && (!("accountsName" in next) || (next.accountsName is string && next.accountsName.size() <= 80))
@@ -210,7 +221,7 @@ service cloud.firestore {
         return platformOwner()
           && companyIdOk(companyId)
           && companyId != "heartwood"
-          && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "demoData", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing", "trade", "trades"])
+          && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "addressParts", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "demoData", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing", "trade", "trades"])
           && companyDetailText(d) && tradeFieldOk(d) && (!("trades" in d) || tradesListOk(d.trades))
           && d.isTest == true
           && d.plan == "trial"
@@ -234,7 +245,7 @@ service cloud.firestore {
           && !hasProfile()
           && companyIdOk(companyId)
           && companyId != "heartwood"
-          && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "demoData", "friendInvite", "friendEndsAt", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing", "trade", "trades"])
+          && d.keys().hasOnly(["name", "legalName", "abn", "signoff", "logoUrl", "address", "addressParts", "phone", "email", "accountsEmail", "hubdocAddress", "ownerUid", "createdBy", "status", "plan", "origin", "isTest", "demoData", "friendInvite", "friendEndsAt", "signedUpAt", "trialEndsAt", "staffCount", "jobCount", "lastActivityAt", "billing", "trade", "trades"])
           && companyDetailText(d) && tradeFieldOk(d) && (!("trades" in d) || tradesListOk(d.trades))
           && d.plan == "friend"
           && d.isTest == false
@@ -632,7 +643,7 @@ service cloud.firestore {
         return d.keys().hasOnly(["name", "email", "role", "companyId", "tenantId", "jobTitle", "jobTitleId"])
           && d.role == "admin"
           && d.get("jobTitle", "Admin") == "Admin"
-          && d.get("jobTitleId", "earthworks:admin").matches('^(earthworks|landscaping|concreting|fencing|carpentry|tiling|plumbing|electrical|concrete-cutting):admin$')
+          && d.get("jobTitleId", "earthworks:admin").matches('^(earthworks|landscaping|concreting|fencing|carpentry|tiling|plumbing|electrical|concrete-cutting|cleaning|property-maintenance|pest-control|skip-bins|pools|solar-aircon|traffic-control|civil-earthworks):admin$')
           && companyIdOk(d.companyId)
           && d.companyId != "heartwood"
           && d.tenantId == d.companyId
@@ -962,14 +973,14 @@ service cloud.firestore {
         return !("trade" in data) || oneTradeId(data.trade);
       }
       function tradesListOk(list) {
-        return tradeSetOk(list, 1, 16);
+        return tradeSetOk(list, 1, 18);
       }
       function tradeDocOk(companyId) {
         let d = request.resource.data;
         return d.keys().hasOnly(["companyId", "trade", "trades", "extraTrades", "titles", "checklists", "photoSteps", "updatedBy", "updatedAt"])
           && d.companyId == companyId
           && ("trade" in d) && tradeFieldOk(d) && (!("trades" in d) || tradesListOk(d.trades))
-          && tradeSetOk(d.extraTrades, 0, 15)
+          && tradeSetOk(d.extraTrades, 0, 17)
           && d.titles is list && d.titles.size() <= 80
           && (!("checklists" in d) || (d.checklists is list && d.checklists.size() <= 60))
           && (!("photoSteps" in d) || (d.photoSteps is list && d.photoSteps.size() <= 60))
