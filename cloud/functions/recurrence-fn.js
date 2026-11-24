@@ -19,7 +19,7 @@ function brisbaneToday(now = Date.now()) {
 }
 
 export async function applySeriesPlan(db, template, today) {
-  if (!template || !template.seriesId || !template.recurrence || template.seriesRole === "occurrence") return { created: 0, updated: 0 };
+  if (!template || !template.seriesId || !template.recurrence || template.seriesEnded || template.seriesRole === "occurrence") return { created: 0, updated: 0 };
   const snap = await db.collection("jobs").where("seriesId", "==", template.seriesId).limit(120).get();
   const existing = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
   const plan = planSeries({ template, existing, today });
@@ -50,7 +50,7 @@ export const recurrenceOnSave = onDocumentWritten(
   async (event) => {
     if (process.env.NODE_TEST_CONTEXT) return;
     const after = event.data && event.data.after && event.data.after.exists ? event.data.after.data() : null;
-    if (!after || after.seriesRole === "occurrence" || !after.recurrence || !after.seriesId) return;
+    if (!after || after.seriesRole === "occurrence" || !after.recurrence || !after.seriesId || after.seriesEnded) return;
     ensureAdmin();
     await applySeriesPlan(getFirestore(), { id: event.params.jobId, ...after }, brisbaneToday());
   },

@@ -19,10 +19,16 @@ test.before(async () => {
     await setDoc(doc(db, "users/bOp"), { role: "operator", name: "Bo", companyId: "bravo", tenantId: "bravo" });
     await setDoc(doc(db, "users/bIdle"), { role: "operator", name: "Idle", companyId: "bravo", tenantId: "bravo" });
     await setDoc(doc(db, "users/bSup"), { role: "supervisor", name: "Sue", companyId: "bravo", tenantId: "bravo" });
+    await setDoc(doc(db, "users/bMgr"), { role: "manager", name: "Mo", companyId: "bravo", tenantId: "bravo" });
     await setDoc(doc(db, "companies/bravo"), { name: "Bravo", status: "active", plan: "paid", isTest: true });
     await setDoc(doc(db, "jobs/pool1"), {
       companyId: "bravo", tenantId: "bravo", client: "Strata", address: "1 Pool St", status: "Scheduled",
       assigned: ["bOp"], seriesId: "spool", seriesRole: "template",
+      recurrence: { freq: "weekly", interval: 1, unit: "", endDate: "", count: null, anchor: "2026-11-23" },
+    });
+    await setDoc(doc(db, "jobs/pool-future"), {
+      companyId: "bravo", tenantId: "bravo", client: "Strata", address: "1 Pool St", status: "Scheduled",
+      date: "2026-12-07", assigned: ["bOp"], seriesId: "spool", seriesRole: "occurrence",
     });
     await setDoc(doc(db, "jobMoney/pool1"), { jobId: "pool1", companyId: "bravo", quoteAmount: 120, poAmount: 120 });
   });
@@ -53,6 +59,21 @@ test("office can store a repeating job without putting the price on it, and crew
   await assertSucceeds(getDoc(doc(db("bOp"), "jobs/pool1")));
   await assertFails(getDoc(doc(db("bOp"), "jobMoney/pool1")));
   await assertFails(updateDoc(doc(db("bOp"), "jobs/pool1"), { recurrence: { freq: "weekly" }, updatedAt: serverTimestamp(), updatedBy: "bOp" }));
+});
+
+test("only an admin can stop a series", async () => {
+  const ended = { seriesEnded: true, seriesEndedOn: "2026-11-24", recurrence: null, seriesRole: "template", updatedAt: serverTimestamp(), updatedBy: "bSup" };
+  await assertFails(updateDoc(doc(db("bSup"), "jobs/pool1"), ended));
+  await assertFails(updateDoc(doc(db("bMgr"), "jobs/pool1"), { ...ended, updatedBy: "bMgr" }));
+  await assertFails(updateDoc(doc(db("bOp"), "jobs/pool1"), { seriesEnded: true, updatedAt: serverTimestamp(), updatedBy: "bOp" }));
+  await assertSucceeds(updateDoc(doc(db("bSup"), "jobs/pool1"), { description: "Office note", updatedAt: serverTimestamp(), updatedBy: "bSup" }));
+  await assertSucceeds(updateDoc(doc(db("bAdm"), "jobs/pool1"), { ...ended, updatedBy: "bAdm" }));
+  await assertSucceeds(updateDoc(doc(db("bAdm"), "jobs/pool-future"), {
+    status: "Cancelled", skipped: true, seriesException: true, updatedAt: serverTimestamp(), updatedBy: "bAdm",
+  }));
+  await assertFails(updateDoc(doc(db("bMgr"), "jobs/pool-future"), {
+    status: "Scheduled", skipped: false, seriesException: false, seriesEnded: false, updatedAt: serverTimestamp(), updatedBy: "bMgr",
+  }));
 });
 
 test("a certificate is a job document: office and the assigned crew can read it, another crew cannot", async () => {

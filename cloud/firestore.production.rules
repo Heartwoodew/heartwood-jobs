@@ -758,10 +758,18 @@ service cloud.firestore {
       allow list: if heartwoodOfficeRead() && resource.data.companyId == "heartwood";
       allow list: if companyStaff() && resource.data.companyId == callerCompany() && request.auth.uid in resource.data.assigned;
       allow create: if companyOffice() && request.resource.data.companyId == callerCompany() && jobMoneyFreeCreate();
+      // Stop series and any change to the repeat rule are admin only. Managers,
+      // supervisors and crew can still edit the job itself.
+      function seriesChangeAdminOnly() {
+        let changed = request.resource.data.diff(resource.data).affectedKeys();
+        return !changed.hasAny(["seriesEnded", "seriesEndedOn", "recurrence", "seriesRole", "seriesId"])
+          || profile().get("role", "") == "admin";
+      }
       allow update: if companyOffice()
         && resource.data.get("companyId", "") == callerCompany()
         && request.resource.data.get("companyId", "") == callerCompany()
-        && jobMoneyFreeUpdate();
+        && jobMoneyFreeUpdate()
+        && seriesChangeAdminOnly();
       allow create: if (isSync() && syncJobCreateOk()) || (isAdmin() && docCompany(request.resource.data) == "heartwood" && jobMoneyFreeCreate());
       allow delete: if isSync() || (isAdmin() && docCompany(resource.data) == "heartwood");
       // Master page: Alex adds demo jobs to a test company only.

@@ -4,7 +4,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/fireba
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, signOut, connectAuthEmulator, setPersistence, browserLocalPersistence }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator,
-  collection, doc, getDoc, getDocFromCache, getDocs, getDocsFromCache, query, where, orderBy, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, deleteField, serverTimestamp, arrayUnion, runTransaction, Timestamp,
+  collection, doc, getDoc, getDocFromCache, getDocs, getDocsFromCache, query, where, limit, orderBy, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, deleteField, serverTimestamp, arrayUnion, runTransaction, Timestamp,
   disableNetwork, enableNetwork }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { getStorage, ref as storageRef, uploadBytes, uploadBytesResumable, deleteObject, connectStorageEmulator, listAll, getMetadata, getBlob }
@@ -55,7 +55,7 @@ import {
   titlesAfterTradeChange, titlesEditorHtml, tradeLabel, quotePack,
 } from "./features/trades.js";
 import { addPresetRow, jobStepsHtml, jobStepsScopeLabel, mergeIndustryPresets, pestControlOn, presetEditorHtml, readPresetEditor, recurrenceHint, removePresetRow } from "./features/industry-presets.js";
-import { newSeriesId, planSeries, recurrenceFromForm, repeatFieldHtml, skipPatch, wireRepeatBox } from "./features/recurrence.js";
+import { cancelVisitPatch, newSeriesId, planSeries, planStopSeries, recurrenceFromForm, repeatFieldHtml, seriesEndedPatch, shouldStopSeries, skipPatch, stopSeriesConfirmText, stopSeriesResultText, wireRepeatBox } from "./features/recurrence.js";
 import { buildCertificate, bytesToBase64, certificatePanelHtml, certificatesEnabled } from "./features/certificates.js";
 import { acceptLogoValue, compressLogo, isLogoStoragePath, logoFailureText, logoFileOk, logoUploadPlan } from "./features/company-logo.js";
 import {
@@ -214,7 +214,7 @@ let INBOUND_DOMAIN = "inbound.callupapp.com.au";
 let startDesktopInstall = () => {};
 let refreshDesktopBanner = () => {};
 let desktopBannerWouldShow = () => false;
-let SHELL_VERSION = "callup-shell-v155-clock-on-reminder";
+let SHELL_VERSION = "callup-shell-v156-stop-series";
 let prepareTicket = () => ({ ok: false, reason: "loading" });
 let ticketDialogHtml = () => "";
 let ticketFailureText = () => "The ticket could not be sent. Try again.";
@@ -359,6 +359,10 @@ function paintSync() {
     document.querySelectorAll("#emailjob").forEach(btn => {
       btn.disabled = off;
       btn.title = off ? needsSignal("email-job", false).message : "";
+    });
+    document.querySelectorAll("[data-stop-series]").forEach(btn => {
+      btn.disabled = off;
+      btn.title = off ? needsSignal("stop-series", false).message : "Stop this series and remove future visits that have not been touched";
     });
     document.querySelectorAll("#billsub, #billportal, #trialsub").forEach(btn => {
       btn.disabled = off;
@@ -2231,7 +2235,7 @@ function jobHasType(j, type) {
   if (j && j.type === type) return true;
   return !!(j && Array.isArray(j.types) && j.types.includes(type));
 }
-const ipPill = (j, cls = "") => j.status === "In progress" ? `<span class="qpill ip ${cls}">In progress</span>` : "";
+const ipPill = (j, cls = "") => j.status === "In progress" ? `<span class="qpill ip ${cls}">In progress</span>${j.skipped ? `<span class="qpill">Skipped</span>` : ""}` : "";
 const ipTop = (j, cls = "") => j.status === "In progress" ? `<div class="ptop">${ipPill(j, cls)}</div>` : "";
 const mixedBadge = j => isMixed(j) ? ` <span class="qpill mixed" title="${esc(mixedKinds(j).map(k => TYPES[k] || k).join(" + "))} on one job - split it">Mixed work</span>` : "";
 function jobRow(j) {
@@ -6044,19 +6048,167 @@ function repeatWrite(job, form) {
   const parsed = recurrenceFromForm(form, job);
   if (!parsed.ok) return { error: "Check how often this job repeats." };
   if (parsed.skip) return { patch: skipPatch() };
+  if (shouldStopSeries(job, parsed)) return { stop: true };
   if (job && job.seriesRole === "occurrence" && parsed.scope !== "series") return { patch: { seriesException: true } };
   if (!parsed.recurrence) {
-    if (job && job.recurrence) return { patch: { recurrence: null, seriesRole: null } };
+    if (job && job.recurrence) return { patch: { recurrence: null, seriesRole: job.seriesEnded ? "template" : null } };
     return { patch: {} };
   }
   const seriesId = (job && job.seriesId) || newSeriesId();
   if (job && job.seriesRole === "occurrence") {
     return { patch: { recurrence: parsed.recurrence, seriesException: false }, templateId: job.templateId || "", series: parsed.recurrence };
   }
-  return { patch: { recurrence: parsed.recurrence, seriesId, seriesRole: "template", seriesException: false, skipped: false } };
+  return { patch: { recurrence: parsed.recurrence, seriesId, seriesRole: "template", seriesException: false, skipped: false, seriesEnded: false } };
+}
+function seriesTemplateLocal(job) {
+  if (!job || !job.seriesId) return null;
+  if (job.seriesRole !== "occurrence") return job;
+  const rows = typeof loadedJobs === "function" ? loadedJobs() : (jobs || []);
+  return rows.find(row => row && (row.id === job.templateId || (row.seriesId === job.seriesId && row.seriesRole !== "occurrence" && row.id !== job.id))) || null;
+}
+async function resolveSeriesTemplate(job) {
+  const local = seriesTemplateLocal(job);
+  if (local && local.seriesRole !== "occurrence") return local;
+  const id = job && (job.seriesRole === "occurrence" ? job.templateId : job.id);
+  if (!id) return local;
+  const snap = await getDoc(doc(db, "jobs", id)).catch(() => null);
+  if (snap && snapExists(snap)) return withMoney({ id: snap.id, ...snap.data() });
+  return local;
+}
+async function loadSeriesRows(template) {
+  const seriesId = template && template.seriesId;
+  const memory = (typeof loadedJobs === "function" ? loadedJobs() : (jobs || [])).filter(row => row && row.seriesId === seriesId);
+  const snap = await getDocs(companyJobs([where("status", "in", ["Scheduled", "In progress", "Done"])]));
+  const remote = snap.docs.map(d => withMoney({ id: d.id, ...d.data() }));
+  const byId = new Map();
+  for (const row of [...memory, ...remote]) {
+    if (row && row.seriesId === seriesId && row.id !== template.id) byId.set(row.id, row);
+  }
+  return [...byId.values()];
+}
+async function seriesActivity(rows, today) {
+  const future = rows.filter(row => row && row.date > today);
+  const documentJobIds = new Set();
+  const uncertainJobIds = new Set();
+  await Promise.all(future.map(async row => {
+    try {
+      const snap = await getDocs(query(collection(db, "jobs", row.id, "documents"), limit(1)));
+      if (!snap.empty) documentJobIds.add(row.id);
+    } catch {
+      uncertainJobIds.add(row.id);
+    }
+  }));
+  const weeks = [...new Set(future.map(row => weekStartOf(row.date)).filter(Boolean))];
+  const timesheets = [];
+  for (const ws of weeks) {
+    try {
+      const snap = await getDocs(query(collection(db, "timesheets"), where("companyId", "==", myCompanyId()), where("weekStart", "==", ws)));
+      timesheets.push(...snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch {
+      for (const row of future) if (weekStartOf(row.date) === ws) uncertainJobIds.add(row.id);
+    }
+    if (myCompanyId() !== "heartwood") continue;
+    const have = new Set(timesheets.map(sheet => sheet.id));
+    const uids = HOME_UIDS.length ? HOME_UIDS : (staff || []).map(person => person.uid).filter(Boolean);
+    const missing = uids.filter(uid => !have.has(`${uid}_${ws}`));
+    const extra = await Promise.all(missing.map(uid => getDoc(doc(db, "timesheets", `${uid}_${ws}`)).catch(() => null)));
+    for (const snap of extra) {
+      if (snap && snapExists(snap)) timesheets.push({ id: snap.id, ...snap.data() });
+    }
+  }
+  return { documentJobIds, uncertainJobIds, timesheets };
+}
+let seriesStopBusy = false;
+async function stopSeriesFromJob(job, opts = {}) {
+  if (seriesStopBusy) return false;
+  seriesStopBusy = true;
+  try {
+  if (!me || me.role !== "admin") {
+    toast("Only an admin can stop a series.");
+    return false;
+  }
+  if (!deviceOnline()) {
+    toast(needsSignal("stop-series", false).message);
+    return false;
+  }
+  let template;
+  try {
+    template = await resolveSeriesTemplate(job);
+  } catch {
+    template = null;
+  }
+  if (!template || !template.seriesId || template.seriesRole === "occurrence") {
+    toast("Couldn't find the first job in this series.");
+    return false;
+  }
+  let rows;
+  let extras;
+  try {
+    rows = await loadSeriesRows(template);
+    extras = await seriesActivity(rows, todayStr());
+  } catch {
+    toast("Couldn't check every visit in this series. Nothing was removed.");
+    return false;
+  }
+  const plan = planStopSeries({ template, existing: rows, today: todayStr(), extras });
+  if (template.seriesEnded && !plan.remove.length) {
+    toast("This series is already stopped.");
+    return false;
+  }
+  if (!confirm(stopSeriesConfirmText(plan))) return false;
+  const stamp = { updatedAt: serverTimestamp(), updatedBy: me.uid };
+  const writes = [
+    updateDoc(doc(db, "jobs", template.id), { ...seriesEndedPatch(todayStr()), ...stamp }),
+    ...plan.remove.map(row => updateDoc(doc(db, "jobs", row.id), { ...cancelVisitPatch(), ...stamp })),
+  ];
+  try {
+    const saved = await queueWrite(Promise.all(writes), { id: "stop-series:" + template.id, kind: "job", label: "Stop series" }, "", { announce: false });
+    const resultText = stopSeriesResultText(plan);
+    template.seriesEnded = true;
+    template.recurrence = null;
+    template.seriesRole = "template";
+    template.seriesEndedOn = todayStr();
+    if (job && job.id === template.id) {
+      job.seriesEnded = true;
+      job.recurrence = null;
+      job.seriesRole = "template";
+      job.seriesEndedOn = todayStr();
+    }
+    for (const row of plan.remove) {
+      const hit = (jobs || []).find(item => item.id === row.id);
+      if (hit) Object.assign(hit, cancelVisitPatch());
+    }
+    if (opts.close) {
+      const dialog = $("#dlg");
+      if (dialog && dialog.close) dialog.close();
+    }
+    toast(saved && saved.queued ? SAVED_ON_PHONE + " " + resultText : resultText);
+    return true;
+  } catch (e) {
+    toast("Series not stopped: " + ((e && (e.code || e.message)) || "failed"));
+    return false;
+  }
+  } finally {
+    seriesStopBusy = false;
+  }
+}
+async function onRepeatUntick(job, form, input) {
+  if (!shouldStopSeries(job, { recurrence: null, skip: false }) || (form && form.dataset.seriesStopped === "1")) return;
+  const ok = await stopSeriesFromJob(job, { close: false });
+  if (!ok) {
+    if (input) input.checked = true;
+    if (form) for (const el of form.querySelectorAll(".repeat-more")) el.hidden = false;
+    return;
+  }
+  if (form) {
+    form.dataset.seriesStopped = "1";
+    const btn = form.querySelector("[data-stop-series]");
+    if (btn) btn.remove();
+    for (const el of form.querySelectorAll(".repeat-more")) el.hidden = true;
+  }
 }
 async function materialiseSeries(template) {
-  if (!template || template.seriesRole !== "template" || !template.seriesId || !template.recurrence) return;
+  if (!template || template.seriesRole !== "template" || !template.seriesId || !template.recurrence || template.seriesEnded) return;
   const pool = typeof loadedJobs === "function" ? loadedJobs() : (jobs || []);
   const existing = (pool || []).filter(row => row && row.seriesId === template.seriesId);
   const plan = planSeries({ template, existing, today: todayStr() });
@@ -6198,7 +6350,7 @@ function editJob(j) {
         <label>Start<input type="time" name="time" value="${esc(j.time)}"></label>
         <label>Hours<input type="number" step="any" min="0" max="999" inputmode="decimal" name="durationHrs" value="${esc(j.durationHrs)}"></label></div>
       <p class="sub">Change the start time to pin it. Leave it and the board spaces this job. Hours on the job do not change timesheets.</p>
-      ${repeatFieldHtml(j, { admin: !!(me && me.role === "admin"), suggestion: (recurrenceHint(j.type) || {}).label || "" })}
+      ${repeatFieldHtml(j, { admin: !!(me && me.role === "admin"), suggestion: (recurrenceHint(j.type) || {}).label || "", seriesEnded: !!(seriesTemplateLocal(j) && seriesTemplateLocal(j).seriesEnded) })}
       ${jobStepsHtml(j, ui.tradeSetup)}
       ${!n && certificatesEnabled(certificateTrades()) && me && ["admin", "supervisor", "manager"].includes(me.role) ? certificatePanelHtml(j, { trades: certificateTrades(), skills: staffSkills(j), canEmail: me.role === "admin" }) : ""}
       ${!n && j.date && !["Done", "Cancelled"].includes(j.status) ? `<div class="row"><button type="button" id="unschbtn" class="btn">✕ Remove from dispatch board</button><span class="sub">Back to Unscheduled${usesSm8Sync() ? "; the booking is removed at the next sync" : ""} (the job stays).</span></div>` : ""}
@@ -6234,7 +6386,10 @@ function editJob(j) {
     splitJob(j, pick).catch(e => toast("Not split: " + (e.code || e.message))); };
   if (!n && $("#splitundo")) $("#splitundo").onclick = () => undoSplit(j).catch(e => toast("Undo failed: " + (e.code || e.message)));
   const f = $("#jf");
-  wireRepeatBox(f);
+  wireRepeatBox(f, {
+    onUntick: input => { onRepeatUntick(j, f, input); },
+    onStop: () => { stopSeriesFromJob(j, { close: true }); },
+  });
   if (f.time) f.time.addEventListener("input", () => { f.time.dataset.touched = "1"; });
   f.description.oninput = () => {
     if (!(n && !importing)) return;
@@ -6282,7 +6437,19 @@ function editJob(j) {
     if (data.status === "Done" && j.status !== "Done") Object.assign(data, { completedAt: serverTimestamp(), completedBy: me.uid });
     const repeat = repeatWrite(j, f);
     if (repeat.error) { $("#ferr").textContent = repeat.error; return; }
-    Object.assign(data, repeat.patch || {});
+    if (repeat.stop) {
+      if (seriesStopBusy) return;
+      const stopped = await stopSeriesFromJob(j, { close: false });
+      if (!stopped) {
+        if (f.repeatOn) {
+          f.repeatOn.checked = true;
+          for (const el of f.querySelectorAll(".repeat-more")) el.hidden = false;
+        }
+        return;
+      }
+      if (f) f.dataset.seriesStopped = "1";
+      Object.assign(data, seriesEndedPatch(todayStr()));
+    } else Object.assign(data, repeat.patch || {});
     if (!confirmIfOnLeave(data.date, data.assignedNames)) return;
     if (!guard.start()) return;
     const saveBtn = f.querySelector("button[value=save]");
