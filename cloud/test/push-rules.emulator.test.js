@@ -58,12 +58,18 @@ test("push tokens are private to their owner and cannot carry extra fields", asy
 test("mute prefs are the caller's own booleans", async () => {
   await assertSucceeds(setDoc(doc(db("bOp"), "users/bOp/chatSettings/prefs"), { muteChat: false, muteDaily: true }));
   await assertSucceeds(updateDoc(doc(db("bOp"), "users/bOp/chatSettings/prefs"), { muteDaily: false }));
+  await assertSucceeds(setDoc(doc(db("bOp"), "users/bOp/chatSettings/prefs"), { muteChat: false, muteDaily: true, muteClockOnReminder: true }));
   await assertFails(updateDoc(doc(db("bOp"), "users/bOp/chatSettings/prefs"), { muteDaily: "yes" }));
   await assertFails(setDoc(doc(db("bOp"), "users/bOp/chatSettings/prefs"), { muteChat: true, muteDaily: true, role: "admin" }));
   await assertFails(setDoc(doc(db("bOp"), "users/bOp/chatSettings/other"), { muteChat: true, muteDaily: true }));
   await assertFails(setDoc(doc(db("bAdm"), "users/bOp/chatSettings/prefs"), { muteChat: true, muteDaily: true }));
-  await assertFails(getDoc(doc(db("bAdm"), "users/bOp/chatSettings/prefs")));
+  await assertSucceeds(getDoc(doc(db("bAdm"), "users/bOp/chatSettings/prefs")));
+  await assertSucceeds(updateDoc(doc(db("bAdm"), "users/bOp/chatSettings/prefs"), { muteClockOnReminder: false }));
+  await assertFails(updateDoc(doc(db("bAdm"), "users/bOp/chatSettings/prefs"), { muteChat: true }));
+  await assertFails(getDoc(doc(db("cOp"), "users/bOp/chatSettings/prefs")));
   await assertFails(deleteDoc(doc(db("bOp"), "users/bOp/chatSettings/prefs")));
+  await assertFails(getDoc(doc(db("bAdm"), "clockOnReminders/bravo_2026-11-12_bOp")));
+  await assertFails(setDoc(doc(db("bAdm"), "clockOnReminders/bravo_2026-11-12_bOp"), { companyId: "bravo" }));
 });
 
 test("a prestart notice is only that operator's own company, and clients cannot write it", async () => {

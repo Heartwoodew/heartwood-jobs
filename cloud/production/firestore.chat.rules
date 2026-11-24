@@ -184,9 +184,10 @@
         && request.resource.data.updatedAt == request.time;
     }
     function chatPrefsOk() {
-      return request.resource.data.keys().hasOnly(["muteChat", "muteDaily"])
+      return request.resource.data.keys().hasOnly(["muteChat", "muteDaily", "muteClockOnReminder"])
         && request.resource.data.muteChat is bool
-        && request.resource.data.muteDaily is bool;
+        && request.resource.data.muteDaily is bool
+        && (!("muteClockOnReminder" in request.resource.data) || request.resource.data.muteClockOnReminder is bool);
     }
     match /users/{uid}/fcmTokens/{tokenId} {
       allow read: if chatSignedIn() && request.auth.uid == uid;
@@ -197,11 +198,36 @@
       allow delete: if chatSignedIn() && request.auth.uid == uid;
     }
     match /users/{uid}/chatSettings/{docId} {
-      allow read: if chatSignedIn() && request.auth.uid == uid && docId == "prefs";
+      function chatClockTargetPath() { return /databases/$(database)/documents/users/$(uid); }
+      function chatClockTargetCompany() {
+        let there = exists(chatClockTargetPath());
+        let data = there ? get(chatClockTargetPath()).data : {};
+        return !there ? ""
+          : ("companyId" in data && data.companyId is string && data.companyId.size() > 0) ? data.companyId
+          : (("tenantId" in data && data.tenantId is string && data.tenantId.size() > 0) ? data.tenantId : "heartwood");
+      }
+      // Admin of that company only. Cannot change muteChat or muteDaily.
+      function chatClockAdmin() {
+        let target = chatClockTargetCompany();
+        let caller = chatTokenCompany();
+        let adminRole = chatHasProfile() && chatProfile().get("role", "") == "admin";
+        return chatSignedIn() && request.auth.uid != uid && target != "" && (
+          (target == "heartwood" && (chatIsAlex() || chatIsPatrick() || (adminRole && caller == "heartwood")))
+          || (target != "heartwood" && adminRole && caller == target)
+        );
+      }
+      allow get: if docId == "prefs" && chatSignedIn() && (request.auth.uid == uid || chatClockAdmin());
+      allow list: if false;
       allow create, update: if chatSignedIn()
         && request.auth.uid == uid
         && docId == "prefs"
         && chatPrefsOk();
+      allow create: if docId == "prefs" && chatClockAdmin()
+        && request.resource.data.keys().hasOnly(["muteClockOnReminder"])
+        && request.resource.data.muteClockOnReminder is bool;
+      allow update: if docId == "prefs" && chatClockAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["muteClockOnReminder"])
+        && request.resource.data.muteClockOnReminder is bool;
       allow delete: if false;
     }
 // END CHAT RULES

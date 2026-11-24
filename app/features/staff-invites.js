@@ -8,6 +8,8 @@ export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const INVITE_ROLES = Object.freeze(["labourer", "operator", "supervisor", "manager", "admin"]);
 // Crew roles: same app access (assigned jobs, own timesheet/leave/receipts, prestarts and fleet meter); no dollar amounts.
 export const CREW_ROLES = Object.freeze(["labourer", "operator"]);
+// Clock On reminder defaults on for these roles. Admins are office and are not reminded.
+export const CLOCK_ON_ROLES = Object.freeze(["labourer", "operator", "supervisor", "manager"]);
 // Dollar amounts: supervisor, manager and admin. Crew still see the amount on their own receipts and claims.
 export const MONEY_ROLES = Object.freeze(["supervisor", "manager", "admin"]);
 // Company quote rates: manager and admin. Supervisors use the rates and do not save them.
@@ -126,6 +128,16 @@ export function canSendPasswordReset(person) {
   if (!person || person.role !== "admin") return false;
   const profileRole = (person.cloudProfile && person.cloudProfile.role) || person.staffRole || "";
   return profileRole !== "manager" && profileRole !== "supervisor";
+}
+
+export function receivesClockOnReminder(role) {
+  return CLOCK_ON_ROLES.includes(role);
+}
+
+// Same people as the password-reset button: the admin shell, not a manager or supervisor.
+// Patrick's profile role is operator and the app still treats him as a Heartwood admin.
+export function canToggleClockOnReminder(person) {
+  return canSendPasswordReset(person);
 }
 
 // Staff roster: admins and supervisors. A manager does not get the button.
@@ -506,7 +518,7 @@ export function inviteEmailLine(status) {
   return "The invite email didn't go through. Copy the link and send it to them yourself (text or email).";
 }
 
-export function staffViewHtml(invites, { now = new Date(), error = "", origin = HEARTWOOD_APP_ORIGIN, emailStatus = null, roles = SUPERVISOR_INVITE_ROLES, titles = null, logins = null, companyId = "", loginsNote = "", resetPasswords = false, viewerUid = "", remindGps = false, locations = null } = {}) {
+export function staffViewHtml(invites, { now = new Date(), error = "", origin = HEARTWOOD_APP_ORIGIN, emailStatus = null, roles = SUPERVISOR_INVITE_ROLES, titles = null, logins = null, companyId = "", loginsNote = "", resetPasswords = false, viewerUid = "", remindGps = false, locations = null, clockOnAdmin = false, clockMutes = null } = {}) {
   const offer = INVITE_ROLES.filter(r => (roles || []).includes(r));
   const titleRows = (Array.isArray(titles) ? titles : []).filter(t => t && offer.includes(t.level) && t.name && t.id);
   const rows = mergeStaffRoster(logins || [], invites || [], { now, companyId });
@@ -518,6 +530,8 @@ export function staffViewHtml(invites, { now = new Date(), error = "", origin = 
       ? rosterShareState(locations[row.uid])
       : null;
     const remind = remindGps === true && !!gps && !gps.sharing;
+    const clock = clockOnAdmin === true && row.status === "active" && row.uid && receivesClockOnReminder(row.role);
+    const clockOn = clock && !(clockMutes && clockMutes[row.uid] === true);
     const tags = (row.tags || []).map(tag => `<span class="skill-tag">${esc(tag)}</span>`).join("");
     const mail = emailStatus && row.status === "pending"
       ? `<div class="sub invite-mail" data-invite-mail="${esc((emailStatus[row.inviteId] && emailStatus[row.inviteId].delivery) || "checking")}">${esc(inviteEmailLine(emailStatus[row.inviteId] || null))}</div>`
@@ -528,6 +542,7 @@ export function staffViewHtml(invites, { now = new Date(), error = "", origin = 
         <div class="sub">${esc(rosterDetail(row))}</div>
         <div class="sub staff-status">${esc(rosterStatusText(row))}</div>
         ${tags ? `<div class="skill-tags">${tags}</div>` : ""}
+        ${clock ? `<label class="ck"><input type="checkbox" data-clock-on="${esc(row.uid)}"${clockOn ? " checked" : ""}> Clock On reminder</label>` : ""}
         ${mail}
         ${link ? `<p class="invite-link">${esc(link)}</p>` : ""}
       </div>
