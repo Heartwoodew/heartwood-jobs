@@ -130,6 +130,8 @@ export function sendPasswordResetEmail() {
   return Promise.resolve();
 }
 export function signInWithEmailAndPassword() { return Promise.resolve({ user: { uid: uidFor(role()) } }); }
+export function setPersistence() { return Promise.resolve(); }
+export const browserLocalPersistence = "local";
 export class Timestamp {
   constructor(seconds, nanoseconds = 0) {
     this.seconds = seconds;
@@ -199,6 +201,10 @@ export function getDoc(ref) {
   if (ref && ref._col === "meta" && ref._id === "quoteRates") {
     return Promise.resolve({ exists: () => true, data: () => ratesDoc() });
   }
+  // The preview operator has already done a Take 5, so Start job can record the status.
+  if (ref && ref._col === "take5s") {
+    return Promise.resolve({ id: ref._id, exists: () => true, data: () => null });
+  }
   if (ref && ref._col === "runSheets") {
     const sheet = typeof window !== "undefined" ? window.HW_RUNSHEET : null;
     if (sheet && sheet.id === ref._id) {
@@ -214,6 +220,9 @@ export function getDocFromCache(ref) {
   record("getDocFromCache", { col: ref && ref._col, id: ref && ref._id });
   return getDoc(ref);
 }
+export function getDocsFromCache(ref) { return getDocs(ref); }
+export function disableNetwork() { return Promise.resolve(); }
+export function enableNetwork() { return Promise.resolve(); }
 export function getDocs(ref) {
   const col = ref && ref._col;
   record("getDocs", { col });
@@ -309,7 +318,8 @@ export function onSnapshot(ref, onNext) {
           window.__inboxListeners.push(onNext);
         }
         onNext(snap((typeof window !== "undefined" && window.HW_INBOX) || []));
-      } else onNext(snap([]));
+      } else if (id && !ref._q) onNext({ id, exists: () => false, data: () => undefined });
+      else onNext(snap([]));
     } catch (e) {
       if (typeof window !== "undefined") {
         window.__errs = window.__errs || [];

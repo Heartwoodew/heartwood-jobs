@@ -479,6 +479,14 @@ Functions in australia-southeast1 that send with `fcmMessage`: `chatMessagePush`
 
 No rules deploy, no index deploy, no Storage change, no Stripe change, no backfill.
 
+## Crew map job pins (not deployed)
+
+Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production.
+
+After review, deploy hosting only. Service worker `callup-shell-v152-crew-map-jobs`. The crew map plots today's job pins even when nobody is clocked on. An office or admin sign-in geocodes an address that has no pin and saves only `job.geo`.
+
+No functions deploy, no rules deploy, no index deploy, no Storage change, no Stripe change, no backfill.
+
 ## Admin password reset (15 Nov 2026)
 
 Do not deploy from this branch. When it is deployed: hosting (service worker `callup-shell-v108-password-reset`) and the function `adminSendPasswordReset` in australia-southeast1. It uses the same `RESEND_API_KEY` and `INVITE_EMAIL_ENABLED` gate as `inviteEmailWorker`. The reset link is emailed to the staff member and is not returned to the browser. Firestore `passwordResetRate/{uid}` is Admin SDK only (client read and write denied). Rebased onto main's `callup-shell-v106-multi-category-quotes`; this branch stays `callup-shell-v108-password-reset`.

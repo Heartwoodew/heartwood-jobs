@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   CREW_UNSHARED, LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, MAP_LIBRARY, MAP_OFFLINE, MAP_TILES, SHARE_FIX_WAIT_MS, SHARE_MIN_METRES, SHARE_MIN_MS,
-  canSeeCrewMap, companySharesLocation, crewListHtml, crewMapModel, crewMapNotice, haversineMetres, homeCrewSlot, jobPoint,
+  canSeeCrewMap, companySharesLocation, crewListHtml, crewMapModel, crewMapNotice, crewPinNote, haversineMetres, homeCrewSlot, jobPoint,
   lastSeenLabel, liveCollectionPath, liveLocationBody, mapFailureStatus, shareIndicator, shouldSendPosition,
 } from "../../app/features/live-location.js";
 
@@ -83,6 +83,10 @@ test("the map shows clocked-on crew and today's job pins, with no prices", () =>
   assert.equal(sam.jobs[0].lat, -27.48);
   assert.equal(sam.jobs[0].invoiceAmount, undefined);
   assert.equal(sam.jobs[0].poAmount, undefined);
+  assert.deepEqual(model.jobs.map(j => j.id), ["j1"]);
+  assert.equal(model.jobs[0].lat, -27.48);
+  assert.equal(model.jobs[0].invoiceAmount, undefined);
+  assert.equal(model.unpinned, 1);
   assert.equal(model.people.find(p => p.uid === "lab1").jobs[0].lat, null);
   assert.equal(jobPoint({ address: "10 Creek Rd, Brisbane", geo: { lat: 1, lng: 2, query: "somewhere else" } }), null);
   const html = crewListHtml(model, s => String(s));
@@ -97,6 +101,7 @@ test("the map shows clocked-on crew and today's job pins, with no prices", () =>
   assert.match(html, /Orbit/);
   assert.match(html, /no pin/);
   assert.doesNotMatch(html, /8800|1200|500|invoice|\$/);
+  assert.doesNotMatch(JSON.stringify(model), /8800|1200|500|invoiceAmount|poAmount|quoteAmount|\$/);
   assert.match(lastSeenLabel(now, now), /just now/i);
   assert.match(shareIndicator({ clockedOn: true, sharing: "gps" }).text, /Location sharing on/);
   assert.equal(shareIndicator({ clockedOn: true, sharing: "off" }).text, "Location off");
@@ -153,11 +158,43 @@ test("home shows the crew card for managers and admins, and never the profit cha
   assert.doesNotMatch(today, /profitChartHtml|\$\$\(/);
 });
 
+test("pinned jobs stay on the map when nobody is clocked on, with no prices", () => {
+  const model = crewMapModel({
+    today: "2026-11-24",
+    locations: [],
+    jobs: [
+      { id: "later", date: "2026-11-24", status: "Scheduled", address: "20 River Rd, Ipswich", time: "11:00", client: "North", invoiceAmount: 8800, poAmount: 1200, geo: { lat: -27.6, lng: 152.76, query: "20 River Rd, Ipswich" } },
+      { id: "early", date: "2026-11-24", status: "In progress", address: "4 Mill St, Brisbane", time: "07:30", assigned: ["nobody"], quoteAmount: 500, geo: { lat: -27.5, lng: 153.01, query: "4 Mill St, Brisbane" } },
+      { id: "cancel", date: "2026-11-24", status: "Cancelled", address: "1 Cancel St", invoiceAmount: 100, geo: { lat: -27.1, lng: 153.1, query: "1 Cancel St" } },
+      { id: "fail", date: "2026-11-24", status: "Scheduled", sm8Status: "Unsuccessful", address: "2 Fail St", geo: { lat: -27.2, lng: 153.2, query: "2 Fail St" } },
+      { id: "yday", date: "2026-11-23", status: "Scheduled", address: "Yesterday", geo: { lat: -27.3, lng: 153.3, query: "Yesterday" } },
+      { id: "mismatch", date: "2026-11-24", status: "Scheduled", address: "9 Other St", geo: { lat: -27.4, lng: 153.4, query: "somewhere else" } },
+      { id: "bare", date: "2026-11-24", status: "Scheduled", address: "8 Bare St", client: "Plain", quoteAmount: 500 },
+      { id: "blank", date: "2026-11-24", status: "Scheduled", client: "No address" },
+    ],
+  });
+  assert.deepEqual(model.people, []);
+  assert.deepEqual(model.jobs.map(j => j.id), ["early", "later"]);
+  assert.equal(model.jobs[0].lat, -27.5);
+  assert.equal(model.jobs[0].lng, 153.01);
+  assert.equal(model.unpinned, 2);
+  assert.equal(crewPinNote(model), "2 of today's jobs have an address but no pin.");
+  assert.equal(crewPinNote({ unpinned: 1 }), "1 of today's jobs has an address but no pin.");
+  assert.equal(crewPinNote({ unpinned: 0 }), "");
+  assert.deepEqual(Object.keys(model.jobs[0]).sort(), ["address", "client", "id", "jobNo", "label", "lat", "lng", "time"]);
+  const html = crewListHtml(model, s => String(s));
+  assert.match(html, /Nobody is clocked on/);
+  assert.doesNotMatch(html, /8800|1200|500|100|invoice|quoteAmount|\$/);
+  assert.doesNotMatch(JSON.stringify(model), /8800|1200|500|invoiceAmount|poAmount|quoteAmount|\$/);
+  assert.equal(jobPoint({ address: "9 Other St", geo: { lat: -27.4, lng: 153.4, query: "somewhere else" } }), null);
+});
+
 test("the map library is not part of the offline shell", () => {
   const sw = read("../../app/sw.js");
   const app = read("../../app/app.js");
+  const css = read("../../app/styles.css");
 
-  assert.match(sw, /callup-shell-v151-push-banner/);
+  assert.match(sw, /callup-shell-v152-crew-map-jobs/);
   assert.match(sw, /features\/live-location\.js/);
   assert.doesNotMatch(sw, /leaflet|openstreetmap|unpkg\.com/i);
   assert.match(app, /LIVE_SHARE_TEXT/);
@@ -168,4 +205,14 @@ test("the map library is not part of the offline shell", () => {
   assert.match(app, /noteShareHidden/);
   assert.match(app, /SHARE_FIX_WAIT_MS/);
   assert.doesNotMatch(app, /import [^;]*leaflet/i);
+  assert.match(css, /#crewmapretry\[hidden\]\{display:none!important\}/);
+  assert.match(css, /\.sm-btn\[hidden\]\{display:none!important\}/);
+  const mapFn = app.slice(app.indexOf("async function ensureCrewMap"), app.indexOf("async function tsPunch"));
+  assert.match(mapFn, /for \(const j of model\.jobs/);
+  assert.doesNotMatch(mapFn, /for \(const j of p\.jobs\)/);
+  assert.match(app, /crewPinNote\(model\)/);
+  assert.match(app, /function canUpdateJobs\(/);
+  assert.match(app, /geocodeAddress\(/);
+  assert.match(app, /cacheGeo\(job, hit\)/);
+  assert.match(app, /resolveConfig\(\)/);
 });

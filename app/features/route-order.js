@@ -354,7 +354,7 @@ function writeLocal(key, value) {
   } catch { /* private mode */ }
 }
 
-async function geocodeAddress(address, cfg, fetchImpl, sleep) {
+export async function geocodeAddress(address, cfg, fetchImpl, sleep) {
   const query = String(address || "").replace(/\s+/g, " ").trim();
   if (!query) return null;
   if (cfg.provider === "ors" && cfg.orsApiKey) {

@@ -176,12 +176,30 @@ function jobLabel(job) {
   return bits[0] || raw || "Job";
 }
 
+function presentJob(job) {
+  const point = jobPoint(job);
+  return {
+    id: String(job.id || ""),
+    label: jobLabel(job),
+    client: String(job.client || ""),
+    address: String(job.address || ""),
+    time: String(job.time || ""),
+    jobNo: String(job.sm8JobNo || ""),
+    lat: point ? point.lat : null,
+    lng: point ? point.lng : null,
+  };
+}
+
+function openToday(job, today) {
+  return !!(job && job.date === today && job.status !== "Cancelled" && job.sm8Status !== "Unsuccessful");
+}
+
 export function crewMapModel({ locations, jobs, today, now = new Date() } = {}) {
   const people = (locations || []).filter(d => d && d.clockedOn === true).map(d => {
     const lat = +d.lat, lng = +d.lng;
     const sharing = d.sharing === "gps" && Number.isFinite(lat) && Number.isFinite(lng) ? "gps" : "off";
     const person = { uid: d.uid || d.id, name: String(d.name || "Staff") };
-    const mine = (jobs || []).filter(j => j && j.date === today && j.status !== "Cancelled" && j.sm8Status !== "Unsuccessful" && jobAssignedTo(j, person));
+    const mine = (jobs || []).filter(j => openToday(j, today) && jobAssignedTo(j, person));
     return {
       uid: person.uid,
       name: person.name,
@@ -190,22 +208,30 @@ export function crewMapModel({ locations, jobs, today, now = new Date() } = {}) 
       lng: sharing === "gps" ? lng : null,
       accuracy: sharing === "gps" && Number.isFinite(+d.accuracy) ? Math.round(+d.accuracy) : null,
       lastSeen: lastSeenLabel(d.updatedAt, now),
-      jobs: mine.map(j => {
-        const point = jobPoint(j);
-        return {
-          id: String(j.id || ""),
-          label: jobLabel(j),
-          client: String(j.client || ""),
-          address: String(j.address || ""),
-          time: String(j.time || ""),
-          jobNo: String(j.sm8JobNo || ""),
-          lat: point ? point.lat : null,
-          lng: point ? point.lng : null,
-        };
-      }),
+      jobs: mine.map(presentJob),
     };
   }).sort((a, b) => a.name.localeCompare(b.name) || String(a.uid).localeCompare(String(b.uid)));
-  return { people };
+  let unpinned = 0;
+  const pinned = [];
+  for (const job of jobs || []) {
+    if (!openToday(job, today)) continue;
+    const row = presentJob(job);
+    if (row.lat == null || row.lng == null) {
+      if (String(job.address || "").replace(/\s+/g, " ").trim()) unpinned += 1;
+      continue;
+    }
+    pinned.push(row);
+  }
+  pinned.sort((a, b) => a.time.localeCompare(b.time) || a.id.localeCompare(b.id));
+  return { people, jobs: pinned, unpinned };
+}
+
+/** Short line when today's open jobs have an address the map cannot place. */
+export function crewPinNote(model) {
+  const n = Number(model && model.unpinned) || 0;
+  if (n < 1) return "";
+  if (n === 1) return "1 of today's jobs has an address but no pin.";
+  return `${n} of today's jobs have an address but no pin.`;
 }
 
 export function crewListHtml(model, esc) {
