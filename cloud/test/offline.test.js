@@ -104,10 +104,10 @@ test("the pending list counts writes, files and incident drafts", () => {
   assert.equal(SAVED_ON_PHONE, "Saved on phone — will sync");
 });
 
-test("the shell is callup-shell-v156-stop-series and installs before it drops the previous cache", () => {
+test("the shell is callup-shell-v158-stop-series and installs before it drops the previous cache", () => {
   const sw = readFileSync(new URL("../../app/sw.js", import.meta.url), "utf8");
   const app = readFileSync(new URL("../../app/app.js", import.meta.url), "utf8");
-  assert.match(sw, /callup-shell-v156-stop-series/);
+  assert.match(sw, /callup-shell-v158-stop-series/);
   assert.match(sw, /features\/offline\.js/);
   assert.match(sw, /callup-uploads/);
   const install = sw.slice(sw.indexOf('addEventListener("install"'), sw.indexOf('addEventListener("activate"'));

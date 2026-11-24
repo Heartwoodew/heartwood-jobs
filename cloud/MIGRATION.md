@@ -530,11 +530,11 @@ Do not deploy from this branch. Do not merge it from the agent. Nothing here wri
 
 An admin stops a repeating job with Stop this series, on the first job or on a later visit, or by unticking This job repeats. The confirm says how many future visits will be removed and lists future visits that stay because they were edited, skipped, started, completed, or already have notes, photos, documents, a timesheet, an invoice or a purchase order. Visits today and earlier stay. Removed visits are marked Cancelled, the same soft cancel the generator already uses when a visit falls outside the series. The template is marked seriesEnded and its repeat rule is cleared, so the rolling 60-day sweep does not add visits. Skip this visit now sets the visit to In progress and keeps the skipped flag, so it stays on the planner as In progress and the generator still leaves it alone.
 
-Service worker `callup-shell-v156-stop-series`.
+Service worker `callup-shell-v158-stop-series`. Main is `callup-shell-v155-clock-on-reminder` after PR 134. Open PRs 135 and 136 already claim v156 and v157, so this shell is v158 so they do not clash.
 
 After review:
 
-1. Deploy hosting with `firebase deploy --only hosting --config cloud/firebase.hosting.json --project heartwood-9f37f`. Phones pick up `callup-shell-v156-stop-series`.
+1. Deploy hosting with `firebase deploy --only hosting --config cloud/firebase.hosting.json --project heartwood-9f37f`. Phones pick up `callup-shell-v158-stop-series`.
 2. Deploy Firestore rules from `cloud/firestore.production.rules` only. Do not deploy `cloud/emulator/firestore.rules`. The change is the admin-only check on seriesEnded, seriesEndedOn, recurrence, seriesRole and seriesId for company job updates.
 3. Deploy the repeating-job functions only: `recurrenceOnSave` and `recurrenceSweep` in australia-southeast1. Do not deploy the rest of the functions codebase. `cloud/firebase.json` still refuses `firebase deploy` from `cloud/`.
 4. No index deploy. No Storage change. No Stripe change. No backfill. No production data write.
