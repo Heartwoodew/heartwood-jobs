@@ -2,9 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  CREW_UNSHARED, LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, MAP_LIBRARY, MAP_OFFLINE, MAP_TILES, SHARE_FIX_WAIT_MS, SHARE_MIN_METRES, SHARE_MIN_MS,
-  canSeeCrewMap, companySharesLocation, crewListHtml, crewMapModel, crewMapNotice, crewPinNote, haversineMetres, homeCrewSlot, jobPoint,
-  lastSeenLabel, liveCollectionPath, liveLocationBody, mapFailureStatus, shareIndicator, shouldSendPosition,
+  COMPANY_TIME_ZONE, CREW_UNSHARED, LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, MAP_LIBRARY, MAP_OFFLINE, MAP_TILES, SHARE_FIX_WAIT_MS, SHARE_MIN_METRES, SHARE_MIN_MS,
+  SHOW_AFTER_CLOCK_OFF, STALE_MINUTES,
+  canSeeCrewMap, clockOffLocationUpdate, companySharesLocation, companyTimeZone, crewListHtml, crewMapModel, crewMapNotice, crewPinNote, haversineMetres, homeCrewSlot, isPositionStale, jobPoint,
+  lastSeenLabel, liveCollectionPath, liveLocationBody, mapFailureStatus, seenClock, shareIndicator, shouldSendPosition, showOnCrewMap,
 } from "../../app/features/live-location.js";
 
 const read = name => readFileSync(new URL(name, import.meta.url), "utf8");
@@ -73,9 +74,11 @@ test("the map shows clocked-on crew and today's job pins, with no prices", () =>
       { id: "j3", date: "2026-11-14", status: "Scheduled", address: "Yesterday", assigned: ["op1"], geo: { lat: 1, lng: 1, query: "Yesterday" } },
     ],
   });
-  assert.deepEqual(model.people.map(p => p.name), ["Lee", "Sam"]);
+  assert.deepEqual(model.people.map(p => p.name), ["Gone", "Lee", "Sam"]);
   assert.equal(model.people.find(p => p.uid === "lab1").sharing, "off");
-  assert.equal(model.people.find(p => p.uid === "gone"), undefined);
+  assert.equal(model.people.find(p => p.uid === "gone").clockedOn, false);
+  assert.equal(model.people.find(p => p.uid === "gone").dot, "off");
+  assert.match(model.people.find(p => p.uid === "gone").markerLabel, /Gone, last seen unknown \(clocked off, stale\)/);
   assert.equal(model.people.find(p => p.uid === "nostatus"), undefined);
   const sam = model.people.find(p => p.uid === "op1");
   assert.equal(sam.jobs.length, 1);
@@ -110,6 +113,79 @@ test("the map shows clocked-on crew and today's job pins, with no prices", () =>
   assert.match(LIVE_LIMIT_NOTE, /locked/);
 });
 
+test("every company keeps the last position, fades it after 10 minutes, and keeps it after clock off", () => {
+  assert.equal(SHOW_AFTER_CLOCK_OFF, true);
+  assert.equal(STALE_MINUTES, 10);
+  assert.equal(COMPANY_TIME_ZONE, "Australia/Brisbane");
+  assert.deepEqual(clockOffLocationUpdate("stamp"), { clockedOn: false, clockedOffAt: "stamp" });
+  const now = new Date("2026-11-24T05:12:00Z");
+  const fresh = new Date(now.getTime() - 9 * 60 * 1000);
+  const old = new Date(now.getTime() - 11 * 60 * 1000);
+  const edge = new Date(now.getTime() - STALE_MINUTES * 60 * 1000);
+  assert.equal(seenClock(now, "Australia/Brisbane"), "3:12pm");
+  assert.equal(isPositionStale(old, now), true);
+  assert.equal(isPositionStale(fresh, now), false);
+  assert.equal(isPositionStale(edge, now), false);
+  assert.equal(isPositionStale(null, now), true);
+  for (const companyId of ["heartwood", "bravo", "yardco"]) {
+    assert.equal(companyTimeZone({ companyId, timeZone: "" }), "Australia/Brisbane");
+    assert.equal(companyTimeZone(companyId), "Australia/Brisbane");
+    assert.equal(companyTimeZone({ companyId, timeZone: "Australia/Perth" }), "Australia/Perth");
+    const model = crewMapModel({
+      now,
+      today: "2026-11-24",
+      timeZone: companyTimeZone({ companyId }),
+      locations: [
+        { uid: "pat", name: "Pat", companyId, clockedOn: true, sharing: "gps", lat: -27.6, lng: 153.02, accuracy: 8, updatedAt: old },
+        { uid: "sam", name: "Sam", companyId, clockedOn: false, sharing: "gps", lat: -27.5, lng: 152.9, accuracy: 12, updatedAt: now, clockedOffAt: now },
+        { uid: "lee", name: "Lee", companyId, clockedOn: true, sharing: "off", updatedAt: old },
+        { uid: "nope", name: "Nope", companyId, clockedOn: false, sharing: "off", updatedAt: now },
+      ],
+      jobs: [
+        { id: "j1", date: "2026-11-24", status: "Scheduled", client: "Orbit", address: "10 Creek Rd", time: "07:00", assigned: ["pat"], invoiceAmount: 8800, geo: { lat: -27.48, lng: 153.03, query: "10 Creek Rd" } },
+      ],
+    });
+    const pat = model.people.find(p => p.uid === "pat");
+    const sam = model.people.find(p => p.uid === "sam");
+    assert.equal(pat.stale, true);
+    assert.equal(pat.dot, "stale");
+    assert.equal(pat.lat, -27.6);
+    assert.equal(pat.clockedOn, true);
+    assert.equal(pat.markerLabel, "Pat, last seen 3:01pm (stale)");
+    assert.equal(sam.dot, "off");
+    assert.equal(sam.stale, false);
+    assert.equal(sam.clockedOn, false);
+    assert.equal(sam.lat, -27.5);
+    assert.equal(sam.markerLabel, "Sam, last seen 3:12pm (clocked off)");
+    assert.equal(model.people.find(p => p.uid === "lee").sharing, "off");
+    assert.equal(model.people.find(p => p.uid === "nope"), undefined);
+    assert.equal(model.jobs[0].invoiceAmount, undefined);
+    const html = crewListHtml(model, s => String(s));
+    assert.match(html, /Pat, last seen 3:01pm \(stale\)/);
+    assert.match(html, /Sam, last seen 3:12pm \(clocked off\)/);
+    assert.match(html, /crew-card stale/);
+    assert.match(html, /crew-card off/);
+    assert.doesNotMatch(html, /8800|\$/);
+  }
+  const hidden = crewMapModel({
+    now,
+    today: "2026-11-24",
+    showAfterClockOff: false,
+    locations: [
+      { uid: "pat", name: "Pat", companyId: "bravo", clockedOn: true, sharing: "gps", lat: -27.6, lng: 153, updatedAt: old },
+      { uid: "sam", name: "Sam", companyId: "bravo", clockedOn: false, sharing: "gps", lat: -27.5, lng: 152.9, updatedAt: now },
+    ],
+  });
+  assert.deepEqual(hidden.people.map(p => p.uid), ["pat"]);
+  assert.equal(hidden.people[0].dot, "stale");
+  assert.equal(showOnCrewMap({ clockedOn: false, sharing: "gps", lat: 1, lng: 2 }, false), false);
+  assert.equal(showOnCrewMap({ clockedOn: true, sharing: "gps", lat: 1, lng: 2, updatedAt: old }, false), true);
+  const src = read("../../app/features/live-location.js");
+  const modelFn = src.slice(src.indexOf("export function crewMapModel"), src.indexOf("export function crewPinNote"));
+  assert.doesNotMatch(modelFn, /heartwood/);
+  assert.doesNotMatch(src.slice(src.indexOf("export function companyTimeZone"), src.indexOf("export function seenClock")), /heartwood/);
+});
+
 test("live location rules match in the emulator model and the production rules", () => {
   const slice = text => {
     const begin = "// BEGIN LIVE LOCATION RULES", end = "// END LIVE LOCATION RULES";
@@ -125,6 +201,16 @@ test("live location rules match in the emulator model and the production rules",
   assert.doesNotMatch(prod, /llRole\(\) == "operator"|llRole\(\) == "labourer"/);
   assert.match(prod, /entry.status == "open" \|\| entry.status == "break"/);
   assert.match(prod, /allow delete: if signedIn\(\) && request.auth.uid == id/);
+  assert.match(prod, /function llClockOff\(id\)/);
+  assert.match(prod, /function llMap\(\)/);
+  assert.match(prod, /function llKeepsFix\(\)/);
+  assert.match(prod, /clockedOffAt == request.time/);
+  assert.match(prod, /resource.data.clockedOn == true \|\| llMap\(\)/);
+  assert.equal((prod.match(/function llClockOff\(id\)/g) || []).length, 2);
+  assert.equal((prod.match(/llClockOff\(id\)/g) || []).length, 4);
+  const clockOffFns = prod.match(/function llClockOff\(id\) \{[\s\S]*?\n      \}/g) || [];
+  assert.equal(clockOffFns.length, 2);
+  for (const fn of clockOffFns) assert.doesNotMatch(fn, /heartwood/);
   assert.match(prod, /function llPaused\(id\)/);
   assert.match(prod, /get\(path\)\.data\.get\("status", ""\) == "paused"/);
   assert.match(prod, /!llPaused\("heartwood"\)/);
@@ -194,7 +280,18 @@ test("the map library is not part of the offline shell", () => {
   const app = read("../../app/app.js");
   const css = read("../../app/styles.css");
 
-  assert.match(sw, /callup-shell-v154-clock-on-reminder/);
+  assert.match(sw, /callup-shell-v155-clock-on-reminder/);
+  assert.match(app, /releaseLiveDoc/);
+  assert.match(app, /clockOffLocationUpdate/);
+  assert.match(app, /SHOW_AFTER_CLOCK_OFF/);
+  assert.match(app, /p\.markerLabel/);
+  assert.match(app, /crewPersonIcon/);
+  assert.match(css, /\.crew-pin span\.off/);
+  assert.match(css, /\.crew-pin span\.stale/);
+  const release = app.slice(app.indexOf("function releaseLiveDoc"), app.indexOf("function liveShareStop"));
+  assert.match(release, /SHOW_AFTER_CLOCK_OFF/);
+  assert.match(release, /liveCollectionPath\(companyId\)/);
+  assert.doesNotMatch(release, /heartwood/);
   assert.match(sw, /features\/live-location\.js/);
   assert.doesNotMatch(sw, /leaflet|openstreetmap|unpkg\.com/i);
   assert.match(app, /LIVE_SHARE_TEXT/);

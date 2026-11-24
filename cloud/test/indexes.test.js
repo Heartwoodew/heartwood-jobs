@@ -6,6 +6,13 @@ import { readFileSync } from "node:fs";
 
 const idx = JSON.parse(readFileSync(new URL("../firestore.indexes.json", import.meta.url), "utf8"));
 
+test("the staff roster can list clocked-on live locations for any company", () => {
+  const hit = (idx.indexes || []).find(i => i.collectionGroup === "liveLocations" && i.queryScope === "COLLECTION");
+  assert.ok(hit, "composite index liveLocations companyId + clockedOn");
+  assert.ok((hit.fields || []).some(f => f.fieldPath === "companyId" && f.order === "ASCENDING"));
+  assert.ok((hit.fields || []).some(f => f.fieldPath === "clockedOn" && f.order === "ASCENDING"));
+});
+
 test("staff invites can be listed by company and role", () => {
   const hit = (idx.indexes || []).find(i => i.collectionGroup === "invites"
     && (i.fields || []).some(f => f.fieldPath === "tenantId" && f.order === "ASCENDING")

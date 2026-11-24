@@ -85,19 +85,25 @@ test("own live location write is allowed only while clocked on, and only on that
 });
 
 test("admin, manager and supervisor can read their own company's live crew; operator and labourer cannot", async () => {
-  for (const uid of ["hwMgr", "hwAdm", "sup1", ALEX]) {
+  for (const uid of ["hwMgr", "hwAdm", ALEX]) {
     await assertSucceeds(getDoc(doc(db(uid), "liveLocations/op1")), uid);
     await assertSucceeds(getDocs(query(collection(db(uid), "liveLocations"), where("companyId", "==", "heartwood"))), uid);
   }
+  await assertSucceeds(getDoc(doc(db("sup1"), "liveLocations/op1")));
+  await assertSucceeds(getDocs(query(collection(db("sup1"), "liveLocations"), where("companyId", "==", "heartwood"), where("clockedOn", "==", true))));
+  await assertFails(getDocs(query(collection(db("sup1"), "liveLocations"), where("companyId", "==", "heartwood"))));
   for (const uid of ["op1", "lab1"]) {
     await assertFails(getDoc(doc(db(uid), "liveLocations/op1")), uid);
     await assertFails(getDoc(doc(db(uid), "liveLocations/" + uid)), uid + " own");
     await assertFails(getDocs(query(collection(db(uid), "liveLocations"), where("companyId", "==", "heartwood"))), uid);
   }
-  for (const uid of ["bMgr", "bAdm", "bSup"]) {
+  for (const uid of ["bMgr", "bAdm"]) {
     await assertSucceeds(getDoc(doc(db(uid), "companies/bravo/liveLocations/bOp")), uid);
     await assertSucceeds(getDocs(query(collection(db(uid), "companies/bravo/liveLocations"), where("companyId", "==", "bravo"))), uid);
   }
+  await assertSucceeds(getDoc(doc(db("bSup"), "companies/bravo/liveLocations/bOp")));
+  await assertSucceeds(getDocs(query(collection(db("bSup"), "companies/bravo/liveLocations"), where("companyId", "==", "bravo"), where("clockedOn", "==", true))));
+  await assertFails(getDocs(query(collection(db("bSup"), "companies/bravo/liveLocations"), where("companyId", "==", "bravo"))));
   for (const uid of ["bOp", "bLab"]) {
     await assertFails(getDoc(doc(db(uid), "companies/bravo/liveLocations/bOp")), uid);
     await assertFails(getDocs(query(collection(db(uid), "companies/bravo/liveLocations"), where("companyId", "==", "bravo"))), uid);
@@ -115,13 +121,43 @@ test("a company cannot read or write another company's live crew", async () => {
   await assertFails(deleteDoc(doc(db("hwMgr"), "companies/bravo/liveLocations/bOp")));
 });
 
-test("clock off clears only that person's live doc", async () => {
-  await assertSucceeds(deleteDoc(doc(db("op1"), "liveLocations/op1")));
+test("clock off keeps the last position for Heartwood and for any other company", async () => {
+  await assertFails(setDoc(doc(db("sup1"), "liveLocations/sup1"), off("sup1", "Sue", "heartwood")));
+  const stillSharing = await getDoc(doc(db("hwMgr"), "liveLocations/sup1"));
+  assert.equal(stillSharing.data().sharing, "gps");
+  assert.equal(stillSharing.data().lat, -27.47);
+  await assertSucceeds(updateDoc(doc(db("op1"), "liveLocations/op1"), { clockedOn: false, clockedOffAt: serverTimestamp() }));
+  await assertSucceeds(updateDoc(doc(db("bOp"), "companies/bravo/liveLocations/bOp"), { clockedOn: false, clockedOffAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(db("op1"), "liveLocations/op1"), { clockedOn: false, clockedOffAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(db("hwMgr"), "liveLocations/lab1"), { clockedOn: false, clockedOffAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(db("sup1"), "liveLocations/lab1"), { clockedOn: false, clockedOffAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(db("bMgr"), "companies/bravo/liveLocations/bOp"), { clockedOn: false, clockedOffAt: serverTimestamp() }));
+  const kept = await getDoc(doc(db("hwMgr"), "liveLocations/op1"));
+  assert.equal(kept.data().clockedOn, false);
+  assert.equal(kept.data().lat, -27.47);
+  assert.equal(kept.data().lng, 153.025);
+  assert.ok(kept.data().clockedOffAt);
+  await assertSucceeds(getDoc(doc(db("hwAdm"), "liveLocations/op1")));
+  await assertSucceeds(getDoc(doc(db(ALEX), "liveLocations/op1")));
+  await assertFails(getDoc(doc(db("sup1"), "liveLocations/op1")));
+  await assertFails(getDoc(doc(db("op1"), "liveLocations/op1")));
+  await assertFails(getDoc(doc(db("bAdm"), "liveLocations/op1")));
+  const on = await getDocs(query(collection(db("sup1"), "liveLocations"), where("companyId", "==", "heartwood"), where("clockedOn", "==", true)));
+  assert.equal(on.docs.some(d => d.id === "op1"), false);
+  assert.equal(on.docs.some(d => d.id === "lab1"), true);
+  const map = await getDocs(query(collection(db("hwMgr"), "liveLocations"), where("companyId", "==", "heartwood")));
+  assert.equal(map.docs.some(d => d.id === "op1"), true);
+  const bravoKept = await getDoc(doc(db("bAdm"), "companies/bravo/liveLocations/bOp"));
+  assert.equal(bravoKept.data().clockedOn, false);
+  assert.equal(bravoKept.data().lat, -27.47);
+  await assertSucceeds(getDoc(doc(db("bMgr"), "companies/bravo/liveLocations/bOp")));
+  await assertFails(getDoc(doc(db("bSup"), "companies/bravo/liveLocations/bOp")));
+  await assertFails(getDoc(doc(db("bOp"), "companies/bravo/liveLocations/bOp")));
+  await assertFails(getDoc(doc(db("hwMgr"), "companies/bravo/liveLocations/bOp")));
+  const bravoOn = await getDocs(query(collection(db("bSup"), "companies/bravo/liveLocations"), where("companyId", "==", "bravo"), where("clockedOn", "==", true)));
+  assert.equal(bravoOn.docs.some(d => d.id === "bOp"), false);
   await assertFails(deleteDoc(doc(db("hwMgr"), "liveLocations/lab1")));
   await assertFails(deleteDoc(doc(db("sup1"), "liveLocations/lab1")));
-  const left = await getDocs(query(collection(db("hwMgr"), "liveLocations"), where("companyId", "==", "heartwood")));
-  assert.equal(left.docs.some(d => d.id === "op1"), false);
-  assert.equal(left.docs.some(d => d.id === "lab1"), true);
 });
 
 test("a paused company cannot read or write live locations, including someone who is not clocked on", async () => {

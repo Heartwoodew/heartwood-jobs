@@ -487,6 +487,20 @@ After review, deploy hosting only. Service worker `callup-shell-v152-crew-map-jo
 
 No functions deploy, no rules deploy, no index deploy, no Storage change, no Stripe change, no backfill.
 
+## Last known crew dots (not deployed)
+
+Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production. No migration of live location documents.
+
+This applies to every CallUp company, not only Heartwood. Heartwood still stores positions in `liveLocations/{uid}` and every other company in `companies/{companyId}/liveLocations/{uid}`. Clock off keeps the last position (`clockedOn: false`, `clockedOffAt`) instead of deleting it. A clocked-on dot that is older than 10 minutes stays on the map and fades. Service worker `callup-shell-v154-last-seen`. PR 118 also wants v153, so this shell is v154.
+
+After review:
+
+1. Build a fresh hosting folder with `bash tools/build-callup-hosting.sh`.
+2. Deploy hosting with `firebase deploy --only hosting --config cloud/firebase.hosting.json --project heartwood-9f37f`.
+3. Publish `cloud/firestore.production.rules`. Do not publish `cloud/emulator/firestore.rules` as the live ruleset. `cloud/firebase.json` points Firestore rules at the emulator file, so do not deploy rules with that config.
+4. Deploy the `liveLocations` composite index (`companyId` and `clockedOn`) so a supervisor roster query stays allowed for every company: from `cloud/`, `firebase deploy --only firestore:indexes --project heartwood-9f37f`.
+
+No functions deploy, no Storage change, no Stripe change, no backfill.
 ## Weekday Clock On reminder (not deployed)
 
 Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production or sends a push.
@@ -497,7 +511,7 @@ The reminder is on by default for labourer, operator, supervisor and manager in 
 
 Each company is checked on its own clock. `companies/{id}.timezone` or `timeZone` is used when it is a real IANA name. Otherwise Australia/Brisbane. The function runs every 15 minutes (`*/15 * * * *`, time zone UTC) and sends when that local time is 06:30 up to, but not including, 07:00, Monday to Friday. `clockOnReminders/{companyId}_{date}_{uid}` is the once-a-day claim. Test companies, archived or suspended companies, owner-paused companies, ended trials, ended friend plans, and paid plans that are not billing active or trialing are skipped. Heartwood is not skipped for those reasons.
 
-Service worker `callup-shell-v154-clock-on-reminder`. Main is `callup-shell-v152-crew-map-jobs`. v153 is left free because another crew-map change and PR 118 may claim it. PR 118's current diff does not contain a shell version.
+Service worker `callup-shell-v155-clock-on-reminder`. Main is `callup-shell-v154-last-seen` after PR 133. This shell is v155 so the two do not clash.
 
 After review:
 
