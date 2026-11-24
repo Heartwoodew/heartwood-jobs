@@ -301,7 +301,7 @@ test("the board, service worker and timesheet module stay in their lanes", () =>
   const sw = readFileSync(new URL("../app/sw.js", import.meta.url), "utf8");
   const src = readFileSync(new URL("../app/features/dispatch-times.js", import.meta.url), "utf8");
 
-  assert.match(sw, /callup-shell-v158-stop-series/);
+  assert.match(sw, /callup-shell-v159-help-videos/);
   assert.match(sw, /features\/dispatch-times\.js/);
   assert.match(app, /formatEstimate\(/);
   assert.match(app, /timeSource/);

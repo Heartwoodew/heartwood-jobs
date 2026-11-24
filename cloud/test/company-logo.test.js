@@ -92,6 +92,6 @@ test("settings and signup replace the Logo URL box with a jpeg/png upload, previ
 test("service worker caches the logo module and the bumped shell version", () => {
   const sw = readFileSync(new URL("../../app/sw.js", import.meta.url), "utf8");
 
-  assert.match(sw, /callup-shell-v158-stop-series/);
+  assert.match(sw, /callup-shell-v159-help-videos/);
   assert.match(sw, /features\/company-logo\.js/);
 });

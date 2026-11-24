@@ -145,6 +145,14 @@ const TOPICS = Object.freeze([
     office: "CallUp runs in the browser and can be installed on a phone or computer. On iPhone open app.callupapp.com.au in Safari, tap Share, then Add to Home Screen. On Android open it in Chrome and tap Install app. The video shows each step.",
     crew: "On iPhone open app.callupapp.com.au in Safari, tap Share, then Add to Home Screen. On Android open it in Chrome and tap Install app. Then sign in with the login your company sent you.",
   },
+  {
+    id: "planner",
+    keywords: ["weekly planner", "the planner", "planner", "dispatch board", "dispatch", "the schedule", "my schedule", "weekly schedule", "today's schedule", "job schedule", "schedule a job", "schedule jobs", "schedule my", "scheduling", "today screen", "today's jobs", "jobs today", "on today", "what's on today", "what is on today", "today", "unallocated", "drag a job"],
+    go: "",
+    goLabel: "",
+    office: "Open Dispatch Board. That is the weekly planner: the crew are down the side and the days of the week run across the top. Jobs sit on the day they are booked, including work with nobody allocated. Drag a job onto the person who will do it, or onto another day. Today shows each person the jobs assigned to them, in order, with the start time and the address. Open a job for the details.",
+    crew: "Open Today. It lists the jobs assigned to you, in order, with the start time and the address. Open a job for the details. The weekly planner is Dispatch Board, which the office uses to put a job on a day and a person.",
+  },
 ]);
 
 function officeUser(ctx) {
