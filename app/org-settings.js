@@ -79,6 +79,7 @@ export function setActiveCompany(company) {
     ...clean(company),
     ...(addressParts ? { addressParts } : {}),
     companyId: typeof company.companyId === "string" && company.companyId ? company.companyId : DEFAULT_ORG.companyId,
+    timeZone: typeof company.timeZone === "string" ? company.timeZone.trim() : "",
     isTest: company.isTest === true,
     plan: typeof company.plan === "string" ? company.plan : "",
     billing: billing ? {

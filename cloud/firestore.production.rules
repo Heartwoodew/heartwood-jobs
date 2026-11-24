@@ -2457,13 +2457,43 @@ service cloud.firestore {
 
 // BEGIN LIVE LOCATION RULES
     // One live doc per person (latest position only). Heartwood: liveLocations/{uid}.
-    // Every other company: companies/{id}/liveLocations/{uid}. Written only while that
-    // person's timesheet shift is clocked on (open or on a break). Clock off deletes it.
-    // Admin, manager and supervisor of the same company read. Operator and labourer do not.
-    // Supervisors read it so the Staff roster can show who is sharing. The crew map stays manager and admin. No other company does.
+    // Every other company: companies/{id}/liveLocations/{uid}. The same clock-off and
+    // last-known rules apply to every company. Written while that person's timesheet
+    // shift is clocked on (open or on a break). Clock off keeps the doc: the same person
+    // sets clockedOn false and clockedOffAt, and does not have to delete it.
+    // A position already shared cannot be replaced with location off, so a lapsed update stays.
+    // Admin and manager of the same company read every doc, including a clocked-off last position.
+    // A supervisor reads clocked-on docs only, for the Staff roster. Operator and labourer do not.
+    // The crew map stays manager and admin. No other company does.
     // Heartwood: status "paused" blocks locations (llPaused). Other companies use companyNotPaused,
     // the same trial and billing pause as the rest of the app. No company document means not paused.
     match /liveLocations/{id} {
+      function llMap() {
+        return isAlex()
+          || (isPatrick() && callerCompany() == "heartwood")
+          || (hasProfile() && (profile().get("role", "") == "admin" || profile().get("role", "") == "manager"));
+      }
+      function llLiveRead() {
+        return resource.data.clockedOn == true || llMap();
+      }
+      function llKeepsFix() {
+        return resource.data.sharing != "gps" || request.resource.data.sharing == "gps";
+      }
+      function llClockOff(id) {
+        let d = request.resource.data;
+        return resource.data.clockedOn == true
+          && d.clockedOn == false
+          && d.clockedOffAt == request.time
+          && d.uid == id
+          && d.uid == request.auth.uid
+          && same("uid") && same("name") && same("companyId") && same("sharing")
+          && same("lat") && same("lng") && same("accuracy")
+          && same("updatedAt") && same("weekStart") && same("entryId")
+          && (
+            (d.sharing == "gps" && d.keys().hasOnly(["uid", "name", "companyId", "clockedOn", "sharing", "lat", "lng", "accuracy", "updatedAt", "weekStart", "entryId", "clockedOffAt"]))
+            || (d.sharing == "off" && d.keys().hasOnly(["uid", "name", "companyId", "clockedOn", "sharing", "updatedAt", "weekStart", "entryId", "clockedOffAt"]))
+          );
+      }
       function llRole() {
         return hasProfile() ? profile().get("role", "") : "";
       }
@@ -2512,12 +2542,39 @@ service cloud.firestore {
           && llClocked();
       }
 
-      allow get: if llOffice() && !llPaused("heartwood") && callerCompany() == "heartwood" && docCompany(resource.data) == "heartwood";
-      allow list: if llOffice() && !llPaused("heartwood") && callerCompany() == "heartwood" && resource.data.companyId == "heartwood";
-      allow create, update: if callerCompany() == "heartwood" && request.resource.data.companyId == "heartwood" && !llPaused("heartwood") && llBody(request.resource.data, id);
+      allow get: if llOffice() && !llPaused("heartwood") && callerCompany() == "heartwood" && docCompany(resource.data) == "heartwood" && llLiveRead();
+      allow list: if llOffice() && !llPaused("heartwood") && callerCompany() == "heartwood" && resource.data.companyId == "heartwood" && llLiveRead();
+      allow create: if callerCompany() == "heartwood" && request.resource.data.companyId == "heartwood" && !llPaused("heartwood") && llBody(request.resource.data, id);
+      allow update: if callerCompany() == "heartwood" && request.resource.data.companyId == "heartwood" && !llPaused("heartwood") && ((llBody(request.resource.data, id) && llKeepsFix()) || llClockOff(id));
       allow delete: if signedIn() && request.auth.uid == id && callerCompany() == "heartwood" && docCompany(resource.data) == "heartwood" && !llPaused("heartwood");
     }
     match /companies/{c}/liveLocations/{id} {
+      function llMap() {
+        return isAlex()
+          || (isPatrick() && callerCompany() == "heartwood")
+          || (hasProfile() && (profile().get("role", "") == "admin" || profile().get("role", "") == "manager"));
+      }
+      function llLiveRead() {
+        return resource.data.clockedOn == true || llMap();
+      }
+      function llKeepsFix() {
+        return resource.data.sharing != "gps" || request.resource.data.sharing == "gps";
+      }
+      function llClockOff(id) {
+        let d = request.resource.data;
+        return resource.data.clockedOn == true
+          && d.clockedOn == false
+          && d.clockedOffAt == request.time
+          && d.uid == id
+          && d.uid == request.auth.uid
+          && same("uid") && same("name") && same("companyId") && same("sharing")
+          && same("lat") && same("lng") && same("accuracy")
+          && same("updatedAt") && same("weekStart") && same("entryId")
+          && (
+            (d.sharing == "gps" && d.keys().hasOnly(["uid", "name", "companyId", "clockedOn", "sharing", "lat", "lng", "accuracy", "updatedAt", "weekStart", "entryId", "clockedOffAt"]))
+            || (d.sharing == "off" && d.keys().hasOnly(["uid", "name", "companyId", "clockedOn", "sharing", "updatedAt", "weekStart", "entryId", "clockedOffAt"]))
+          );
+      }
       function llRole() {
         return hasProfile() ? profile().get("role", "") : "";
       }
@@ -2562,9 +2619,10 @@ service cloud.firestore {
           && llClocked();
       }
 
-      allow get: if llOffice() && c != "heartwood" && callerCompany() == c && docCompany(resource.data) == c && companyNotPaused(c);
-      allow list: if llOffice() && c != "heartwood" && callerCompany() == c && resource.data.companyId == c && companyNotPaused(c);
-      allow create, update: if c != "heartwood" && callerCompany() == c && request.resource.data.companyId == c && companyNotPaused(c) && llBody(request.resource.data, id);
+      allow get: if llOffice() && c != "heartwood" && callerCompany() == c && docCompany(resource.data) == c && companyNotPaused(c) && llLiveRead();
+      allow list: if llOffice() && c != "heartwood" && callerCompany() == c && resource.data.companyId == c && companyNotPaused(c) && llLiveRead();
+      allow create: if c != "heartwood" && callerCompany() == c && request.resource.data.companyId == c && companyNotPaused(c) && llBody(request.resource.data, id);
+      allow update: if c != "heartwood" && callerCompany() == c && request.resource.data.companyId == c && companyNotPaused(c) && ((llBody(request.resource.data, id) && llKeepsFix()) || llClockOff(id));
       allow delete: if signedIn() && request.auth.uid == id && c != "heartwood" && callerCompany() == c && docCompany(resource.data) == c && companyNotPaused(c);
     }
 // END LIVE LOCATION RULES
