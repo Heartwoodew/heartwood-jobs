@@ -511,7 +511,7 @@ The reminder is on by default for labourer, operator, supervisor and manager in 
 
 Each company is checked on its own clock. `companies/{id}.timezone` or `timeZone` is used when it is a real IANA name. Otherwise Australia/Brisbane. The function runs every 15 minutes (`*/15 * * * *`, time zone UTC) and sends when that local time is 06:30 up to, but not including, 07:00, Monday to Friday. `clockOnReminders/{companyId}_{date}_{uid}` is the once-a-day claim. Test companies, archived or suspended companies, owner-paused companies, ended trials, ended friend plans, and paid plans that are not billing active or trialing are skipped. Heartwood is not skipped for those reasons.
 
-Service worker `callup-shell-v155-clock-on-reminder`. Main is `callup-shell-v154-last-seen` after PR 133. This shell is v155 so the two do not clash.
+Service worker `callup-shell-v156-dispatch-drag`. Main is `callup-shell-v154-last-seen` after PR 133. This shell is v156 so the two do not clash.
 
 After review:
 
