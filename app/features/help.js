@@ -42,6 +42,14 @@ const TOPICS = Object.freeze([
     crew: "Your jobs are on Today and This week. Open a job to see the address, start it, add a note, or add photos. Adding a new job is done in the office.",
   },
   {
+    id: "repeat",
+    keywords: ["repeating job", "recurring", "this job repeats", "stop this series", "stop a series", "stop the series", "skip this visit"],
+    go: "jobs",
+    goLabel: "Take me to Jobs",
+    office: "On the first job, tick This job repeats and choose how often. Visits are added for the next 60 days. An admin stops the series with Stop this series, on the first job or on a later visit, or by unticking This job repeats. That asks you to confirm, then removes future visits that nobody has edited, skipped, started, or added notes, photos, documents, a timesheet, an invoice or a purchase order to. Visits today and earlier stay. Visits that were changed are listed and kept. A skipped visit stays on the planner as In progress. It is not marked Unsuccessful. Managers, supervisors and crew cannot stop a series.",
+    crew: "A repeating visit is set by an admin. You see your visit on the planner. Skipping a visit, or stopping the series, is done by an admin. A skipped visit shows as In progress. Prices are not shown on your login.",
+  },
+  {
     id: "quotes",
     keywords: ["quote", "quoting", "make a quote", "new quote", "wizard"],
     go: "quotes",

@@ -19,6 +19,7 @@ export const SERVER_ACTIONS = Object.freeze({
   invite: "Sending a staff invite needs signal.",
   "password-reset": "Password reset needs signal.",
   "gps-remind": "Sending a location reminder needs signal.",
+  "stop-series": "Stop series needs a connection so future visits can be checked before they are removed.",
   server: "This needs signal.",
 });
 

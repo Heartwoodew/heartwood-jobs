@@ -112,7 +112,7 @@ test("startDesktopInstall shows Download for Windows at once and adds Install on
   assert.match(host.innerHTML, /Install on this PC/);
 });
 
-test("the manifest can be installed on a desktop, and the shell is callup-shell-v155-clock-on-reminder", () => {
+test("the manifest can be installed on a desktop, and the shell is callup-shell-v158-stop-series", () => {
   const manifest = JSON.parse(readFileSync(join(ROOT, "app/manifest.webmanifest"), "utf8"));
   assert.equal(manifest.display, "standalone");
   assert.equal(manifest.start_url, "/app/");
@@ -121,7 +121,7 @@ test("the manifest can be installed on a desktop, and the shell is callup-shell-
   const sizes = manifest.icons.map(icon => icon.sizes);
   assert.ok(sizes.includes("192x192") && sizes.includes("512x512"));
   const sw = readFileSync(join(ROOT, "app/sw.js"), "utf8");
-  assert.match(sw, /callup-shell-v155-clock-on-reminder/);
+  assert.match(sw, /callup-shell-v158-stop-series/);
   assert.match(sw, /features\/desktop-install\.js/);
   const app = readFileSync(join(ROOT, "app/app.js"), "utf8");
   assert.match(app, /startDesktopInstall/);
