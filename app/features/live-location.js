@@ -1,6 +1,8 @@
-// Live crew position. One document per person, only while they are clocked on.
-// Heartwood keeps the legacy top-level collection. Every other company uses companies/{id}/liveLocations.
-// No trail, no route, and no writes once the shift is closed — the app deletes the doc on clock off.
+// Live crew position. One document per person. Heartwood keeps the legacy top-level
+// collection. Every other company uses companies/{id}/liveLocations. The last-known
+// dot is the same for every company: it is not limited to Heartwood.
+// No trail and no route. Clock off keeps the last position when SHOW_AFTER_CLOCK_OFF
+// is on (clockedOn false, clockedOffAt set). A lapsed update stays on the map and fades.
 
 export const LIVE_SHARE_TEXT = "Your location is shared with your managers only while you're clocked on.";
 export const GPS_REMIND_BODY = "Please turn on location sharing — clock on in CallUp, allow location, and keep CallUp open on site.";
@@ -14,6 +16,12 @@ export const MAP_TILES = "The map tiles didn't load. Tap Retry. The list below s
 export const SHARE_MIN_MS = 60000;
 export const SHARE_MIN_METRES = 50;
 export const SHARE_FIX_WAIT_MS = 20000;
+// Last-known dots stay after Clock Off. Flip this off to hide those people and delete the doc again.
+export const SHOW_AFTER_CLOCK_OFF = true;
+// A clocked-on position older than this fades. It stays on the map. Alex has not picked a final value.
+export const STALE_MINUTES = 10;
+// Every company uses this zone until a company record stores its own. Heartwood is not a special case.
+export const COMPANY_TIME_ZONE = "Australia/Brisbane";
 
 const CREW_ROLES = new Set(["labourer", "operator", "supervisor"]);
 
@@ -133,19 +141,70 @@ function asTime(v) {
   return null;
 }
 
-export function lastSeenLabel(updatedAt, now = new Date()) {
+export function lastSeenLabel(updatedAt, now = new Date(), timeZone = COMPANY_TIME_ZONE) {
   const t = asTime(updatedAt);
   if (t == null) return "Last seen unknown";
   const nowMs = now instanceof Date ? now.getTime() : now;
   const sec = Math.max(0, Math.round((nowMs - t) / 1000));
   const clock = new Intl.DateTimeFormat("en-AU", {
-    hour: "numeric", minute: "2-digit", hourCycle: "h12", timeZone: "Australia/Brisbane",
+    hour: "numeric", minute: "2-digit", hourCycle: "h12", timeZone: companyTimeZone(timeZone),
   }).format(new Date(t));
   if (sec < 45) return `Last seen just now (${clock})`;
   if (sec < 90) return `Last seen 1 min ago (${clock})`;
   if (sec < 3600) return `Last seen ${Math.round(sec / 60)} min ago (${clock})`;
   const hr = Math.round(sec / 3600);
   return `Last seen ${hr} hour${hr === 1 ? "" : "s"} ago (${clock})`;
+}
+
+/** Brisbane for every company, unless that company record has its own time zone. */
+export function companyTimeZone(company) {
+  const raw = company && typeof company === "object" ? company.timeZone : company;
+  const tz = typeof raw === "string" ? raw.trim() : "";
+  if (!tz) return COMPANY_TIME_ZONE;
+  try {
+    new Intl.DateTimeFormat("en-AU", { timeZone: tz }).format(new Date());
+    return tz;
+  } catch {
+    return COMPANY_TIME_ZONE;
+  }
+}
+
+/** Local clock in the company zone, e.g. 3:12pm. Empty when the time is missing. */
+export function seenClock(updatedAt, timeZone = COMPANY_TIME_ZONE) {
+  const t = asTime(updatedAt);
+  if (t == null) return "";
+  const parts = new Intl.DateTimeFormat("en-AU", {
+    hour: "numeric", minute: "2-digit", hourCycle: "h12", timeZone: companyTimeZone(timeZone),
+  }).formatToParts(new Date(t));
+  const hour = (parts.find(p => p.type === "hour") || {}).value || "";
+  const minute = (parts.find(p => p.type === "minute") || {}).value || "";
+  const period = ((parts.find(p => p.type === "dayPeriod") || {}).value || "").replace(/\./g, "").replace(/\s/g, "").toLowerCase();
+  if (!hour || !minute) return "";
+  return `${hour}:${minute}${period}`;
+}
+
+/** Older than STALE_MINUTES. A missing time is stale. Exactly the threshold is still fresh. */
+export function isPositionStale(updatedAt, now = new Date(), staleMinutes = STALE_MINUTES) {
+  const t = asTime(updatedAt);
+  if (t == null) return true;
+  const nowMs = now instanceof Date ? now.getTime() : Number(now);
+  const limit = (Number(staleMinutes) || 0) * 60 * 1000;
+  return nowMs - t > limit;
+}
+
+/** Clock Off fields. updatedAt, lat and lng stay as last reported. */
+export function clockOffLocationUpdate(clockedOffAt) {
+  return { clockedOn: false, clockedOffAt };
+}
+
+export function crewMarkerLabel({ name, updatedAt, clockedOn, stale, timeZone = COMPANY_TIME_ZONE } = {}) {
+  const who = String(name || "Staff").trim() || "Staff";
+  const clock = seenClock(updatedAt, timeZone);
+  const when = clock ? `last seen ${clock}` : "last seen unknown";
+  const notes = [];
+  if (clockedOn === false) notes.push("clocked off");
+  if (stale) notes.push("stale");
+  return `${who}, ${when}${notes.length ? ` (${notes.join(", ")})` : ""}`;
 }
 
 export function jobAssignedTo(job, person) {
@@ -194,20 +253,44 @@ function openToday(job, today) {
   return !!(job && job.date === today && job.status !== "Cancelled" && job.sm8Status !== "Unsuccessful");
 }
 
-export function crewMapModel({ locations, jobs, today, now = new Date() } = {}) {
-  const people = (locations || []).filter(d => d && d.clockedOn === true).map(d => {
+function hasFix(d) {
+  return !!(d && d.sharing === "gps" && Number.isFinite(+d.lat) && Number.isFinite(+d.lng));
+}
+
+/** Clocked-on people always stay. Clocked-off people stay only when the setting is on and a fix exists. */
+export function showOnCrewMap(d, showAfterClockOff = SHOW_AFTER_CLOCK_OFF) {
+  if (!d) return false;
+  if (d.clockedOn === true) return true;
+  return showAfterClockOff === true && d.clockedOn === false && hasFix(d);
+}
+
+export function crewMapModel({
+  locations, jobs, today, now = new Date(),
+  showAfterClockOff = SHOW_AFTER_CLOCK_OFF,
+  staleMinutes = STALE_MINUTES,
+  timeZone = COMPANY_TIME_ZONE,
+} = {}) {
+  const zone = companyTimeZone(timeZone);
+  const people = (locations || []).filter(d => showOnCrewMap(d, showAfterClockOff)).map(d => {
     const lat = +d.lat, lng = +d.lng;
-    const sharing = d.sharing === "gps" && Number.isFinite(lat) && Number.isFinite(lng) ? "gps" : "off";
+    const sharing = hasFix(d) ? "gps" : "off";
     const person = { uid: d.uid || d.id, name: String(d.name || "Staff") };
     const mine = (jobs || []).filter(j => openToday(j, today) && jobAssignedTo(j, person));
+    const clockedOn = d.clockedOn === true;
+    const stale = sharing === "gps" && isPositionStale(d.updatedAt, now, staleMinutes);
+    const dot = !clockedOn ? "off" : stale ? "stale" : "live";
     return {
       uid: person.uid,
       name: person.name,
       sharing,
+      clockedOn,
+      stale,
+      dot,
       lat: sharing === "gps" ? lat : null,
       lng: sharing === "gps" ? lng : null,
       accuracy: sharing === "gps" && Number.isFinite(+d.accuracy) ? Math.round(+d.accuracy) : null,
-      lastSeen: lastSeenLabel(d.updatedAt, now),
+      lastSeen: lastSeenLabel(d.updatedAt, now, zone),
+      markerLabel: crewMarkerLabel({ name: person.name, updatedAt: d.updatedAt, clockedOn, stale, timeZone: zone }),
       jobs: mine.map(presentJob),
     };
   }).sort((a, b) => a.name.localeCompare(b.name) || String(a.uid).localeCompare(String(b.uid)));
@@ -240,11 +323,12 @@ export function crewListHtml(model, esc) {
   if (!people.length) return `<p class="crew-note">Nobody is clocked on.</p>`;
   return `<div class="crew-list">${people.map(p => {
     const where = p.sharing === "gps"
-      ? `${e(p.lastSeen)}${p.accuracy != null ? ` · ±${p.accuracy} m` : ""}`
+      ? `${e(p.markerLabel || p.lastSeen)}${p.accuracy != null ? ` · ±${p.accuracy} m` : ""}`
       : CREW_UNSHARED;
     const jobs = p.jobs.length
       ? p.jobs.map(j => `<li>${j.time ? `${e(j.time)} · ` : ""}${e(j.label)}${j.jobNo ? ` · #${e(j.jobNo)}` : ""}${j.client ? ` · ${e(j.client)}` : ""}${j.lat == null && j.address ? " · no pin" : ""}</li>`).join("")
       : `<li>No job assigned today</li>`;
-    return `<article class="crew-card"><b>${e(p.name)}</b><div class="sub">${where}</div><ul>${jobs}</ul></article>`;
+    const tone = p.dot === "off" ? " off" : p.dot === "stale" ? " stale" : "";
+    return `<article class="crew-card${tone}"><b>${e(p.name)}</b><div class="sub">${where}</div><ul>${jobs}</ul></article>`;
   }).join("")}</div>`;
 }

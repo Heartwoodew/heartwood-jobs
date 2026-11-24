@@ -64,7 +64,8 @@ import {
   paidShift, prestartStatus, sheetHours, shiftHours, sortedEntries, stampText,
 } from "./features/timesheet.js";
 import {
-  LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, SHARE_FIX_WAIT_MS, canSeeCrewMap, companySharesLocation, crewListHtml, crewMapModel,
+  LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, SHARE_FIX_WAIT_MS, SHOW_AFTER_CLOCK_OFF, STALE_MINUTES, canSeeCrewMap, clockOffLocationUpdate,
+  companySharesLocation, companyTimeZone, crewListHtml, crewMapModel,
   crewMapNotice, crewPinNote, homeCrewSlot, jobPoint, liveCollectionPath, liveLocationBody, locationRemindBannerHtml, mapFailureStatus, shareIndicator, shouldSendPosition,
 } from "./features/live-location.js";
 
@@ -213,7 +214,7 @@ let INBOUND_DOMAIN = "inbound.callupapp.com.au";
 let startDesktopInstall = () => {};
 let refreshDesktopBanner = () => {};
 let desktopBannerWouldShow = () => false;
-let SHELL_VERSION = "callup-shell-v152-crew-map-jobs";
+let SHELL_VERSION = "callup-shell-v154-last-seen";
 let prepareTicket = () => ({ ok: false, reason: "loading" });
 let ticketDialogHtml = () => "";
 let ticketFailureText = () => "The ticket could not be sent. Try again.";
@@ -4207,7 +4208,7 @@ function armShareWatch() {
   if (shareRun.watch == null) {
     shareRun.watch = geo.watchPosition(
       pos => considerShareFix(positionFix(pos)),
-      () => sendShareOff(),
+      () => { if (shareRun && !shareRun.last) sendShareOff(); },
       { enableHighAccuracy: true, maximumAge: 15000, timeout: 20000 },
     );
   }
@@ -4243,6 +4244,15 @@ function liveShareStart(entryId, weekStart, firstFix) {
   if (firstFix) considerShareFix(firstFix);
   armShareWatch();
 }
+function releaseLiveDoc(companyId) {
+  if (!me || !companyId) return;
+  const ref = doc(db, ...liveCollectionPath(companyId), me.uid);
+  if (SHOW_AFTER_CLOCK_OFF) {
+    updateDoc(ref, clockOffLocationUpdate(serverTimestamp())).catch(() => {});
+    return;
+  }
+  deleteDoc(ref).catch(() => {});
+}
 function liveShareStop(clearDoc) {
   const run = shareRun;
   disarmShareWatch();
@@ -4251,13 +4261,13 @@ function liveShareStop(clearDoc) {
   paintShareStatus();
   if (clearDoc && run && me && !liveCleared) {
     liveCleared = true;
-    deleteDoc(doc(db, ...liveCollectionPath(run.companyId), me.uid)).catch(() => {});
+    releaseLiveDoc(run.companyId);
   }
 }
 function clearStaleLive() {
   if (!me || shareRun || liveCleared) return;
   liveCleared = true;
-  deleteDoc(doc(db, ...liveCollectionPath(myCompanyId()), me.uid)).catch(() => {});
+  releaseLiveDoc(myCompanyId());
 }
 function noteShareHidden() {
   if (!shareRun || shareRun.last || shareRun.offSent) return;
@@ -4321,20 +4331,20 @@ function canUpdateJobs() {
 }
 function crewMapScreen() {
   return `<div class="crew-map-wrap">
-    <p class="crew-note">${esc(LIVE_LIMIT_NOTE)} Clocking off removes someone straight away.</p>
+    <p class="crew-note">${esc(LIVE_LIMIT_NOTE)} A dot stays at the last place that phone reported. It fades after ${STALE_MINUTES} minutes without an update${SHOW_AFTER_CLOCK_OFF ? ", and stays faded after clock off" : ""}.</p>
     <div class="crew-map-frame">
       <div id="crewmap" class="crew-map" role="region" aria-label="Live crew map"></div>
       <p id="crewmapempty" class="crew-map-note" hidden></p>
     </div>
     <p id="crewmapstatus" class="crew-note"></p>
     <button type="button" id="crewmapretry" class="sm-btn" hidden>Retry</button>
-    <p class="crew-legend"><span class="crew-dot crew"></span> Clocked on <span class="crew-dot job"></span> Today's job</p>
+    <p class="crew-legend"><span class="crew-dot crew"></span> Clocked on <span class="crew-dot stale"></span> Stale ${SHOW_AFTER_CLOCK_OFF ? `<span class="crew-dot off"></span> Clocked off ` : ""}<span class="crew-dot job"></span> Today's job</p>
     <div id="crewlist"><p class="crew-note">Loading crew…</p></div>
   </div>`;
 }
 function homeCrewCard() {
   if (homeCrewSlot(me) !== "crew") return "";
-  return `<section class="hsec crew-home" aria-label="Crew on the clock"><div class="hsec-h">Crew <small>clocked on now</small></div>${crewMapScreen()}</section>`;
+  return `<section class="hsec crew-home" aria-label="Crew on the map"><div class="hsec-h">Crew <small>last known</small></div>${crewMapScreen()}</section>`;
 }
 function openCrewScreen() {
   if (!canSeeCrewMap(me)) return;
@@ -4351,7 +4361,7 @@ function openCrewScreen() {
     const companyId = myCompanyId();
     const path = liveCollectionPath(companyId);
     ui.crewUnsub = onSnapshot(query(collection(db, ...path), where("companyId", "==", companyId)), s => {
-      ui.crewLive = s.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => x.clockedOn === true && (x.companyId || "heartwood") === companyId);
+      ui.crewLive = s.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => (x.companyId || "heartwood") === companyId);
       ui.crewErr = "";
       paintCrew();
     }, e => { ui.crewErr = e.code || "permission-denied"; paintCrew(); });
@@ -4379,7 +4389,7 @@ function paintCrewMapStatus(model, failure) {
   if (ui.crewErr) { status.textContent = "The crew list isn't available on this sign-in."; return; }
   const parts = [];
   if (notice && !gps) parts.push(notice);
-  else parts.push("Blue dots are people clocked on. Amber dots are today's jobs that already have a map pin.");
+  else parts.push(`Blue dots are people clocked on. Grey dots are a last position older than ${STALE_MINUTES} minutes${SHOW_AFTER_CLOCK_OFF ? ", or someone who has clocked off" : ""}. Amber dots are today's jobs that already have a map pin.`);
   if (gap) parts.push(gap);
   status.textContent = parts.join(" ");
 }
@@ -4417,13 +4427,17 @@ function paintCrew() {
     if (ui.crewLayer) ui.crewLayer.clearLayers();
     return;
   }
-  const model = crewMapModel({ locations: ui.crewLive || [], jobs: ui.crewJobs || [], today: todayStr(), now: new Date() });
+  const model = crewMapModel({ locations: ui.crewLive || [], jobs: ui.crewJobs || [], today: todayStr(), now: new Date(), timeZone: companyTimeZone(orgSettings()) });
   list.innerHTML = crewListHtml(model, esc);
   bindCrewMapRetry();
   ensureCrewMap(model);
 }
 function crewIcon(L, color) {
   return L.divIcon({ className: "crew-pin", html: `<span style="background:${color}"></span>`, iconSize: [18, 18], iconAnchor: [9, 9] });
+}
+function crewPersonIcon(L, dot) {
+  const kind = dot === "off" || dot === "stale" ? dot : "live";
+  return L.divIcon({ className: "crew-pin", html: `<span class="${kind}"></span>`, iconSize: [18, 18], iconAnchor: [9, 9] });
 }
 const LEAFLET_CSS = ["vendor/leaflet/leaflet.css", "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"];
 const LEAFLET_JS = ["vendor/leaflet/leaflet.js", "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"];
@@ -4482,7 +4496,7 @@ async function ensureCrewMap(model) {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
     }).addTo(ui.crewMap);
     let tilesOk = false;
-    const crewNow = () => crewMapModel({ locations: ui.crewLive || [], jobs: ui.crewJobs || [], today: todayStr(), now: new Date() });
+    const crewNow = () => crewMapModel({ locations: ui.crewLive || [], jobs: ui.crewJobs || [], today: todayStr(), now: new Date(), timeZone: companyTimeZone(orgSettings()) });
     tiles.on("tileload", () => {
       const was = ui.crewTilesFailed;
       tilesOk = true;
@@ -4501,8 +4515,8 @@ async function ensureCrewMap(model) {
   for (const p of model.people) {
     if (p.sharing !== "gps" || p.lat == null) continue;
     const jobs = p.jobs.map(j => esc(j.label)).filter(Boolean).join(", ");
-    L.marker([p.lat, p.lng], { icon: crewIcon(L, "#1d4ed8"), title: p.name })
-      .bindPopup(`<b>${esc(p.name)}</b><br>${esc(p.lastSeen)}${p.accuracy != null ? `<br>±${p.accuracy} m` : ""}${jobs ? `<br>${jobs}` : ""}`)
+    L.marker([p.lat, p.lng], { icon: crewPersonIcon(L, p.dot), title: p.markerLabel || p.name })
+      .bindPopup(`<b>${esc(p.markerLabel || p.name)}</b>${p.accuracy != null ? `<br>±${p.accuracy} m` : ""}${jobs ? `<br>${jobs}` : ""}`)
       .addTo(ui.crewLayer);
     bounds.push([p.lat, p.lng]);
   }
@@ -5027,7 +5041,7 @@ function withHeartwoodOwner(rows, companyId) {
 function watchStaffRoster() {
   if (!canInvite()) return () => {};
   const companyId = myCompanyId();
-  const stopLive = onSnapshot(query(collection(db, ...liveCollectionPath(companyId)), where("companyId", "==", companyId)), s => {
+  const stopLive = onSnapshot(query(collection(db, ...liveCollectionPath(companyId)), where("companyId", "==", companyId), where("clockedOn", "==", true)), s => {
     const map = {};
     s.docs.forEach(d => {
       const data = d.data() || {};

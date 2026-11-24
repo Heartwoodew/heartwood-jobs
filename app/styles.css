@@ -27,11 +27,17 @@
 .crew-legend{display:flex;gap:14px;align-items:center;font-size:13px;margin:0}
 .crew-dot{width:12px;height:12px;border-radius:50%;display:inline-block;margin-right:6px;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.3)}
 .crew-dot.crew{background:#1d4ed8}.crew-dot.job{background:#b45309}
+.crew-dot.stale{background:#64748b;opacity:.7}
+.crew-dot.off{background:#64748b;opacity:.4;border-style:dashed}
 .crew-list{display:flex;flex-direction:column;gap:8px}
 .crew-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px}
 .crew-card ul{margin:6px 0 0;padding-left:18px}
 .crew-pin{background:transparent;border:0}
 .crew-pin span{display:block;width:16px;height:16px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.35)}
+.crew-pin span.live{background:#1d4ed8}
+.crew-pin span.stale{background:#64748b;opacity:.55}
+.crew-pin span.off{background:#64748b;opacity:.38;border-style:dashed}
+.crew-card.stale{opacity:.8}.crew-card.off{opacity:.62}
 button{font:inherit;border:1px solid var(--line);background:var(--card);border-radius:8px;padding:7px 12px;cursor:pointer;color:var(--ink)}
 button.primary{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}button.ghost{background:transparent}
 .top button.ghost{color:#f6f1ea;border-color:#6b5440}button.sm{padding:2px 7px;font-size:12px}
