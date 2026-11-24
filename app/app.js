@@ -17,8 +17,11 @@ import { OPEN_STATUSES, staleOpenJobs, mergeJobLists, parseHoursInput } from "./
 import {
   DISPATCH_CATEGORIES, approvedSheet, dispatchSettingsHtml, estimateDuration, formatEstimate,
   historyMedians, isManualStart, keepsStart, normaliseTime, planAutoTimes, primaryKey, readDispatchLocal,
-  sanitizeDispatchSettings, spaceDay, withSortHint, writeDispatchLocal,
+  sanitizeDispatchSettings, spaceDay, writeDispatchLocal,
 } from "./features/dispatch-times.js";
+import {
+  LONG_PRESS_MS, bindBoardDrag, blockDays, canEditJobDate, dragBlockReason, dragGhostText, dropFromCell, planDispatchDrop,
+} from "./features/dispatch-drag.js";
 import { installRouteOrder, orderJobsForRun, runSheetId, geoPatch, geocodeAddress, resolveConfig, setRouteDepot } from "./features/route-order.js";
 import {
   bindDescriptionPicker, collectSuggestions, descriptionPickerHtml, detailsFromClient, emailsFromRecipientDoc,
@@ -214,7 +217,7 @@ let INBOUND_DOMAIN = "inbound.callupapp.com.au";
 let startDesktopInstall = () => {};
 let refreshDesktopBanner = () => {};
 let desktopBannerWouldShow = () => false;
-let SHELL_VERSION = "callup-shell-v155-clock-on-reminder";
+let SHELL_VERSION = "callup-shell-v156-dispatch-drag";
 let prepareTicket = () => ({ ok: false, reason: "loading" });
 let ticketDialogHtml = () => "";
 let ticketFailureText = () => "The ticket could not be sent. Try again.";
@@ -1135,14 +1138,20 @@ function boardHour(slot, job) {
   if (h > 18) return 18;
   return h;
 }
+function scheduleActor() {
+  return { role: me && me.role, staffRole: me && me.staffRole, companyId: myCompanyId() };
+}
 function dispatchChip(j, slot) {
   const away = assignmentWarning(ui.leave || [], j.date, leavePeople(namesOf(j)));
   const time = slot ? slot.time : (j.time || "");
   const est = slot ? formatEstimate(slot.estHours) : "";
   const late = slot && slot.pastFinish;
+  const locked = dragBlockReason(j);
+  const span = blockDays(j);
   const why = slot && slot.estSource === "quote" ? "Hours from the quote" : slot && slot.estSource === "history" ? "Median clocked time for this kind of job" : "Default for this kind of job";
-  return `<div class="dchip ${QCLS[queueOf(j)]} t-${j.type} ${j.status === "In progress" ? "inprog" : ""} ${away ? "on-leave" : ""} ${late ? "past-finish" : ""}" draggable="true" data-id="${j.id}" title="${esc(j.client)} – ${esc(j.description)}${est ? " · " + esc(est) : ""}${late ? " · Runs past finish time" : ""}${away ? " · " + away : ""}">${ipTop(j, "sm")}
-      <b>${esc(time)}</b> ${esc((j.address || "").split(",")[0])}<div class="sub"><span class="est" title="${esc(why)}">${esc(est)}</span>${esc(jobTypeText(j) || TYPES[j.type] || "")} · #${esc(jobNo(j))}</div>${late ? `<div class="sub past-finish">Runs past finish time</div>` : ""}</div>`;
+  const hold = locked === "invoiced" ? "Invoiced jobs can't be moved" : locked === "completed" ? "Completed jobs can't be moved" : "Drag to another day, time or person";
+  return `<div class="dchip ${QCLS[queueOf(j)]} t-${j.type} ${j.status === "In progress" ? "inprog" : ""} ${away ? "on-leave" : ""} ${late ? "past-finish" : ""} ${locked ? "locked" : ""}" draggable="false" data-id="${j.id}" data-time="${esc(time)}" title="${esc(j.client)} – ${esc(j.description)}${est ? " · " + esc(est) : ""}${late ? " · Runs past finish time" : ""}${away ? " · " + away : ""} · ${esc(hold)}">${ipTop(j, "sm")}
+      <b>${esc(time)}</b> ${esc((j.address || "").split(",")[0])}<div class="sub"><span class="est" title="${esc(why)}">${esc(est)}</span>${esc(jobTypeText(j) || TYPES[j.type] || "")} · #${esc(jobNo(j))}${span > 1 ? ` · ${span}-day block` : ""}</div>${late ? `<div class="sub past-finish">Runs past finish time</div>` : ""}</div>`;
 }
 function inviteDisplayNow() {
   return window.HW_TODAY ? new Date(window.HW_TODAY + "T12:00:00+10:00") : new Date();
@@ -2378,7 +2387,7 @@ function dispatchView(all) {
       <button type="button" class="sm-btn route-open" id="optorder">Optimise order</button>
       <button id="new" class="sm-btn primary">+ New Job</button></div>
     ${leaveBanner}
-    <div class="dwrap"><div class="dboard"><p class="touchhint">Tap a job to open it. Press and hold a job to move it to another day or staff member.</p><div class="dgrid-scroll">${grid}</div><p class="sub muted">Drag a job to another day or staff member to reschedule (${esc(syncNote("saved in the app, synced at the next sync", "saved straight away"))}).</p></div>
+    <div class="dwrap"><div class="dboard"><p class="touchhint">Tap a job to open it. Press and hold, then drag it. Scrolling still works until the hold starts.</p><div class="dgrid-scroll">${grid}</div><p class="sub muted">Drag a job to another day, time or person (${esc(syncNote("saved in the app, synced at the next sync", "saved straight away"))}). On the day board, the start snaps to 15 minutes. On the week board, a drop between jobs sets the start so that order stays. Completed and invoiced jobs stay put.</p></div>
       </div>`;
 }
 // Floating "Done today" card (dispatch board + job list). Today = Brisbane date of completedAt (fallback: job date when
@@ -5689,67 +5698,107 @@ function renderAdmin() {
   const pool = [...jobs, ...(ui.undated || [])];
   A.querySelectorAll("[data-id]").forEach(el => {
     el.onclick = ev => { if (ev.target.closest("input,button,label,textarea")) return; editJob(pool.find(j => j.id === el.dataset.id) || (ui.done || []).find(j => j.id === el.dataset.id)); };
+    if (el.classList.contains("dchip") || el.classList.contains("mdc")) return;
     el.ondragstart = ev => { ev.dataTransfer.setData("text/plain", el.dataset.id + "|" + (el.closest("[data-staff]")?.dataset.staff || "")); el.classList.add("dragging"); };
     el.ondragend = () => el.classList.remove("dragging");
   });
-  // iPad / touch: HTML5 drag is unreliable, so press-and-hold a board chip or unscheduled card to open the Move sheet; tap still opens the job.
-  if (TOUCH.matches && !PHONE.matches) A.querySelectorAll(".dchip[data-id],.uj[data-id]").forEach(el => {
+  // Unscheduled cards still open the Move sheet on a long-press. Board chips drag instead.
+  if (TOUCH.matches && !PHONE.matches) A.querySelectorAll(".uj[data-id]").forEach(el => {
     el.draggable = false; el.ondragstart = null; let t = null, held = false;
     const clear = () => { clearTimeout(t); t = null; };
-    el.addEventListener("touchstart", () => { held = false; clear(); t = setTimeout(() => { held = true; const j = pool.find(x => x.id === el.dataset.id); if (j) moveSheet(j); }, 500); }, { passive: true });
+    el.addEventListener("touchstart", () => { held = false; clear(); t = setTimeout(() => { held = true; const j = pool.find(x => x.id === el.dataset.id); if (j) moveSheet(j); }, LONG_PRESS_MS); }, { passive: true });
     el.addEventListener("touchmove", clear, { passive: true }); el.addEventListener("touchend", clear); el.addEventListener("touchcancel", clear);
     el.addEventListener("contextmenu", e => e.preventDefault());
     el.addEventListener("click", e => { if (held) { e.stopImmediatePropagation(); e.preventDefault(); held = false; } }, true);
   });
+  if (ui.unbindDrag) { ui.unbindDrag(); ui.unbindDrag = null; }
+  if (ui.view === "dispatch") {
+    ui.unbindDrag = bindBoardDrag(A, {
+      longPressMs: LONG_PRESS_MS,
+      job: id => pool.find(j => j.id === id),
+      canDrag: job => canEditJobDate(scheduleActor()) && !dragBlockReason(job),
+      blockReason: dragBlockReason,
+      ghost: job => dragGhostText(job),
+      onDrop: (job, drop) => { ui.boardHoldSwipe = true; setTimeout(() => { ui.boardHoldSwipe = false; }, 80); dispatchMove(job, drop); },
+      onBlocked: (_job, reason) => toast(reason === "invoiced" ? "Invoiced jobs can't be moved." : "Completed jobs can't be moved."),
+    });
+  }
   A.querySelectorAll(".drop").forEach(z => {
     z.ondragover = ev => { ev.preventDefault(); z.classList.add("over"); };
     z.ondragleave = () => z.classList.remove("over");
     z.ondrop = ev => { ev.preventDefault(); z.classList.remove("over");
-      const [id, from] = ev.dataTransfer.getData("text/plain").split("|"); const j = pool.find(x => x.id === id);
-      if (j) dispatchMove(j, z.dataset.date, from, z.dataset.staff, z.dataset.hour); };
+      const [id, from] = (ev.dataTransfer.getData("text/plain") || "").split("|"); const j = pool.find(x => x.id === id);
+      if (!j) return;
+      dispatchMove(j, dropFromCell(z, ev.clientY, { fromKey: from, jobId: id })); };
   });
 }
-// Dispatch drag: date (and optionally hour / staff row). Writes Firestore only (admin), marks editedInApp so the
-// 30-min ServiceM8 import keeps the change. Nothing is written to ServiceM8.
-async function dispatchMove(j, date, fromKey, toKey, hour) {
-  const u = { date, editedInApp: true, updatedAt: serverTimestamp(), updatedBy: me.uid };
-  if (toKey && fromKey !== toKey) {
+// Dispatch drag. The booking is saved with writeJob, the same split the job form uses for a date
+// or time edit (money stays off the job). editedInApp, updatedAt and updatedBy are set here too.
+// A day-grid drop pins a 15-minute start. A week or phone drop between jobs pins the start that
+// keeps that order. A date-only move leaves an automatic start for the planner to space.
+async function dispatchMove(j, drop) {
+  if (!canEditJobDate(scheduleActor())) { toast("You can't change a job's date."); return; }
+  const settings = dispatchSettingsNow();
+  const plan = planDispatchDrop(j, drop, settings);
+  if (!plan.ok) {
+    if (plan.reason === "invoiced") toast("Invoiced jobs can't be moved.");
+    else if (plan.reason === "completed") toast("Completed jobs can't be moved.");
+    return;
+  }
+  const prev = {
+    date: j.date || "", time: j.time || "", timeSource: j.timeSource || "auto",
+    endDate: j.endDate || "", dateEnd: j.dateEnd || "",
+    assigned: Array.isArray(j.assigned) ? j.assigned.slice() : [],
+    assignedNames: Array.isArray(j.assignedNames) ? j.assignedNames.slice() : [],
+    estHours: j.estHours ?? null, estSource: j.estSource || "",
+  };
+  const u = { ...plan.patch, editedInApp: true, updatedAt: serverTimestamp(), updatedBy: me.uid };
+  if (plan.staffChanged) {
     const find = k => staff.find(s => skey(s) === k);
-    let names = namesOf(j).slice(); const from = find(fromKey), to = find(toKey);
+    let names = namesOf(j).slice(); const from = find(plan.fromKey), to = find(plan.toKey);
     if (from) names = names.filter(n => n.toLowerCase() !== from.name.toLowerCase());
-    if (toKey === "_none") names = []; else if (to && !names.some(n => n.toLowerCase() === to.name.toLowerCase())) names.push(to.name);
+    if (plan.toKey === "_none") names = []; else if (to && !names.some(n => n.toLowerCase() === to.name.toLowerCase())) names.push(to.name);
     u.assignedNames = names;
     u.assigned = names.map(n => (staff.find(s => s.name.toLowerCase() === n.toLowerCase()) || {}).uid).filter(Boolean);
   }
-  // A pinned start dropped on an hour stays at that hour. An auto job uses the hour only to choose its place in the day.
-  if (hour && keepsStart(j)) {
-    const mm = (normaliseTime(j.time) || "00:00").slice(3);
-    u.time = String(hour).padStart(2, "0") + ":" + mm;
-    u.timeSource = "manual";
-  }
-  if (j.date === date && !u.assignedNames && !u.time && !hour) return;
-  const names = u.assignedNames || namesOf(j);
-  if (!confirmIfOnLeave(date, names)) return;
+  const nextDate = u.date || j.date;
+  if (!confirmIfOnLeave(nextDate, u.assignedNames || namesOf(j))) return;
   const draft = {
-    ...j, date,
+    ...j, ...plan.patch, date: nextDate,
     assigned: u.assigned || j.assigned, assignedNames: u.assignedNames || j.assignedNames,
     time: u.time || j.time, timeSource: u.timeSource || j.timeSource,
   };
-  let pool = [...jobs, ...(ui.undated || [])].map(x => x.id === j.id ? draft : x);
-  if (hour && !u.timeSource) pool = withSortHint(pool, j.id, hour);
-  const dates = [...new Set([j.date, date].filter(Boolean))];
+  const pool = [...jobs, ...(ui.undated || [])].map(x => x.id === j.id ? draft : x);
+  const dates = [...new Set([j.date, nextDate].filter(Boolean))];
   const writes = planAutoTimes(pool, {
-    settings: dispatchSettingsNow(), history: dispatchHistory(pool), sheets: ui.runSheets || {},
-    dates,
+    settings, history: dispatchHistory(pool), sheets: ui.runSheets || {}, dates,
   });
   const mine = writes.find(w => w.id === j.id);
-  if (mine && !u.timeSource) Object.assign(u, { time: mine.time, timeSource: "auto", estHours: mine.estHours, estSource: mine.estSource });
-  try { await updateDoc(doc(db, "jobs", j.id), u); } catch (e) { return toast("Not saved: " + (e.code || e.message)); }
+  if (mine && u.timeSource !== "manual") Object.assign(u, { time: mine.time, timeSource: "auto", estHours: mine.estHours, estSource: mine.estSource });
+  let saved;
+  try { saved = await writeJob(j.id, u); }
+  catch (e) { return toast("Not saved: " + (e.code || e.message)); }
   if (ui.undated) ui.undated = ui.undated.filter(x => x.id !== j.id);
-  Object.assign(j, { date, ...(u.time ? { time: u.time } : {}), ...(u.timeSource ? { timeSource: u.timeSource } : {}), ...(u.estHours != null ? { estHours: u.estHours, estSource: u.estSource } : {}), ...(u.assigned ? { assigned: u.assigned, assignedNames: u.assignedNames } : {}) });
-  const rest = writes.filter(w => w.id !== j.id);
-  if (rest.length) queueDispatchPersist(pool.map(x => x.id === j.id ? { ...x, ...u } : x), dates);
-  toast(`Rescheduled to ${shortDate(date)}${u.time ? " " + u.time : ""}${u.assignedNames ? " · " + (u.assignedNames.join(", ") || "Unallocated") : ""}`);
+  if (PHONE.matches && nextDate) ui.mday = nextDate;
+  const applied = {};
+  for (const key of Object.keys(u)) if (key !== "editedInApp" && key !== "updatedAt" && key !== "updatedBy") applied[key] = u[key];
+  Object.assign(j, applied);
+  queueDispatchPersist(pool.map(x => x.id === j.id ? { ...x, ...applied } : x), dates);
+  const when = applied.time || j.time || "";
+  const who = applied.assignedNames ? (applied.assignedNames.join(", ") || "Unallocated") : "";
+  undoToast(`Rescheduled to ${shortDate(nextDate)}${when ? " " + when : ""}${who ? " · " + who : ""}`, async () => {
+    const back = { editedInApp: true, updatedAt: serverTimestamp(), updatedBy: me.uid };
+    for (const key of Object.keys(applied)) back[key] = prev[key];
+    await writeJob(j.id, back);
+    const restored = {};
+    for (const key of Object.keys(applied)) restored[key] = prev[key];
+    Object.assign(j, restored);
+    if (PHONE.matches && prev.date) ui.mday = prev.date;
+    queueDispatchPersist([...(jobs || []), ...(ui.undated || [])].map(x => x.id === j.id ? { ...x, ...restored } : x), dates);
+    toast("Move undone");
+    renderAdmin();
+  });
+  if (saved) renderAdmin();
 }
 // "Remove from dispatch board": clears date/time (job goes back to Unscheduled; nothing is deleted). The next sync deletes
 // this visit's staff bookings in ServiceM8 (sm8_push), not the job. Undo puts the date/time back.
@@ -8264,12 +8313,15 @@ function mobileDispatch(all) {
     const time = slot ? slot.time : (j.time || "--:--");
     const est = slot ? formatEstimate(slot.estHours) : "";
     const late = slot && slot.pastFinish;
-    return `<div class="mdc ${QCLS[queueOf(j)]} ${away ? "on-leave" : ""} ${late ? "past-finish" : ""}" data-id="${j.id}">
+    const locked = dragBlockReason(j);
+    const span = blockDays(j);
+    return `<div class="mdc ${QCLS[queueOf(j)]} ${away ? "on-leave" : ""} ${late ? "past-finish" : ""} ${locked ? "locked" : ""}" draggable="false" data-id="${j.id}" data-time="${esc(time)}">
       <div class="mdc-top"><b class="mdc-time">${esc(time)}</b><span class="mdc-no">#${esc(jobNo(j))}</span><span class="pstack">${ipPill(j, "sm")}<span class="qpill ${QCLS[queueOf(j)]}">${esc(queueOf(j))}</span></span></div>
       <div class="mdc-cl">${esc(j.client || "")}</div>
       <a class="mdc-addr" href="${mapsUrl(j.address || "")}" target="_blank" rel="noopener">📍 ${esc(j.address || "-")}</a>
       <div class="mdc-desc">${esc(firstLine(crewText(j.description)))}</div>
       ${est ? `<div class="sub est">${esc(est)}</div>` : ""}
+      ${span > 1 ? `<p class="sub">${span}-day block</p>` : ""}
       ${late ? `<p class="sub past-finish">Runs past finish time</p>` : ""}
       ${away ? `<p class="leave-chip">${esc(away)}</p>` : ""}
       <div class="mdc-foot"><span class="sub">${j.po ? "PO " + esc(j.po) : "No PO"}${est ? " · " + esc(est) : ""}</span>
@@ -8278,18 +8330,18 @@ function mobileDispatch(all) {
   const groups = rowsFor(all).map(r => {
     const plan = rowPlan(r, d, dayJobs);
     const cards = plan.map(slot => { const j = dayJobs.find(x => x.id === slot.id); return j ? card(j, slot) : ""; }).join("");
-    return [r, cards, plan.length];
+    return `<div class="mlane drop" data-date="${d}" data-staff="${esc(r.key)}"><div class="mgrp">${esc(r.name)} <span class="cnt">${plan.length}</span></div>${cards || `<p class="muted sub pad">Nothing booked for ${esc(orgSettings().name)}.</p>`}</div>`;
   });
   return `<div class="mdisp" id="mdisp"><div class="mdh">
       <div class="mdh-row"><button class="sm-btn" data-md="-1" aria-label="Previous day">‹</button>
         <div class="mdh-date"><b>${esc(dayLabel(d))}</b>${d === t0 ? '<span class="sub">Today</span>' : ""}</div>
         <button class="sm-btn" data-md="1" aria-label="Next day">›</button><button class="sm-btn" data-md="0">Today</button></div>
       <div class="mstrip">${strip.map(x => { const n = sched.filter(j => j.date === x).length;
-        return `<button class="${x === d ? "on" : ""} ${x === t0 ? "today" : ""}" data-mday="${x}"><small>${new Date(x + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", timeZone: "UTC" })}</small><b>${+x.slice(8)}</b><span class="${n ? "" : "zero"}">${n}</span></button>`; }).join("")}</div></div>
+        return `<button class="drop ${x === d ? "on" : ""} ${x === t0 ? "today" : ""}" data-mday="${x}" data-date="${x}"><small>${new Date(x + "T00:00:00Z").toLocaleDateString("en-AU", { weekday: "short", timeZone: "UTC" })}</small><b>${+x.slice(8)}</b><span class="${n ? "" : "zero"}">${n}</span></button>`; }).join("")}</div></div>
     <button type="button" class="route-open" id="optorder">Optimise order</button>
     ${plannerLeaveHtml(ui.leave || [], [d], staff.map(s => ({ uid: s.uid || "", name: s.name })))}
-    ${groups.map(([r, html, n]) => `<div class="mgrp">${esc(r.name)} <span class="cnt">${n}</span></div>${html || `<p class="muted sub pad">Nothing booked for ${esc(orgSettings().name)}.</p>`}`).join("")}
-    <p class="sub muted pad">Swipe left / right to change day. Tap a card to open the job.</p></div>`;
+    ${groups.join("")}
+    <p class="sub muted pad">Swipe left or right to change day. Press and hold a job, then drag it to another day or person. A drop between jobs sets the start so the order stays.</p></div>`;
 }
 function bindMobileDispatch(A, pool) {
   const go = d => { ui.mday = d; renderAdmin(); window.scrollTo(0, 0); };
@@ -8303,7 +8355,7 @@ function bindMobileDispatch(A, pool) {
   const el = $("#mdisp"); let x0 = null, y0 = null;
   if (el) {
     el.addEventListener("touchstart", e => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
-    el.addEventListener("touchend", e => { if (x0 == null) return; const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0; x0 = null;
+    el.addEventListener("touchend", e => { if (x0 == null || ui.boardHoldSwipe || document.body.classList.contains("dispatch-dragging")) return; const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0; x0 = null;
       if (Math.abs(dx) > 70 && Math.abs(dx) > 1.5 * Math.abs(dy)) go(addDays(ui.mday, dx < 0 ? 1 : -1)); }, { passive: true });
   }
 }
