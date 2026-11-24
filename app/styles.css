@@ -19,6 +19,8 @@
 .crew-map{height:min(62vh,640px);min-height:280px;border-radius:12px;border:1px solid var(--line);background:#d9e2ea}
 .crew-map-note{position:absolute;z-index:800;left:12px;right:12px;bottom:12px;margin:0;padding:8px 10px;background:#fffdf9;border:1px solid var(--line);border-radius:10px;font-size:14px;font-weight:700}
 #crewmapretry{align-self:flex-start}
+#crewmapretry[hidden]{display:none!important}
+.sm-btn[hidden]{display:none!important}
 .crew-home .crew-map-wrap{padding:12px}
 .crew-home .crew-map{height:min(42vh,420px);min-height:220px}
 .crew-note{font-size:14px;line-height:1.4;color:#5c4e42;margin:0}

@@ -213,7 +213,7 @@ test("hours buttons do not call an undefined rerender, and list errors stay visi
   assert.match(app, /hxg\.onclick/);
   assert.match(sw, /u\.protocol === "blob:"/);
 
-  assert.match(sw, /callup-shell-v151-push-banner/);
+  assert.match(sw, /callup-shell-v152-crew-map-jobs/);
   const slice = (text, a, b) => text.slice(text.indexOf(a), text.indexOf(b) + b.length);
   assert.equal(
     slice(readFileSync(new URL("../emulator/firestore.rules", import.meta.url), "utf8"), "// BEGIN HOURS EXPORT RULES", "// END HOURS EXPORT RULES"),

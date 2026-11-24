@@ -649,6 +649,7 @@ if (q.get("check") === "1") {
     await waitFor("#qwf");
     const addr = document.querySelector("[name=address]");
     if (addr) addr.value = "1 Test Street, Chuwar QLD 4306";
+    document.querySelector('[data-type="spoil"]')?.click();
     const hours = document.querySelector("[name=hoursOnSite]");
     if (hours) hours.value = "2";
     document.querySelector("#qwnext")?.click();
@@ -692,6 +693,7 @@ if (q.get("check") === "1") {
     ok(!!document.querySelector("#qwaccept") && !!(document.querySelector("#qwaccept").compareDocumentPosition(document.querySelector(".qw-body")) & Node.DOCUMENT_POSITION_FOLLOWING), "accept is at the top of a new quote");
     const addr = document.querySelector("[name=address]");
     if (addr && !addr.value) addr.value = "Lot 88 · 14 Brightvale Street, Redbank Plains QLD 4301";
+    document.querySelector('[data-type="spoil"]')?.click();
     document.querySelector("#qwnext")?.click();
     await sleep(40);
     const preset = document.querySelector('[data-preset][value=truck_skid]');

@@ -19,7 +19,7 @@ import {
   historyMedians, isManualStart, keepsStart, normaliseTime, planAutoTimes, primaryKey, readDispatchLocal,
   sanitizeDispatchSettings, spaceDay, withSortHint, writeDispatchLocal,
 } from "./features/dispatch-times.js";
-import { installRouteOrder, orderJobsForRun, runSheetId, geoPatch, setRouteDepot } from "./features/route-order.js";
+import { installRouteOrder, orderJobsForRun, runSheetId, geoPatch, geocodeAddress, resolveConfig, setRouteDepot } from "./features/route-order.js";
 import {
   bindDescriptionPicker, collectSuggestions, descriptionPickerHtml, detailsFromClient, emailsFromRecipientDoc,
   inputAttrs, listsHtml, loadBook, matchClient, prefillPatch, pushRecentEmail, rememberBook, saveBook, unionEmails,
@@ -65,7 +65,7 @@ import {
 } from "./features/timesheet.js";
 import {
   LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, SHARE_FIX_WAIT_MS, canSeeCrewMap, companySharesLocation, crewListHtml, crewMapModel,
-  crewMapNotice, homeCrewSlot, liveCollectionPath, liveLocationBody, locationRemindBannerHtml, mapFailureStatus, shareIndicator, shouldSendPosition,
+  crewMapNotice, crewPinNote, homeCrewSlot, jobPoint, liveCollectionPath, liveLocationBody, locationRemindBannerHtml, mapFailureStatus, shareIndicator, shouldSendPosition,
 } from "./features/live-location.js";
 
 // Same price strip as features/quotes.js noDollars. Kept here so a crew run sheet never paints a dollar
@@ -213,7 +213,7 @@ let INBOUND_DOMAIN = "inbound.callupapp.com.au";
 let startDesktopInstall = () => {};
 let refreshDesktopBanner = () => {};
 let desktopBannerWouldShow = () => false;
-let SHELL_VERSION = "callup-shell-v151-push-banner";
+let SHELL_VERSION = "callup-shell-v152-crew-map-jobs";
 let prepareTicket = () => ({ ok: false, reason: "loading" });
 let ticketDialogHtml = () => "";
 let ticketFailureText = () => "The ticket could not be sent. Try again.";
@@ -4310,6 +4310,14 @@ function leaveCrewScreen() {
   ui.crewUnsub?.(); ui.crewJobUnsub?.();
   ui.crewUnsub = ui.crewJobUnsub = null;
   ui.crewSubsOn = false;
+  ui.crewGeoTried = null;
+  ui.crewGeoGen = (ui.crewGeoGen || 0) + 1;
+}
+// Heartwood job writes stay with an admin. Other companies' office (admin, manager, supervisor) can update a job.
+function canUpdateJobs() {
+  if (!me) return false;
+  if (myCompanyId() === "heartwood") return me.role === "admin";
+  return me.role === "admin" || me.role === "manager" || me.role === "supervisor";
 }
 function crewMapScreen() {
   return `<div class="crew-map-wrap">
@@ -4359,6 +4367,7 @@ function paintCrewMapStatus(model, failure) {
   const retry = document.getElementById("crewmapretry");
   const note = document.getElementById("crewmapempty");
   const notice = crewMapNotice(model);
+  const gap = crewPinNote(model);
   const gps = ((model && model.people) || []).some(p => p.sharing === "gps");
   if (note) {
     note.hidden = !notice || !!failure;
@@ -4368,8 +4377,11 @@ function paintCrewMapStatus(model, failure) {
   if (!status) return;
   if (failure) { status.textContent = failure.text; return; }
   if (ui.crewErr) { status.textContent = "The crew list isn't available on this sign-in."; return; }
-  if (notice && !gps) { status.textContent = notice; return; }
-  status.textContent = "Blue dots are people clocked on. Amber dots are today's jobs that already have a map pin.";
+  const parts = [];
+  if (notice && !gps) parts.push(notice);
+  else parts.push("Blue dots are people clocked on. Amber dots are today's jobs that already have a map pin.");
+  if (gap) parts.push(gap);
+  status.textContent = parts.join(" ");
 }
 function bindCrewMapRetry() {
   const btn = document.getElementById("crewmapretry");
@@ -4486,7 +4498,6 @@ async function ensureCrewMap(model) {
   }
   ui.crewLayer.clearLayers();
   const bounds = [];
-  const seenJobs = new Set();
   for (const p of model.people) {
     if (p.sharing !== "gps" || p.lat == null) continue;
     const jobs = p.jobs.map(j => esc(j.label)).filter(Boolean).join(", ");
@@ -4495,23 +4506,79 @@ async function ensureCrewMap(model) {
       .addTo(ui.crewLayer);
     bounds.push([p.lat, p.lng]);
   }
-  for (const p of model.people) {
-    for (const j of p.jobs) {
-      if (j.lat == null || seenJobs.has(j.id)) continue;
-      seenJobs.add(j.id);
-      L.marker([j.lat, j.lng], { icon: crewIcon(L, "#b45309"), title: j.label })
-        .bindPopup(`<b>${esc(j.label)}</b>${j.jobNo ? `<br>#${esc(j.jobNo)}` : ""}${j.client ? `<br>${esc(j.client)}` : ""}${j.time ? `<br>${esc(j.time)}` : ""}${j.address ? `<br>${esc(j.address)}` : ""}`)
-        .addTo(ui.crewLayer);
-      bounds.push([j.lat, j.lng]);
-    }
+  for (const j of model.jobs || []) {
+    if (j.lat == null || j.lng == null) continue;
+    L.marker([j.lat, j.lng], { icon: crewIcon(L, "#b45309"), title: j.label })
+      .bindPopup(`<b>${esc(j.label)}</b>${j.jobNo ? `<br>#${esc(j.jobNo)}` : ""}${j.client ? `<br>${esc(j.client)}` : ""}${j.time ? `<br>${esc(j.time)}` : ""}${j.address ? `<br>${esc(j.address)}` : ""}`)
+      .addTo(ui.crewLayer);
+    bounds.push([j.lat, j.lng]);
   }
   const key = bounds.map(b => b.map(n => Number(n).toFixed(5)).join(",")).sort().join("|");
   if (!bounds.length) ui.crewMap.setView([-27.47, 153.03], 10);
   else if (key !== ui.crewFitKey) ui.crewMap.fitBounds(bounds, { padding: [28, 28], maxZoom: 15 });
   ui.crewFitKey = key;
   setTimeout(() => { if (ui.crewMap) ui.crewMap.invalidateSize(); }, 50);
+  if (token !== ui.crewMapToken) return;
   if (ui.crewTilesFailed) paintCrewMapStatus(model, mapFailureStatus({ online: deviceOnline(), reason: "tiles" }));
   else paintCrewMapStatus(model, null);
+  scheduleCrewGeocode();
+}
+function normCrewAddr(address) {
+  return String(address || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+function jobsNeedingPin(list) {
+  const today = todayStr();
+  ui.crewGeoTried = ui.crewGeoTried || new Set();
+  return (list || []).filter(j => {
+    if (!j || !j.id || ui.crewGeoTried.has(j.id)) return false;
+    if (j.date !== today || j.status === "Cancelled" || j.sm8Status === "Unsuccessful") return false;
+    if (jobPoint(j)) return false;
+    return normCrewAddr(j.address).length > 0;
+  });
+}
+let crewGeoChain = Promise.resolve();
+function scheduleCrewGeocode() {
+  if (!canUpdateJobs() || !deviceOnline() || !document.getElementById("crewmap")) return;
+  const pending = jobsNeedingPin(ui.crewJobs);
+  if (!pending.length) return;
+  for (const j of pending) ui.crewGeoTried.add(j.id);
+  const generation = ui.crewGeoGen || 0;
+  crewGeoChain = crewGeoChain.then(() => pinCrewJobs(pending, generation)).catch(() => {});
+}
+function crewGeoLive(generation) {
+  return (ui.crewGeoGen || 0) === generation && !!document.getElementById("crewmap") && canUpdateJobs();
+}
+function releaseCrewGeo(list) {
+  for (const job of list) ui.crewGeoTried?.delete(job.id);
+}
+async function pinCrewJobs(list, generation) {
+  const cfg = resolveConfig();
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const fetchImpl = (url, init) => fetch(url, init);
+  const seenAddr = new Map();
+  let wrote = false;
+  for (let i = 0; i < list.length; i++) {
+    const job = list[i];
+    if (!crewGeoLive(generation)) { releaseCrewGeo(list.slice(i)); break; }
+    const key = normCrewAddr(job.address);
+    let hit = seenAddr.get(key);
+    if (hit === undefined) {
+      try { hit = await geocodeAddress(job.address, cfg, fetchImpl, sleep); }
+      catch { hit = null; }
+      if (!hit || !Number.isFinite(+hit.lat) || !Number.isFinite(+hit.lng) || Math.abs(+hit.lat) > 90 || Math.abs(+hit.lng) > 180) hit = null;
+      seenAddr.set(key, hit);
+    }
+    if (!crewGeoLive(generation)) { releaseCrewGeo(list.slice(i)); break; }
+    if (!hit) continue;
+    const current = (ui.crewJobs || []).find(row => row.id === job.id);
+    if (current && (jobPoint(current) || normCrewAddr(current.address) !== key)) continue;
+    try {
+      await cacheGeo(job, hit);
+      if (current) current.geo = geoPatch(job.address, hit).geo;
+      wrote = true;
+    } catch { /* a failed lookup stays unpinned */ }
+  }
+  if (wrote && crewGeoLive(generation) && document.getElementById("crewlist")) paintCrew();
 }
 async function tsPunch(kind) {
   const active = tsSheets();
@@ -8855,6 +8922,9 @@ async function loadRunSheets(date) {
     } catch { ui.runSheets[id] = false; }
   }));
 }
+function cacheGeo(job, hit) {
+  return updateDoc(doc(db, "jobs", job.id), geoPatch(job.address, hit));
+}
 ROUTE = installRouteOrder({
   db, doc, setDoc, updateDoc, serverTimestamp,
   todayStr, toast,
@@ -8874,7 +8944,7 @@ ROUTE = installRouteOrder({
     queueDispatchPersist(jobs, [data && data.date].filter(Boolean));
     if (ui.view === "dispatch") renderAdmin();
   },
-  cacheGeo: (job, hit) => updateDoc(doc(db, "jobs", job.id), geoPatch(job.address, hit)),
+  cacheGeo,
 });
 async function openAcceptedJob(jobId) {
   const id = String(jobId || "").trim();
