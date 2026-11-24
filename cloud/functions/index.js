@@ -36,7 +36,10 @@
  *
  * Phone notifications live in push-schedule.js: chatMessagePush, dailyJobPush
  * (06:00 Australia/Brisbane), dailyJobChangePush, prestartJobPush, prestartAssetPush
- * and prestartTimesheetPush. Photo retention is not scheduled.
+ * and prestartTimesheetPush. clockOnReminderPush (clock-on-push.js) runs every
+ * 15 minutes (UTC) and sends at 06:30 in each company's timezone on a local
+ * weekday, unless that person muted it, is already clocked on, or is on
+ * approved leave that morning. Photo retention is not scheduled.
  * pauseRetentionSweep (03:00 Australia/Brisbane) logs paused companies it would delete.
  * It does not delete anything unless PAUSE_DELETE_DRY_RUN=false.
  * An owner-paused company is never selected. That pause is not an automatic deletion.
@@ -212,6 +215,7 @@ export const helperAsk = onCall(
 
 export { retentionSweepHandler } from "./lib/retention-run.js";
 export { chatMessagePush, dailyJobPush, dailyJobChangePush, prestartJobPush, prestartAssetPush, prestartTimesheetPush } from "./push-schedule.js";
+export { clockOnReminderPush } from "./clock-on-push.js";
 
 const INVITE_REGION = "australia-southeast1";
 

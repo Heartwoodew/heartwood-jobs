@@ -1369,16 +1369,34 @@ service cloud.firestore {
     }
     match /users/{uid}/chatSettings/{docId} {
       function chatPrefsOk() {
-        return request.resource.data.keys().hasOnly(["muteChat", "muteDaily"])
+        return request.resource.data.keys().hasOnly(["muteChat", "muteDaily", "muteClockOnReminder"])
           && request.resource.data.muteChat is bool
-          && request.resource.data.muteDaily is bool;
+          && request.resource.data.muteDaily is bool
+          && (!("muteClockOnReminder" in request.resource.data) || request.resource.data.muteClockOnReminder is bool);
+      }
+      // An admin of that company may read the prefs and change only the Clock On mute.
+      // Missing muteClockOnReminder means the reminder stays on.
+      function clockPrefsAdmin() {
+        let target = exists(/databases/$(database)/documents/users/$(uid))
+          ? docCompany(get(/databases/$(database)/documents/users/$(uid)).data) : "";
+        return signedIn() && request.auth.uid != uid && target != "" && (
+          (target == "heartwood" && isAdmin())
+          || (target != "heartwood" && hasProfile() && profile().get("role", "") == "admin" && docCompany(profile()) == target)
+        );
       }
 
-      allow read: if signedIn() && request.auth.uid == uid && docId == "prefs";
+      allow get: if docId == "prefs" && signedIn() && (request.auth.uid == uid || clockPrefsAdmin());
+      allow list: if false;
       allow create, update: if signedIn()
         && request.auth.uid == uid
         && docId == "prefs"
         && chatPrefsOk();
+      allow create: if docId == "prefs" && clockPrefsAdmin()
+        && request.resource.data.keys().hasOnly(["muteClockOnReminder"])
+        && request.resource.data.muteClockOnReminder is bool;
+      allow update: if docId == "prefs" && clockPrefsAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["muteClockOnReminder"])
+        && request.resource.data.muteClockOnReminder is bool;
       allow delete: if false;
     }
 // END CHAT RULES

@@ -46,6 +46,7 @@ test("production rules are a smaller scope tree than the file that 503s", () => 
 
   assert.deepEqual(after.dead, []);
   // locationNotices is the GPS reminder the person reads. supportTickets is the raise-ticket collection.
+  // clockOnReminders has no client match. Firestore denies it, and a deny match would widen the scope tree.
   assert.equal(after.matches, BEFORE.matches + 2);
   assert.equal(after.maxMatchNesting, BEFORE.maxMatchNesting);
   // Shared helpers live on the database match so each copy is compiled once.

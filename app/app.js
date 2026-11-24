@@ -28,7 +28,7 @@ import { SWMS, SWMS_EMPTY, SWMS_VERSION, sigMs, sigExp, latestSig, statusOf, swm
 import {
   acceptLoadingHtml, acceptScreenModel, acceptViewHtml, buildInviteDraft, inviteFailureText,
   newInviteToken, pendingInviteForEmail, staffViewHtml, appOriginFor, invitableRoles, CREW_ROLES,
-  canSendPasswordReset, canRemindLocation, forgotPasswordMessage, GOOGLE_ONLY_RESET,
+  canSendPasswordReset, canRemindLocation, canToggleClockOnReminder, receivesClockOnReminder, forgotPasswordMessage, GOOGLE_ONLY_RESET,
 } from "./features/staff-invites.js";
 import { saveGuard, settleOrQueue } from "./features/pending-write.js";
 import { bootStallHtml, bootWatchdog, readOrCache, trackRead, withTimeout } from "./features/boot-guard.js";
@@ -214,7 +214,7 @@ let INBOUND_DOMAIN = "inbound.callupapp.com.au";
 let startDesktopInstall = () => {};
 let refreshDesktopBanner = () => {};
 let desktopBannerWouldShow = () => false;
-let SHELL_VERSION = "callup-shell-v154-last-seen";
+let SHELL_VERSION = "callup-shell-v155-clock-on-reminder";
 let prepareTicket = () => ({ ok: false, reason: "loading" });
 let ticketDialogHtml = () => "";
 let ticketFailureText = () => "The ticket could not be sent. Try again.";
@@ -5038,6 +5038,31 @@ function withHeartwoodOwner(rows, companyId) {
   if (companyId !== "heartwood" || (rows || []).some(u => u && u.uid === ALEX_UID)) return rows || [];
   return [{ uid: ALEX_UID, name: "Alex", role: "admin", email: "alex@heartwoodew.com", companyId: "heartwood" }, ...rows];
 }
+function stopClockMutes() {
+  if (ui.clockMuteStops) ui.clockMuteStops.forEach(stop => { try { stop(); } catch { /* already stopped */ } });
+  ui.clockMuteStops = [];
+  ui.clockMuteKey = "";
+}
+function watchClockMutes(rows) {
+  if (!canToggleClockOnReminder(me)) { stopClockMutes(); return; }
+  const uids = (rows || []).filter(row => row && row.uid && receivesClockOnReminder(row.role)).map(row => row.uid);
+  const key = uids.slice().sort().join(",");
+  if (ui.clockMuteKey === key && ui.clockMuteStops && ui.clockMuteStops.length === uids.length) return;
+  stopClockMutes();
+  ui.clockMuteKey = key;
+  ui.clockMuteStops = [];
+  for (const uid of uids) {
+    const stop = onSnapshot(doc(db, "users", uid, "chatSettings", "prefs"), snap => {
+      const data = snap.exists() ? (snap.data() || {}) : {};
+      const muted = data.muteClockOnReminder === true;
+      const prev = ui.clockMutes || {};
+      if (Object.prototype.hasOwnProperty.call(prev, uid) && prev[uid] === muted) return;
+      ui.clockMutes = { ...prev, [uid]: muted };
+      staffRerender();
+    }, () => {});
+    ui.clockMuteStops.push(stop);
+  }
+}
 function watchStaffRoster() {
   if (!canInvite()) return () => {};
   const companyId = myCompanyId();
@@ -5061,13 +5086,15 @@ function watchStaffRoster() {
         ? [{ uid: ALEX_UID, name: "Alex" }, ...bookable.filter(u => u.uid !== ALEX_UID)]
         : bookable;
     }
+    watchClockMutes(ui.staffLogins);
     staffRerender();
   }, () => {
     ui.staffLogins = withHeartwoodOwner([], companyId);
     ui.staffLoginsErr = "Some people with a login are not listed.";
+    watchClockMutes(ui.staffLogins);
     staffRerender();
   });
-  return () => { stopLogins(); stopLive(); };
+  return () => { stopLogins(); stopLive(); stopClockMutes(); };
 }
 function docData(snap) {
   if (!snap || typeof snap.exists !== "function" || !snap.exists() || typeof snap.data !== "function") return null;
@@ -5330,6 +5357,7 @@ function staffPageHtml() {
     logins: ui.staffLogins || [], companyId: myCompanyId(), loginsNote: ui.staffLoginsErr || "",
     resetPasswords: canSendPasswordReset(me), viewerUid: (me && me.uid) || "",
     remindGps: canRemindLocation(me), locations: ui.staffLive || {},
+    clockOnAdmin: canToggleClockOnReminder(me), clockMutes: ui.clockMutes || {},
   }) + titlesEditorHtml(setup.titles, { canEdit: canEditTitles() })
     + skillsEditorHtml((me && me.cloudProfile && me.cloudProfile.skills) || [], { canEdit: true });
 }
@@ -5457,6 +5485,33 @@ function bindStaff(A) {
       toast(msg && msg.length < 180 && !/https?:/i.test(msg) ? msg : "Couldn't email that reset link. Try again in a minute.");
     } finally {
       b.disabled = false;
+    }
+  });
+  A.querySelectorAll("[data-clock-on]").forEach(box => box.onchange = async () => {
+    if (!canToggleClockOnReminder(me)) return;
+    const uid = box.dataset.clockOn;
+    const mute = box.checked !== true;
+    box.disabled = true;
+    try {
+      const ref = doc(db, "users", uid, "chatSettings", "prefs");
+      if (uid === me.uid) {
+        const snap = await getDoc(ref);
+        const prev = snap.exists() ? (snap.data() || {}) : {};
+        await setDoc(ref, {
+          muteChat: prev.muteChat === true,
+          muteDaily: prev.muteDaily === true,
+          muteClockOnReminder: mute,
+        }, { merge: true });
+      } else {
+        await setDoc(ref, { muteClockOnReminder: mute }, { merge: true });
+      }
+      ui.clockMutes = { ...(ui.clockMutes || {}), [uid]: mute };
+      toast(mute ? "Clock On reminder off." : "Clock On reminder on.");
+    } catch (e) {
+      box.checked = mute;
+      toast("Couldn't save that reminder (" + ((e && e.code) || "error") + ").");
+    } finally {
+      box.disabled = false;
     }
   });
   A.querySelectorAll("[data-gps-remind]").forEach(b => b.onclick = async () => {

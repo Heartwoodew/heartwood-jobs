@@ -501,6 +501,24 @@ After review:
 4. Deploy the `liveLocations` composite index (`companyId` and `clockedOn`) so a supervisor roster query stays allowed for every company: from `cloud/`, `firebase deploy --only firestore:indexes --project heartwood-9f37f`.
 
 No functions deploy, no Storage change, no Stripe change, no backfill.
+## Weekday Clock On reminder (not deployed)
+
+Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production or sends a push.
+
+There is no existing Clock On reminder. `dailyJobPush` at 06:00 Australia/Brisbane tells people about jobs they are assigned that day. `remindLocationSharing` is a manual GPS nudge. Neither checks whether someone is already clocked on. This adds `clockOnReminderPush` instead of extending either one.
+
+The reminder is on by default for labourer, operator, supervisor and manager in every company. A missing `muteClockOnReminder` means on. The person turns it off in Notifications. An admin turns it off or on for someone else on the Staff screen. Office admins are not reminded. Patrick's profile role in this app is operator, so he is included with no production write. If his live `users/{uid}.role` is `admin`, he is office and is not reminded; an admin does not need to write a flag for an operator.
+
+Each company is checked on its own clock. `companies/{id}.timezone` or `timeZone` is used when it is a real IANA name. Otherwise Australia/Brisbane. The function runs every 15 minutes (`*/15 * * * *`, time zone UTC) and sends when that local time is 06:30 up to, but not including, 07:00, Monday to Friday. `clockOnReminders/{companyId}_{date}_{uid}` is the once-a-day claim. Test companies, archived or suspended companies, owner-paused companies, ended trials, ended friend plans, and paid plans that are not billing active or trialing are skipped. Heartwood is not skipped for those reasons.
+
+Service worker `callup-shell-v155-clock-on-reminder`. Main is `callup-shell-v154-last-seen` after PR 133. This shell is v155 so the two do not clash.
+
+After review:
+
+1. Deploy the new function only: `clockOnReminderPush` in australia-southeast1 on heartwood-9f37f. Use the isolated functions deploy. Do not deploy the rest of the functions codebase. `cloud/firebase.json` still refuses `firebase deploy` from `cloud/`. Do not remove that hook.
+2. Deploy hosting with `firebase deploy --only hosting --config cloud/firebase.hosting.json --project heartwood-9f37f`.
+3. Deploy Firestore rules from `cloud/firestore.production.rules` only. Do not deploy `cloud/emulator/firestore.rules`. The prefs doc may include `muteClockOnReminder`. `clockOnReminders` has no client rule, so the claim stays server-only.
+4. No index deploy. No Storage change. No Stripe change. No backfill. No production data write.
 
 ## Admin password reset (15 Nov 2026)
 

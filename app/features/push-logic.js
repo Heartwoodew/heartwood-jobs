@@ -160,12 +160,13 @@ export function notifyPanelHtml(model = {}) {
     : (!model.vapidReady ? `<p class="sub">Notifications need the Web Push certificate in the app config before this phone can subscribe.</p>` : "");
   return `<section class="pad push-panel" data-push-panel>
     <h3>Notifications</h3>
-    <p class="sub">Pings this phone for chat, and a morning list of your jobs.</p>
+    <p class="sub">Pings this phone for chat, a morning list of your jobs, and a weekday Clock On reminder at 6:30am.</p>
     ${deliveryBlock(model)}
     ${enable}
     ${hint}
     <label class="ck"><input type="checkbox" data-mute-chat ${model.muteChat ? "checked" : ""}> Mute chat notifications</label>
     <label class="ck"><input type="checkbox" data-mute-daily ${model.muteDaily ? "checked" : ""}> Mute daily job list</label>
+    <label class="ck"><input type="checkbox" data-mute-clock ${model.muteClockOnReminder ? "checked" : ""}> Mute Clock On reminder</label>
     ${off}
     ${note}
   </section>`;

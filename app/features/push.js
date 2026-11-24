@@ -9,7 +9,7 @@ import {
 
 export { notifyPanelHtml, pushBannerHtml, pushTargetFromUrl, shouldToast, tokenDocId, vapidReady };
 
-const state = { muteChat: false, muteDaily: false, enabled: false, dismissed: false };
+const state = { muteChat: false, muteDaily: false, muteClockOnReminder: false, enabled: false, dismissed: false };
 let deps = null;
 let prefsUnsub = null;
 let pending = null;
@@ -20,6 +20,7 @@ export function pushModel() {
   return {
     muteChat: state.muteChat === true,
     muteDaily: state.muteDaily === true,
+    muteClockOnReminder: state.muteClockOnReminder === true,
     enabled: state.enabled === true,
     dismissed: state.dismissed === true,
     iosHint: browserIosHint(),
@@ -85,6 +86,7 @@ function paint() {
   document.querySelectorAll("[data-push-banner]").forEach(el => { el.hidden = model.enabled || model.dismissed; });
   document.querySelectorAll("[data-mute-chat]").forEach(el => { el.checked = model.muteChat; });
   document.querySelectorAll("[data-mute-daily]").forEach(el => { el.checked = model.muteDaily; });
+  document.querySelectorAll("[data-mute-clock]").forEach(el => { el.checked = model.muteClockOnReminder; });
   document.querySelectorAll(".push-enable").forEach(el => { el.hidden = model.enabled || !!model.iosHint; });
   document.querySelectorAll(".push-off").forEach(el => { el.hidden = !model.enabled; });
 }
@@ -105,9 +107,11 @@ async function writePrefs(next) {
   if (!deps || !uid) return;
   const muteChat = next.muteChat === true;
   const muteDaily = next.muteDaily === true;
-  await setDoc(doc(deps.db, "users", uid, "chatSettings", "prefs"), { muteChat, muteDaily });
+  const muteClockOnReminder = next.muteClockOnReminder === true;
+  await setDoc(doc(deps.db, "users", uid, "chatSettings", "prefs"), { muteChat, muteDaily, muteClockOnReminder });
   state.muteChat = muteChat;
   state.muteDaily = muteDaily;
+  state.muteClockOnReminder = muteClockOnReminder;
   paint();
 }
 
@@ -226,7 +230,7 @@ async function continueAfterGrant(permissionPromise) {
       return;
     }
     state.enabled = true;
-    await writePrefs({ muteChat: state.muteChat === true, muteDaily: state.muteDaily === true });
+    await writePrefs({ muteChat: state.muteChat === true, muteDaily: state.muteDaily === true, muteClockOnReminder: state.muteClockOnReminder === true });
     paint();
     if (deps && deps.rerender) deps.rerender();
     say("Notifications are on for this phone.");
@@ -259,14 +263,21 @@ function bindRoot(root) {
     if (box.dataset.bound === "1") return;
     box.dataset.bound = "1";
     box.addEventListener("change", () => {
-      writePrefs({ muteChat: box.checked, muteDaily: state.muteDaily === true }).catch(() => deps && deps.toast("Couldn't save that setting."));
+      writePrefs({ muteChat: box.checked, muteDaily: state.muteDaily === true, muteClockOnReminder: state.muteClockOnReminder === true }).catch(() => deps && deps.toast("Couldn't save that setting."));
     });
   });
   root.querySelectorAll("[data-mute-daily]").forEach(box => {
     if (box.dataset.bound === "1") return;
     box.dataset.bound = "1";
     box.addEventListener("change", () => {
-      writePrefs({ muteChat: state.muteChat === true, muteDaily: box.checked }).catch(() => deps && deps.toast("Couldn't save that setting."));
+      writePrefs({ muteChat: state.muteChat === true, muteDaily: box.checked, muteClockOnReminder: state.muteClockOnReminder === true }).catch(() => deps && deps.toast("Couldn't save that setting."));
+    });
+  });
+  root.querySelectorAll("[data-mute-clock]").forEach(box => {
+    if (box.dataset.bound === "1") return;
+    box.dataset.bound = "1";
+    box.addEventListener("change", () => {
+      writePrefs({ muteChat: state.muteChat === true, muteDaily: state.muteDaily === true, muteClockOnReminder: box.checked }).catch(() => deps && deps.toast("Couldn't save that setting."));
     });
   });
   root.querySelectorAll(".push-off").forEach(button => {
@@ -295,6 +306,7 @@ export function installPush(next) {
         const data = snap && typeof snap.exists === "function" && snap.exists() ? (snap.data() || {}) : {};
         state.muteChat = data.muteChat === true;
         state.muteDaily = data.muteDaily === true;
+        state.muteClockOnReminder = data.muteClockOnReminder === true;
         paint();
       }, () => {});
       if (typeof navigator !== "undefined" && navigator.serviceWorker && !onSwMessage) {
@@ -322,6 +334,7 @@ export function installPush(next) {
       onSwMessage = null;
       state.muteChat = false;
       state.muteDaily = false;
+      state.muteClockOnReminder = false;
       state.enabled = false;
       state.dismissed = false;
     },
