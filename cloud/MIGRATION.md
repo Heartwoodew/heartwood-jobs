@@ -524,7 +524,7 @@ After review:
 
 Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production. No functions, no rules, no indexes, no Firebase change.
 
-After review, deploy hosting only. Service worker `callup-shell-v159-help-videos`. Main is `callup-shell-v158-stop-series`. This branch previously claimed `callup-shell-v157-help-video-6`; that name is not reused. Open PR 135 claims `callup-shell-v156-dispatch-drag`. Video 6, "Today and the planner" (`https://youtu.be/h7CC6hnrohM`), is in the Help list for everyone. Questions about the Today screen, the weekly planner, Dispatch Board, or the schedule link to that video. Links stay plain youtu.be links. `helperAsk` is still hard-off.
+After review, deploy hosting only. Service worker `callup-shell-v159-help-videos`. Main is `callup-shell-v158-stop-series`. This branch previously claimed `callup-shell-v157-help-video-6`; that name is not reused. Open PR 135 claims `callup-shell-v156-dispatch-drag`. Videos 6 to 10 are plain youtu.be links: Today and the planner (`https://youtu.be/h7CC6hnrohM`), Start times and who's free (`https://youtu.be/7lg0i8D1wdg`, office), Job photos and documents (`https://youtu.be/AecI2Vf_W3w`), Email a job to the client (`https://youtu.be/Mucs-GTqRJc`), and Recurring jobs (`https://youtu.be/wFZgFjWUcuc`, office). Questions about those screens carry the matching video. `helperAsk` is still hard-off.
 
 No functions deploy, no Storage change, no rules deploy, no index deploy, no Stripe change, no backfill.
 
