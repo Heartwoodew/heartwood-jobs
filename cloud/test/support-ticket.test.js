@@ -77,9 +77,9 @@ test("the raise-ticket form is on Help, More, settings and the header, and crew 
   const html = read("../../app/index.html");
   assert.match(html, /id="ticketbtn"/);
   const sw = read("../../app/sw.js");
-  assert.match(sw, /callup-shell-v158-stop-series/);
+  assert.match(sw, /callup-shell-v159-help-videos/);
   assert.match(sw, /features\/support-ticket\.js/);
-  assert.equal(SHELL_VERSION, "callup-shell-v158-stop-series");
+  assert.equal(SHELL_VERSION, "callup-shell-v159-help-videos");
   assert.equal(pushTargetFromUrl("https://app.callupapp.com.au/app/?ticket=aaaaaaaaaaaaaaaaaaaa").kind, "ticket");
   assert.equal(pushTargetFromUrl("https://app.callupapp.com.au/app/?ticket=short"), null);
 });

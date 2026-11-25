@@ -18,6 +18,11 @@ export const TUTORIAL_VIDEOS = Object.freeze([
   { n: 3, title: "Install the app", youtubeId: "uKLQKTpxVJA", audience: "all", keywords: ["install", "download the app", "download callup", "home screen", "get the app", "add to phone", "app on my phone", "desktop app"] },
   { n: 4, title: "Turn on phone alerts", youtubeId: "e7leDphA0no", audience: "all", keywords: ["notifications", "alerts", "push", "turn on notifications", "mute", "morning job list"] },
   { n: 5, title: "Add a client and book a job", youtubeId: "0GWlLkJpRD0", audience: "office", keywords: ["add a client", "add client", "new client", "add a customer", "add customer", "new customer", "book a job", "book job", "booking a job", "create a job", "create job", "creating a job", "add a job", "add job", "new job"] },
+  { n: 6, title: "Today and the planner", youtubeId: "h7CC6hnrohM", audience: "all", keywords: ["weekly planner", "the planner", "planner", "dispatch board", "dispatch", "the schedule", "my schedule", "weekly schedule", "today's schedule", "job schedule", "schedule a job", "schedule jobs", "schedule my", "scheduling", "today screen", "today's jobs", "jobs today", "on today", "what's on today", "what is on today", "today", "unallocated", "drag a job"] },
+  { n: 7, title: "Start times and who's free", youtubeId: "7lg0i8D1wdg", audience: "office", keywords: ["day view", "start times", "start time", "who's free", "who is free", "capacity", "crew capacity"] },
+  { n: 8, title: "Job photos and documents", youtubeId: "AecI2Vf_W3w", audience: "all", keywords: ["add photos", "job photos", "job documents", "site photos", "office only", "crew can see", "photos", "photo", "documents", "document", "picture"] },
+  { n: 9, title: "Email a job to the client", youtubeId: "Mucs-GTqRJc", audience: "all", keywords: ["email a job", "email job", "mail the job", "other mail app", "send the job", "share the job"] },
+  { n: 10, title: "Recurring jobs", youtubeId: "wFZgFjWUcuc", audience: "office", keywords: ["recurring", "this job repeats", "repeating jobs", "repeating job", "stop this series", "stop a series", "stop the series", "skip this visit"] },
 ].map(v => Object.freeze({ ...v, keywords: Object.freeze([...v.keywords]) })));
 
 const ID_RE = /^[A-Za-z0-9_-]{11}$/;

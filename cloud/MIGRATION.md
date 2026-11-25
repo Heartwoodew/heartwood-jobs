@@ -520,6 +520,14 @@ After review:
 3. Deploy Firestore rules from `cloud/firestore.production.rules` only. Do not deploy `cloud/emulator/firestore.rules`. The prefs doc may include `muteClockOnReminder`. `clockOnReminders` has no client rule, so the claim stays server-only.
 4. No index deploy. No Storage change. No Stripe change. No backfill. No production data write.
 
+## Help videos: Today, start times, photos, email, and repeating jobs (not deployed)
+
+Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production. No functions, no rules, no indexes, no Firebase change.
+
+After review, deploy hosting only. Service worker `callup-shell-v159-help-videos`. Main is `callup-shell-v158-stop-series`. This branch previously claimed `callup-shell-v157-help-video-6`; that name is not reused. Open PR 135 claims `callup-shell-v156-dispatch-drag`. Videos 6 to 10 are plain youtu.be links: Today and the planner (`https://youtu.be/h7CC6hnrohM`), Start times and who's free (`https://youtu.be/7lg0i8D1wdg`, office), Job photos and documents (`https://youtu.be/AecI2Vf_W3w`), Email a job to the client (`https://youtu.be/Mucs-GTqRJc`), and Recurring jobs (`https://youtu.be/wFZgFjWUcuc`, office). Questions about those screens carry the matching video. `helperAsk` is still hard-off.
+
+No functions deploy, no Storage change, no rules deploy, no index deploy, no Stripe change, no backfill.
+
 ## Admin password reset (15 Nov 2026)
 
 Do not deploy from this branch. When it is deployed: hosting (service worker `callup-shell-v108-password-reset`) and the function `adminSendPasswordReset` in australia-southeast1. It uses the same `RESEND_API_KEY` and `INVITE_EMAIL_ENABLED` gate as `inviteEmailWorker`. The reset link is emailed to the staff member and is not returned to the browser. Firestore `passwordResetRate/{uid}` is Admin SDK only (client read and write denied). Rebased onto main's `callup-shell-v106-multi-category-quotes`; this branch stays `callup-shell-v108-password-reset`.

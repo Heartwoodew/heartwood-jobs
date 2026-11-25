@@ -43,7 +43,7 @@ const TOPICS = Object.freeze([
   },
   {
     id: "repeat",
-    keywords: ["repeating job", "recurring", "this job repeats", "stop this series", "stop a series", "stop the series", "skip this visit"],
+    keywords: ["repeating job", "repeating jobs", "recurring", "this job repeats", "stop this series", "stop a series", "stop the series", "skip this visit"],
     go: "jobs",
     goLabel: "Take me to Jobs",
     office: "On the first job, tick This job repeats and choose how often. Visits are added for the next 60 days. An admin stops the series with Stop this series, on the first job or on a later visit, or by unticking This job repeats. That asks you to confirm, then removes future visits that nobody has edited, skipped, started, or added notes, photos, documents, a timesheet, an invoice or a purchase order to. Visits today and earlier stay. Visits that were changed are listed and kept. A skipped visit stays on the planner as In progress. It is not marked Unsuccessful. Managers, supervisors and crew cannot stop a series.",
@@ -107,7 +107,7 @@ const TOPICS = Object.freeze([
   },
   {
     id: "documents",
-    keywords: ["document", "photo", "photos", "swms", "upload", "picture"],
+    keywords: ["document", "photo", "photos", "swms", "upload", "picture", "add photos", "job photos", "job documents", "site photos", "office only", "crew can see"],
     go: "jobs",
     goLabel: "Take me to Jobs",
     office: "Open the job. Photos are added with Add photos. Documents sit on the job card for the office, and crew documents are the ones marked for the crew. SWMS, when this company has one, is on the job and under SWMS.",
@@ -115,7 +115,7 @@ const TOPICS = Object.freeze([
   },
   {
     id: "email",
-    keywords: ["email a job", "email job", "mail the job", "send the job", "share the job"],
+    keywords: ["email a job", "email job", "mail the job", "send the job", "share the job", "other mail app"],
     go: "jobs",
     goLabel: "Take me to Jobs",
     office: "Open the job and tap Email job. The client's email is filled in when there is one. Add a Cc if you want one, then tap Send. CallUp sends the email. Other mail app opens your own mail app instead. Nothing is sent until you tap Send.",
@@ -144,6 +144,22 @@ const TOPICS = Object.freeze([
     goLabel: "",
     office: "CallUp runs in the browser and can be installed on a phone or computer. On iPhone open app.callupapp.com.au in Safari, tap Share, then Add to Home Screen. On Android open it in Chrome and tap Install app. The video shows each step.",
     crew: "On iPhone open app.callupapp.com.au in Safari, tap Share, then Add to Home Screen. On Android open it in Chrome and tap Install app. Then sign in with the login your company sent you.",
+  },
+  {
+    id: "planner",
+    keywords: ["weekly planner", "the planner", "planner", "dispatch board", "dispatch", "the schedule", "my schedule", "weekly schedule", "today's schedule", "job schedule", "schedule a job", "schedule jobs", "schedule my", "scheduling", "today screen", "today's jobs", "jobs today", "on today", "what's on today", "what is on today", "today", "unallocated", "drag a job"],
+    go: "",
+    goLabel: "",
+    office: "Open Dispatch Board. That is the weekly planner: the crew are down the side and the days of the week run across the top. Jobs sit on the day they are booked, including work with nobody allocated. Drag a job onto the person who will do it, or onto another day. Today shows each person the jobs assigned to them, in order, with the start time and the address. Open a job for the details.",
+    crew: "Open Today. It lists the jobs assigned to you, in order, with the start time and the address. Open a job for the details. The weekly planner is Dispatch Board, which the office uses to put a job on a day and a person.",
+  },
+  {
+    id: "capacity",
+    keywords: ["day view", "start times", "start time", "who's free", "who is free", "capacity", "crew capacity"],
+    go: "",
+    goLabel: "",
+    office: "Open Dispatch Board and choose Day. That day is an hour grid from 6am to 6pm. Leave the start blank and the board spaces the job. Change the start time on the job to pin it. Hours on the job do not change timesheets. Capacity is in the Jobs menu. It shows who is free, booked, or on approved leave for the week, from the job bookings and approved leave already on this phone. Hours sheets stay separate.",
+    crew: "Today shows the start time on your job. The office sets it. Capacity, who is free or booked, is for the office and is not on your login.",
   },
 ]);
 
