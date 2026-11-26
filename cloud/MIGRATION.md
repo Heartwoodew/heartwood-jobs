@@ -1,3 +1,17 @@
+## Job requirements (not deployed)
+
+Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production.
+
+Office job cards have a Requirements tab after Details. Crew have a Requirements tab beside Job and Chat, with the words read-only and tick boxes only. A new Coral Homes job, including one saved from the inbox form, copies the shared pack plus the pack for that job's type or clean stage. Custom lines stay when the office applies the template again. There is no Coral call-up parser until a real work-order email exists. The cost-code map is the hook for that later change. Crew do not see prices.
+
+Service worker `callup-shell-v161-requirements`.
+
+After review, and only when the owner says merge:
+
+1. Deploy Firestore rules from `cloud/firestore.production.rules` only. Do not deploy `cloud/emulator/firestore.rules`. `cloud/firebase.json` points Firestore at the emulator file and its predeploy hook still refuses a live deploy. Do not remove that hook.
+2. Deploy hosting with `firebase deploy --only hosting --config cloud/firebase.hosting.json --project heartwood-9f37f`. Phones pick up `callup-shell-v161-requirements`.
+3. No functions deploy. No index deploy. No Storage change. No production data write.
+
 ## Staff clock-time corrections (not deployed)
 
 Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production.
@@ -6,12 +20,12 @@ A worker can correct clock on and clock off on their own timesheet. The new time
 
 A worker can correct the current pay period, and any earlier period that is not sent and not approved. Clock off must be after clock on. Times cannot be in the future. The correction can change only the time fields and the edit audit. Job, notes, status, and the GPS stamp stay. Another person's sheet stays. An admin can still correct their own sheet after it is sent or approved. Alex can still rewrite a Heartwood timesheet, which is the existing owner rule.
 
-Service worker `callup-shell-v160-clock-adjust`. Main is `callup-shell-v159-help-videos`. Open pull requests are at v156 or below.
+Service worker `callup-shell-v161-requirements`. Main is `callup-shell-v159-help-videos`. Open pull requests are at v156 or below.
 
 After review, and only when the owner says merge:
 
 1. Deploy Firestore rules from `cloud/firestore.production.rules` only. Do not deploy `cloud/emulator/firestore.rules`. `cloud/firebase.json` points Firestore at the emulator file and its predeploy hook still refuses a live deploy. Do not remove that hook.
-2. Deploy hosting with `firebase deploy --only hosting --config cloud/firebase.hosting.json --project heartwood-9f37f`. Phones pick up `callup-shell-v160-clock-adjust`.
+2. Deploy hosting with `firebase deploy --only hosting --config cloud/firebase.hosting.json --project heartwood-9f37f`. Phones pick up `callup-shell-v161-requirements`.
 3. No functions deploy. No index deploy. No Storage change. No Stripe change. No backfill. No production data write.
 
 # Cloud storage, tenant isolation, and 3-month operational retention
