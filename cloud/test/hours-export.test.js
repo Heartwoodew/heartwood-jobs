@@ -199,6 +199,30 @@ test("iPhone uses the share sheet, and a throwing or false canShare falls back t
   } finally { URL.createObjectURL = prev; URL.revokeObjectURL = prevRevoke; }
 });
 
+test("an edited shift is flagged in the spreadsheet without prices", () => {
+  const sheet = {
+    uid: "u1",
+    entries: {
+      a: {
+        id: "a", source: "clock", status: "closed", date: "2026-11-03", start: "07:30", finish: "15:15",
+        originalClockOn: "07:00", originalClockOff: "15:00", note: "Slab", job: "Depot",
+        edits: { e1: { summary: "Clock on 07:00 → 07:30", byName: "Sam" } },
+      },
+    },
+  };
+  const rep = m.buildHoursReport({ weekStart: "2026-11-02", people: [{ uid: "u1", name: "Sam" }], sheets: [sheet] });
+  const shift = rep.people[0].days[1].shifts[0];
+  assert.equal(shift.source, "Clocked · Edited");
+  assert.match(shift.note, /Edited/);
+  assert.match(shift.note, /original clock on 7:00 am/);
+  assert.match(shift.note, /original clock off 3:00 pm/);
+  assert.match(shift.note, /Slab/);
+  const xml = m.reportSheets(rep, { company: "Heartwood", generated: new Date("2026-11-08T06:00:00Z") })[1].xml;
+  assert.match(xml, /Clocked · Edited/);
+  assert.match(xml, /original clock on 7:00 am/);
+  assert.doesNotMatch(xml, /\$|poAmount|quoteAmount|invoiceAmount/);
+});
+
 test("hours buttons do not call an undefined rerender, and list errors stay visible", () => {
   const app = readFileSync(new URL("../../app/app.js", import.meta.url), "utf8");
   const sw = readFileSync(new URL("../../app/sw.js", import.meta.url), "utf8");
@@ -213,7 +237,7 @@ test("hours buttons do not call an undefined rerender, and list errors stay visi
   assert.match(app, /hxg\.onclick/);
   assert.match(sw, /u\.protocol === "blob:"/);
 
-  assert.match(sw, /callup-shell-v159-help-videos/);
+  assert.match(sw, /callup-shell-v160-clock-adjust/);
   const slice = (text, a, b) => text.slice(text.indexOf(a), text.indexOf(b) + b.length);
   assert.equal(
     slice(readFileSync(new URL("../emulator/firestore.rules", import.meta.url), "utf8"), "// BEGIN HOURS EXPORT RULES", "// END HOURS EXPORT RULES"),

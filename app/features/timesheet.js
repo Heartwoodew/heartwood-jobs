@@ -134,6 +134,91 @@ export function paidShift(entry) {
   return { ...entry, start, finish, breakStart, breakEnd };
 }
 
+// A corrected clock time is HH:MM, 24-hour, zero-padded. Lexicographic order matches clock order.
+export const CLOCK_HM = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+export function addIsoDays(iso, n) {
+  const d = new Date(String(iso || "") + "T00:00:00Z");
+  if (Number.isNaN(d.getTime())) return "";
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+export function brisbaneToday(now = new Date(), timeZone = "Australia/Brisbane") {
+  const d = asDate(now);
+  if (!d) return "";
+  return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+}
+
+// sent / approved close a past pay period. The current week stays open so someone can still fix today.
+export function sheetLock(sheet) {
+  if (!sheet) return "";
+  const status = String(sheet.status || "").toLowerCase();
+  if (sheet.approved === true || status === "approved") return "approved";
+  if (sheet.sent === true || status === "sent") return "sent";
+  return "";
+}
+
+export function currentPayPeriod(sheet, today) {
+  const start = sheet && sheet.weekStart;
+  if (!start || !today) return false;
+  const end = sheet.weekEnd && sheet.weekEnd >= start ? sheet.weekEnd : addIsoDays(start, 6);
+  return today >= start && today <= end;
+}
+
+export function periodOpenForWorker(sheet, today) {
+  if (currentPayPeriod(sheet, today)) return true;
+  return !sheetLock(sheet);
+}
+
+export function entryTimeEdited(entry) {
+  return !!(entry && (entry.originalClockOn || entry.originalClockOff || editList(entry).length));
+}
+
+export function clockAdjustSummary(prev, next) {
+  const bits = [];
+  if ((prev?.start || "") !== (next?.start || "")) bits.push(`Clock on ${prev?.start || "—"} → ${next?.start || "—"}`);
+  if ((prev?.finish || "") !== (next?.finish || "")) bits.push(`Clock off ${prev?.finish || "—"} → ${next?.finish || "—"}`);
+  return bits.join(". ").slice(0, 200);
+}
+
+function withOriginalClock(entry, start, finish) {
+  const next = { ...entry, start, finish };
+  if (entry.originalClockOn) next.originalClockOn = entry.originalClockOn;
+  else if (CLOCK_HM.test(entry.start || "")) next.originalClockOn = entry.start;
+  if (entry.originalClockOff) next.originalClockOff = entry.originalClockOff;
+  else if (CLOCK_HM.test(entry.finish || "")) next.originalClockOff = entry.finish;
+  return next;
+}
+
+// Workers correct their own clock on / clock off. The change is the new time immediately.
+// originalClockOn / originalClockOff are the times from before the first correction and are not replaced.
+// admin true skips the own-sheet and pay-period checks. The screen still only writes the signed-in sheet
+// unless the caller is the owner, who already has a separate rules path.
+export function assessClockAdjust({ entry, sheet, uid, today, now, clockOn, clockOff, admin = false, timeZone = "Australia/Brisbane" } = {}) {
+  if (!entry) return { ok: false, reason: "That shift is not on this week." };
+  if (!admin && (!sheet || sheet.uid !== uid)) return { ok: false, reason: "You can only change your own times." };
+  if (!admin && !periodOpenForWorker(sheet, today)) {
+    return { ok: false, reason: sheetLock(sheet) === "approved" ? "This pay period is already approved." : "This pay period has already been sent." };
+  }
+  const open = entry.source === "clock" && entry.status !== "closed" && !entry.finish;
+  const on = String(clockOn || "");
+  const off = open ? "" : String(clockOff || "");
+  if (!CLOCK_HM.test(on)) return { ok: false, reason: "Enter a clock on time." };
+  if (!open && !CLOCK_HM.test(off)) return { ok: false, reason: "Enter a clock off time." };
+  if (!open && off <= on) return { ok: false, reason: "Clock off must be after clock on." };
+  const day = String(entry.date || "");
+  const todayKey = today || brisbaneToday(now, timeZone);
+  if (day && todayKey && day > todayKey) return { ok: false, reason: "Times can't be in the future." };
+  if (day && todayKey && day === todayKey) {
+    const nowHm = brisbaneHM(now, timeZone);
+    if (nowHm && (on > nowHm || (off && off > nowHm))) return { ok: false, reason: "Times can't be in the future." };
+  }
+  if ((entry.start || "") === on && (entry.finish || "") === off) return { ok: false, reason: "No change." };
+  const next = withOriginalClock(entry, on, open ? (entry.finish || "") : off);
+  return { ok: true, entry: next, summary: clockAdjustSummary(entry, next) };
+}
+
 export function sheetHours(sheet) {
   const entries = entryList(sheet?.entries).map(paidShift);
   const taken = new Set(entries.map(e => e.date).filter(Boolean));

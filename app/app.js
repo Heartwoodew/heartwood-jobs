@@ -59,9 +59,9 @@ import { cancelVisitPatch, newSeriesId, planSeries, planStopSeries, recurrenceFr
 import { buildCertificate, bytesToBase64, certificatePanelHtml, certificatesEnabled } from "./features/certificates.js";
 import { acceptLogoValue, compressLogo, isLogoStoragePath, logoFailureText, logoFileOk, logoUploadPlan } from "./features/company-logo.js";
 import {
-  accuracyText, brisbaneHM, captureFix, coordText, daysForSheet, editList, entryList, locationConsent,
+  accuracyText, assessClockAdjust, brisbaneHM, captureFix, coordText, daysForSheet, editList, entryList, entryTimeEdited, locationConsent,
   locationMap, machineChoicePatch, machinePromptNeeded, machineShiftToResume, mapsHref, needsLocationConsent, newTsId, openClock,
-  paidShift, prestartStatus, sheetHours, shiftHours, sortedEntries, stampText,
+  paidShift, periodOpenForWorker, prestartStatus, sheetHours, sheetLock, shiftHours, sortedEntries, stampText,
 } from "./features/timesheet.js";
 import {
   LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, SHARE_FIX_WAIT_MS, SHOW_AFTER_CLOCK_OFF, STALE_MINUTES, canSeeCrewMap, clockOffLocationUpdate,
@@ -214,7 +214,7 @@ let INBOUND_DOMAIN = "inbound.callupapp.com.au";
 let startDesktopInstall = () => {};
 let refreshDesktopBanner = () => {};
 let desktopBannerWouldShow = () => false;
-let SHELL_VERSION = "callup-shell-v159-help-videos";
+let SHELL_VERSION = "callup-shell-v160-clock-adjust";
 let prepareTicket = () => ({ ok: false, reason: "loading" });
 let ticketDialogHtml = () => "";
 let ticketFailureText = () => "The ticket could not be sent. Try again.";
@@ -3287,25 +3287,40 @@ function tsAdjustedLine(raw, field, fix) {
   if (!hm || !cur || hm === cur) return "";
   return `<p class="ts-stamp">Adjusted to ${esc(ampm(cur))}. Original stamp ${esc(stampText(fix.at))} stays.</p>`;
 }
-function tsEntryCard(raw, canEdit) {
+function tsOfficeAdmin() { return !!(me && me.role === "admin"); }
+function tsWorkerLocked(sheet) { return !tsOfficeAdmin() && !!sheet && !periodOpenForWorker(sheet, todayStr()); }
+function tsLockNote(sheet) {
+  if (!tsWorkerLocked(sheet)) return "";
+  return `<p class="ts-privacy">${sheetLock(sheet) === "approved" ? "This pay period is already approved. Times stay as they are." : "This pay period has already been sent. Times stay as they are."}</p>`;
+}
+function tsOriginalAdmin(raw) {
+  const bits = [];
+  if (raw.originalClockOn) bits.push("clock on " + ampm(raw.originalClockOn));
+  if (raw.originalClockOff) bits.push("clock off " + ampm(raw.originalClockOff));
+  return bits.length ? `<p class="ts-stamp">Original ${esc(bits.join(", "))}</p>` : "";
+}
+function tsEntryCard(raw, canEdit, audit) {
   const e = paidShift(raw) || raw;
   const badge = raw.source === "manual" ? `<span class="ts-badge manual">Manual</span>` : `<span class="ts-badge clock">Clocked</span>`;
+  const edited = audit && entryTimeEdited(raw) ? `<span class="ts-badge edited">Edited</span>` : "";
   const day = e.date ? `${tsDow(e.date)} ${dmy(e.date).slice(0, 5)}` : "";
   const hours = shiftHours(e);
   const open = raw.source === "clock" && raw.status !== "closed";
   const span = `${e.start ? ampm(e.start) : "—"}${e.finish ? " – " + ampm(e.finish) : open ? " · still on" : ""}`;
   const br = e.breakStart && e.breakEnd ? `<p class="sub">Break ${esc(ampm(e.breakStart))} – ${esc(ampm(e.breakEnd))}</p>` : raw.status === "break" ? `<p class="sub">On break${e.breakStart ? " from " + esc(ampm(e.breakStart)) : ""}</p>` : "";
   const job = [e.job, e.note].filter(Boolean).join(" — ");
-  const audit = raw.source === "manual" ? `<p class="sub">Entered by ${esc(raw.enteredByName || "")}${raw.enteredAt ? " · " + esc(stampText(raw.enteredAt)) : ""}</p>` : "";
+  const auditLine = raw.source === "manual" ? `<p class="sub">Entered by ${esc(raw.enteredByName || "")}${raw.enteredAt ? " · " + esc(stampText(raw.enteredAt)) : ""}</p>` : "";
   const edits = editList(raw).map(ed => `<p class="sub">Edited by ${esc(ed.byName || "")}${ed.at ? " · " + esc(stampText(ed.at)) : ""}${ed.summary ? " · " + esc(ed.summary) : ""}</p>`).join("");
-  return `<article class="ts-entry">${badge}<div class="ts-dl"><b>${esc(day)}</b><span class="ts-h">${hours ? hrs(hours) : open ? "On" : ""}</span></div>
+  const original = audit ? tsOriginalAdmin(raw) : "";
+  return `<article class="ts-entry">${badge}${edited}<div class="ts-dl"><b>${esc(day)}</b><span class="ts-h">${hours ? hrs(hours) : open ? "On" : ""}</span></div>
     <p class="ts-when">${esc(span)}</p>${br}${job ? `<p class="sub">${esc(job)}</p>` : ""}
     ${tsFixLine("Clocked on", raw.clockOn)}${tsAdjustedLine(raw, "start", raw.clockOn)}
     ${tsFixLine("Clocked off", raw.clockOff)}${tsAdjustedLine(raw, "finish", raw.clockOff)}
+    ${original}
     ${tsFixLine("Break start", raw.breakOn)}${tsFixLine("Break end", raw.breakOff)}
-    ${audit}${edits}
+    ${auditLine}${edits}
     ${tsMachineStatusHtml(raw)}
-    ${canEdit ? `<button type="button" class="sm-btn tsedit" data-eid="${esc(raw.id)}">Edit</button>` : ""}</article>`;
+    ${canEdit ? `<button type="button" class="sm-btn tsedit" data-eid="${esc(raw.id)}">Adjust times</button>` : ""}</article>`;
 }
 function tsLegacyCards(sheet, canEdit) {
   if (!sheet) return "";
@@ -3322,9 +3337,10 @@ function tsLegacyCards(sheet, canEdit) {
       ${canEdit ? `<button type="button" class="sm-btn tslegacy" data-legacy="${ds}">Edit as manual</button>` : ""}</article>`;
   }).join("");
 }
-function tsCards(sheet, canEdit) {
-  const entries = sortedEntries(sheet?.entries).map(raw => tsEntryCard(raw, canEdit)).join("");
-  const legacy = tsLegacyCards(sheet, canEdit);
+function tsCards(sheet, canEdit, audit) {
+  const allow = !!canEdit && !tsWorkerLocked(sheet);
+  const entries = sortedEntries(sheet?.entries).map(raw => tsEntryCard(raw, allow, audit)).join("");
+  const legacy = tsLegacyCards(sheet, allow);
   if (!entries && !legacy) return `<p class="sub">No shifts this week yet.</p>`;
   return entries + legacy;
 }
@@ -3488,23 +3504,34 @@ async function tsChooseMachine(choice, asset) {
   }
   tsRerender();
 }
+function tsAdjustForm(existing) {
+  const open = existing.source === "clock" && existing.status !== "closed" && !existing.finish;
+  const paid = paidShift(existing) || existing;
+  return `<form id="tsman" class="ts-man"><div class="ts-dl">${existing.source === "clock" ? `<span class="ts-badge clock">Clocked</span>` : `<span class="ts-badge manual">Manual</span>`}<b>Adjust clock times</b></div>
+    <p class="ts-privacy">This saves straight away. The office still sees the original time, who changed it, and when.</p>
+    ${existing.source === "clock" ? `<div class="ts-keep">${tsFixLine("Clocked on", existing.clockOn)}${tsFixLine("Clocked off", existing.clockOff)}</div>` : ""}
+    <div class="ts-in"><label>Clock on<input type="time" name="clockOn" required value="${esc(paid.start || "")}"></label>${open ? "" : `<label>Clock off<input type="time" name="clockOff" required value="${esc(paid.finish || "")}"></label>`}</div>
+    <p id="tsmsg" class="sub"></p>
+    <div class="btns"><button type="button" class="sm-btn" id="tsmancancel">Cancel</button><button type="submit" class="sm-btn primary">Save times</button></div></form>`;
+}
 function tsManualForm(sheet) {
   const legacyDs = String(ui.tsEdit || "").startsWith("legacy:") ? ui.tsEdit.slice(7) : "";
   const existing = ui.tsEdit && ui.tsEdit !== "new" && !legacyDs ? (sheet?.entries || {})[ui.tsEdit] : null;
+  if (existing) return tsAdjustForm(existing);
   const day = legacyDs ? ((sheet?.days || {})[legacyDs] || {}) : null;
-  const e = existing || { date: legacyDs || (tsWeek() === weekStartOf(todayStr()) ? todayStr() : tsWeek()), start: day?.start || "", finish: day?.finish || "", breakStart: day?.breakStart || "", breakEnd: day?.breakEnd || "", job: "", note: day?.note || "" };
-  const clock = !!(existing && existing.source === "clock");
+  const e = { date: legacyDs || (tsWeek() === weekStartOf(todayStr()) ? todayStr() : tsWeek()), start: day?.start || "", finish: day?.finish || "", breakStart: day?.breakStart || "", breakEnd: day?.breakEnd || "", job: "", note: day?.note || "" };
   const dates = TS_DAYS.map((n, i) => { const ds = addDays(tsWeek(), i); return `<option value="${ds}" ${e.date === ds ? "selected" : ""}>${n} ${dmy(ds).slice(0, 5)}</option>`; }).join("");
-  return `<form id="tsman" class="ts-man"><div class="ts-dl">${clock ? `<span class="ts-badge clock">Clocked</span>` : `<span class="ts-badge manual">Manual</span>`}<b>${existing ? "Edit shift" : "Add hours manually"}</b></div>
-    ${clock ? `<div class="ts-keep"><p>The original clock stamp stays visible after you save.</p>${tsFixLine("Clocked on", existing.clockOn)}${tsFixLine("Clocked off", existing.clockOff)}${tsFixLine("Break start", existing.breakOn)}${tsFixLine("Break end", existing.breakOff)}</div><input type="hidden" name="date" value="${esc(existing.date)}">` : `<label>Day<select name="date">${dates}</select></label>`}
+  return `<form id="tsman" class="ts-man"><div class="ts-dl"><span class="ts-badge manual">Manual</span><b>Add hours manually</b></div>
+    <label>Day<select name="date">${dates}</select></label>
     <div class="ts-in"><label>Start<input type="time" name="start" value="${esc(e.start || "")}"></label><label>Finish<input type="time" name="finish" value="${esc(e.finish || "")}"></label></div>
     <div class="ts-in"><label>Break start<input type="time" name="breakStart" value="${esc(e.breakStart || "")}"></label><label>Break end<input type="time" name="breakEnd" value="${esc(e.breakEnd || "")}"></label></div>
-    <label>Job<input name="job" maxlength="200" value="${esc(existing?.job || e.job || "")}" placeholder="Site or job"></label>
-    <label>Notes<input name="note" maxlength="200" value="${esc(existing?.note || e.note || "")}" placeholder="Optional"></label>
+    <label>Job<input name="job" maxlength="200" value="${esc(e.job || "")}" placeholder="Site or job"></label>
+    <label>Notes<input name="note" maxlength="200" value="${esc(e.note || "")}" placeholder="Optional"></label>
     <p id="tsmsg" class="sub"></p>
     <div class="btns"><button type="button" class="sm-btn" id="tsmancancel">Cancel</button><button type="submit" class="sm-btn primary">Save shift</button></div></form>`;
 }
 function tsManualArea(sheet) {
+  if (tsWorkerLocked(sheet) && !ui.tsEdit) return "";
   if (ui.tsEdit) return tsManualForm(sheet);
   return `<button type="button" class="sm-btn ts-add" id="tsadd">Add manual hours</button>`;
 }
@@ -3523,8 +3550,9 @@ function tsEditor() {
   if (!tsWorkerReady()) return tsNav() + `<p class="sub pad">Loading…</p>`;
   const sheet = ui.tsMine;
   const has = entryList(sheet?.entries).length > 0;
-  const body = !has && !ui.tsEdit ? tsGrid(sheet) : has ? `${tsCards(sheet, true)}${tsWeekTotal(sheet)}` : "";
-  return `${tsNav()}${tsLeaveFor(me.uid, me.name)}${tsClockHtml()}${tsMachineHtml()}${tsManualArea(sheet)}${body}`;
+  const locked = tsWorkerLocked(sheet);
+  const body = locked ? `${tsCards(sheet, false)}${tsWeekTotal(sheet)}` : !has && !ui.tsEdit ? tsGrid(sheet) : has ? `${tsCards(sheet, true)}${tsWeekTotal(sheet)}` : "";
+  return `${tsNav()}${tsLockNote(sheet)}${tsLeaveFor(me.uid, me.name)}${tsClockHtml()}${tsMachineHtml()}${locked ? "" : tsManualArea(sheet)}${body}`;
 }
 const TS_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const tsDayLbl = (ds, wd) => `${wd} ${+ds.slice(8, 10)} ${TS_MON[+ds.slice(5, 7) - 1]}`;
@@ -3588,7 +3616,7 @@ function tsPerson(p, t) {
   const edited = t.sent && String(t.updatedAtIso || "") > String(t.sentAt || "") ? ` <span class="qpill">Edited since sent</span>` : "";
   const legacyTable = `<table class="jt ts-t"><thead><tr><th>Day</th><th>Start</th><th>Finish</th><th>Lunch</th><th>Hours</th><th>Note</th></tr></thead><tbody>${TS_DAYS.map((n, i) => { const ds = addDays(t.weekStart, i), d = (t.days || {})[ds] || {};
     return `<tr><td>${n} ${dmy(ds).slice(0, 5)}</td><td>${esc(d.start || "")}</td><td>${esc(d.finish || "")}</td><td>${tsHours(d) ? "−30m" : ""}</td><td>${tsHours(d) ? hrs(tsHours(d)) : ""}</td><td>${esc(d.note || "")}</td></tr>`; }).join("")}</tbody></table>`;
-  const detail = entryList(t.entries).length ? tsCards(t, t.uid === me.uid) : legacyTable;
+  const detail = entryList(t.entries).length ? tsCards(t, t.uid === me.uid, true) : legacyTable;
   const send = !isOwner() ? "" : `<div class="btns"><button type="button" class="sm-btn tscopy">Copy</button>${t.sent ? `<button type="button" class="sm-btn tsunsent">Unmark sent</button>` : ""}</div>`;
   return `<div class="ts-card" data-tsid="${esc(t.id)}"><h3>${esc(p.name)} · <b>${hrs(sheetHours(t))}</b>${sent}${edited}</h3>${away}${detail}${send}</div>`;
 }
@@ -4660,32 +4688,50 @@ async function tsPunch(kind) {
 async function tsSaveManual(ev) {
   ev.preventDefault();
   const f = ev.target;
-  const next = {
-    date: f.date.value, start: f.start.value, finish: f.finish.value,
-    breakStart: f.breakStart.value, breakEnd: f.breakEnd.value,
-    job: f.job.value.trim().slice(0, 200), note: f.note.value.trim().slice(0, 200),
-  };
   const msg = $("#tsmsg");
-  if ((next.breakStart && !next.breakEnd) || (!next.breakStart && next.breakEnd)) { if (msg) msg.textContent = "Enter both break start and break end, or leave both empty"; return; }
   const ws = tsWeek();
+  const legacy = String(ui.tsEdit || "").startsWith("legacy:");
+  const adjusting = !!(f.clockOn) && !legacy && ui.tsEdit && ui.tsEdit !== "new";
   ui.tsBusy = true;
   let paint = true;
   try {
     const sheet = await tsLoad(ws);
     const entries = { ...(sheet?.entries || {}) };
-    const legacy = String(ui.tsEdit || "").startsWith("legacy:");
     const existing = !legacy && ui.tsEdit && ui.tsEdit !== "new" ? entries[ui.tsEdit] : null;
     if (ui.tsEdit && ui.tsEdit !== "new" && !legacy && !existing) { paint = false; if (msg) msg.textContent = "That shift is not on this week"; return; }
-    const needFinish = !existing || existing.source !== "clock" || existing.status === "closed";
-    if (!next.start || (needFinish && !next.finish)) { paint = false; if (msg) msg.textContent = "Enter a start and a finish"; return; }
+    if (adjusting) {
+      const verdict = assessClockAdjust({
+        entry: existing, sheet: { ...(sheet || {}), uid: me.uid, weekStart: ws, weekEnd: addDays(ws, 6) },
+        uid: me.uid, today: todayStr(), now: new Date(),
+        clockOn: f.clockOn.value, clockOff: f.clockOff ? f.clockOff.value : "",
+        admin: tsOfficeAdmin(),
+      });
+      if (!verdict.ok) { paint = false; if (msg) msg.textContent = verdict.reason; return; }
+      const editId = newTsId();
+      entries[existing.id] = {
+        ...verdict.entry,
+        edits: { ...(existing.edits || {}), [editId]: { at: serverTimestamp(), by: me.uid, byName: String(me.name || "Staff").slice(0, 80), summary: verdict.summary } },
+        lastEditId: editId,
+      };
+      const edited = await tsWrite(ws, sheet, entries, existing.id, {});
+      ui.tsEdit = null; ui.tsDirty = false;
+      toast(edited && edited.queued ? SAVED_ON_PHONE : "Times saved");
+      return;
+    }
+    const next = {
+      date: f.date.value, start: f.start.value, finish: f.finish.value,
+      breakStart: f.breakStart.value, breakEnd: f.breakEnd.value,
+      job: f.job.value.trim().slice(0, 200), note: f.note.value.trim().slice(0, 200),
+    };
+    if ((next.breakStart && !next.breakEnd) || (!next.breakStart && next.breakEnd)) { paint = false; if (msg) msg.textContent = "Enter both break start and break end, or leave both empty"; return; }
+    if (!next.start || !next.finish) { paint = false; if (msg) msg.textContent = "Enter a start and a finish"; return; }
     if (existing) {
-      const summary = tsDiffSummary(existing, { ...next, date: existing.source === "clock" ? existing.date : next.date });
+      const summary = tsDiffSummary(existing, next);
       if (!summary) { ui.tsEdit = null; ui.tsDirty = false; toast("No change"); return; }
       const editId = newTsId();
       entries[existing.id] = {
         ...existing,
         ...next,
-        date: existing.source === "clock" ? existing.date : next.date,
         edits: { ...(existing.edits || {}), [editId]: { at: serverTimestamp(), by: me.uid, byName: String(me.name || "Staff").slice(0, 80), summary } },
         lastEditId: editId,
       };
@@ -4779,7 +4825,9 @@ function bindTs(A, rerender) {
     if (d.start || d.finish || d.note) days[r.dataset.ds] = d; }); return days; };
   f.oninput = () => { const days = read(); const tot = $("#tstot"); if (tot) tot.textContent = hrs(tsTotal(days));
     f.querySelectorAll(".ts-day").forEach(r => { const h = tsHours(days[r.dataset.ds]); r.querySelector(".ts-h").textContent = h ? hrs(h) : ""; }); const m = $("#tsmsg"); if (m) m.textContent = "Not saved"; ui.tsDirty = true; };
-  f.onsubmit = async ev => { ev.preventDefault(); const days = read();
+  f.onsubmit = async ev => { ev.preventDefault();
+    if (tsWorkerLocked({ ...(ui.tsMine || {}), weekStart: ws })) { const m = $("#tsmsg"); if (m) m.textContent = sheetLock(ui.tsMine) === "approved" ? "This pay period is already approved." : "This pay period has already been sent."; return; }
+    const days = read();
     for (const [ds, d] of Object.entries(days)) if ((d.start && !d.finish) || (!d.start && d.finish)) { const m = $("#tsmsg"); if (m) m.textContent = `${dmy(ds).slice(0, 5)}: enter both start and finish`; return; }
     const data = { uid: me.uid, name: String(me.name || "Staff").slice(0, 80), weekStart: ws, weekEnd: addDays(ws, 6), days, totalHrs: tsTotal(days), updatedAt: serverTimestamp(), updatedAtIso: new Date().toISOString() , ...tsCompanyField() };
     try {

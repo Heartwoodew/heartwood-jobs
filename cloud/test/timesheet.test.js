@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  accuracyText, captureFix, coordText, daysForSheet, machineChoicePatch, machinePromptNeeded, machineShiftToResume, mapsHref,
-  needsLocationConsent, paidShift, prestartStatus, sheetHours, shiftHours,
+  accuracyText, assessClockAdjust, captureFix, coordText, daysForSheet, entryTimeEdited, machineChoicePatch, machinePromptNeeded, machineShiftToResume, mapsHref,
+  needsLocationConsent, paidShift, periodOpenForWorker, prestartStatus, sheetHours, shiftHours,
 } from "../../app/features/timesheet.js";
 
 test("finished shifts keep the 30-minute lunch unless a break is entered", () => {
@@ -121,6 +121,70 @@ test("timesheet rules fragment matches the emulator block and does not replace o
   assert.match(slice(frag), /m\.fix == "no location"/);
   assert.match(slice(frag), /allow delete: if false/);
   assert.doesNotMatch(slice(frag), /match \/receipts\/|match \/xeroQueue\/|watchPosition/);
+});
+
+test("a worker's clock correction applies immediately and keeps the first original time", () => {
+  const entry = {
+    id: "e1", source: "clock", status: "closed", date: "2026-11-10", start: "06:58", finish: "15:04",
+    clockOn: { at: "2026-11-09T20:58:00Z", fix: "gps", lat: -27.47, lng: 153.02, accuracy: 12 },
+    clockOff: { at: "2026-11-10T05:04:00Z", fix: "gps", lat: -27.47, lng: 153.02, accuracy: 9 },
+    edits: {}, job: "Lot 12", note: "slab",
+  };
+  const sheet = { uid: "op1", weekStart: "2026-11-09", weekEnd: "2026-11-15", sent: false };
+  const first = assessClockAdjust({
+    entry, sheet, uid: "op1", today: "2026-11-12", now: new Date("2026-11-12T02:00:00Z"),
+    clockOn: "07:05", clockOff: "15:10",
+  });
+  assert.equal(first.ok, true);
+  assert.equal(first.entry.start, "07:05");
+  assert.equal(first.entry.finish, "15:10");
+  assert.equal(first.entry.originalClockOn, "06:58");
+  assert.equal(first.entry.originalClockOff, "15:04");
+  assert.equal(first.entry.job, "Lot 12");
+  assert.equal(first.entry.clockOn.lat, -27.47);
+  assert.equal(entryTimeEdited(first.entry), true);
+  const paid = paidShift({ ...first.entry, edits: { e1: { summary: first.summary } } });
+  assert.equal(paid.start, "07:05");
+  assert.equal(paid.finish, "15:10");
+  const second = assessClockAdjust({
+    entry: first.entry, sheet, uid: "op1", today: "2026-11-12", now: new Date("2026-11-12T02:00:00Z"),
+    clockOn: "07:15", clockOff: "15:10",
+  });
+  assert.equal(second.ok, true);
+  assert.equal(second.entry.originalClockOn, "06:58");
+  assert.equal(second.entry.originalClockOff, "15:04");
+  assert.equal(assessClockAdjust({ entry, sheet, uid: "op1", today: "2026-11-12", now: new Date("2026-11-12T02:00:00Z"), clockOn: "15:30", clockOff: "07:00" }).reason, "Clock off must be after clock on.");
+  assert.equal(assessClockAdjust({ entry, sheet, uid: "op1", today: "2026-11-10", now: new Date("2026-11-10T01:00:00Z"), clockOn: "18:00", clockOff: "18:30" }).reason, "Times can't be in the future.");
+  assert.equal(assessClockAdjust({ entry: { ...entry, date: "2026-11-13" }, sheet, uid: "op1", today: "2026-11-12", now: new Date("2026-11-12T02:00:00Z"), clockOn: "07:00", clockOff: "15:00" }).reason, "Times can't be in the future.");
+  assert.equal(assessClockAdjust({ entry, sheet, uid: "op2", today: "2026-11-12", now: new Date("2026-11-12T02:00:00Z"), clockOn: "07:05", clockOff: "15:10" }).reason, "You can only change your own times.");
+  const sent = { ...sheet, weekStart: "2026-11-02", weekEnd: "2026-11-08", sent: true };
+  assert.equal(assessClockAdjust({ entry, sheet: sent, uid: "op1", today: "2026-11-12", now: new Date("2026-11-12T02:00:00Z"), clockOn: "07:05", clockOff: "15:10" }).reason, "This pay period has already been sent.");
+  const approved = { ...sheet, weekStart: "2026-11-02", weekEnd: "2026-11-08", approved: true };
+  assert.equal(assessClockAdjust({ entry, sheet: approved, uid: "op1", today: "2026-11-12", now: new Date("2026-11-12T02:00:00Z"), clockOn: "07:05", clockOff: "15:10" }).reason, "This pay period is already approved.");
+  assert.equal(periodOpenForWorker({ ...sheet, sent: true }, "2026-11-12"), true);
+  assert.equal(assessClockAdjust({ entry, sheet: { ...sheet, sent: true }, uid: "op1", today: "2026-11-12", now: new Date("2026-11-12T06:00:00Z"), clockOn: "07:05", clockOff: "15:10" }).ok, true);
+  assert.equal(assessClockAdjust({ entry, sheet: sent, uid: "op1", today: "2026-11-12", now: new Date("2026-11-12T02:00:00Z"), clockOn: "07:05", clockOff: "15:10", admin: true }).ok, true);
+  const open = assessClockAdjust({
+    entry: { ...entry, status: "open", finish: "", clockOff: undefined },
+    sheet, uid: "op1", today: "2026-11-12", now: new Date("2026-11-12T02:00:00Z"), clockOn: "07:00",
+  });
+  assert.equal(open.ok, true);
+  assert.equal(open.entry.finish, "");
+  assert.equal(open.entry.originalClockOff, undefined);
+});
+
+test("the adjust form is clock times only, and admins see the Edited mark", () => {
+  const app = readFileSync(new URL("../../app/app.js", import.meta.url), "utf8");
+  const form = app.slice(app.indexOf("function tsAdjustForm"), app.indexOf("function tsManualForm"));
+  assert.match(form, /Adjust clock times/);
+  assert.match(form, /name="clockOn"/);
+  assert.match(form, /name="clockOff"/);
+  assert.match(form, /saves straight away/);
+  assert.doesNotMatch(form, /name="job"|name="note"|name="breakStart"|poAmount|quoteAmount|invoiceAmount/);
+  assert.match(app, /ts-badge edited/);
+  assert.match(app, /Original /);
+  assert.match(app, /assessClockAdjust/);
+  assert.match(app, /periodOpenForWorker/);
 });
 
 test("machine question comes back after a reload for an open clock shift with no answer", () => {
