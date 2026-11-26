@@ -106,7 +106,7 @@ test("each draft row offers Quote accepted and an accepted row names its job", (
 
 test("quote accept ships in the next service worker cache", () => {
   const sw = readFileSync(new URL("../app/sw.js", import.meta.url), "utf8");
-  assert.match(sw, /callup-shell-v161-requirements/);
+  assert.match(sw, /callup-shell-v162-clock-on-fix/);
   const app = readFileSync(new URL("../app/app.js", import.meta.url), "utf8");
   assert.match(app, /canQuote = \(\) => canSeeMoney\(\)/);
   assert.match(app, /openJob: openAcceptedJob/);
