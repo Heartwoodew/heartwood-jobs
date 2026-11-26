@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   CLIENT_ERROR_FIELDS, CLIENT_ERROR_MESSAGE_MAX, CLIENT_ERROR_SESSION_MAX, CLIENT_ERROR_STACK_MAX,
-  clientErrorPayload, clientErrorScreen, clientErrorText, clientErrorsHtml, createClientErrorGate, scrubClientText,
+  clientErrorPayload, clientErrorScreen, clientErrorText, clientErrorWorthSending, clientErrorWriteDenied, clientErrorsHtml, createClientErrorGate, scrubClientText,
 } from "../../app/features/client-errors.js";
 
 const app = readFileSync(new URL("../../app/app.js", import.meta.url), "utf8");
@@ -54,7 +54,12 @@ test("the stored fields are the timestamp, who, where, and the short text", () =
   assert.match(html, /&lt;script&gt;/);
   assert.doesNotMatch(html, /<script>/);
   assert.match(clientErrorsHtml([], "ok"), /No phone errors yet/);
-  assert.match(clientErrorsHtml([], "loading"), /Loading/);
+  assert.equal(clientErrorsHtml([], "loading"), "");
+  assert.equal(clientErrorsHtml([], "hidden"), "");
+  assert.equal(clientErrorWriteDenied({ code: "permission-denied" }), true);
+  assert.equal(clientErrorWriteDenied({ message: "Missing or insufficient permissions." }), true);
+  assert.equal(clientErrorWorthSending("permission-denied: companies/acme/clientErrors"), false);
+  assert.equal(clientErrorWorthSending("Clock on failed: permission-denied"), true);
 });
 
 test("the phone listens for errors, reports a clock punch failure, and queues with the offline cache", () => {
@@ -71,6 +76,12 @@ test("the phone listens for errors, reports a clock punch failure, and queues wi
   assert.match(share, /reportClientError\(err, "live share"\)/);
   assert.match(app, /me && me\.role === "admin" \? clientErrorsHtml/);
   assert.match(app, /orderBy\("createdAt", "desc"\), limit\(100\)/);
+  const send = app.slice(app.indexOf("function installClientErrorCapture("), app.indexOf("function stopClientErrors("));
+  assert.match(send, /writeState = clientErrorWriteDenied\(err\) \? "stopped" : "open"/);
+  assert.match(send, /clientErrorWorthSending\(message\)/);
+  assert.doesNotMatch(send, /console\.(log|warn|error|debug)/);
+  assert.match(app, /ui\.clientErrDenied = true/);
+  assert.match(app, /ui\.clientErrState = "hidden"/);
 });
 
 test("rules let a member create a phone error and only an admin read it", () => {

@@ -1030,7 +1030,16 @@ body.operator .job-chat .chat-screen{height:calc(100dvh - 168px - env(safe-area-
 .chat-attach{background:#efe6da;border-color:#eadfd3;color:#3b2a1a;font-size:22px;font-weight:700}
 .chat-denied{padding:24px 16px}
 .chat-denied p{color:#5c4e42}
-.job-chat[hidden],.det-body[hidden],.mactions[hidden]{display:none !important}
+.job-chat[hidden],.job-req[hidden],.det-body[hidden],.mactions[hidden]{display:none !important}
+.job-req{padding:4px 16px 28px}
+.req-office,.req-crew{display:grid;gap:10px}
+.req-tools,.req-add{display:flex;flex-wrap:wrap;gap:8px;align-items:end}
+.req-tools label,.req-add label,.req-office > label{display:grid;gap:4px;font-size:13px}
+.req-sec h3{margin:8px 0 4px;font-size:15px}
+.req-line{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 0;border-bottom:1px solid var(--sm-line)}
+.req-line label{display:flex;gap:8px;align-items:flex-start;flex:1;min-width:12rem}
+.req-src,.req-empty,.req-editor{color:var(--sm-mut)}
+.req-line input[type="checkbox"]{width:22px;height:22px;margin-top:2px;flex:none}
 .job-switch{display:flex;gap:8px;padding:8px 16px 0}
 .job-switch button{flex:1;border:none;border-radius:999px;background:#efe6da;min-height:44px;font-weight:750;color:#5c4e42}
 .job-switch button.on{background:#3b2a1a;color:#f6f1ea}

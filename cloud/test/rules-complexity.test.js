@@ -46,15 +46,15 @@ test("production rules are a smaller scope tree than the file that 503s", () => 
 
   assert.deepEqual(after.dead, []);
   // locationNotices is the GPS reminder the person reads. supportTickets is the raise-ticket collection.
-  // clientErrors is the phone error log. clockOnReminders has no client match.
-  // Firestore denies it, and a deny match would widen the scope tree.
-  assert.equal(after.matches, BEFORE.matches + 3);
+  // Requirement templates, items and meta are three matches. clientErrors is the phone error log.
+  // clockOnReminders has no client match. Firestore denies it, and a deny match would widen the scope tree.
+  assert.equal(after.matches, BEFORE.matches + 6);
   assert.equal(after.maxMatchNesting, BEFORE.maxMatchNesting);
   // Shared helpers live on the database match so each copy is compiled once.
   // 80 is still far under the 303-function ruleset that 503s the compiler.
   assert.ok(after.rootFunctions < 80, `database scope still has ${after.rootFunctions} functions`);
-  // Each new match sees the shared helpers. clientErrors is one more. 6500 is still under a third of the 22879 ruleset that 503s.
-  assert.ok(after.scopeWeight < 6500, `scope weight ${after.scopeWeight}`);
+  // Requirements and clientErrors each see the shared helpers. 7000 is still under a third of the 22879 ruleset that 503s.
+  assert.ok(after.scopeWeight < 7000, `scope weight ${after.scopeWeight}`);
   assert.ok(after.maxFunctionsVisible < 100, `widest scope sees ${after.maxFunctionsVisible}`);
   assert.ok(after.maxCallDepth < BEFORE.maxCallDepth);
   assert.ok(after.bytes < 245000, "rules source must stay under ~245000 bytes");

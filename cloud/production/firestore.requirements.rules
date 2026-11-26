@@ -1,0 +1,191 @@
+// BEGIN JOB REQUIREMENT RULES
+    // Job requirements. Office (admin, manager, supervisor, including Heartwood
+    // supervisors) can create, edit and delete items and the current meta.
+    // They still cannot write the job document. Assigned operator or labourer
+    // can tick or untick only. Unassigned crew cannot read. A paused company
+    // cannot read or write. No money fields. One profile read and one job read.
+    match /companies/{companyId}/requirementTemplates/{templateId} {
+      function requirementActor() {
+        let bootstrap = signedIn() && request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "R7t41e54Ykcdk9WPdVZnDd697iI2"];
+        let user = /databases/$(database)/documents/users/$(request.auth.uid);
+        let has = signedIn() && !bootstrap && exists(user);
+        let data = has ? get(user).data : null;
+        let role = data != null ? data.get("role", "") : "";
+        let actorCompany = data != null ? data.get("companyId", "") : "";
+        let actorTenant = data != null ? data.get("tenantId", "") : "";
+        let company = bootstrap ? "heartwood"
+          : (actorCompany is string && actorCompany.size() > 0 ? actorCompany
+            : (actorTenant is string && actorTenant.size() > 0 ? actorTenant : (has ? "heartwood" : "")));
+        return { "role": role, "company": company, "ok": signedIn() && (bootstrap || has) };
+      }
+      function templateOffice() {
+        let actor = requirementActor();
+        let open = companyId == "heartwood" || companyNotPaused(companyId);
+        return templateId in ["coral-homes", "heartwood-default"] && actor.ok && actor.company == companyId && open && (
+          actor.role in ["admin", "manager", "supervisor"]
+          || (companyId == "heartwood" && request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "R7t41e54Ykcdk9WPdVZnDd697iI2"])
+        );
+      }
+      function templateShape(d) {
+        return d.keys().hasOnly(["companyId", "templateId", "builder", "title", "items", "updatedAt", "updatedBy"])
+          && !d.keys().hasAny(["poAmount", "poAmountBasis", "poAmountSource", "quoteAmount", "invoiceAmount", "xeroCheck", "price", "rate", "rates", "tipFee", "tipFees", "amount", "cost", "totalEx", "gst", "totalInc"])
+          && d.companyId == companyId
+          && d.templateId == templateId
+          && templateId in ["coral-homes", "heartwood-default"]
+          && d.builder is string && d.builder.size() <= 80
+          && d.title is string && d.title.size() <= 80
+          && d.items is list && d.items.size() <= 80
+          && d.updatedBy == request.auth.uid
+          && d.updatedAt == request.time;
+      }
+
+      allow get, list: if templateOffice();
+      allow create, update: if templateOffice() && templateShape(request.resource.data);
+      allow delete: if templateOffice() && resource.data.get("companyId", "") == companyId;
+    }
+
+    match /jobs/{jobId}/requirementItems/{itemId} {
+      function requirementActor() {
+        let bootstrap = signedIn() && request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "R7t41e54Ykcdk9WPdVZnDd697iI2"];
+        let user = /databases/$(database)/documents/users/$(request.auth.uid);
+        let has = signedIn() && !bootstrap && exists(user);
+        let data = has ? get(user).data : null;
+        let role = data != null ? data.get("role", "") : "";
+        let companyId = data != null ? data.get("companyId", "") : "";
+        let tenantId = data != null ? data.get("tenantId", "") : "";
+        let company = bootstrap ? "heartwood"
+          : (companyId is string && companyId.size() > 0 ? companyId
+            : (tenantId is string && tenantId.size() > 0 ? tenantId : (has ? "heartwood" : "")));
+        return { "role": role, "company": company, "ok": signedIn() && (bootstrap || has) };
+      }
+      function requirementGate(jobId) {
+        let actor = requirementActor();
+        let job = get(/databases/$(database)/documents/jobs/$(jobId)).data;
+        let companyId = job.get("companyId", "");
+        let tenantId = job.get("tenantId", "");
+        let company = (companyId is string && companyId.size() > 0) ? companyId
+          : ((tenantId is string && tenantId.size() > 0) ? tenantId : "heartwood");
+        let assignedList = job.get("assigned", []);
+        let assigned = assignedList is list && request.auth.uid in assignedList;
+        let open = company == "heartwood" || companyNotPaused(company);
+        let same = actor.ok && actor.company == company && open;
+        let office = same && (
+          actor.role in ["admin", "manager", "supervisor"]
+          || (company == "heartwood" && request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "R7t41e54Ykcdk9WPdVZnDd697iI2"])
+        );
+        let crew = same && assigned && actor.role in ["operator", "labourer"];
+        return { "office": office, "crew": crew, "company": company };
+      }
+      function itemShape(d) {
+        return itemId.matches('^r[A-Za-z0-9]{6,40}$')
+          && d.keys().hasOnly(["companyId", "section", "text", "source", "sort", "done", "doneBy", "doneAt", "createdAt", "updatedAt", "updatedBy"])
+          && !d.keys().hasAny(["poAmount", "poAmountBasis", "poAmountSource", "quoteAmount", "invoiceAmount", "xeroCheck", "price", "rate", "rates", "tipFee", "tipFees", "amount", "cost", "totalEx", "gst", "totalInc"])
+          && d.companyId is string && d.companyId.size() > 0 && d.companyId.size() <= 40
+          && d.section in ["shared", "earthworks", "setup", "spoil", "clean", "close"]
+          && d.text is string && d.text.size() > 0 && d.text.size() <= 500
+          && d.source in ["template", "custom", "email"]
+          && d.sort is number && d.sort >= 0 && d.sort <= 9999
+          && d.done is bool
+          && d.doneBy is string && d.doneBy.size() <= 128
+          && (d.doneAt == null || d.doneAt is timestamp)
+          && d.createdAt is timestamp
+          && d.updatedAt is timestamp
+          && d.updatedBy is string && d.updatedBy.size() > 0 && d.updatedBy.size() <= 128;
+      }
+      function itemSee(jobId) {
+        let gate = requirementGate(jobId);
+        return gate.office || gate.crew;
+      }
+      function itemCreate(jobId) {
+        let gate = requirementGate(jobId);
+        let d = request.resource.data;
+        return gate.office && itemShape(d) && d.companyId == gate.company
+          && d.createdAt == request.time && d.updatedAt == request.time && d.updatedBy == request.auth.uid;
+      }
+      function itemUpdate(jobId) {
+        let gate = requirementGate(jobId);
+        let next = request.resource.data;
+        let prev = resource.data;
+        let changed = next.diff(prev).affectedKeys();
+        let shape = itemShape(next);
+        let sameCompany = prev.get("companyId", "") == gate.company && next.companyId == prev.companyId;
+        let office = gate.office && shape && sameCompany
+          && next.createdAt == prev.createdAt
+          && next.updatedAt == request.time
+          && next.updatedBy == request.auth.uid;
+        let tick = gate.crew && shape && sameCompany
+          && changed.hasOnly(["done", "doneBy", "doneAt", "updatedBy"])
+          && next.updatedBy == request.auth.uid
+          && ((next.done == true && next.doneBy == request.auth.uid && next.doneAt == request.time)
+            || (next.done == false && next.doneBy == "" && next.doneAt == null));
+        return office || tick;
+      }
+      function itemRemove(jobId) {
+        let gate = requirementGate(jobId);
+        return gate.office && resource.data.get("companyId", "") == gate.company;
+      }
+
+      allow get, list: if itemSee(jobId);
+      allow create: if itemCreate(jobId);
+      allow update: if itemUpdate(jobId);
+      allow delete: if itemRemove(jobId);
+    }
+
+    match /jobs/{jobId}/requirementMeta/{metaId} {
+      function requirementActor() {
+        let bootstrap = signedIn() && request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "R7t41e54Ykcdk9WPdVZnDd697iI2"];
+        let user = /databases/$(database)/documents/users/$(request.auth.uid);
+        let has = signedIn() && !bootstrap && exists(user);
+        let data = has ? get(user).data : null;
+        let role = data != null ? data.get("role", "") : "";
+        let companyId = data != null ? data.get("companyId", "") : "";
+        let tenantId = data != null ? data.get("tenantId", "") : "";
+        let company = bootstrap ? "heartwood"
+          : (companyId is string && companyId.size() > 0 ? companyId
+            : (tenantId is string && tenantId.size() > 0 ? tenantId : (has ? "heartwood" : "")));
+        return { "role": role, "company": company, "ok": signedIn() && (bootstrap || has) };
+      }
+      function requirementGate(jobId) {
+        let actor = requirementActor();
+        let job = get(/databases/$(database)/documents/jobs/$(jobId)).data;
+        let companyId = job.get("companyId", "");
+        let tenantId = job.get("tenantId", "");
+        let company = (companyId is string && companyId.size() > 0) ? companyId
+          : ((tenantId is string && tenantId.size() > 0) ? tenantId : "heartwood");
+        let assignedList = job.get("assigned", []);
+        let assigned = assignedList is list && request.auth.uid in assignedList;
+        let open = company == "heartwood" || companyNotPaused(company);
+        let same = actor.ok && actor.company == company && open;
+        let office = same && (
+          actor.role in ["admin", "manager", "supervisor"]
+          || (company == "heartwood" && request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "R7t41e54Ykcdk9WPdVZnDd697iI2"])
+        );
+        let crew = same && assigned && actor.role in ["operator", "labourer"];
+        return { "office": office, "crew": crew, "company": company };
+      }
+      function metaShape(d) {
+        return metaId == "current"
+          && d.keys().hasOnly(["templateId", "builder", "storey", "cleanStage", "notes", "updatedAt", "updatedBy"])
+          && !d.keys().hasAny(["poAmount", "poAmountBasis", "poAmountSource", "quoteAmount", "invoiceAmount", "xeroCheck", "price", "rate", "rates", "tipFee", "tipFees", "amount", "cost", "totalEx", "gst", "totalInc"])
+          && d.templateId is string && d.templateId.size() <= 40 && d.templateId.matches('^[a-z0-9-]*$')
+          && d.builder is string && d.builder.size() <= 80
+          && d.storey in ["single", "two", ""]
+          && d.cleanStage in ["", "first", "second-lowset", "second-highset", "third", "final"]
+          && d.notes is string && d.notes.size() <= 2000
+          && d.updatedAt == request.time
+          && d.updatedBy == request.auth.uid;
+      }
+      function metaSee(jobId) {
+        let gate = requirementGate(jobId);
+        return gate.office || gate.crew;
+      }
+      function metaWrite(jobId) {
+        let gate = requirementGate(jobId);
+        return gate.office && metaShape(request.resource.data);
+      }
+
+      allow get, list: if metaSee(jobId);
+      allow create, update: if metaWrite(jobId);
+      allow delete: if requirementGate(jobId).office && metaId == "current";
+    }
+// END JOB REQUIREMENT RULES

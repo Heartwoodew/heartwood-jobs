@@ -35,6 +35,20 @@ export function clientErrorText(err) {
   return "";
 }
 
+// The live rules do not have clientErrors yet. A denied write must not be reported again.
+export function clientErrorWriteDenied(err) {
+  const code = String(err && err.code || "");
+  const text = clientErrorText(err);
+  return code === "permission-denied" || code === "permission_denied"
+    || /permission-denied|PERMISSION_DENIED|Missing or insufficient permissions/.test(text);
+}
+
+export function clientErrorWorthSending(message) {
+  const text = String(message || "");
+  if (!text) return false;
+  return !( /clientErrors/.test(text) && /permission-denied|PERMISSION_DENIED/.test(text) );
+}
+
 export function clientErrorScreen(loc, view) {
   const path = String((loc && loc.pathname) || "");
   const route = String(view || "").replace(/[\r\n]/g, " ").trim();
@@ -97,7 +111,8 @@ export function clientErrorWhen(value) {
 
 export function clientErrorsHtml(rows, state) {
   const head = `<section class="pad" id="clienterrors"><h3>Phone errors</h3>`;
-  if (state === "loading") return `${head}<p class="sub">Loading…</p></section>`;
+  // Hidden until a read succeeds. A denied read (rules not deployed yet) shows nothing.
+  if (state === "hidden" || state === "loading" || !state) return "";
   if (state === "error") return `${head}<p class="sub">Couldn't load phone errors.</p></section>`;
   const list = (rows || []).slice(0, 100);
   if (!list.length) return `${head}<p class="sub">No phone errors yet.</p></section>`;

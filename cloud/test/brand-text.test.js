@@ -44,6 +44,7 @@ test("no ServiceM8 / SM8 in any shipped string, page, manifest or stylesheet (fo
 // project id. A new string mentioning Heartwood fails here until it is checked against client companies.
 const HEARTWOOD_OK = new Set([
   "heartwoodAdmins", // Firestore collection id (Heartwood admin grants), never shown
+  "heartwood-default", // requirement template id; the picker label is the reviewed word Heartwood
   "heartwood", "demo-heartwood", "heartwood-held", "heartwood-not-approved",
   "heartwood-9f37f", "heartwood-9f37f.firebaseapp.com", "heartwood-9f37f.firebasestorage.app",
   "https://australia-southeast1-heartwood-9f37f.cloudfunctions.net/stripeWebhook",
