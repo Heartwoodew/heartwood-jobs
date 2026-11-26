@@ -6526,15 +6526,13 @@ function editJob(j) {
         write = setDoc(newRef, scopeRecord({ ...sp.job, ...extra, source: importing ? "inbox" : "app", log: [], createdAt: serverTimestamp() }, myCompanyId()));
         if (sp.hasMoney) write = Promise.all([write, jobMoneyWrite(newRef.id, sp.money)]);
         if (importing) write = write.then(() => markInboxImported(j._import.emailId, newRef.id));
-        if (isCoralClient(data.client)) {
-          const coralJob = { ...data, ...extra };
-          write = write.then(() => commitRequirementPlan(
-            requirementEnv(),
-            newRef.id,
-            planRequirementWrite(coralJob, [], { companyId: myCompanyId(), uid: me.uid }),
-            new Set(),
-          ).catch(err => { console.warn("requirements", err && (err.code || err.message)); }));
-        }
+        const seeded = { ...data, ...extra };
+        write = write.then(() => commitRequirementPlan(
+          requirementEnv(),
+          newRef.id,
+          planRequirementWrite(seeded, [], { companyId: myCompanyId(), uid: me.uid }),
+          new Set(),
+        ).catch(err => { console.warn("requirements", err && (err.code || err.message)); }));
       } else write = writeJob(j.id, data);
       const r = await settleOrQueue(write);
       if (r.queued) write.catch(e => toast("Job not saved: " + (e.code || e.message)));

@@ -153,6 +153,14 @@ test("office edits requirements, a Heartwood supervisor cannot write the job, an
       items: [{ section: "shared", text: "SWMS supplied and on site before the job starts." }],
       updatedAt: serverTimestamp(), updatedBy: "hwSup",
     }), name);
+    await assertSucceeds(setDoc(doc(hwSup, "companies/heartwood/requirementTemplates/heartwood-default"), {
+      companyId: "heartwood", templateId: "heartwood-default", builder: "Heartwood", title: "Heartwood",
+      items: [{ section: "shared", text: "White card, tickets and a signed SWMS before work." }],
+      updatedAt: serverTimestamp(), updatedBy: "hwSup",
+    }), name);
+    await assertSucceeds(setDoc(itemRef(hwSup, "hw1", "rclose00"), itemBody("heartwood", "hwSup", {
+      section: "close", text: "Take plenty of final photos.", sort: 20,
+    })), name);
     await assertFails(getDoc(doc(db(env, "hwOp"), "companies/heartwood/requirementTemplates/coral-homes")), name);
     await assertFails(setDoc(itemRef(db(env, "pausedAdm"), "paused1", "rpauseditem1"), itemBody("paused", "pausedAdm")), name);
     await assertFails(getDoc(itemRef(env.unauthenticatedContext().firestore(), "hw1", "rshared00")), name);

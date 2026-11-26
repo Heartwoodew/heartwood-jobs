@@ -12,19 +12,21 @@
 // This module does not parse Coral email.
 
 export const CORAL_TEMPLATE_ID = "coral-homes";
+export const HEARTWOOD_TEMPLATE_ID = "heartwood-default";
 export const CORAL_CLIENT = "Coral Homes Qld Pty Ltd";
 export const CORAL_ALIAS = "Coral Homes";
 export const TEMPLATE_SOURCE = "template";
 export const CUSTOM_SOURCE = "custom";
 export const EMAIL_SOURCE = "email";
 
-export const SECTIONS = ["shared", "earthworks", "setup", "spoil", "clean"];
+export const SECTIONS = ["shared", "earthworks", "setup", "spoil", "clean", "close"];
 export const SECTION_LABELS = {
   shared: "Every job",
   earthworks: "Earthworks",
   setup: "Site set-up",
   spoil: "Spoil",
   clean: "Site clean",
+  close: "End of the job",
 };
 export const CLEAN_STAGES = ["first", "second-lowset", "second-highset", "third", "final"];
 export const CLEAN_STAGE_LABELS = {
@@ -65,7 +67,10 @@ const ID_PREFIX = {
   setup: "rsetup",
   spoil: "rspoil",
   clean: "rclean",
+  close: "rclose",
 };
+
+const DUMP_DOCKETS = "Photograph the dump dockets and attach them to the job.";
 
 export function requirementText(text) {
   return String(text == null ? "" : text)
@@ -203,6 +208,77 @@ function earthworksLines() {
   ];
 }
 
+function heartwoodBackslabLines() {
+  return [
+    "Take before photos and walk around for hazards or variations, and raise them with the supervisor.",
+    "Use all available on-site spoil before bringing in CBR15.",
+    "Leave an even fall away from the slab, with the finished height 50 to 100 mm below the rebate.",
+    "Remove construction debris.",
+    "Final trim with the spreader bar.",
+    "Get the supervisor's go-ahead before carting off leftover spoil or concrete.",
+    "Clean the slab, road and footpath thoroughly.",
+    "Reinstate the silt fence.",
+    "Take after photos.",
+  ];
+}
+
+function heartwoodCleanLines() {
+  return [
+    "Take before photos and walk around for extras or variations, and discuss them with the supervisor.",
+    "Move rubbish to the front of the property.",
+    "Final trim with the spreader bar where needed.",
+    "Clean the road and footpath thoroughly.",
+    "Reinstate the silt fence.",
+    "Take after photos.",
+  ];
+}
+
+function heartwoodSharedLines() {
+  return [
+    "White card, tickets and a signed SWMS before work. Keep the SWMS on site or in the vehicle.",
+    "Wear the PPE the SWMS requires, and a hard hat within 6 m of plant.",
+    "Complete the plant pre-start every day before use.",
+    "Keep a first aid kit on hand.",
+    "Report injuries, hazards, incidents and near misses to the builder or supervisor.",
+    "Use a spotter for reversing plant or vehicles.",
+    "Unload inside the boundary.",
+    "Noisy work only from 6:30 am to 6:30 pm.",
+    "No alcohol, drugs or dogs.",
+    "At the end of the day, make excavations safe, secure the plant and lock the gates.",
+    "Variations only when directed in writing.",
+  ];
+}
+
+function heartwoodCloseLines() {
+  return [
+    "Take plenty of final photos.",
+    "Mark the job complete.",
+    "Clean mud off the slab, footpath and road.",
+    "Upload the dump dockets.",
+  ];
+}
+
+function heartwoodSpoilLines() {
+  return [
+    "Use on-site spoil first.",
+    "Get the supervisor's approval before removing spoil or concrete.",
+    DUMP_DOCKETS,
+    "Empty the truck at the end of the day.",
+  ];
+}
+
+function heartwoodEarthworksLines() {
+  return [
+    "Inspect the base and tell the builder in writing if the site is not ready.",
+    "Keep 3 m from live overhead lines (up to 132 kV).",
+    "Set an exclusion zone around plant.",
+    "Bench, batter or shore trenches 1.5 m or deeper.",
+    "Barricade and sign open excavations.",
+    "Dial Before You Dig before digging.",
+    "Water down dust in dry weather.",
+  ];
+}
+
 function setupLines() {
   return [
     "Back-blade the existing spoil about 1 m around the slab so the working platform does not pond.",
@@ -211,6 +287,7 @@ function setupLines() {
     "Remove leftover steel from the slab pour.",
     "Fold the slab plastic up the outside vertical face around the full perimeter before back-blading.",
     "A temporary R82 mesh rubbish enclosure is optional: 1.2 m high, 3 m by 3 m or 4 m by 2 m.",
+    ...heartwoodBackslabLines(),
   ];
 }
 
@@ -218,6 +295,7 @@ function spoilLines() {
   return [
     "Record the loads.",
     "An official purchase order is required before spoil is exported.",
+    DUMP_DOCKETS,
   ];
 }
 
@@ -255,6 +333,7 @@ function cleanLines(job) {
   } else {
     lines.push("Site clean. Set the stage (first, second, third or final) from the description or the cost code.");
   }
+  lines.push(...heartwoodCleanLines());
   if (detectStorey(job) === "two") {
     lines.push(
       "Two-storey: add a clean after the bricks and plaster.",
@@ -267,12 +346,17 @@ function cleanLines(job) {
   return lines;
 }
 
-function linesFor(section, job) {
-  if (section === "shared") return sharedLines(job);
-  if (section === "earthworks") return earthworksLines();
-  if (section === "setup") return setupLines();
-  if (section === "spoil") return spoilLines();
-  if (section === "clean") return cleanLines(job);
+function linesFor(section, job, templateId) {
+  const heartwood = templateId === HEARTWOOD_TEMPLATE_ID;
+  if (section === "shared") return heartwood ? heartwoodSharedLines() : sharedLines(job);
+  if (section === "close") return heartwood ? heartwoodCloseLines() : [];
+  if (section === "earthworks") return heartwood ? heartwoodEarthworksLines() : earthworksLines();
+  if (section === "setup") return heartwood ? heartwoodBackslabLines() : setupLines();
+  if (section === "spoil") return heartwood ? heartwoodSpoilLines() : spoilLines();
+  if (section === "clean") {
+    if (heartwood) return [...heartwoodCleanLines(), "Leave the site looking tidy."];
+    return cleanLines(job);
+  }
   return [];
 }
 
@@ -305,12 +389,20 @@ function cleanLine(text) {
   return next;
 }
 
-export function buildTemplateItems(job) {
+export function chosenTemplate(job, opts = {}) {
+  if (opts.templateId === CORAL_TEMPLATE_ID || opts.templateId === HEARTWOOD_TEMPLATE_ID) return opts.templateId;
+  if (isCoralClient(job && job.client) || isCoralClient(job && job.builder)) return CORAL_TEMPLATE_ID;
+  return HEARTWOOD_TEMPLATE_ID;
+}
+
+export function buildTemplateItems(job, templateId = CORAL_TEMPLATE_ID) {
   const kind = packKind(job);
-  const sections = ["shared"].concat(kind && kind !== "shared" ? [kind] : []);
+  const sections = ["shared"];
+  if (kind && kind !== "shared" && kind !== "close") sections.push(kind);
+  if (templateId === HEARTWOOD_TEMPLATE_ID) sections.push("close");
   const items = [];
   sections.forEach(section => {
-    linesFor(section, job).forEach((text, index) => {
+    linesFor(section, job, templateId).forEach((text, index) => {
       const line = cleanLine(text);
       if (!line) return;
       items.push({
@@ -328,39 +420,43 @@ export function buildTemplateItems(job) {
   return items;
 }
 
-export function coralTemplateDoc(companyId) {
-  const sample = { client: CORAL_CLIENT, type: "other", description: "" };
+function catalogue(companyId, templateId, sample) {
   const items = [];
   for (const section of SECTIONS) {
-    const lines = section === "shared" ? sharedLines(sample) : linesFor(section, { client: CORAL_CLIENT, type: section === "clean" ? "clean" : section, cleanStage: section === "clean" ? "final" : "", storey: "" });
-    lines.forEach(text => {
+    linesFor(section, sample, templateId).forEach(text => {
       const line = cleanLine(text);
       if (line) items.push({ section, text: line });
     });
   }
+  return items.slice(0, 80);
+}
+
+export function coralTemplateDoc(companyId) {
   return {
     companyId: companyId || "heartwood",
     templateId: CORAL_TEMPLATE_ID,
     builder: CORAL_ALIAS,
     title: "Coral Homes",
-    items: items.slice(0, 80),
+    items: catalogue(companyId, CORAL_TEMPLATE_ID, { client: CORAL_CLIENT, type: "clean", cleanStage: "final", storey: "" }),
   };
 }
 
-function wantsTemplate(job, opts) {
-  if (opts && opts.force) return true;
-  if (opts && opts.templateId === CORAL_TEMPLATE_ID) return true;
-  return isCoralClient(job && job.client) || isCoralClient(job && job.builder);
+export function heartwoodTemplateDoc(companyId) {
+  return {
+    companyId: companyId || "heartwood",
+    templateId: HEARTWOOD_TEMPLATE_ID,
+    builder: "Heartwood",
+    title: "Heartwood",
+    items: catalogue(companyId, HEARTWOOD_TEMPLATE_ID, { client: "Private", type: "clean" }),
+  };
 }
 
 export function planRequirementWrite(job, existingItems, opts = {}) {
   const companyId = opts.companyId || (job && job.companyId) || "heartwood";
-  if (!wantsTemplate(job, opts)) {
-    return { apply: false, items: [], meta: null, deleteIds: [], template: null, kind: "", storey: "", cleanStage: "" };
-  }
+  const templateId = chosenTemplate(job, opts);
   const storey = detectStorey(job);
   const cleanStage = packKind(job) === "clean" ? detectCleanStage(job) : (CLEAN_STAGES.includes(job && job.cleanStage) ? job.cleanStage : "");
-  const built = buildTemplateItems({ ...job, storey, cleanStage });
+  const built = buildTemplateItems({ ...job, storey, cleanStage }, templateId);
   const previous = Array.isArray(existingItems) ? existingItems : [];
   const prevTemplate = previous.filter(item => item && item.source === TEMPLATE_SOURCE);
   const custom = previous.filter(item => item && item.source && item.source !== TEMPLATE_SOURCE);
@@ -403,10 +499,10 @@ export function planRequirementWrite(job, existingItems, opts = {}) {
     cleanStage,
     items,
     deleteIds,
-    template: coralTemplateDoc(companyId),
+    template: templateId === CORAL_TEMPLATE_ID ? coralTemplateDoc(companyId) : heartwoodTemplateDoc(companyId),
     meta: {
-      templateId: CORAL_TEMPLATE_ID,
-      builder: CORAL_ALIAS,
+      templateId,
+      builder: templateId === CORAL_TEMPLATE_ID ? CORAL_ALIAS : "Heartwood",
       storey,
       cleanStage,
       notes,
@@ -508,11 +604,13 @@ function optionList(pairs, selected) {
   return pairs.map(([value, label]) => `<option value="${esc(value)}"${value === selected ? " selected" : ""}>${esc(label)}</option>`).join("");
 }
 
-export function officeRequirementsHtml({ items, meta, editorName } = {}) {
+export function officeRequirementsHtml({ items, meta, editorName, job } = {}) {
   const groups = grouped(items || []);
   const storey = meta && STOREYS.includes(meta.storey) ? meta.storey : "";
   const stage = meta && CLEAN_STAGES.includes(meta.cleanStage) ? meta.cleanStage : "";
-  const templateId = meta && meta.templateId === CORAL_TEMPLATE_ID ? CORAL_TEMPLATE_ID : "";
+  const templateId = meta && (meta.templateId === CORAL_TEMPLATE_ID || meta.templateId === HEARTWOOD_TEMPLATE_ID)
+    ? meta.templateId
+    : (isCoralClient(job && job.client) ? CORAL_TEMPLATE_ID : HEARTWOOD_TEMPLATE_ID);
   const notes = parseNotes(meta && meta.notes);
   const list = groups.length
     ? groups.map(group => `<section class="req-sec"><h3>${esc(group.label)}</h3>${group.items.map(item => {
@@ -532,7 +630,7 @@ export function officeRequirementsHtml({ items, meta, editorName } = {}) {
     : "";
   return `<div class="req-office">
     <div class="req-tools">
-      <label>Template<select data-req-template>${optionList([["", "No template"], [CORAL_TEMPLATE_ID, "Coral Homes"]], templateId)}</select></label>
+      <label>Template<select data-req-template>${optionList([["", "No template"], [HEARTWOOD_TEMPLATE_ID, "Heartwood"], [CORAL_TEMPLATE_ID, "Coral Homes"]], templateId)}</select></label>
       <label>Storey<select data-req-storey>${optionList([["", "Not set"], ["single", "Single storey"], ["two", "Two storey"]], storey)}</select></label>
       <label>Stage<select data-req-stage>${optionList([["", "Not set"], ...CLEAN_STAGES.map(id => [id, CLEAN_STAGE_LABELS[id]])], stage)}</select></label>
       <button type="button" class="sm-btn primary" data-req-apply>Apply template</button>
@@ -568,7 +666,7 @@ export function mountRequirements(root, job, api) {
   const paint = () => {
     const editorName = meta && meta.updatedBy && api.nameOf ? api.nameOf(meta.updatedBy) : "";
     root.innerHTML = api.office
-      ? officeRequirementsHtml({ items, meta, editorName })
+      ? officeRequirementsHtml({ items, meta, editorName, job })
       : crewRequirementsHtml({ items });
   };
   const fail = err => {
@@ -582,8 +680,8 @@ export function mountRequirements(root, job, api) {
       const template = root.querySelector("[data-req-template]");
       const storey = root.querySelector("[data-req-storey]");
       const stage = root.querySelector("[data-req-stage]");
-      if (!template || template.value !== CORAL_TEMPLATE_ID) {
-        if (api.toast) api.toast("Choose the Coral Homes template first.");
+      if (!template || (template.value !== CORAL_TEMPLATE_ID && template.value !== HEARTWOOD_TEMPLATE_ID)) {
+        if (api.toast) api.toast("Choose a template first.");
         return;
       }
       const plan = planRequirementWrite({
@@ -594,7 +692,7 @@ export function mountRequirements(root, job, api) {
         companyId: api.companyId,
         uid: api.uid,
         force: true,
-        templateId: CORAL_TEMPLATE_ID,
+        templateId: template.value,
         notes: notesFrom(root, meta),
       });
       api.commit(job.id, plan, new Set(items.map(item => item.id))).catch(fail);

@@ -21,7 +21,7 @@
       function templateOffice() {
         let actor = requirementActor();
         let open = companyId == "heartwood" || companyNotPaused(companyId);
-        return templateId == "coral-homes" && actor.ok && actor.company == companyId && open && (
+        return templateId in ["coral-homes", "heartwood-default"] && actor.ok && actor.company == companyId && open && (
           actor.role in ["admin", "manager", "supervisor"]
           || (companyId == "heartwood" && request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "R7t41e54Ykcdk9WPdVZnDd697iI2"])
         );
@@ -30,7 +30,8 @@
         return d.keys().hasOnly(["companyId", "templateId", "builder", "title", "items", "updatedAt", "updatedBy"])
           && !d.keys().hasAny(["poAmount", "poAmountBasis", "poAmountSource", "quoteAmount", "invoiceAmount", "xeroCheck", "price", "rate", "rates", "tipFee", "tipFees", "amount", "cost", "totalEx", "gst", "totalInc"])
           && d.companyId == companyId
-          && d.templateId == "coral-homes"
+          && d.templateId == templateId
+          && templateId in ["coral-homes", "heartwood-default"]
           && d.builder is string && d.builder.size() <= 80
           && d.title is string && d.title.size() <= 80
           && d.items is list && d.items.size() <= 80
@@ -80,7 +81,7 @@
           && d.keys().hasOnly(["companyId", "section", "text", "source", "sort", "done", "doneBy", "doneAt", "createdAt", "updatedAt", "updatedBy"])
           && !d.keys().hasAny(["poAmount", "poAmountBasis", "poAmountSource", "quoteAmount", "invoiceAmount", "xeroCheck", "price", "rate", "rates", "tipFee", "tipFees", "amount", "cost", "totalEx", "gst", "totalInc"])
           && d.companyId is string && d.companyId.size() > 0 && d.companyId.size() <= 40
-          && d.section in ["shared", "earthworks", "setup", "spoil", "clean"]
+          && d.section in ["shared", "earthworks", "setup", "spoil", "clean", "close"]
           && d.text is string && d.text.size() > 0 && d.text.size() <= 500
           && d.source in ["template", "custom", "email"]
           && d.sort is number && d.sort >= 0 && d.sort <= 9999

@@ -2,7 +2,7 @@
 
 Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production.
 
-Office job cards have a Requirements tab after Details. Crew have a Requirements tab beside Job and Chat, with the words read-only and tick boxes only. A new Coral Homes job, including one saved from the inbox form, copies the shared pack plus the pack for that job's type or clean stage. Custom lines stay when the office applies the template again. There is no Coral call-up parser until a real work-order email exists. The cost-code map is the hook for that later change. Crew do not see prices.
+Office job cards have a Requirements tab after Details. Crew have a Requirements tab beside Job and Chat, with the words read-only and tick boxes only. A new Coral Homes job, including one saved from the inbox form, copies the Coral pack plus the Heartwood backslab, site-clean and spoil lines. Any other new job copies the Heartwood default checklist. The office can switch template afterwards. Custom lines stay when a template is applied again. There is no Coral call-up parser until a real work-order email exists. The cost-code map is the hook for that later change. Crew do not see prices.
 
 Service worker `callup-shell-v161-requirements`.
 

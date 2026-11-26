@@ -19,6 +19,9 @@ function coral(extra) {
 function texts(job) {
   return planRequirementWrite(job, [], { companyId: "heartwood", uid: "office" }).items.map(item => item.text);
 }
+function textsOf(client, type) {
+  return texts({ client, type, address: "1 St, Ipswich QLD" }).join("\n");
+}
 function has(list, pattern) {
   return list.some(line => pattern.test(line));
 }
@@ -117,18 +120,84 @@ test("storey, New South Wales and Port Macquarie change only the lines that depe
   assert.equal(has(port, /^Plasterboard is recycled by others\.$/), false);
 });
 
-test("a non-Coral job stays empty, and Schedule 2 is not invented", () => {
-  const plan = planRequirementWrite({
-    client: "Silkwood Homes", type: "clean", costCode: "6380015", description: "final clean",
-    address: "1 St, Port Macquarie NSW",
-  }, [], { companyId: "heartwood", uid: "office" });
-  assert.equal(plan.apply, false);
-  assert.deepEqual(plan.items, []);
+test("Schedule 2 is named and not invented", () => {
   const coralLines = texts(coral({ type: "clean", cleanStage: "final", storey: "two" }));
   for (const line of coralLines) {
     if (line.includes("Schedule 2")) assert.equal(line, "All waste off site (Schedule 2).");
   }
   assert.equal(coralLines.join("\n").includes("waste must be"), false);
+  assert.match(coralLines.join("\n"), /Move rubbish to the front of the property/);
+});
+
+test("Coral packs keep the builder lines and add the Heartwood checklist", () => {
+  const setup = texts(coral({ type: "backslab" })).join("\n");
+  assert.match(setup, /before back-blading/);
+  assert.match(setup, /about 1 m around the slab/);
+  assert.match(setup, /before bringing in CBR15/);
+  assert.match(setup, /50 to 100 mm below the rebate/);
+  assert.match(setup, /Reinstate the silt fence/);
+  assert.match(setup, /Take after photos/);
+  assert.doesNotMatch(setup, MONEY);
+
+  for (const stage of CLEAN_STAGES) {
+    const clean = texts(coral({ type: "clean", cleanStage: stage })).join("\n");
+    assert.match(clean, /discuss them with the supervisor/, stage);
+    assert.match(clean, /Move rubbish to the front of the property/, stage);
+    assert.match(clean, /spreader bar where needed/, stage);
+    assert.match(clean, /Clean the road and footpath thoroughly/, stage);
+    assert.match(clean, /Reinstate the silt fence/, stage);
+    assert.match(clean, /Take after photos/, stage);
+    assert.doesNotMatch(clean, MONEY, stage);
+  }
+
+  const spoil = texts(coral({ type: "spoil" })).join("\n");
+  assert.match(spoil, /Record the loads/);
+  assert.match(spoil, /Photograph the dump dockets and attach them to the job/);
+  assert.doesNotMatch(spoil, MONEY);
+});
+
+test("Orbit, Torsion and Private jobs use the Heartwood default template", () => {
+  const clients = ["Orbit Homes (Qld) Pty Ltd", "Torsion Built Pty Ltd", "Private"];
+  for (const client of clients) {
+    const spoil = planRequirementWrite({ client, type: "spoil", address: "1 St, Ipswich QLD" }, [], { companyId: "heartwood", uid: "office" });
+    const body = spoil.items.map(item => item.text).join("\n");
+    assert.equal(spoil.meta.templateId, "heartwood-default", client);
+    assert.match(body, /White card, tickets and a signed SWMS/, client);
+    assert.match(body, /hard hat within 6 m of plant/, client);
+    assert.match(body, /6:30 am to 6:30 pm/, client);
+    assert.match(body, /Use on-site spoil first/, client);
+    assert.match(body, /Photograph the dump dockets and attach them to the job/, client);
+    assert.match(body, /Empty the truck at the end of the day/, client);
+    assert.match(body, /Take plenty of final photos/, client);
+    assert.match(body, /Mark the job complete/, client);
+    assert.match(body, /Clean mud off the slab, footpath and road/, client);
+    assert.match(body, /Upload the dump dockets/, client);
+    assert.doesNotMatch(body, /Schedule 2|before back-blading|1 m around the slab|within 25 mm|Record the loads/, client);
+    assert.doesNotMatch(body, MONEY, client);
+  }
+
+  const backslab = textsOf("Private", "backslab");
+  assert.match(backslab, /CBR15/);
+  assert.match(backslab, /50 to 100 mm below the rebate/);
+  assert.doesNotMatch(backslab, /before back-blading/);
+  assert.doesNotMatch(backslab, /1 m around the slab/);
+
+  const clean = textsOf("Orbit Homes (Qld) Pty Ltd", "clean");
+  assert.match(clean, /Leave the site looking tidy/);
+  assert.match(clean, /Move rubbish to the front of the property/);
+  assert.doesNotMatch(clean, /2 men \/ 1 hour|Schedule 2/);
+
+  const earth = textsOf("Torsion Built Pty Ltd", "earthworks");
+  assert.match(earth, /Dial Before You Dig before digging/);
+  assert.match(earth, /3 m from live overhead lines/);
+  assert.match(earth, /1\.5 m or deeper/);
+  assert.doesNotMatch(earth, /within 25 mm|78% or more/);
+
+  const other = textsOf("Private", "waterproof");
+  assert.match(other, /White card, tickets and a signed SWMS/);
+  assert.match(other, /Mark the job complete/);
+  assert.doesNotMatch(other, /CBR15|Dial Before You Dig|Use on-site spoil first/);
+  assert.doesNotMatch(other, MONEY);
 });
 
 test("re-applying keeps custom lines and ticks, and drops template lines that no longer apply", () => {
@@ -184,6 +253,8 @@ test("crew and office views show no money, and the crew view is a tick list", ()
   assert.match(office, />Template</);
   assert.match(office, />Custom</);
   assert.match(office, /Last edited by Sam/);
+  assert.match(office, /Heartwood/);
+  assert.match(office, /Coral Homes/);
   assert.equal(crewRequirementsHtml({ items: [] }), `<p class="req-empty">No requirements yet</p>`);
   assert.match(officeRequirementsHtml({ items: [], meta: null }), /No requirements yet/);
   const body = itemWriteBody(poisoned, { companyId: "heartwood", uid: "sam", create: true, serverTimestamp: () => "ts" });
@@ -231,7 +302,7 @@ test("the office tab, the crew tab and the rules are wired, with no prices in th
   assert.match(detail, /data-jtab="req"/);
   assert.match(detail, />Requirements</);
   assert.match(detail, /No requirements yet|crewRequirementsHtml|mountJobRequirements/);
-  assert.match(app, /planRequirementWrite\(coralJob/);
+  assert.match(app, /planRequirementWrite\(seeded/);
   assert.match(sw, /features\/job-requirements\.js/);
   assert.match(sw, /callup-shell-v161-requirements/);
   const prod = readFileSync(new URL("../firestore.production.rules", import.meta.url), "utf8");
@@ -243,5 +314,7 @@ test("the office tab, the crew tab and the rules are wired, with no prices in th
   assert.match(slice(prod), /changed\.hasOnly\(\["done", "doneBy", "doneAt", "updatedBy"\]\)/);
   assert.match(slice(prod), /actor\.role in \["admin", "manager", "supervisor"\]/);
   assert.match(slice(prod), /company == "heartwood" \|\| companyNotPaused\(company\)/);
+  assert.match(slice(prod), /heartwood-default/);
+  assert.match(slice(prod), /"close"/);
   assert.match(prod, /function companyOffice\(\) \{\s*let id = callerCompany\(\);\s*return id != "" && id != "heartwood"/);
 });
