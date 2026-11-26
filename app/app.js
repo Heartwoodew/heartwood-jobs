@@ -68,6 +68,9 @@ import {
   companySharesLocation, companyTimeZone, crewListHtml, crewMapModel,
   crewMapNotice, crewPinNote, homeCrewSlot, jobPoint, liveCollectionPath, liveLocationBody, locationRemindBannerHtml, mapFailureStatus, shareIndicator, shouldSendPosition,
 } from "./features/live-location.js";
+import {
+  clientErrorPayload, clientErrorScreen, clientErrorText, clientErrorsHtml, createClientErrorGate,
+} from "./features/client-errors.js";
 
 // Same price strip as features/quotes.js noDollars. Kept here so a crew run sheet never paints a dollar
 // while the quotes module is still loading.
@@ -595,6 +598,86 @@ let QG = { bindAdmin() {} }; // Quotes module; filled after helpers load
 let ROUTE = { open() {} };
 const ALEX_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";      // Alex has no users/{uid} profile doc; always staff
 const ui = { view: "list", staffF: "", typeF: "", photoLists: {}, photoUrls: {}, photoBlobs: {}, photoThumbs: {}, photoThumbTasks: {}, photoErrors: {}, photoJobs: {}, photoPaint: 0, queuedThumbs: {}, holdSideWork: true, startupQueue: [] };
+let reportClientError = () => {};
+installClientErrorCapture();
+function installClientErrorCapture() {
+  const gate = createClientErrorGate();
+  let reporting = false;
+  const send = (message, stack) => {
+    if (reporting) return;
+    reporting = true;
+    try {
+      if (!me || !me.uid) return;
+      const view = me.role === "admin" && !ui.myJobs ? ui.view : (ui.opTab || ui.view || "");
+      const built = clientErrorPayload({
+        uid: me.uid,
+        companyId: myCompanyId(),
+        role: me.role || "",
+        appVersion: SHELL_VERSION,
+        swVersion: SHELL_VERSION,
+        screen: clientErrorScreen(location, view),
+        message, stack,
+        userAgent: navigator.userAgent,
+        online: navigator.onLine === true,
+      }, gate);
+      if (!built) return;
+      // Offline persistence queues this write. Do not wait on it, and do not toast.
+      const pending = addDoc(collection(db, "companies", built.companyId, "clientErrors"), {
+        ...built.data,
+        createdAt: serverTimestamp(),
+      });
+      if (pending && typeof pending.catch === "function") pending.catch(() => {});
+    } catch { /* a report must never change the screen that failed */ }
+    finally { reporting = false; }
+  };
+  window.addEventListener("error", event => {
+    const err = event && event.error;
+    send((event && event.message) || clientErrorText(err) || "error", err && err.stack);
+  });
+  window.addEventListener("unhandledrejection", event => {
+    const reason = event && event.reason;
+    send(clientErrorText(reason) || "unhandledrejection", reason && reason.stack);
+  });
+  reportClientError = (err, where) => {
+    const text = clientErrorText(err) || "error";
+    send(where ? where + ": " + text : text, err && err.stack);
+  };
+}
+function stopClientErrors() {
+  if (ui.clientErrUnsub) ui.clientErrUnsub();
+  ui.clientErrUnsub = null;
+  ui.clientErrFor = "";
+}
+function watchClientErrors() {
+  if (!me || me.role !== "admin") return;
+  const companyId = myCompanyId();
+  if (!companyId || (ui.clientErrUnsub && ui.clientErrFor === companyId)) return;
+  stopClientErrors();
+  ui.clientErrFor = companyId;
+  ui.clientErrors = [];
+  ui.clientErrState = "loading";
+  // The first snapshot can run before onSnapshot returns. A placeholder blocks a second subscribe.
+  ui.clientErrUnsub = () => {};
+  const paint = () => {
+    if (!me || me.role !== "admin") return;
+    if (ui.view === "settings" && !ui.myJobs) renderAdmin();
+    else if (ui.opTab === "settings") renderOperator();
+  };
+  const q = query(collection(db, "companies", companyId, "clientErrors"), orderBy("createdAt", "desc"), limit(100));
+  let unsub = () => {};
+  try {
+    unsub = onSnapshot(q, snap => {
+      ui.clientErrors = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      ui.clientErrState = "ok";
+      // A cached snapshot can arrive inside the settings render. Paint after it finishes.
+      queueMicrotask(paint);
+    }, () => {
+      ui.clientErrState = "error";
+      queueMicrotask(paint);
+    });
+  } catch { ui.clientErrState = "error"; }
+  ui.clientErrUnsub = unsub;
+}
 const ADMIN_SAFE = new Set(["home", "jobs", "unscheduled", "completed", "swms", "crew", "master", "clients"]);
 const OP_SAFE = new Set(["today", "week", "done", "more", "crew"]);
 function queueStartup(fn) { ui.startupQueue.push(fn); }
@@ -807,7 +890,7 @@ async function bootSignedIn(user) {
     const setJobs = () => { jobs = mergeJobLists(windowJobs, staleJobs).map(withMoney); addNameOnlyStaff(jobs); };
     const nearQ = companyJobs([where("date", ">=", todayStr()), where("date", "<=", addDays(todayStr(), 1)), orderBy("date")]);
     let stopNear = onSnapshot(nearQ, s => { windowJobs = s.docs.map(d => ({ id: d.id, ...d.data() })); setJobs(); renderAdmin(); }, e => { console.warn("jobs", e.code, e.message); windowJobs = []; setJobs(); renderAdmin(); });
-    const stopShared = () => { CHAT.stop(); PUSH.stop(); COMP.stop(); stopPrestartNotices(); stopLocationNotice(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; };
+    const stopShared = () => { CHAT.stop(); PUSH.stop(); COMP.stop(); stopPrestartNotices(); stopLocationNotice(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); stopClientErrors(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; };
     unsub = () => { stopNear(); stopShared(); };
     queueStartup(() => {
       stopNear();
@@ -839,7 +922,7 @@ async function bootSignedIn(user) {
     // A date filter on top of array-contains needs an index this app does not add, so crew startup stays this query.
     const q = companyJobs([where("assigned", "array-contains", user.uid)]);
     const u1 = onSnapshot(q, s => { jobs = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); renderOperator(); });
-    const stopShared = () => { CHAT.stop(); PUSH.stop(); COMP.stop(); stopPrestartNotices(); stopLocationNotice(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); };
+    const stopShared = () => { CHAT.stop(); PUSH.stop(); COMP.stop(); stopPrestartNotices(); stopLocationNotice(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); stopClientErrors(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); };
     unsub = () => { u1(); stopShared(); };
     queueStartup(() => {
       // Company supervisors are office (they already read quotes); crew never subscribe and the rules refuse them.
@@ -1637,11 +1720,13 @@ function settingsView() {
     : "";
   const perfSet = canEditPerformanceSettings(me) ? performanceSettingsHtml(ui.perfSettings || { weights: DEFAULT_WEIGHTS }, { take5On: ui.take5On !== false }) : "";
   const setup = ui.tradeSetup || resolveCompanySetup({ companyId: myCompanyId() }, null);
+  const phoneErrors = me && me.role === "admin" ? clientErrorsHtml(ui.clientErrors || [], ui.clientErrState || "loading") : "";
   return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin"), trades, canEditTrades: canEditTitles() })
     + presetEditorHtml(setup, { canEdit: canEditTitles() })
     + rates + perfSet + PUSH.panelHtml()
     + dispatchSettingsHtml(dispatchSettingsNow(), { canEdit: canEditTitles() })
-    + `<section class="pad"><h3>Support</h3><p class="sub">Send a note to CallUp. Anyone signed in can raise a ticket.</p><button type="button" class="sm-btn" data-raise-ticket>Raise ticket</button></section>`;
+    + `<section class="pad"><h3>Support</h3><p class="sub">Send a note to CallUp. Anyone signed in can raise a ticket.</p><button type="button" class="sm-btn" data-raise-ticket>Raise ticket</button></section>`
+    + phoneErrors;
 }
 async function saveDispatchForm(form) {
   if (!canEditTitles()) { toast("An admin or a manager can change dispatch times."); return; }
@@ -1729,6 +1814,7 @@ function bindPresetEditor(A) {
   }));
 }
 function bindSettings(A) {
+  watchClientErrors();
   bindTradeList(A);
   bindPresetEditor(A);
   loadReferralBox(A);
@@ -3507,6 +3593,7 @@ async function tsChooseMachine(choice, asset) {
     if (patch.machineChoice === "asset") tsEnsurePrestarts();
   } catch (err) {
     ui.tsMachineShift = null;
+    reportClientError(err, "machine");
     toast("You're clocked on. The machine wasn't saved.");
   } finally {
     ui.tsMachineBusy = false;
@@ -4292,6 +4379,7 @@ function liveShareStart(entryId, weekStart, firstFix) {
     armShareWatch();
   } catch (err) {
     console.warn("live share", err && (err.message || err));
+    reportClientError(err, "live share");
   }
 }
 function releaseLiveDoc(companyId) {
@@ -4328,7 +4416,10 @@ document.addEventListener("visibilitychange", () => {
   try {
     if (document.hidden) { noteShareHidden(); disarmShareWatch(); }
     else armShareWatch();
-  } catch (err) { console.warn("live share", err && (err.message || err)); }
+  } catch (err) {
+    console.warn("live share", err && (err.message || err));
+    reportClientError(err, "live share");
+  }
 });
 window.addEventListener("pagehide", () => {
   if (!shareRun) return;
@@ -4699,6 +4790,7 @@ async function tsPunch(kind) {
       ui.tsPrevFor = "";
     }
   } catch (err) {
+    reportClientError(err, "clock");
     toast("Not saved: " + (err.code || err.message));
   } finally {
     ui.tsBusy = false;

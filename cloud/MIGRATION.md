@@ -1,17 +1,20 @@
-## Clock on fix after Patrick's morning lock-up (not deployed)
+## Clock on fix and phone error log (not deployed)
 
 Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production.
 
 - Every clock on threw `ReferenceError: SHARE_MIN_MS is not defined` since the crew map fallback change on 24 Nov. The live-location timer used the constant without importing it. It is imported now, and a live-sharing failure can no longer stop or undo a clock punch.
 - The two timesheet reads in a clock punch now give up after 6 seconds and use this phone's copy, so Checking location… cannot sit there on a stalled connection.
 - The "Which machine are you on today?" question takes one tap at a time, uses this phone's copy when there is no signal, queues the answer, and always goes away. Before, a tap on a weak signal could wait with no sign it was taken, and the timesheet does not redraw while that question is on screen.
+- The phone now records its own errors in `companies/{companyId}/clientErrors`. A window error, an unhandled rejection, or a failure in the clock punch is written with the time, the person, their role, the app version, the screen, a short message, a short stack, the browser, and whether the phone was online. Prices, tokens, and GPS are stripped. The phone sends at most 20 different messages per visit and queues the write while offline. An admin sees the latest 100 under Settings. A manager, a supervisor, and crew cannot read them. Nobody can edit or delete one from the phone.
 
-Service worker `callup-shell-v162-clock-on-fix`. Main is `callup-shell-v160-clock-adjust`. PR 139 uses v161.
+Service worker `callup-shell-v162-clock-on-fix`. Main is `callup-shell-v160-clock-adjust`. Open PR 139 uses v161. Another in-flight change (add a client from the New Job dropdown) may also claim v162, so whichever merges second must bump the service worker.
 
 After review, and only when the owner says merge:
 
-1. Deploy hosting with `firebase deploy --only hosting --config cloud/firebase.hosting.json --project heartwood-9f37f` from a fresh deploy folder. Phones pick up `callup-shell-v162-clock-on-fix`.
-2. No rules deploy. No functions deploy. No index deploy. No Storage change. No Stripe change. No production data write.
+1. Build a fresh hosting folder with `bash tools/build-callup-hosting.sh`.
+2. Deploy hosting with `firebase deploy --only hosting --config cloud/firebase.hosting.json --project heartwood-9f37f` from that fresh folder. Phones pick up `callup-shell-v162-clock-on-fix`.
+3. Publish Firestore rules from `cloud/firestore.production.rules` only. Do not deploy `cloud/emulator/firestore.rules`. `cloud/firebase.json` points Firestore at the emulator file, so do not deploy rules with that config.
+4. No functions deploy. No index deploy. No Storage change. No Stripe change. No production data write.
 
 ## Staff clock-time corrections (not deployed)
 

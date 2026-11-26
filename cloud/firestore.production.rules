@@ -3264,6 +3264,45 @@ service cloud.firestore {
               : "heartwood";
           }
 
+    // Phone errors. A signed-in member of this company may create one record.
+    // Only an admin of this company may read. The client cannot update or delete.
+    // No prices, tokens, or GPS. The phone truncates the text; these limits are the backstop.
+    match /companies/{companyId}/clientErrors/{errorId} {
+      function clientErrorMember(companyId) {
+        return signedIn()
+          && companyId == callerCompany()
+          && companyId.size() > 1
+          && companyId.size() <= 40;
+      }
+      function clientErrorAdmin(companyId) {
+        return clientErrorMember(companyId) && (
+          (companyId == "heartwood" && isAdmin())
+          || (hasProfile() && profile().get("role", "") == "admin")
+          || platformOwner()
+        );
+      }
+      function clientErrorCreate(companyId) {
+        let d = request.resource.data;
+        return clientErrorMember(companyId)
+          && errorId.matches('^[A-Za-z0-9]{1,40}$')
+          && d.keys().hasOnly(["createdAt", "uid", "role", "appVersion", "swVersion", "screen", "message", "stack", "userAgent", "online"])
+          && d.createdAt == request.time
+          && d.uid == request.auth.uid
+          && d.role is string && d.role.size() <= 40
+          && d.appVersion is string && d.appVersion.size() <= 80
+          && d.swVersion is string && d.swVersion.size() <= 80
+          && d.screen is string && d.screen.size() <= 120
+          && d.message is string && d.message.size() > 0 && d.message.size() <= 500
+          && d.stack is string && d.stack.size() <= 2048
+          && d.userAgent is string && d.userAgent.size() <= 300
+          && d.online is bool;
+      }
+
+      allow get, list: if clientErrorAdmin(companyId);
+      allow create: if clientErrorCreate(companyId);
+      allow update, delete: if false;
+    }
+
     // Support tickets. The person who raised it can create and read their own.
     // The platform owner (Master) can list, read and close every ticket.
     // Another company, and another person in the same company, cannot read it.
