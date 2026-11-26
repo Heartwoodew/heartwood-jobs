@@ -21,11 +21,14 @@
       );
     }
     function lvDecider() {
-      return lvSignedIn() && hasProfile() == false && (isAlex() || isPatrick())
-        || lvSignedIn() && (
-          (callerCompany() == "heartwood" && (isAlex() || isPatrick() || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor" || profile().role == "manager"))))
-          || (callerCompany() != "heartwood" && hasProfile() && (profile().role == "admin" || profile().role == "supervisor" || profile().role == "manager"))
-        );
+      let known = lvSignedIn() && hasProfile();
+      let user = known ? profile() : null;
+      let company = lvSignedIn() ? callerCompany() : "";
+      return lvSignedIn() && (
+        (!known && (isAlex() || isPatrick()))
+        || (company == "heartwood" && (isAlex() || isPatrick() || (known && (user.role == "admin" || user.role == "supervisor" || user.role == "manager"))))
+        || (company != "heartwood" && known && (user.role == "admin" || user.role == "supervisor" || user.role == "manager"))
+      );
     }
     function lvDate(v) {
       return v is string && v.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
@@ -34,84 +37,80 @@
       return v == "" || v == "am" || v == "pm";
     }
     function lvHalves() {
-      return lvHalf(request.resource.data.startHalf)
-        && lvHalf(request.resource.data.endHalf)
+      let next = docData();
+      return lvHalf(next.startHalf)
+        && lvHalf(next.endHalf)
         && (
-          (request.resource.data.start == request.resource.data.end
-            && request.resource.data.startHalf == request.resource.data.endHalf)
-          || (request.resource.data.start < request.resource.data.end
-            && (request.resource.data.startHalf == "" || request.resource.data.startHalf == "pm")
-            && (request.resource.data.endHalf == "" || request.resource.data.endHalf == "am"))
+          (next.start == next.end
+            && next.startHalf == next.endHalf)
+          || (next.start < next.end
+            && (next.startHalf == "" || next.startHalf == "pm")
+            && (next.endHalf == "" || next.endHalf == "am"))
         );
     }
     function lvCertPath(uid, id) {
-      return request.resource.data.certificatePath == ""
-        || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.pdf"
-        || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.jpg"
-        || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.png"
-        || request.resource.data.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.webp";
+      let next = docData();
+      return next.certificatePath == ""
+        || next.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.pdf"
+        || next.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.jpg"
+        || next.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.png"
+        || next.certificatePath == "leaveCertificates/" + uid + "/" + id + "/cert.webp";
     }
     function lvCreate(id) {
+      let next = docData();
       return (lvHeartwood() || (callerCompany() != "heartwood" && callerCompany() != "" && hasProfile()))
         && id.matches('^lv[a-z0-9]{16}$')
-        && request.resource.data.keys().hasOnly(["uid", "name", "type", "start", "end", "startHalf", "endHalf", "reason", "certificatePath", "certificateName", "status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "createdAt", "updatedAt", "companyId"])
-        && (!("companyId" in request.resource.data) || request.resource.data.companyId == callerCompany())
-        && request.resource.data.uid == request.auth.uid
-        && request.resource.data.name is string
-        && request.resource.data.name.size() > 0
-        && request.resource.data.name.size() <= 80
-        && (request.resource.data.type == "annual" || request.resource.data.type == "sick" || request.resource.data.type == "other")
-        && lvDate(request.resource.data.start)
-        && lvDate(request.resource.data.end)
-        && request.resource.data.end >= request.resource.data.start
+        && next.keys().hasOnly(["uid", "name", "type", "start", "end", "startHalf", "endHalf", "reason", "certificatePath", "certificateName", "status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "createdAt", "updatedAt", "companyId"])
+        && (!("companyId" in next) || next.companyId == callerCompany())
+        && next.uid == request.auth.uid
+        && textLen(next.name, 1, 80)
+        && (next.type == "annual" || next.type == "sick" || next.type == "other")
+        && lvDate(next.start)
+        && lvDate(next.end)
+        && next.end >= next.start
         && lvHalves()
-        && request.resource.data.reason is string
-        && request.resource.data.reason.size() > 0
-        && request.resource.data.reason.size() <= 500
+        && textLen(next.reason, 1, 500)
         && lvCertPath(request.auth.uid, id)
-        && request.resource.data.certificateName is string
-        && request.resource.data.certificateName.size() <= 120
-        && (request.resource.data.certificatePath == ""
-          ? request.resource.data.certificateName == ""
-          : request.resource.data.certificateName.size() > 0)
-        && request.resource.data.status == "pending"
-        && request.resource.data.decisionNote == ""
-        && request.resource.data.decidedBy == ""
-        && request.resource.data.decidedByName == ""
-        && request.resource.data.decidedAt == null
-        && request.resource.data.createdAt == request.time
-        && request.resource.data.updatedAt == request.time;
+        && textMax(next.certificateName, 120)
+        && (next.certificatePath == ""
+          ? next.certificateName == ""
+          : next.certificateName.size() > 0)
+        && next.status == "pending"
+        && next.decisionNote == ""
+        && next.decidedBy == ""
+        && next.decidedByName == ""
+        && next.decidedAt == null
+        && next.createdAt == request.time
+        && next.updatedAt == request.time;
     }
     function lvDecision() {
+      let next = docData();
+      let prev = prevData();
       return lvDecider()
-        && resource.data.status == "pending"
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "updatedAt"])
-        && (request.resource.data.status == "approved" || request.resource.data.status == "declined")
-        && request.resource.data.decisionNote is string
-        && request.resource.data.decisionNote.size() > 0
-        && request.resource.data.decisionNote.size() <= 500
-        && request.resource.data.decidedBy == request.auth.uid
-        && request.resource.data.decidedByName is string
-        && request.resource.data.decidedByName.size() > 0
-        && request.resource.data.decidedByName.size() <= 80
-        && request.resource.data.decidedAt == request.time
-        && request.resource.data.updatedAt == request.time
-        && same("uid") && same("name") && same("type") && same("start") && same("end")
-        && same("startHalf") && same("endHalf") && same("reason")
-        && same("certificatePath") && same("certificateName") && same("createdAt");
+        && prev.status == "pending"
+        && next.diff(prev).affectedKeys().hasOnly(["status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "updatedAt"])
+        && (next.status == "approved" || next.status == "declined")
+        && textLen(next.decisionNote, 1, 500)
+        && next.decidedBy == request.auth.uid
+        && textLen(next.decidedByName, 1, 80)
+        && next.decidedAt == request.time
+        && next.updatedAt == request.time
+        && fieldSame(next, prev, "uid") && fieldSame(next, prev, "name") && fieldSame(next, prev, "type") && fieldSame(next, prev, "start") && fieldSame(next, prev, "end")
+        && fieldSame(next, prev, "startHalf") && fieldSame(next, prev, "endHalf") && fieldSame(next, prev, "reason")
+        && fieldSame(next, prev, "certificatePath") && fieldSame(next, prev, "certificateName") && same("createdAt");
     }
 
     match /leaveRequests/{id} {
       allow get: if (lvHeartwood() && (resource == null && id.matches('^lv[a-z0-9]{16}$')
-          || resource != null && docCompany(resource.data) == "heartwood" && (lvDecider() || resource.data.uid == request.auth.uid)))
-        || (callerCompany() != "heartwood" && resource != null && resource.data.companyId == callerCompany()
-          && (resource.data.uid == request.auth.uid || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor" || profile().role == "manager"))));
-      allow list: if lvHeartwood() && resource.data.uid == request.auth.uid;
-      allow list: if lvHeartwood() && lvDecider() && resource.data.companyId == "heartwood";
-      allow list: if callerCompany() != "heartwood" && resource.data.companyId == callerCompany()
-        && (resource.data.uid == request.auth.uid || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor" || profile().role == "manager")));
-      allow create: if lvCreate(id) && (lvHeartwood() && callerCompany() == "heartwood" || request.resource.data.companyId == callerCompany());
-      allow update: if lvDecision() && docCompany(resource.data) == callerCompany();
+          || resource != null && docCompany(prevData()) == "heartwood" && (lvDecider() || prevData().uid == request.auth.uid)))
+        || (callerCompany() != "heartwood" && resource != null && prevData().companyId == callerCompany()
+          && (prevData().uid == request.auth.uid || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor" || profile().role == "manager"))));
+      allow list: if lvHeartwood() && prevData().uid == request.auth.uid;
+      allow list: if lvHeartwood() && lvDecider() && prevData().companyId == "heartwood";
+      allow list: if callerCompany() != "heartwood" && prevData().companyId == callerCompany()
+        && (prevData().uid == request.auth.uid || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor" || profile().role == "manager")));
+      allow create: if lvCreate(id) && (lvHeartwood() && callerCompany() == "heartwood" || docData().companyId == callerCompany());
+      allow update: if lvDecision() && docCompany(prevData()) == callerCompany();
       allow delete: if false;
     }
 // END LEAVE RULES

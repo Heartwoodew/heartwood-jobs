@@ -205,7 +205,7 @@ test("live location rules match in the emulator model and the production rules",
   assert.match(prod, /function llMap\(\)/);
   assert.match(prod, /function llKeepsFix\(\)/);
   assert.match(prod, /clockedOffAt == request.time/);
-  assert.match(prod, /resource.data.clockedOn == true \|\| llMap\(\)/);
+  assert.match(prod, /prevData\(\).clockedOn == true \|\| llMap\(\)/);
   assert.equal((prod.match(/function llClockOff\(id\)/g) || []).length, 2);
   assert.equal((prod.match(/llClockOff\(id\)/g) || []).length, 4);
   const clockOffFns = prod.match(/function llClockOff\(id\) \{[\s\S]*?\n      \}/g) || [];

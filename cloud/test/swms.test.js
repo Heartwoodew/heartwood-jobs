@@ -78,7 +78,7 @@ test("SWMS signature rules are an additive block and do not touch receipts, fina
   assert.match(emu, /match \/receipts\/\{id\}/);
   assert.match(emu, /match \/xeroQueue\/\{id\}/);
   assert.match(rulesSlice(frag), /match \/swmsSignatures\/\{id\}/);
-  assert.match(rulesSlice(frag), /request\.resource\.data\.uid == request\.auth\.uid/);
+  assert.match(rulesSlice(frag), /docData\(\)\.uid == request\.auth\.uid/);
   assert.match(rulesSlice(frag), /signedAt == request\.time/);
   assert.match(rulesSlice(frag), /allow update, delete: if false/);
   assert.doesNotMatch(rulesSlice(frag), /match \/receipts\/|match \/xeroQueue\/|match \/jobs\/|finance|SCHEDULING_APPROVED/);

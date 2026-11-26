@@ -286,7 +286,7 @@ test("invite rules fragment matches the emulator block and does not open mail", 
     return text.slice(start, end + "// END INVITE RULES".length);
   };
   assert.equal(slice(emu), slice(frag));
-  assert.match(slice(frag), /role in \["labourer", "operator", "supervisor", "manager"\]\s*\|\| \(request\.resource\.data\.role == "admin" && inviteFullAdmin\(\)\)/);
+  assert.match(slice(frag), /role in \["labourer", "operator", "supervisor", "manager"\]\s*\|\| \(next\.role == "admin" && inviteFullAdmin\(\)\)/);
   assert.match(slice(frag), /allow delete: if false/);
   assert.match(slice(frag), /match \/mail\/\{id\}/);
   assert.doesNotMatch(slice(frag), /match \/users\/|match \/jobs\/|match \/xeroQueue\//);

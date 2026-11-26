@@ -91,6 +91,6 @@ test("rules let a member create a phone error and only an admin read it", () => 
   assert.match(block, /allow update, delete: if false/);
   assert.match(block, /d\.uid == request\.auth\.uid/);
   assert.match(block, /d\.createdAt == request\.time/);
-  assert.match(block, /d\.stack is string && d\.stack\.size\(\) <= 2048/);
+  assert.match(block, /textMax\(d\.stack, 2048\)/);
   assert.match(block, /d\.keys\(\)\.hasOnly\(\["createdAt", "uid", "role", "appVersion", "swVersion", "screen", "message", "stack", "userAgent", "online"\]\)/);
 });

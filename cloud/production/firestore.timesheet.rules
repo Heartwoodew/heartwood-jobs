@@ -26,26 +26,23 @@
     }
     function tsMine(id) {
       return signedIn()
-        && request.resource.data.uid == request.auth.uid
-        && request.resource.data.weekStart is string
-        && request.resource.data.weekStart.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
-        && id == request.auth.uid + "_" + request.resource.data.weekStart;
+        && docData().uid == request.auth.uid
+        && docData().weekStart is string
+        && docData().weekStart.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && id == request.auth.uid + "_" + docData().weekStart;
     }
     function tsDocOk() {
-      return request.resource.data.keys().hasOnly(["uid", "name", "weekStart", "weekEnd", "days", "entries", "totalHrs", "updatedAt", "updatedAtIso", "lastEntryId", "locationConsentAt", "sent", "sentAt", "sentBy", "approved"])
-        && request.resource.data.name is string
-        && request.resource.data.name.size() > 0
-        && request.resource.data.name.size() <= 80
-        && request.resource.data.weekEnd is string
-        && request.resource.data.weekEnd >= request.resource.data.weekStart
-        && request.resource.data.days is map
-        && request.resource.data.days.size() <= 7
-        && request.resource.data.totalHrs is number
-        && request.resource.data.totalHrs >= 0
-        && request.resource.data.totalHrs <= 400
-        && request.resource.data.updatedAt == request.time
-        && request.resource.data.updatedAtIso is string
-        && request.resource.data.updatedAtIso.size() <= 40;
+      return docData().keys().hasOnly(["uid", "name", "weekStart", "weekEnd", "days", "entries", "totalHrs", "updatedAt", "updatedAtIso", "lastEntryId", "locationConsentAt", "sent", "sentAt", "sentBy", "approved"])
+        && textLen(docData().name, 1, 80)
+        && docData().weekEnd is string
+        && docData().weekEnd >= docData().weekStart
+        && docData().days is map
+        && docData().days.size() <= 7
+        && docData().totalHrs is number
+        && docData().totalHrs >= 0
+        && docData().totalHrs <= 400
+        && docData().updatedAt == request.time
+        && textMax(docData().updatedAtIso, 40);
     }
     function tsFix(m) {
       return m.keys().hasOnly(["at", "fix", "lat", "lng", "accuracy"])
@@ -61,18 +58,18 @@
     }
     function tsEntryCore(e) {
       return e.keys().hasOnly(["id", "source", "status", "date", "start", "finish", "breakStart", "breakEnd", "note", "job", "clockOn", "clockOff", "breakOn", "breakOff", "enteredBy", "enteredByName", "enteredAt", "edits", "lastEditId", "machineChoice", "machineId", "machineName"])
-        && e.id == request.resource.data.lastEntryId
+        && e.id == docData().lastEntryId
         && e.id.matches('^[a-z0-9]{8,24}$')
         && (e.source == "clock" || e.source == "manual")
         && e.enteredBy == request.auth.uid
-        && e.enteredByName is string && e.enteredByName.size() > 0 && e.enteredByName.size() <= 80
+        &&textLen(e.enteredByName, 1, 80)
         && e.enteredAt is timestamp
         && e.edits is map
-        && e.note is string && e.note.size() <= 200
-        && e.job is string && e.job.size() <= 200
+        &&textMax(e.note, 200)
+        &&textMax(e.job, 200)
         && e.date is string && e.date.size() == 10
-        && e.start is string && e.start.size() <= 5
-        && e.finish is string && e.finish.size() <= 5
+        &&textMax(e.start, 5)
+        &&textMax(e.finish, 5)
         && ((e.source == "clock" && "clockOn" in e) || (e.source == "manual" && !e.keys().hasAny(["clockOn", "clockOff", "breakOn", "breakOff"])));
     }
     function tsEntryNew(e) {
@@ -96,8 +93,8 @@
     // A machine pick is written once, all three fields together.
     function tsMachinePick(b, a) {
       return !("machineChoice" in b)
-        && (((a.machineChoice == "none" || a.machineChoice == "skip") && a.machineId == "" && a.machineName is string && a.machineName.size() <= 80)
-          || (a.machineChoice == "asset" && a.machineId.matches('^[A-Za-z0-9_-]{1,80}$') && a.machineName is string && a.machineName.size() > 0 && a.machineName.size() <= 80));
+        && (((a.machineChoice == "none" || a.machineChoice == "skip") && a.machineId == "" &&textMax(a.machineName, 80))
+          || (a.machineChoice == "asset" && a.machineId.matches('^[A-Za-z0-9_-]{1,80}$') &&textLen(a.machineName, 1, 80)));
     }
     // An existing shift: check only what changed. id, source, author, enteredAt and the clock-on stamp never change;
     // a recorded stamp or machine pick is never rewritten or removed; a new stamp is a valid fix taken now (clock shifts only).
@@ -122,8 +119,8 @@
     function tsTimeOk(b, a) {
       let today = tsToday();
       let nowHm = tsNowHm();
-      let openWeek = today >= resource.data.weekStart && today <= resource.data.weekEnd;
-      let locked = resource.data.get("sent", false) == true || resource.data.get("approved", false) == true;
+      let openWeek = today >= prevData().weekStart && today <= prevData().weekEnd;
+      let locked = prevData().get("sent", false) == true || prevData().get("approved", false) == true;
       return (a.finish == "" || a.finish > a.start)
         && (a.date < today || (a.date == today && a.start <= nowHm && (a.finish == "" || a.finish <= nowHm)))
         && (openWeek || !locked || isAlex() || isPatrick() || (hasProfile() && profile().role == "admin"))
@@ -146,8 +143,8 @@
             && (!("breakOn" in added) || tsFix(a.breakOn))
             && (!("breakOff" in added) || tsFix(a.breakOff))))
           && (!ch.hasAny(["machineChoice", "machineId", "machineName"]) || tsMachinePick(b, a))
-          && (!("finish" in ch) || (a.finish is string && a.finish.size() <= 5))
-          && (!("enteredByName" in ch) || (a.enteredByName is string && a.enteredByName.size() > 0 && a.enteredByName.size() <= 80))
+          && (!("finish" in ch) || (textMax(a.finish, 5)))
+          && (!("enteredByName" in ch) || (textLen(a.enteredByName, 1, 80)))
           && (!ch.hasAny(["edits", "lastEditId"]) || (a.edits is map && tsEditOk(b, a))))
         || (ch.hasOnly(["start", "finish", "edits", "lastEditId", "originalClockOn", "originalClockOff"])
           && (a.start != b.start || a.finish != b.finish)
@@ -174,9 +171,9 @@
     // Clock-off after a break and a machine pick used to hit Firestore's 1000-expression limit (permission-denied):
     // the entries map was diffed three times and compared whole. Diff once and look the shift up once.
     function tsOneEntry() {
-      let after = request.resource.data.entries;
-      let before = resource.data.get("entries", {});
-      let key = request.resource.data.lastEntryId;
+      let after = docData().entries;
+      let before = prevData().get("entries", {});
+      let key = docData().lastEntryId;
       let d = after.diff(before);
       return after is map
         && after.size() <= 40
@@ -188,44 +185,44 @@
     }
     function tsWorkerCreate(id) {
       return tsMine(id) && tsDocOk()
-        && !("sent" in request.resource.data) && !("sentAt" in request.resource.data) && !("sentBy" in request.resource.data)
-        && !("approved" in request.resource.data)
-        && (!("locationConsentAt" in request.resource.data) || request.resource.data.locationConsentAt == request.time)
-        && (!("entries" in request.resource.data)
-          || (request.resource.data.entries.size() == 1
-            && request.resource.data.lastEntryId in request.resource.data.entries
-            && tsEntryNew(request.resource.data.entries[request.resource.data.lastEntryId])));
+        && !("sent" in docData()) && !("sentAt" in docData()) && !("sentBy" in docData())
+        && !("approved" in docData())
+        && (!("locationConsentAt" in docData()) || docData().locationConsentAt == request.time)
+        && (!("entries" in docData())
+          || (docData().entries.size() == 1
+            && docData().lastEntryId in docData().entries
+            && tsEntryNew(docData().entries[docData().lastEntryId])));
     }
     function tsWorkerUpdate(id) {
       return tsMine(id) && tsDocOk()
-        && request.resource.data.uid == resource.data.uid
-        && request.resource.data.weekStart == resource.data.weekStart
+        && docData().uid == prevData().uid
+        && docData().weekStart == prevData().weekStart
         && same("sent") && same("sentAt") && same("sentBy") && same("approved")
-        && (!("locationConsentAt" in resource.data) && !("locationConsentAt" in request.resource.data)
-          || !("locationConsentAt" in resource.data) && request.resource.data.locationConsentAt == request.time
-          || request.resource.data.get("locationConsentAt", null) == resource.data.get("locationConsentAt", null))
+        && (!("locationConsentAt" in prevData()) && !("locationConsentAt" in docData())
+          || !("locationConsentAt" in prevData()) && docData().locationConsentAt == request.time
+          || docData().get("locationConsentAt", null) == prevData().get("locationConsentAt", null))
         // Shift change first: comparing the whole entries map is only needed when no shift changed.
-        && (tsOneEntry() || request.resource.data.get("entries", {}) == resource.data.get("entries", {}));
+        && (tsOneEntry() || docData().get("entries", {}) == prevData().get("entries", {}));
     }
     function tsSentUpdate() {
       return tsHeartwoodAdmin()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["sent", "sentAt", "sentBy"])
-        && request.resource.data.sent is bool
-        && (request.resource.data.get("sentAt", null) == null || request.resource.data.sentAt is string)
-        && (request.resource.data.get("sentBy", null) == null || request.resource.data.sentBy == request.auth.uid);
+        && docData().diff(prevData()).affectedKeys().hasOnly(["sent", "sentAt", "sentBy"])
+        && docData().sent is bool
+        && (docData().get("sentAt", null) == null || docData().sentAt is string)
+        && (docData().get("sentBy", null) == null || docData().sentBy == request.auth.uid);
     }
 
     match /timesheets/{id} {
       allow get: if signedIn() && (
         (resource == null && id.matches('^' + request.auth.uid + '_[0-9]{4}-[0-9]{2}-[0-9]{2}$'))
-        || (tsHeartwoodAdmin() && resource != null && docCompany(resource.data) == "heartwood")
-        || (resource != null && resource.data.uid == request.auth.uid && docCompany(resource.data) == callerCompany())
-        || (callerCompany() != "heartwood" && hasProfile() && profile().role == "admin" && resource != null && resource.data.companyId == callerCompany())
+        || (tsHeartwoodAdmin() && resource != null && docCompany(prevData()) == "heartwood")
+        || (resource != null && prevData().uid == request.auth.uid && docCompany(prevData()) == callerCompany())
+        || (callerCompany() != "heartwood" && hasProfile() && profile().role == "admin" && resource != null && prevData().companyId == callerCompany())
       );
-      allow list: if signedIn() && callerCompany() == "heartwood" && resource.data.uid == request.auth.uid;
-      allow list: if callerCompany() != "heartwood" && resource.data.uid == request.auth.uid && resource.data.companyId == callerCompany();
-      allow list: if tsHeartwoodAdmin() && resource.data.companyId == "heartwood";
-      allow list: if callerCompany() != "heartwood" && hasProfile() && profile().role == "admin" && resource.data.companyId == callerCompany();
+      allow list: if signedIn() && callerCompany() == "heartwood" && prevData().uid == request.auth.uid;
+      allow list: if callerCompany() != "heartwood" && prevData().uid == request.auth.uid && prevData().companyId == callerCompany();
+      allow list: if tsHeartwoodAdmin() && prevData().companyId == "heartwood";
+      allow list: if callerCompany() != "heartwood" && hasProfile() && profile().role == "admin" && prevData().companyId == callerCompany();
       allow create: if tsWorkerCreate(id);
       allow update: if tsWorkerUpdate(id) || tsSentUpdate();
       allow delete: if false;

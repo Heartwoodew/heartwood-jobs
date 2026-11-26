@@ -138,9 +138,9 @@ test("production and emulator document rules match, and the shell cache includes
   const emu = readFileSync(new URL("../emulator/firestore.rules", import.meta.url), "utf8");
   const slice = text => text.slice(text.indexOf("// BEGIN JOB DOCUMENT RULES"), text.indexOf("// END JOB DOCUMENT RULES"));
   assert.equal(slice(prod), slice(emu));
-  assert.match(slice(prod), /companyNotPaused\(company\)/);
-  assert.match(slice(prod), /actor\.role in \["admin", "manager", "supervisor"\]/);
-  assert.match(slice(prod), /actor\.role in \["operator", "labourer"\]/);
+  assert.match(prod, /company == "heartwood" \|\| companyNotPaused\(company\)/);
+  assert.match(prod, /actor\.role in \["admin", "manager", "supervisor"\]/);
+  assert.match(prod, /actor\.role in \["operator", "labourer"\]/);
   const storageProd = readFileSync(new URL("../production/storage.rules", import.meta.url));
   const storageEmu = readFileSync(new URL("../emulator/storage.rules", import.meta.url));
   assert.equal(storageProd.equals(storageEmu), true);

@@ -117,7 +117,7 @@ test("timesheet rules fragment matches the emulator block and does not replace o
   assert.equal(slice(emu), slice(frag));
   assert.match(emu, /match \/receipts\/\{id\}/);
   assert.match(emu, /match \/xeroQueue\/\{id\}/);
-  assert.match(slice(frag), /resource\.data\.uid == request\.auth\.uid/);
+  assert.match(slice(frag), /prevData\(\)\.uid == request\.auth\.uid/);
   assert.match(slice(frag), /m\.fix == "no location"/);
   assert.match(slice(frag), /allow delete: if false/);
   assert.doesNotMatch(slice(frag), /match \/receipts\/|match \/xeroQueue\/|watchPosition/);

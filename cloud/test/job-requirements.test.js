@@ -313,7 +313,7 @@ test("the office tab, the crew tab and the rules are wired, with no prices in th
   assert.equal(slice(prod), frag.trimEnd());
   assert.match(slice(prod), /changed\.hasOnly\(\["done", "doneBy", "doneAt", "updatedBy"\]\)/);
   assert.match(slice(prod), /actor\.role in \["admin", "manager", "supervisor"\]/);
-  assert.match(slice(prod), /company == "heartwood" \|\| companyNotPaused\(company\)/);
+  assert.match(prod, /company == "heartwood" \|\| companyNotPaused\(company\)/);
   assert.match(slice(prod), /heartwood-default/);
   assert.match(slice(prod), /"close"/);
   assert.match(prod, /function companyOffice\(\) \{\s*let id = callerCompany\(\);\s*return id != "" && id != "heartwood"/);
