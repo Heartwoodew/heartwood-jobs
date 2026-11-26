@@ -65,10 +65,13 @@ import {
   paidShift, periodOpenForWorker, prestartStatus, sheetHours, sheetLock, shiftHours, sortedEntries, stampText,
 } from "./features/timesheet.js";
 import {
-  LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, SHARE_FIX_WAIT_MS, SHOW_AFTER_CLOCK_OFF, STALE_MINUTES, canSeeCrewMap, clockOffLocationUpdate,
+  LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, SHARE_FIX_WAIT_MS, SHARE_MIN_MS, SHOW_AFTER_CLOCK_OFF, STALE_MINUTES, canSeeCrewMap, clockOffLocationUpdate,
   companySharesLocation, companyTimeZone, crewListHtml, crewMapModel,
   crewMapNotice, crewPinNote, homeCrewSlot, jobPoint, liveCollectionPath, liveLocationBody, locationRemindBannerHtml, mapFailureStatus, shareIndicator, shouldSendPosition,
 } from "./features/live-location.js";
+import {
+  clientErrorPayload, clientErrorScreen, clientErrorText, clientErrorWorthSending, clientErrorWriteDenied, clientErrorsHtml, createClientErrorGate,
+} from "./features/client-errors.js";
 
 // Same price strip as features/quotes.js noDollars. Kept here so a crew run sheet never paints a dollar
 // while the quotes module is still loading.
@@ -216,6 +219,14 @@ let startDesktopInstall = () => {};
 let refreshDesktopBanner = () => {};
 let desktopBannerWouldShow = () => false;
 let SHELL_VERSION = "callup-shell-v163-add-client";
+let isCoralClient = () => false;
+let canonicalClientName = name => String(name || "").trim();
+let planRequirementWrite = () => ({ apply: false });
+let commitRequirementPlan = async () => ({ ok: false, applied: false });
+let mountRequirements = () => () => {};
+let tickWriteBody = () => ({});
+let requirementText = text => String(text ?? "");
+let CLEAN_STAGES = [];
 let prepareTicket = () => ({ ok: false, reason: "loading" });
 let ticketDialogHtml = () => "";
 let ticketFailureText = () => "The ticket could not be sent. Try again.";
@@ -228,7 +239,7 @@ let featuresOn = false;
 let packPromise = null;
 function loadFeaturePack() {
   if (!packPromise) packPromise = (async () => {
-    const [quotes, help, capacity, cloudStorage, retention, jobEmail, gallery, capture, documents, chatUi, push, compliance, performance, take5, exportsMod, receipts, leave, hours, claims, inbox, desktop, inbound, supportTickets] = await Promise.all([
+    const [quotes, help, capacity, cloudStorage, retention, jobEmail, gallery, capture, documents, chatUi, push, compliance, performance, take5, exportsMod, receipts, leave, hours, claims, inbox, desktop, inbound, supportTickets, requirements] = await Promise.all([
       import("./features/quotes.js"),
       import("./features/help.js"),
       import("./features/capacity.js"),
@@ -252,6 +263,7 @@ function loadFeaturePack() {
       import("./features/desktop-install.js"),
       import("./features/inbound-forward.js"),
       import("./features/support-ticket.js"),
+      import("./features/job-requirements.js"),
     ]);
     ({ installQuotes, adminViewRouter, quoteRatesSettingsBlurb, setDefaultDepot, setQuoteTradeSetup, setQuoteFocus } = quotes);
     ({ askHelp, helpAnswerHtml, helpPanelHtml, helpVisible } = help);
@@ -276,6 +288,7 @@ function loadFeaturePack() {
     ({ startDesktopInstall, refreshDesktopBanner, desktopBannerWouldShow } = desktop);
     ({ forwardScreenHtml, jobFromDraft, inboundToken, collectSupervisorEmails, normalizeSupervisorEmail, readDraftEdits, INBOUND_DOMAIN } = inbound);
     ({ SHELL_VERSION, prepareTicket, ticketDialogHtml, ticketFailureText, newTicketId, compressTicketShot, screenshotUploadPlan, masterTicketsHtml, ticketPage } = supportTickets);
+    ({ isCoralClient, canonicalClientName, planRequirementWrite, commitRequirementPlan, mountRequirements, tickWriteBody, requirementText, CLEAN_STAGES } = requirements);
     featuresOn = true;
     mountFeatureApps();
   })();
@@ -408,7 +421,7 @@ if (navigator.serviceWorker) navigator.serviceWorker.addEventListener("message",
 
 // ------------------------------------------------------------------ constants / helpers
 // Client names for job/quote forms. Heartwood's builders by default; replaced in place per company (refreshClientLists).
-export const CLIENTS = ["Orbit Homes (Qld) Pty Ltd", "Torsion Built Pty Ltd", "Silkwood Homes", "OJ Pippin Homes", "Envision Homes", "Private"];
+export const CLIENTS = ["Orbit Homes (Qld) Pty Ltd", "Torsion Built Pty Ltd", "Silkwood Homes", "OJ Pippin Homes", "Envision Homes", "Coral Homes Qld Pty Ltd", "Private"];
 const TYPES = { spoil: "Spoil removal", backslab: "Backslab", waterproof: "Waterproofing", clean: "Site clean", other: "Other" };
 const STATUSES = ["Scheduled", "In progress", "Done", "Cancelled"];
 const TZ = "Australia/Brisbane";
@@ -596,6 +609,103 @@ let QG = { bindAdmin() {} }; // Quotes module; filled after helpers load
 let ROUTE = { open() {} };
 const ALEX_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";      // Alex has no users/{uid} profile doc; always staff
 const ui = { view: "list", staffF: "", typeF: "", photoLists: {}, photoUrls: {}, photoBlobs: {}, photoThumbs: {}, photoThumbTasks: {}, photoErrors: {}, photoJobs: {}, photoPaint: 0, queuedThumbs: {}, holdSideWork: true, startupQueue: [] };
+let reportClientError = () => {};
+installClientErrorCapture();
+function installClientErrorCapture() {
+  const gate = createClientErrorGate();
+  let reporting = false;
+  // open: may write. pending: one write is still unanswered. stopped: rules denied it.
+  let writeState = "open";
+  const send = (message, stack) => {
+    if (reporting || writeState !== "open" || !clientErrorWorthSending(message)) return;
+    reporting = true;
+    try {
+      if (!me || !me.uid) return;
+      const view = me.role === "admin" && !ui.myJobs ? ui.view : (ui.opTab || ui.view || "");
+      const built = clientErrorPayload({
+        uid: me.uid,
+        companyId: myCompanyId(),
+        role: me.role || "",
+        appVersion: SHELL_VERSION,
+        swVersion: SHELL_VERSION,
+        screen: clientErrorScreen(location, view),
+        message, stack,
+        userAgent: navigator.userAgent,
+        online: navigator.onLine === true,
+      }, gate);
+      if (!built) return;
+      // One write at a time. Offline persistence holds it until the server answers.
+      // A permission-denied (rules not deployed) stops the log for this visit: no toast, no retry, no console line from us.
+      writeState = "pending";
+      const pending = addDoc(collection(db, "companies", built.companyId, "clientErrors"), {
+        ...built.data,
+        createdAt: serverTimestamp(),
+      });
+      if (pending && typeof pending.then === "function") {
+        pending.then(() => { writeState = "open"; }, err => {
+          writeState = clientErrorWriteDenied(err) ? "stopped" : "open";
+        });
+      } else writeState = "open";
+    } catch { writeState = "open"; }
+    finally { reporting = false; }
+  };
+  window.addEventListener("error", event => {
+    const err = event && event.error;
+    send((event && event.message) || clientErrorText(err) || "error", err && err.stack);
+  });
+  window.addEventListener("unhandledrejection", event => {
+    const reason = event && event.reason;
+    send(clientErrorText(reason) || "unhandledrejection", reason && reason.stack);
+  });
+  reportClientError = (err, where) => {
+    const text = clientErrorText(err) || "error";
+    send(where ? where + ": " + text : text, err && err.stack);
+  };
+}
+function stopClientErrors() {
+  if (ui.clientErrUnsub) ui.clientErrUnsub();
+  ui.clientErrUnsub = null;
+  ui.clientErrFor = "";
+}
+function watchClientErrors() {
+  if (!me || me.role !== "admin" || ui.clientErrDenied) return;
+  const companyId = myCompanyId();
+  if (!companyId || (ui.clientErrUnsub && ui.clientErrFor === companyId)) return;
+  stopClientErrors();
+  ui.clientErrFor = companyId;
+  ui.clientErrors = [];
+  ui.clientErrState = "loading";
+  // The first snapshot can run before onSnapshot returns. A placeholder blocks a second subscribe.
+  ui.clientErrUnsub = () => {};
+  const paint = () => {
+    if (!me || me.role !== "admin") return;
+    if (ui.view === "settings" && !ui.myJobs) renderAdmin();
+    else if (ui.opTab === "settings") renderOperator();
+  };
+  const q = query(collection(db, "companies", companyId, "clientErrors"), orderBy("createdAt", "desc"), limit(100));
+  let unsub = () => {};
+  try {
+    unsub = onSnapshot(q, snap => {
+      ui.clientErrors = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      ui.clientErrState = "ok";
+      // A cached snapshot can arrive inside the settings render. Paint after it finishes.
+      queueMicrotask(paint);
+    }, err => {
+      if (clientErrorWriteDenied(err)) {
+        ui.clientErrDenied = true;
+        ui.clientErrState = "hidden";
+        ui.clientErrors = [];
+        if (ui.clientErrUnsub) { const stop = ui.clientErrUnsub; ui.clientErrUnsub = null; try { stop(); } catch { /* already closed */ } }
+        queueMicrotask(paint);
+        return;
+      }
+      ui.clientErrState = "error";
+      queueMicrotask(paint);
+    });
+  } catch { ui.clientErrState = "error"; }
+  if (ui.clientErrDenied) { try { unsub(); } catch { /* the denied listen is already closed */ } }
+  else ui.clientErrUnsub = unsub;
+}
 const ADMIN_SAFE = new Set(["home", "jobs", "unscheduled", "completed", "swms", "crew", "master", "clients"]);
 const OP_SAFE = new Set(["today", "week", "done", "more", "crew"]);
 function queueStartup(fn) { ui.startupQueue.push(fn); }
@@ -808,7 +918,7 @@ async function bootSignedIn(user) {
     const setJobs = () => { jobs = mergeJobLists(windowJobs, staleJobs).map(withMoney); addNameOnlyStaff(jobs); };
     const nearQ = companyJobs([where("date", ">=", todayStr()), where("date", "<=", addDays(todayStr(), 1)), orderBy("date")]);
     let stopNear = onSnapshot(nearQ, s => { windowJobs = s.docs.map(d => ({ id: d.id, ...d.data() })); setJobs(); renderAdmin(); }, e => { console.warn("jobs", e.code, e.message); windowJobs = []; setJobs(); renderAdmin(); });
-    const stopShared = () => { CHAT.stop(); PUSH.stop(); COMP.stop(); stopPrestartNotices(); stopLocationNotice(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; };
+    const stopShared = () => { CHAT.stop(); PUSH.stop(); COMP.stop(); stopPrestartNotices(); stopLocationNotice(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); stopClientErrors(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; };
     unsub = () => { stopNear(); stopShared(); };
     queueStartup(() => {
       stopNear();
@@ -840,7 +950,7 @@ async function bootSignedIn(user) {
     // A date filter on top of array-contains needs an index this app does not add, so crew startup stays this query.
     const q = companyJobs([where("assigned", "array-contains", user.uid)]);
     const u1 = onSnapshot(q, s => { jobs = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); renderOperator(); });
-    const stopShared = () => { CHAT.stop(); PUSH.stop(); COMP.stop(); stopPrestartNotices(); stopLocationNotice(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); };
+    const stopShared = () => { CHAT.stop(); PUSH.stop(); COMP.stop(); stopPrestartNotices(); stopLocationNotice(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); stopClientErrors(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); };
     unsub = () => { u1(); stopShared(); };
     queueStartup(() => {
       // Company supervisors are office (they already read quotes); crew never subscribe and the rules refuse them.
@@ -1638,11 +1748,13 @@ function settingsView() {
     : "";
   const perfSet = canEditPerformanceSettings(me) ? performanceSettingsHtml(ui.perfSettings || { weights: DEFAULT_WEIGHTS }, { take5On: ui.take5On !== false }) : "";
   const setup = ui.tradeSetup || resolveCompanySetup({ companyId: myCompanyId() }, null);
+  const phoneErrors = me && me.role === "admin" ? clientErrorsHtml(ui.clientErrors || [], ui.clientErrState || "loading") : "";
   return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin"), trades, canEditTrades: canEditTitles() })
     + presetEditorHtml(setup, { canEdit: canEditTitles() })
     + rates + perfSet + PUSH.panelHtml()
     + dispatchSettingsHtml(dispatchSettingsNow(), { canEdit: canEditTitles() })
-    + `<section class="pad"><h3>Support</h3><p class="sub">Send a note to CallUp. Anyone signed in can raise a ticket.</p><button type="button" class="sm-btn" data-raise-ticket>Raise ticket</button></section>`;
+    + `<section class="pad"><h3>Support</h3><p class="sub">Send a note to CallUp. Anyone signed in can raise a ticket.</p><button type="button" class="sm-btn" data-raise-ticket>Raise ticket</button></section>`
+    + phoneErrors;
 }
 async function saveDispatchForm(form) {
   if (!canEditTitles()) { toast("An admin or a manager can change dispatch times."); return; }
@@ -1730,6 +1842,7 @@ function bindPresetEditor(A) {
   }));
 }
 function bindSettings(A) {
+  watchClientErrors();
   bindTradeList(A);
   bindPresetEditor(A);
   loadReferralBox(A);
@@ -3484,13 +3597,17 @@ async function tsChooseMachine(choice, asset) {
   const patch = machineChoicePatch(choice, asset);
   const id = ui.tsMachineShift;
   const ws = ui.tsMachineWs || tsWeek();
-  if (!patch || !id) return;
+  if (!patch || !id || ui.tsMachineBusy) return;
+  // While this question is on screen the timesheet does not redraw. Show the tap was taken, and never wait
+  // forever on a weak signal: the answer queues on this phone and the question goes away either way.
+  ui.tsMachineBusy = true;
+  document.querySelectorAll("#tsmachine button").forEach(b => { b.disabled = true; });
   try {
-    const sheet = await tsLoad(ws);
+    const sheet = await tsLoad(ws, { offlineOk: true });
     const prev = sheet && sheet.entries && sheet.entries[id];
-    if (!prev) { toast("You're clocked on. The machine list didn't save."); return; }
-    if (prev.machineChoice) { ui.tsMachineShift = null; tsRerender(); return; }
-    await updateDoc(doc(db, "timesheets", `${me.uid}_${ws}`), {
+    if (prev && prev.machineChoice) { ui.tsMachineShift = null; return; }
+    if (!prev) { ui.tsMachineShift = null; toast("You're clocked on. The machine list didn't save."); return; }
+    const write = updateDoc(doc(db, "timesheets", `${me.uid}_${ws}`), {
       [`entries.${id}.machineChoice`]: patch.machineChoice,
       [`entries.${id}.machineId`]: patch.machineId,
       [`entries.${id}.machineName`]: patch.machineName,
@@ -3498,12 +3615,18 @@ async function tsChooseMachine(choice, asset) {
       updatedAt: serverTimestamp(),
       updatedAtIso: new Date().toISOString(),
     });
+    const r = await queueWrite(write, { id: "timesheet-machine:" + ws + ":" + id, kind: "timesheet", label: "Machine for today" }, "", { announce: false, quietFail: true });
     ui.tsMachineShift = null;
+    if (r && r.queued) toast(SAVED_ON_PHONE);
     if (patch.machineChoice === "asset") tsEnsurePrestarts();
   } catch (err) {
+    ui.tsMachineShift = null;
+    reportClientError(err, "machine");
     toast("You're clocked on. The machine wasn't saved.");
+  } finally {
+    ui.tsMachineBusy = false;
+    tsRerender();
   }
-  tsRerender();
 }
 function tsAdjustForm(existing) {
   const open = existing.source === "clock" && existing.status !== "closed" && !existing.finish;
@@ -4115,10 +4238,14 @@ function bindClaims(A, rerender) {
   A.querySelectorAll("[data-rc-receipt]").forEach(btn => { btn.onclick = () => downloadClaimReceipt(btn.dataset.rcReceipt); });
   A.querySelectorAll("[data-rc-filter]").forEach(btn => { btn.onclick = () => { ui.claimsFilter = btn.dataset.rcFilter; rerender(); }; });
 }
+// A clock punch must not wait on a stalled connection. After this long it uses this phone's copy.
+const TS_PUNCH_READ_MS = 6000;
 async function tsLoad(ws, opts = {}) {
   const ref = doc(db, "timesheets", `${me.uid}_${ws}`);
   try {
-    const snap = await getDoc(ref);
+    const snap = opts.offlineOk
+      ? await withTimeout(getDoc(ref), TS_PUNCH_READ_MS, "timesheet").catch(e => { throw e && e.code === "boot-timeout" ? { code: "unavailable" } : e; })
+      : await getDoc(ref);
     return snap.exists() ? { id: snap.id, ...snap.data() } : null;
   } catch (e) {
     // No signal: a clock punch must still work. Use this phone's copy (the watched week is always cached).
@@ -4274,8 +4401,14 @@ function liveShareStart(entryId, weekStart, firstFix) {
   shareRun = { entryId, weekStart, companyId: myCompanyId(), last: null, watch: null, timer: null, offSent: false };
   ui.liveShare = { clockedOn: true, sharing: "ask" };
   paintShareStatus();
-  if (firstFix) considerShareFix(firstFix);
-  armShareWatch();
+  // Live sharing is extra. A failure here must never stop or undo a clock punch that already saved.
+  try {
+    if (firstFix) considerShareFix(firstFix);
+    armShareWatch();
+  } catch (err) {
+    console.warn("live share", err && (err.message || err));
+    reportClientError(err, "live share");
+  }
 }
 function releaseLiveDoc(companyId) {
   if (!me || !companyId) return;
@@ -4308,8 +4441,13 @@ function noteShareHidden() {
 }
 document.addEventListener("visibilitychange", () => {
   if (!shareRun) return;
-  if (document.hidden) { noteShareHidden(); disarmShareWatch(); }
-  else armShareWatch();
+  try {
+    if (document.hidden) { noteShareHidden(); disarmShareWatch(); }
+    else armShareWatch();
+  } catch (err) {
+    console.warn("live share", err && (err.message || err));
+    reportClientError(err, "live share");
+  }
 });
 window.addEventListener("pagehide", () => {
   if (!shareRun) return;
@@ -4654,9 +4792,9 @@ async function tsPunch(kind) {
         edits: {}, lastEditId: "",
       };
       const r = await tsWrite(ws, sheet, entries, id, { consent: !(sheet && sheet.locationConsentAt) });
-      liveShareStart(id, ws, fix);
       ui.tsMachineShift = id;
       ui.tsMachineWs = ws;
+      try { liveShareStart(id, ws, fix); } catch (err) { console.warn("live share", err && (err.message || err)); }
       toast((fix.fix === "gps" ? "Clocked on" : "Clocked on · no location") + tsQueuedNote(r));
     } else {
       const e = openClock(entries);
@@ -4680,6 +4818,7 @@ async function tsPunch(kind) {
       ui.tsPrevFor = "";
     }
   } catch (err) {
+    reportClientError(err, "clock");
     toast("Not saved: " + (err.code || err.message));
   } finally {
     ui.tsBusy = false;
@@ -6471,7 +6610,7 @@ function editJob(j) {
     const picked = [...f.querySelectorAll("[name=assigned]:checked")].map(x => staff.find(s => skey(s) === x.value)).filter(Boolean);
     const assigned = picked.filter(s => s.uid).map(s => s.uid);
     const timeTouched = f.time.dataset.touched === "1";
-    const data = { client: f.client.value.trim(), address: f.address.value.trim(), type: typ, po: f.po.value.trim().toUpperCase().replace(/\s+/g, ""),
+    const data = { client: canonicalClientName(f.client.value.trim()), address: f.address.value.trim(), type: typ, po: f.po.value.trim().toUpperCase().replace(/\s+/g, ""),
       description: f.description.value.trim(), date: f.date.value, time: f.time.value, durationHrs: parseHoursInput(f.durationHrs.value),
       timeSource: timeTouched || isManualStart(j) ? "manual" : "auto",
       assigned, assignedNames: picked.map(s => s.name), status: f.status.value, notes: f.notes.value.trim(),
@@ -6518,6 +6657,13 @@ function editJob(j) {
         write = setDoc(newRef, scopeRecord({ ...sp.job, ...extra, source: importing ? "inbox" : "app", log: [], createdAt: serverTimestamp() }, myCompanyId()));
         if (sp.hasMoney) write = Promise.all([write, jobMoneyWrite(newRef.id, sp.money)]);
         if (importing) write = write.then(() => markInboxImported(j._import.emailId, newRef.id));
+        const seeded = { ...data, ...extra };
+        write = write.then(() => commitRequirementPlan(
+          requirementEnv(),
+          newRef.id,
+          planRequirementWrite(seeded, [], { companyId: myCompanyId(), uid: me.uid }),
+          new Set(),
+        ).catch(err => { console.warn("requirements", err && (err.code || err.message)); }));
       } else write = writeJob(j.id, data);
       const r = await settleOrQueue(write);
       if (r.queued) write.catch(e => toast("Job not saved: " + (e.code || e.message)));
@@ -6551,9 +6697,9 @@ function jobTabs(d, j) {
     <div class="kf"><small>Staff</small><b>${names.length ? esc(names.map(label).join(", ")) : `<span class="unal">Unallocated</span>`}</b></div>
     <div class="kf"><small>PO</small><b>${j.po ? esc(j.po) : `<span class="nopo">No PO</span>`}</b></div>
     <div class="kf"><small>Status</small><b class="pstack">${st}</b></div>${canXero() && q === "Completed" ? `<div class="kf kf-xero"><small>Xero</small><b>${xcCell(j)}</b></div>` : ""}</div>
-    <div class="jc-tabs" role="tablist">${[["details", "Details"], ["chat", "Chat"], ["photos", "Photos"], ["sup", "Supervisor"], ["safety", "Safety"], ["hist", "History"]].map(([k, l]) => `<button type="button" role="tab" data-jt="${k}">${l}${k === "chat" ? CHAT.badge("job_" + j.id) : ""}</button>`).join("")}</div>`);
+    <div class="jc-tabs" role="tablist">${[["details", "Details"], ["req", "Requirements"], ["chat", "Chat"], ["photos", "Photos"], ["sup", "Supervisor"], ["safety", "Safety"], ["hist", "History"]].map(([k, l]) => `<button type="button" role="tab" data-jt="${k}">${l}${k === "chat" ? CHAT.badge("job_" + j.id) : ""}</button>`).join("")}</div>`);
   const pane = k => { const x = document.createElement("div"); x.className = "jc-pane"; x.dataset.pane = k; return x; };
-  const P = { details: pane("details"), chat: pane("chat"), photos: pane("photos"), sup: pane("sup"), safety: pane("safety"), hist: pane("hist") };
+  const P = { details: pane("details"), req: pane("req"), chat: pane("chat"), photos: pane("photos"), sup: pane("sup"), safety: pane("safety"), hist: pane("hist") };
   const cols = [...body.querySelectorAll(".jc-col")];
   const detL = document.createElement("div"), detR = document.createElement("div"); detL.className = detR.className = "jc-col";
   cols.forEach((c, ci) => { let sec = "details";
@@ -6570,7 +6716,7 @@ function jobTabs(d, j) {
   if (!P.hist.children.length) P.hist.innerHTML = `<p class="muted sub">No history yet.</p>`;
   P.chat.innerHTML = CHAT.jobHtml(j);
   body.innerHTML = ""; body.classList.add("tabbed"); Object.values(P).forEach(x => body.appendChild(x));
-  const show = k => { ui.jtab = k; f.querySelectorAll("[data-jt]").forEach(b => b.classList.toggle("on", b.dataset.jt === k)); Object.entries(P).forEach(([kk, x]) => x.hidden = kk !== k); if (k === "photos") queuePhotoThumbs(f); if (k === "chat") CHAT.openJob(P.chat, j); };
+  const show = k => { ui.jtab = k; f.querySelectorAll("[data-jt]").forEach(b => b.classList.toggle("on", b.dataset.jt === k)); Object.entries(P).forEach(([kk, x]) => x.hidden = kk !== k); if (k === "photos") queuePhotoThumbs(f); if (k === "chat") CHAT.openJob(P.chat, j); if (k === "req") mountJobRequirements(P.req, j, true); };
   // v47: facts + tabs + panes share ONE scroll area (phones); display:contents elsewhere so iPad/desktop are unchanged
   if (!f.querySelector(".jc-scroll")) { const sc = document.createElement("div"); sc.className = "jc-scroll";
     f.insertBefore(sc, f.querySelector(".jc-facts")); sc.append(f.querySelector(".jc-facts"), f.querySelector(".jc-tabs"), body); }
@@ -6590,7 +6736,7 @@ function jobTabs(d, j) {
 const INV_FLOOR = 5402;                  // last number used on the planner's Completed sheet / completed.json (10/10/2026)
 const XERO_COLS = ["*ContactName", "EmailAddress", "POAddressLine1", "*InvoiceNumber", "Reference", "*InvoiceDate", "*DueDate",
   "InventoryItemCode", "*Description", "*Quantity", "*UnitAmount", "Discount", "*AccountCode", "*TaxType", "Currency"];
-const STD_CLIENTS = ["Orbit Homes (Qld) Pty Ltd", "Torsion Built Pty Ltd", "Silkwood Homes", "OJ Pippin Homes", "Envision Homes"];
+const STD_CLIENTS = ["Orbit Homes (Qld) Pty Ltd", "Torsion Built Pty Ltd", "Silkwood Homes", "OJ Pippin Homes", "Envision Homes", "Coral Homes Qld Pty Ltd"];
 function refreshClientLists() {
   const org = orgSettings();
   CLIENTS.splice(0, CLIENTS.length, ...companyClientNames(org, CLI || []));
@@ -7998,22 +8144,79 @@ function renderOperator() {
     ${opTabs(ui.opTab)}</div>`);
   bindOp(mine);
 }
+function requirementEditorName(uid) {
+  if (!uid) return "";
+  if (me && me.uid === uid) return me.name || "You";
+  const person = (staff || []).find(s => s.uid === uid);
+  return person ? person.name : "Office";
+}
+function requirementEnv() {
+  return { db, doc, setDoc, deleteDoc, getDoc, serverTimestamp, companyId: myCompanyId(), uid: me && me.uid };
+}
+function requirementApi(office) {
+  return {
+    db, doc, collection, onSnapshot, setDoc, updateDoc, deleteDoc, getDoc, serverTimestamp,
+    office: !!office,
+    companyId: myCompanyId(),
+    uid: me && me.uid,
+    nameOf: requirementEditorName,
+    toast,
+    commit: (jobId, plan, existingIds) => commitRequirementPlan(requirementEnv(), jobId, plan, existingIds),
+    tick: (jobId, item, done) => updateDoc(doc(db, "jobs", jobId, "requirementItems", item.id), tickWriteBody(me.uid, done, serverTimestamp)),
+    remove: (jobId, itemId) => deleteDoc(doc(db, "jobs", jobId, "requirementItems", itemId)),
+    updateItem: (jobId, item, patch) => {
+      const next = { updatedAt: serverTimestamp(), updatedBy: me.uid };
+      if ("text" in patch) next.text = requirementText(patch.text);
+      if ("source" in patch) next.source = patch.source;
+      if ("sort" in patch) next.sort = patch.sort;
+      if ("section" in patch) next.section = patch.section;
+      if ("done" in patch) next.done = !!patch.done;
+      if ("doneBy" in patch) next.doneBy = patch.doneBy || "";
+      if ("doneAt" in patch) next.doneAt = patch.doneAt;
+      return updateDoc(doc(db, "jobs", jobId, "requirementItems", item.id), next);
+    },
+    saveMeta: (jobId, meta) => setDoc(doc(db, "jobs", jobId, "requirementMeta", "current"), {
+      templateId: meta.templateId || "",
+      builder: meta.builder || "",
+      storey: meta.storey === "single" || meta.storey === "two" ? meta.storey : "",
+      cleanStage: CLEAN_STAGES.includes(meta.cleanStage) ? meta.cleanStage : "",
+      notes: requirementText(meta.notes || "").slice(0, 2000),
+      updatedAt: serverTimestamp(),
+      updatedBy: me.uid,
+    }),
+  };
+}
+function mountJobRequirements(pane, job, office) {
+  if (!pane || pane.dataset.reqOn === "1") return ui.stopReq || (() => {});
+  pane.dataset.reqOn = "1";
+  const stop = mountRequirements(pane, job, requirementApi(office));
+  ui.stopReq = stop;
+  if (office) {
+    const dlg = $("#dlg");
+    if (dlg) dlg.addEventListener("close", () => { if (ui.stopReq === stop) ui.stopReq = null; stop(); }, { once: true });
+  }
+  return stop;
+}
 function renderOpDetail(j) {
+  if (ui.stopReq) { ui.stopReq(); ui.stopReq = null; }
   const q = queueOf(j), done = j.status === "Done", started = j.status === "In progress";
   const p = phonePlace(j.address);
   const crew = namesOf(j);
   const type = jobTypeText(j) || TYPES[j.type] || "Job";
   const addrLine = [p.street, p.place].filter(Boolean).join(", ") || p.full || j.address || "";
   const onChat = ui.jobPane === "chat";
+  const onReq = ui.jobPane === "req";
   paintApp(`<div class="mob">${companyViewBanner()}<div class="mob-bar det ${QCLS[q]}"><button class="mback" id="back" type="button">${ICO.back}<span class="sr">Jobs</span></button>
       <div class="mob-bar-txt"><div class="mob-title">Job details</div>${started ? ipTop(j, "onbar") : ""}<div class="mob-sub">${done ? "Completed" : started ? "In progress" : "Scheduled"} · #${esc(jobNo(j))}</div>
         <div class="mob-brandline"><span class="wordmark" aria-label="${esc(PRODUCT_NAME)}">Call<span>Up</span></span><span class="orgbit">${esc(orgSettings().name)}</span></div></div></div>
     <div class="job-switch" role="tablist" aria-label="Job sections">
-      <button type="button" data-jtab="job" class="${onChat ? "" : "on"}">Job</button>
+      <button type="button" data-jtab="job" class="${onChat || onReq ? "" : "on"}">Job</button>
+      <button type="button" data-jtab="req" class="${onReq ? "on" : ""}">Requirements</button>
       <button type="button" data-jtab="chat" class="${onChat ? "on" : ""}">Chat ${CHAT.badge("job_" + j.id)}</button>
     </div>
+    <div class="job-req"${onReq ? "" : " hidden"}></div>
     <div class="job-chat"${onChat ? "" : " hidden"}></div>
-    <div class="det-body"${onChat ? " hidden" : ""}>
+    <div class="det-body"${onChat || onReq ? " hidden" : ""}>
       <div class="typepill">${esc(type)}</div>
       <h1 class="det-lot">${esc(p.head || "Job")}</h1>
       <p class="det-addr">${esc(addrLine || "-")}</p>
@@ -8034,7 +8237,7 @@ function renderOpDetail(j) {
         ${take5EntryVisible({ enabled: ui.take5On !== false }) || (ui.take5s || []).some(row => row.jobId === j.id) ? `<div id="take5slot">${take5StartButtonHtml({ enabled: ui.take5On !== false, done: hasTake5(ui.take5s, me.uid, j.id) })}${take5JobHtml(ui.take5s || [], j.id, { ownUid: me.uid, canView: canViewTake5(me) })}</div>` : ""}</div>
       <div class="mcard">${jobReceiptsHtml(j)}</div>
     </div>
-    <div class="mactions"${onChat ? " hidden" : ""}>${done ? `<div class="donebar">Completed${j.loads ? ` · ${esc(j.loads)} loads` : ""}</div>` :
+    <div class="mactions"${onChat || onReq ? " hidden" : ""}>${done ? `<div class="donebar">Completed${j.loads ? ` · ${esc(j.loads)} loads` : ""}</div>` :
       `<button class="mbtn start" type="button" data-act="start" ${started ? "disabled" : ""}>${ICO.play}<span>${started ? "Started" : "Start job"}</span></button>
        <button class="mbtn complete" type="button" data-act="done">Complete job</button>`}
       <button type="button" class="mbtn mnote op-photo" id="emailph">${ICO.photos}<span>Add photos</span></button>
@@ -8045,18 +8248,21 @@ function renderOpDetail(j) {
   wireJobDocuments(document.querySelector("[data-job-docs]"), j);
   if (!hasTake5(ui.take5s, me.uid, j.id)) rememberOwnTake5(j);
   const showJobPane = which => {
-    ui.jobPane = which === "chat" ? "chat" : "job";
+    ui.jobPane = which === "chat" ? "chat" : which === "req" ? "req" : "job";
     $("#app").querySelectorAll("[data-jtab]").forEach(b => { b.classList.toggle("on", b.dataset.jtab === ui.jobPane); b.setAttribute("aria-selected", b.dataset.jtab === ui.jobPane ? "true" : "false"); });
     const chatOn = ui.jobPane === "chat";
-    document.querySelector(".det-body")?.toggleAttribute("hidden", chatOn);
-    document.querySelector(".mactions")?.toggleAttribute("hidden", chatOn);
-    const pane = document.querySelector(".job-chat");
-    pane?.toggleAttribute("hidden", !chatOn);
-    if (chatOn) CHAT.openJob(pane, j);
+    const reqOn = ui.jobPane === "req";
+    document.querySelector(".det-body")?.toggleAttribute("hidden", chatOn || reqOn);
+    document.querySelector(".mactions")?.toggleAttribute("hidden", chatOn || reqOn);
+    document.querySelector(".job-chat")?.toggleAttribute("hidden", !chatOn);
+    document.querySelector(".job-req")?.toggleAttribute("hidden", !reqOn);
+    if (chatOn) CHAT.openJob(document.querySelector(".job-chat"), j);
+    if (reqOn) mountJobRequirements(document.querySelector(".job-req"), j, false);
   };
   $("#app").querySelectorAll("[data-jtab]").forEach(b => b.onclick = () => showJobPane(b.dataset.jtab));
   if (onChat) CHAT.openJob(document.querySelector(".job-chat"), j);
-  $("#back").onclick = () => { ui.opSel = null; ui.jobPane = "job"; renderOperator(); };
+  if (onReq) mountJobRequirements(document.querySelector(".job-req"), j, false);
+  $("#back").onclick = () => { if (ui.stopReq) { ui.stopReq(); ui.stopReq = null; } ui.opSel = null; ui.jobPane = "job"; renderOperator(); };
   $("#app").querySelectorAll("[data-act]").forEach(b => b.onclick = () => opAction(j, b.dataset.act));
 }
 const logEntry = text => ({ text, by: me.uid, byName: me.name, at: new Date().toLocaleString("en-AU", { timeZone: TZ, dateStyle: "short", timeStyle: "short" }) });

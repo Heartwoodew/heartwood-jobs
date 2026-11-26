@@ -1030,7 +1030,16 @@ body.operator .job-chat .chat-screen{height:calc(100dvh - 168px - env(safe-area-
 .chat-attach{background:#efe6da;border-color:#eadfd3;color:#3b2a1a;font-size:22px;font-weight:700}
 .chat-denied{padding:24px 16px}
 .chat-denied p{color:#5c4e42}
-.job-chat[hidden],.det-body[hidden],.mactions[hidden]{display:none !important}
+.job-chat[hidden],.job-req[hidden],.det-body[hidden],.mactions[hidden]{display:none !important}
+.job-req{padding:4px 16px 28px}
+.req-office,.req-crew{display:grid;gap:10px}
+.req-tools,.req-add{display:flex;flex-wrap:wrap;gap:8px;align-items:end}
+.req-tools label,.req-add label,.req-office > label{display:grid;gap:4px;font-size:13px}
+.req-sec h3{margin:8px 0 4px;font-size:15px}
+.req-line{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 0;border-bottom:1px solid var(--sm-line)}
+.req-line label{display:flex;gap:8px;align-items:flex-start;flex:1;min-width:12rem}
+.req-src,.req-empty,.req-editor{color:var(--sm-mut)}
+.req-line input[type="checkbox"]{width:22px;height:22px;margin-top:2px;flex:none}
 .job-switch{display:flex;gap:8px;padding:8px 16px 0}
 .job-switch button{flex:1;border:none;border-radius:999px;background:#efe6da;min-height:44px;font-weight:750;color:#5c4e42}
 .job-switch button.on{background:#3b2a1a;color:#f6f1ea}
@@ -1332,6 +1341,10 @@ abbr.req{color:#9b2c2c;text-decoration:none;font-weight:700}
 .fwd-steps{padding-left:1.2em}
 .fwd-list{list-style:none;padding:0;margin:0}
 .fwd-list li{margin:6px 0}
+.client-errors{list-style:none;padding:0;margin:8px 0 0;display:flex;flex-direction:column;gap:8px}
+.client-errors li{background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+.client-errors p{margin:6px 0 0;white-space:pre-wrap;word-break:break-word}
+.client-errors pre{white-space:pre-wrap;word-break:break-word;margin:6px 0 0;font:12px/1.35 ui-monospace,monospace;color:#5c4e42;max-height:8em;overflow:auto}
 /* Client list on New Job / Edit Job. The add row is admin only. No prices. */
 .client-field{position:relative;display:block;width:100%}
 .client-field > label{display:block}

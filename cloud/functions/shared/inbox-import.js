@@ -9,6 +9,31 @@ export const BUILDER_CLIENTS = Object.freeze({
   silkwood: "Silkwood Homes",
 });
 
+// Coral Homes call-up emails are not parsed here. Heartwood has no per-job Coral
+// work-order email yet. A later PR should make coralCallupHook return a draft
+// once a real email exists. Until then it returns null, and parseInboxEmail
+// stays on Orbit, Torsion and Silkwood only.
+//
+// Codes from the 24 Nov 2026 "Heartwood Earthworx - Price File". No dollars,
+// tip fees or rates. 195 is the prefix for 195xxx cut-and-fill codes.
+// Keep this map in step with REQUIREMENT_COST_CODES in features/job-requirements.js.
+export const CORAL_COST_CODE_MAP = Object.freeze({
+  "195": { pack: "earthworks", label: "Cut and fill" },
+  "197100": { pack: "spoil", label: "Spoil export" },
+  "297000": { pack: "setup", label: "Site set-up / back-blade" },
+  "297200": { pack: "setup", label: "Site set-up / back-blade" },
+  "526210": { pack: "setup", label: "Site set-up / back-blade" },
+  "6350015": { pack: "clean", stage: "first", label: "First / rough-in clean" },
+  "6360015": { pack: "clean", stage: "second-lowset", label: "Second clean, lowset" },
+  "6360017": { pack: "clean", stage: "second-highset", label: "Second clean, highset" },
+  "6370015": { pack: "clean", stage: "third", label: "Third clean" },
+  "6380015": { pack: "clean", stage: "final", label: "Final / practical completion" },
+});
+
+export function coralCallupHook(_email) {
+  return null;
+}
+
 const STREET = "Street|St|Road|Rd|Avenue|Ave|Drive|Dr|Court|Ct|Crt|Crescent|Cres|Circuit|Cct|Place|Pl|Parade|Pde|Terrace|Tce|Lane|Ln|Boulevard|Blvd|Way|Close|Cl|Grove|Gr";
 const STREET_RE = new RegExp(`\\b(?:${STREET})\\b`, "i");
 const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
@@ -348,6 +373,8 @@ function jobLike(parsed, text) {
 }
 
 export function parseInboxEmail(email, opts = {}) {
+  const coralDraft = coralCallupHook(email);
+  if (coralDraft) return coralDraft;
   const m = email || {};
   const text = emailBlob(m);
   const ref = brisbaneDay(m.date, opts.today || "");
