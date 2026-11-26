@@ -1,16 +1,44 @@
-## Job requirements (not deployed)
+## Add a client from New Job (not deployed)
 
 Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production.
 
-Office job cards have a Requirements tab after Details. Crew have a Requirements tab beside Job and Chat, with the words read-only and tick boxes only. A new Coral Homes job, including one saved from the inbox form, copies the Coral pack plus the Heartwood backslab, site-clean and spoil lines. Any other new job copies the Heartwood default checklist. The office can switch template afterwards. Custom lines stay when a template is applied again. There is no Coral call-up parser until a real work-order email exists. The cost-code map is the hook for that later change. Crew do not see prices.
+On New Job and Edit Job, an admin can choose **+ Add new client** from the client list. The list also offers it when the typed name is not already there, and the sheet opens with that name filled in. The sheet is the same Add client form as the Clients screen: company or client name is required, and contact name, phone, email, address and notes are the same fields. Save uses the same `clients/{id}` write as Clients (`buildClientCreate`, then `setDoc` with merge). The new client is selected on the job. Address, description, date and the other fields already typed stay as they were. Cancel closes the sheet and leaves the job form alone. Crew, supervisors and managers do not see the option. The Clients screen is still admin-only. Firestore rules are unchanged. A client is stored for the company that is open, not another company. Crew still do not see prices.
 
-Service worker `callup-shell-v161-requirements`.
+The Requirements tab (PR 139) and the clock-on fix (PR 140) stay as they are on main. This branch does not edit Firestore rules. Production rules are already over the compiled size limit.
+
+Service worker `callup-shell-v163-add-client`. Main is `callup-shell-v162-clock-on-fix` after PR 139 (`callup-shell-v161-requirements`) and PR 140.
 
 After review, and only when the owner says merge:
 
-1. Deploy Firestore rules from `cloud/firestore.production.rules` only. Do not deploy `cloud/emulator/firestore.rules`. `cloud/firebase.json` points Firestore at the emulator file and its predeploy hook still refuses a live deploy. Do not remove that hook.
-2. Deploy hosting with `firebase deploy --only hosting --config cloud/firebase.hosting.json --project heartwood-9f37f`. Phones pick up `callup-shell-v161-requirements`.
-3. No functions deploy. No index deploy. No Storage change. No production data write.
+1. Build a fresh hosting folder with `bash tools/build-callup-hosting.sh`.
+2. Deploy hosting with `firebase deploy --only hosting --config cloud/firebase.hosting.json --project heartwood-9f37f` from that fresh folder. Phones pick up `callup-shell-v163-add-client`.
+3. No Firestore rules deploy. No functions deploy. No index deploy. No Storage change.
+
+## Clock on fix and phone error log (not deployed)
+
+Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production.
+
+- Every clock on threw `ReferenceError: SHARE_MIN_MS is not defined` since the crew map fallback change on 24 Nov. The live-location timer used the constant without importing it. It is imported now, and a live-sharing failure can no longer stop or undo a clock punch. This works with the rules that are live now (ruleset ae98ff5b). It does not need a rules deploy.
+- The two timesheet reads in a clock punch now give up after 6 seconds and use this phone's copy, so Checking location… cannot sit there on a stalled connection.
+- The "Which machine are you on today?" question takes one tap at a time, uses this phone's copy when there is no signal, queues the answer, and always goes away. Before, a tap on a weak signal could wait with no sign it was taken, and the timesheet does not redraw while that question is on screen.
+- The phone now records its own errors in `companies/{companyId}/clientErrors`. A window error, an unhandled rejection, or a failure in the clock punch is written with the time, the person, their role, the app version, the screen, a short message, a short stack, the browser, and whether the phone was online. Prices, tokens, and GPS are stripped. The phone sends at most 20 different messages per visit. While the rules are not published, a denied write stops for that visit: no toast, no retry loop, and no error on screen. An admin sees the latest 100 under Settings once the rules are live. A manager, a supervisor, and crew cannot read them. Nobody can edit or delete one from the phone.
+
+Service worker `callup-shell-v162-clock-on-fix`. PR 139 is on main as `callup-shell-v161-requirements`. Another in-flight change (add a client from the New Job dropdown) may also claim v162, so whichever merges second must bump the service worker.
+
+The `clientErrors` rules are in `cloud/firestore.production.rules` and are not deployed with this change. Production rules are already over the compiled size limit with PR 139's requirements rules (release rejected: compiled executables 269886 bytes, limit 256000). A rules deploy stays blocked until a separate rules-size reduction lands. GitHub Pages for jobs.heartwoodew.com publishes the web files on merge, before any rules deploy, so the clock-on fix must stand on the current live rules.
+
+After review, and only when the owner says merge:
+
+1. Build a fresh hosting folder with `bash tools/build-callup-hosting.sh`.
+2. Deploy hosting with `firebase deploy --only hosting --config cloud/firebase.hosting.json --project heartwood-9f37f` from that fresh folder. Phones pick up `callup-shell-v162-clock-on-fix`.
+3. Do not deploy Firestore rules with this change. Do not deploy `cloud/emulator/firestore.rules`. `cloud/firebase.json` points Firestore at the emulator file. The `clientErrors` block waits for a rules-size reduction.
+4. No functions deploy. No index deploy. No Storage change. No Stripe change. No production data write.
+
+## Job requirements (merged as PR 139)
+
+Office job cards have a Requirements tab after Details. Crew have a Requirements tab beside Job and Chat, with the words read-only and tick boxes only. A new Coral Homes job, including one saved from the inbox form, copies the Coral pack plus the Heartwood backslab, site-clean and spoil lines. Any other new job copies the Heartwood default checklist. The office can switch template afterwards. Custom lines stay when a template is applied again. There is no Coral call-up parser until a real work-order email exists. The cost-code map is the hook for that later change. Crew do not see prices.
+
+Service worker `callup-shell-v161-requirements`. That rules deploy is what pushed the compiled rules over 256000 bytes. Do not deploy those rules again until the size comes down.
 
 ## Staff clock-time corrections (not deployed)
 

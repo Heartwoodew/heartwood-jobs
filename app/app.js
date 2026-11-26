@@ -47,7 +47,8 @@ import {
   builderSignoff, clientDocId, companyClientNames, companyJobPrefix, companyMailbox, companyStdClients, timesheetMailParts,
   supervisorsPath, docCompanyId, isHeartwoodCompany, buildClientCreate,
 } from "./features/company.js";
-import { adminViewBannerHtml, bootCompanyView, clearedCompanySession, companyHistoryState, historyStepOnEnter, historyStepOnMasterReturn, IN_COMPANY_VIEW_KEY, masterHistoryState, RETURN_MASTER_KEY, takeReturnMasterFlag, urlMarksCompanyView, withCompanyViewParam, clientFormHtml, companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, pausedAdminHtml, pausedOwnerHtml, pausedStaffHtml, referralBoxHtml, signupFieldErrors, signupFormHtml, trialBannerHtml } from "./features/company-ui.js";
+import { adminViewBannerHtml, bootCompanyView, clearedCompanySession, companyHistoryState, historyStepOnEnter, historyStepOnMasterReturn, IN_COMPANY_VIEW_KEY, masterHistoryState, RETURN_MASTER_KEY, takeReturnMasterFlag, urlMarksCompanyView, withCompanyViewParam, clientCreateMessage, clientFormHtml, companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, pausedAdminHtml, pausedOwnerHtml, pausedStaffHtml, referralBoxHtml, signupFieldErrors, signupFormHtml, trialBannerHtml } from "./features/company-ui.js";
+import { canOfferNewClient, clientFieldHtml, clientMenuHtml, clientMenuModel, jobDraftAfterCreate, readJobDraft } from "./features/client-picker.js";
 import { pickDashboardBanner } from "./features/dashboard-banners.js";
 import {
   addTitle, bindTradeSearch, companyTradesDoc, defaultJobCategory, jobCategorySelectHtml, jobTypeMap, normalizeTrade, readTradeList, removeTitle, renameTitle, resolveCompanySetup,
@@ -64,10 +65,13 @@ import {
   paidShift, periodOpenForWorker, prestartStatus, sheetHours, sheetLock, shiftHours, sortedEntries, stampText,
 } from "./features/timesheet.js";
 import {
-  LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, SHARE_FIX_WAIT_MS, SHOW_AFTER_CLOCK_OFF, STALE_MINUTES, canSeeCrewMap, clockOffLocationUpdate,
+  LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, SHARE_FIX_WAIT_MS, SHARE_MIN_MS, SHOW_AFTER_CLOCK_OFF, STALE_MINUTES, canSeeCrewMap, clockOffLocationUpdate,
   companySharesLocation, companyTimeZone, crewListHtml, crewMapModel,
   crewMapNotice, crewPinNote, homeCrewSlot, jobPoint, liveCollectionPath, liveLocationBody, locationRemindBannerHtml, mapFailureStatus, shareIndicator, shouldSendPosition,
 } from "./features/live-location.js";
+import {
+  clientErrorPayload, clientErrorScreen, clientErrorText, clientErrorWorthSending, clientErrorWriteDenied, clientErrorsHtml, createClientErrorGate,
+} from "./features/client-errors.js";
 
 // Same price strip as features/quotes.js noDollars. Kept here so a crew run sheet never paints a dollar
 // while the quotes module is still loading.
@@ -214,7 +218,7 @@ let INBOUND_DOMAIN = "inbound.callupapp.com.au";
 let startDesktopInstall = () => {};
 let refreshDesktopBanner = () => {};
 let desktopBannerWouldShow = () => false;
-let SHELL_VERSION = "callup-shell-v161-requirements";
+let SHELL_VERSION = "callup-shell-v163-add-client";
 let isCoralClient = () => false;
 let canonicalClientName = name => String(name || "").trim();
 let planRequirementWrite = () => ({ apply: false });
@@ -605,6 +609,103 @@ let QG = { bindAdmin() {} }; // Quotes module; filled after helpers load
 let ROUTE = { open() {} };
 const ALEX_UID = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";      // Alex has no users/{uid} profile doc; always staff
 const ui = { view: "list", staffF: "", typeF: "", photoLists: {}, photoUrls: {}, photoBlobs: {}, photoThumbs: {}, photoThumbTasks: {}, photoErrors: {}, photoJobs: {}, photoPaint: 0, queuedThumbs: {}, holdSideWork: true, startupQueue: [] };
+let reportClientError = () => {};
+installClientErrorCapture();
+function installClientErrorCapture() {
+  const gate = createClientErrorGate();
+  let reporting = false;
+  // open: may write. pending: one write is still unanswered. stopped: rules denied it.
+  let writeState = "open";
+  const send = (message, stack) => {
+    if (reporting || writeState !== "open" || !clientErrorWorthSending(message)) return;
+    reporting = true;
+    try {
+      if (!me || !me.uid) return;
+      const view = me.role === "admin" && !ui.myJobs ? ui.view : (ui.opTab || ui.view || "");
+      const built = clientErrorPayload({
+        uid: me.uid,
+        companyId: myCompanyId(),
+        role: me.role || "",
+        appVersion: SHELL_VERSION,
+        swVersion: SHELL_VERSION,
+        screen: clientErrorScreen(location, view),
+        message, stack,
+        userAgent: navigator.userAgent,
+        online: navigator.onLine === true,
+      }, gate);
+      if (!built) return;
+      // One write at a time. Offline persistence holds it until the server answers.
+      // A permission-denied (rules not deployed) stops the log for this visit: no toast, no retry, no console line from us.
+      writeState = "pending";
+      const pending = addDoc(collection(db, "companies", built.companyId, "clientErrors"), {
+        ...built.data,
+        createdAt: serverTimestamp(),
+      });
+      if (pending && typeof pending.then === "function") {
+        pending.then(() => { writeState = "open"; }, err => {
+          writeState = clientErrorWriteDenied(err) ? "stopped" : "open";
+        });
+      } else writeState = "open";
+    } catch { writeState = "open"; }
+    finally { reporting = false; }
+  };
+  window.addEventListener("error", event => {
+    const err = event && event.error;
+    send((event && event.message) || clientErrorText(err) || "error", err && err.stack);
+  });
+  window.addEventListener("unhandledrejection", event => {
+    const reason = event && event.reason;
+    send(clientErrorText(reason) || "unhandledrejection", reason && reason.stack);
+  });
+  reportClientError = (err, where) => {
+    const text = clientErrorText(err) || "error";
+    send(where ? where + ": " + text : text, err && err.stack);
+  };
+}
+function stopClientErrors() {
+  if (ui.clientErrUnsub) ui.clientErrUnsub();
+  ui.clientErrUnsub = null;
+  ui.clientErrFor = "";
+}
+function watchClientErrors() {
+  if (!me || me.role !== "admin" || ui.clientErrDenied) return;
+  const companyId = myCompanyId();
+  if (!companyId || (ui.clientErrUnsub && ui.clientErrFor === companyId)) return;
+  stopClientErrors();
+  ui.clientErrFor = companyId;
+  ui.clientErrors = [];
+  ui.clientErrState = "loading";
+  // The first snapshot can run before onSnapshot returns. A placeholder blocks a second subscribe.
+  ui.clientErrUnsub = () => {};
+  const paint = () => {
+    if (!me || me.role !== "admin") return;
+    if (ui.view === "settings" && !ui.myJobs) renderAdmin();
+    else if (ui.opTab === "settings") renderOperator();
+  };
+  const q = query(collection(db, "companies", companyId, "clientErrors"), orderBy("createdAt", "desc"), limit(100));
+  let unsub = () => {};
+  try {
+    unsub = onSnapshot(q, snap => {
+      ui.clientErrors = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      ui.clientErrState = "ok";
+      // A cached snapshot can arrive inside the settings render. Paint after it finishes.
+      queueMicrotask(paint);
+    }, err => {
+      if (clientErrorWriteDenied(err)) {
+        ui.clientErrDenied = true;
+        ui.clientErrState = "hidden";
+        ui.clientErrors = [];
+        if (ui.clientErrUnsub) { const stop = ui.clientErrUnsub; ui.clientErrUnsub = null; try { stop(); } catch { /* already closed */ } }
+        queueMicrotask(paint);
+        return;
+      }
+      ui.clientErrState = "error";
+      queueMicrotask(paint);
+    });
+  } catch { ui.clientErrState = "error"; }
+  if (ui.clientErrDenied) { try { unsub(); } catch { /* the denied listen is already closed */ } }
+  else ui.clientErrUnsub = unsub;
+}
 const ADMIN_SAFE = new Set(["home", "jobs", "unscheduled", "completed", "swms", "crew", "master", "clients"]);
 const OP_SAFE = new Set(["today", "week", "done", "more", "crew"]);
 function queueStartup(fn) { ui.startupQueue.push(fn); }
@@ -817,7 +918,7 @@ async function bootSignedIn(user) {
     const setJobs = () => { jobs = mergeJobLists(windowJobs, staleJobs).map(withMoney); addNameOnlyStaff(jobs); };
     const nearQ = companyJobs([where("date", ">=", todayStr()), where("date", "<=", addDays(todayStr(), 1)), orderBy("date")]);
     let stopNear = onSnapshot(nearQ, s => { windowJobs = s.docs.map(d => ({ id: d.id, ...d.data() })); setJobs(); renderAdmin(); }, e => { console.warn("jobs", e.code, e.message); windowJobs = []; setJobs(); renderAdmin(); });
-    const stopShared = () => { CHAT.stop(); PUSH.stop(); COMP.stop(); stopPrestartNotices(); stopLocationNotice(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; };
+    const stopShared = () => { CHAT.stop(); PUSH.stop(); COMP.stop(); stopPrestartNotices(); stopLocationNotice(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); stopClientErrors(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); if (ui.masterUnsub) ui.masterUnsub(); ui.masterUnsub = null; };
     unsub = () => { stopNear(); stopShared(); };
     queueStartup(() => {
       stopNear();
@@ -849,7 +950,7 @@ async function bootSignedIn(user) {
     // A date filter on top of array-contains needs an index this app does not add, so crew startup stays this query.
     const q = companyJobs([where("assigned", "array-contains", user.uid)]);
     const u1 = onSnapshot(q, s => { jobs = s.docs.map(d => withMoney({ id: d.id, ...d.data() })); renderOperator(); });
-    const stopShared = () => { CHAT.stop(); PUSH.stop(); COMP.stop(); stopPrestartNotices(); stopLocationNotice(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); };
+    const stopShared = () => { CHAT.stop(); PUSH.stop(); COMP.stop(); stopPrestartNotices(); stopLocationNotice(); tsStop(); leaveStop(); claimsStop(); clockWatchStop(); stopClientErrors(); leaveCrewScreen(); perfStop(); if (ui.swmsUnsub) ui.swmsUnsub(); };
     unsub = () => { u1(); stopShared(); };
     queueStartup(() => {
       // Company supervisors are office (they already read quotes); crew never subscribe and the rules refuse them.
@@ -1647,11 +1748,13 @@ function settingsView() {
     : "";
   const perfSet = canEditPerformanceSettings(me) ? performanceSettingsHtml(ui.perfSettings || { weights: DEFAULT_WEIGHTS }, { take5On: ui.take5On !== false }) : "";
   const setup = ui.tradeSetup || resolveCompanySetup({ companyId: myCompanyId() }, null);
+  const phoneErrors = me && me.role === "admin" ? clientErrorsHtml(ui.clientErrors || [], ui.clientErrState || "loading") : "";
   return companySettingsHtml(org, { canEdit: !!(me && me.role === "admin"), trades, canEditTrades: canEditTitles() })
     + presetEditorHtml(setup, { canEdit: canEditTitles() })
     + rates + perfSet + PUSH.panelHtml()
     + dispatchSettingsHtml(dispatchSettingsNow(), { canEdit: canEditTitles() })
-    + `<section class="pad"><h3>Support</h3><p class="sub">Send a note to CallUp. Anyone signed in can raise a ticket.</p><button type="button" class="sm-btn" data-raise-ticket>Raise ticket</button></section>`;
+    + `<section class="pad"><h3>Support</h3><p class="sub">Send a note to CallUp. Anyone signed in can raise a ticket.</p><button type="button" class="sm-btn" data-raise-ticket>Raise ticket</button></section>`
+    + phoneErrors;
 }
 async function saveDispatchForm(form) {
   if (!canEditTitles()) { toast("An admin or a manager can change dispatch times."); return; }
@@ -1739,6 +1842,7 @@ function bindPresetEditor(A) {
   }));
 }
 function bindSettings(A) {
+  watchClientErrors();
   bindTradeList(A);
   bindPresetEditor(A);
   loadReferralBox(A);
@@ -3493,13 +3597,17 @@ async function tsChooseMachine(choice, asset) {
   const patch = machineChoicePatch(choice, asset);
   const id = ui.tsMachineShift;
   const ws = ui.tsMachineWs || tsWeek();
-  if (!patch || !id) return;
+  if (!patch || !id || ui.tsMachineBusy) return;
+  // While this question is on screen the timesheet does not redraw. Show the tap was taken, and never wait
+  // forever on a weak signal: the answer queues on this phone and the question goes away either way.
+  ui.tsMachineBusy = true;
+  document.querySelectorAll("#tsmachine button").forEach(b => { b.disabled = true; });
   try {
-    const sheet = await tsLoad(ws);
+    const sheet = await tsLoad(ws, { offlineOk: true });
     const prev = sheet && sheet.entries && sheet.entries[id];
-    if (!prev) { toast("You're clocked on. The machine list didn't save."); return; }
-    if (prev.machineChoice) { ui.tsMachineShift = null; tsRerender(); return; }
-    await updateDoc(doc(db, "timesheets", `${me.uid}_${ws}`), {
+    if (prev && prev.machineChoice) { ui.tsMachineShift = null; return; }
+    if (!prev) { ui.tsMachineShift = null; toast("You're clocked on. The machine list didn't save."); return; }
+    const write = updateDoc(doc(db, "timesheets", `${me.uid}_${ws}`), {
       [`entries.${id}.machineChoice`]: patch.machineChoice,
       [`entries.${id}.machineId`]: patch.machineId,
       [`entries.${id}.machineName`]: patch.machineName,
@@ -3507,12 +3615,18 @@ async function tsChooseMachine(choice, asset) {
       updatedAt: serverTimestamp(),
       updatedAtIso: new Date().toISOString(),
     });
+    const r = await queueWrite(write, { id: "timesheet-machine:" + ws + ":" + id, kind: "timesheet", label: "Machine for today" }, "", { announce: false, quietFail: true });
     ui.tsMachineShift = null;
+    if (r && r.queued) toast(SAVED_ON_PHONE);
     if (patch.machineChoice === "asset") tsEnsurePrestarts();
   } catch (err) {
+    ui.tsMachineShift = null;
+    reportClientError(err, "machine");
     toast("You're clocked on. The machine wasn't saved.");
+  } finally {
+    ui.tsMachineBusy = false;
+    tsRerender();
   }
-  tsRerender();
 }
 function tsAdjustForm(existing) {
   const open = existing.source === "clock" && existing.status !== "closed" && !existing.finish;
@@ -4124,10 +4238,14 @@ function bindClaims(A, rerender) {
   A.querySelectorAll("[data-rc-receipt]").forEach(btn => { btn.onclick = () => downloadClaimReceipt(btn.dataset.rcReceipt); });
   A.querySelectorAll("[data-rc-filter]").forEach(btn => { btn.onclick = () => { ui.claimsFilter = btn.dataset.rcFilter; rerender(); }; });
 }
+// A clock punch must not wait on a stalled connection. After this long it uses this phone's copy.
+const TS_PUNCH_READ_MS = 6000;
 async function tsLoad(ws, opts = {}) {
   const ref = doc(db, "timesheets", `${me.uid}_${ws}`);
   try {
-    const snap = await getDoc(ref);
+    const snap = opts.offlineOk
+      ? await withTimeout(getDoc(ref), TS_PUNCH_READ_MS, "timesheet").catch(e => { throw e && e.code === "boot-timeout" ? { code: "unavailable" } : e; })
+      : await getDoc(ref);
     return snap.exists() ? { id: snap.id, ...snap.data() } : null;
   } catch (e) {
     // No signal: a clock punch must still work. Use this phone's copy (the watched week is always cached).
@@ -4283,8 +4401,14 @@ function liveShareStart(entryId, weekStart, firstFix) {
   shareRun = { entryId, weekStart, companyId: myCompanyId(), last: null, watch: null, timer: null, offSent: false };
   ui.liveShare = { clockedOn: true, sharing: "ask" };
   paintShareStatus();
-  if (firstFix) considerShareFix(firstFix);
-  armShareWatch();
+  // Live sharing is extra. A failure here must never stop or undo a clock punch that already saved.
+  try {
+    if (firstFix) considerShareFix(firstFix);
+    armShareWatch();
+  } catch (err) {
+    console.warn("live share", err && (err.message || err));
+    reportClientError(err, "live share");
+  }
 }
 function releaseLiveDoc(companyId) {
   if (!me || !companyId) return;
@@ -4317,8 +4441,13 @@ function noteShareHidden() {
 }
 document.addEventListener("visibilitychange", () => {
   if (!shareRun) return;
-  if (document.hidden) { noteShareHidden(); disarmShareWatch(); }
-  else armShareWatch();
+  try {
+    if (document.hidden) { noteShareHidden(); disarmShareWatch(); }
+    else armShareWatch();
+  } catch (err) {
+    console.warn("live share", err && (err.message || err));
+    reportClientError(err, "live share");
+  }
 });
 window.addEventListener("pagehide", () => {
   if (!shareRun) return;
@@ -4663,9 +4792,9 @@ async function tsPunch(kind) {
         edits: {}, lastEditId: "",
       };
       const r = await tsWrite(ws, sheet, entries, id, { consent: !(sheet && sheet.locationConsentAt) });
-      liveShareStart(id, ws, fix);
       ui.tsMachineShift = id;
       ui.tsMachineWs = ws;
+      try { liveShareStart(id, ws, fix); } catch (err) { console.warn("live share", err && (err.message || err)); }
       toast((fix.fix === "gps" ? "Clocked on" : "Clocked on · no location") + tsQueuedNote(r));
     } else {
       const e = openClock(entries);
@@ -4689,6 +4818,7 @@ async function tsPunch(kind) {
       ui.tsPrevFor = "";
     }
   } catch (err) {
+    reportClientError(err, "clock");
     toast("Not saved: " + (err.code || err.message));
   } finally {
     ui.tsBusy = false;
@@ -6377,7 +6507,7 @@ function editJob(j) {
     <div class="jc-body"><div class="jc-col">
       ${importing ? importBanner(j) : ""}
       <h4>Client &amp; Site</h4>
-      <label>Client<input name="client" ${inputAttrs("client")} value="${esc(j.client)}" required></label>
+      ${clientFieldHtml({ value: j.client || "", canAdd: canOfferNewClient(me) })}
       ${n ? "" : `<div class="supcard" data-sup="${esc(j.id)}"></div>`}
       <label>Job (site) address<input name="address" ${inputAttrs("address")} value="${esc(j.address)}" required></label>
       ${importing ? "" : `<div class="row"><label>Contact name<input name="contactName" maxlength="80" ${inputAttrs("contactName")} value="${esc(j.contactName || j.supervisorName || "")}"></label>
@@ -6428,8 +6558,9 @@ function editJob(j) {
   d.showModal();
   bindDescriptionPicker(d);
   wireClientPrefill(d);
-  loadClients().then(() => { if (document.getElementById("jf")) refreshAutofillLists(); }).catch(() => {});
+  loadClients().then(() => { if (document.getElementById("jf")) { refreshAutofillLists(); refreshOpenClientMenu(); } }).catch(() => {});
   if (!n) jobTabs(d, j);
+  wireJobClientMenu(d);
   if (!n) { rememberJob(j); $("#emailph").onclick = () => emailPhotos(j); const emailJobBtn = $("#emailjob"); if (emailJobBtn) emailJobBtn.onclick = () => { openJobEmail(j).catch(e => toast(e.message || "Couldn't open the email")); }; watchJobPhotos(j); paintPhotoSlots(); wireJobDocuments(d.querySelector("[data-job-docs]"), j); }
   if (!n && $("#cloudexport")) $("#cloudexport").onclick = () => downloadGalleryCopy(j).catch(e => toast(e.message || "Download failed"));
   if (!n) { wireFindPo(j); supervisors(); wireJobReceipts(j); fillSupCard(j); }
@@ -7180,13 +7311,127 @@ function bindClients(A) {
   A.querySelectorAll("[data-ced]").forEach(b => b.onclick = () => { const [id, i] = b.dataset.ced.split(":"); editContact(CLI.find(c => c.id === id), i === "new" ? -1 : +i); });
   const nb = A.querySelector("[data-cnew]"); if (nb) nb.onclick = () => openClientForm();
 }
-function openClientForm() {
-  const d = $("#dlg"); d.className = ""; d.onclose = null;
-  refreshAutofillLists();
-  d.innerHTML = clientFormHtml();
+function clientNamesNow() {
+  const suggested = currentSuggestions().client;
+  return Array.isArray(suggested) && suggested.length ? suggested : CLIENTS.slice();
+}
+function paintJobClientMenu(input) {
+  const menu = input && input.closest(".client-field") && input.closest(".client-field").querySelector("[data-client-menu]");
+  if (!input || !menu) return;
+  const model = clientMenuModel(clientNamesNow(), input.value, { canAdd: input.dataset.clientCombo === "add" && canOfferNewClient(me) });
+  menu.innerHTML = clientMenuHtml(model);
+}
+function refreshOpenClientMenu() {
+  const input = document.querySelector("#jf #jf-client");
+  const menu = input && input.closest(".client-field") && input.closest(".client-field").querySelector("[data-client-menu]");
+  if (!input || !menu || menu.hidden) return;
+  paintJobClientMenu(input);
+}
+function hideJobClientMenu(input) {
+  const menu = input && input.closest(".client-field") && input.closest(".client-field").querySelector("[data-client-menu]");
+  if (menu) menu.hidden = true;
+  if (input) input.setAttribute("aria-expanded", "false");
+}
+function showJobClientMenu(input) {
+  const menu = input && input.closest(".client-field") && input.closest(".client-field").querySelector("[data-client-menu]");
+  if (!menu) return;
+  paintJobClientMenu(input);
+  menu.hidden = false;
+  input.setAttribute("aria-expanded", "true");
+}
+let clientMenuDocBound = false;
+function wireJobClientMenu(root) {
+  const input = root && root.querySelector ? root.querySelector("#jf-client") : null;
+  if (!input || input.dataset.clientBound) return;
+  input.dataset.clientBound = "1";
+  const field = input.closest(".client-field");
+  const menu = field && field.querySelector("[data-client-menu]");
+  if (!menu) return;
+  const dialog = root.closest ? root.closest("dialog") : null;
+  if (dialog && !dialog.dataset.clientCancel) {
+    dialog.dataset.clientCancel = "1";
+    dialog.addEventListener("cancel", ev => {
+      const open = dialog.querySelector("[data-client-menu]");
+      if (open && !open.hidden) {
+        ev.preventDefault();
+        hideJobClientMenu(dialog.querySelector("#jf-client"));
+      }
+    });
+  }
+  input.addEventListener("focus", () => showJobClientMenu(input));
+  input.addEventListener("input", () => showJobClientMenu(input));
+  input.addEventListener("keydown", ev => {
+    if (ev.key === "Escape" && !menu.hidden) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      hideJobClientMenu(input);
+    }
+    if (ev.key === "Enter" && !menu.hidden && input.dataset.clientCombo === "add") {
+      const add = menu.querySelector("[data-add-client]");
+      if (add && !menu.querySelector("[data-client-name]")) {
+        ev.preventDefault();
+        hideJobClientMenu(input);
+        openClientFromJob(add.getAttribute("data-prefill") || "", input.form);
+      }
+    }
+  });
+  menu.addEventListener("pointerdown", ev => {
+    const add = ev.target.closest("[data-add-client]");
+    const pick = ev.target.closest("[data-client-name]");
+    if (!add && !pick) return;
+    ev.preventDefault();
+    if (add) {
+      if (input.dataset.clientCombo !== "add" || !canOfferNewClient(me)) return;
+      const prefill = add.getAttribute("data-prefill") || "";
+      hideJobClientMenu(input);
+      openClientFromJob(prefill, input.form);
+      return;
+    }
+    input.value = pick.getAttribute("data-client-name") || "";
+    hideJobClientMenu(input);
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  if (!clientMenuDocBound) {
+    clientMenuDocBound = true;
+    document.addEventListener("pointerdown", ev => {
+      const openField = document.querySelector("#jf .client-field");
+      if (!openField || openField.contains(ev.target)) return;
+      hideJobClientMenu(openField.querySelector("#jf-client"));
+    });
+  }
+}
+function ensureClientDialog() {
+  let d = document.getElementById("clientdlg");
+  if (!d) {
+    d = document.createElement("dialog");
+    d.id = "clientdlg";
+    document.body.appendChild(d);
+  }
+  return d;
+}
+function openClientFromJob(prefill, jobForm) {
+  if (!canOfferNewClient(me) || !jobForm) return;
+  const d = ensureClientDialog();
+  if (d.open) d.close();
+  d.className = "clientdlg";
+  d.innerHTML = clientFormHtml({ name: String(prefill || "") });
   d.showModal();
   wireClientPrefill(d);
-  const form = $("#clientnew");
+  bindClientCreateForm(d.querySelector("#clientnew"), {
+    onSaved(built) {
+      const next = jobDraftAfterCreate(readJobDraft(jobForm), built && built.data && built.data.name);
+      const input = jobForm.elements.client;
+      if (input) input.value = next.client;
+      d.close();
+      if (input) {
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        input.focus();
+      }
+    },
+  });
+}
+function bindClientCreateForm(form, { onSaved } = {}) {
+  if (!form) return;
   form.onsubmit = async ev => {
     if (ev.submitter?.value === "cancel") return;
     ev.preventDefault();
@@ -7200,16 +7445,18 @@ function openClientForm() {
       notes: form.notes.value,
     });
     form.querySelectorAll("[data-err]").forEach(slot => { slot.hidden = true; slot.textContent = ""; });
-    const err = $("#clienterr");
+    const err = form.querySelector("#clienterr");
     if (!built.ok) {
-      const message = built.reason === "email" ? "Check the email address." : built.reason === "phone" ? "Check the phone number." : "Enter the company or client name.";
-      err.textContent = message;
+      const message = clientCreateMessage(built.reason);
+      if (err) err.textContent = message;
       const slot = form.querySelector(`[data-err="${built.reason === "name" ? "name" : built.reason}"]`);
       if (slot) { slot.hidden = false; slot.textContent = message; }
       const field = form.elements[built.reason] || form.name;
       if (field) { field.setAttribute("aria-invalid", "true"); field.focus(); }
       return;
     }
+    const saveBtn = form.querySelector('button[value="ok"]');
+    if (saveBtn) saveBtn.disabled = true;
     try {
       await setDoc(doc(db, "clients", built.id), { ...built.data, updatedAt: serverTimestamp(), updatedBy: me.uid }, { merge: true });
       rememberEntries({
@@ -7219,12 +7466,27 @@ function openClientForm() {
         email: form.email.value,
         address: form.address.value,
       });
-      d.close();
-      await loadClients(true);
-      renderAdmin();
+      try { await loadClients(true); } catch { /* the client write is already stored */ }
+      if (onSaved) onSaved(built);
+      else {
+        const dlg = form.closest("dialog");
+        if (dlg) dlg.close();
+        renderAdmin();
+      }
       toast("Client saved");
-    } catch (e) { err.textContent = "Not saved: " + (e.code || e.message); }
+    } catch (e) {
+      if (err) err.textContent = "Not saved: " + (e.code || e.message);
+      if (saveBtn) saveBtn.disabled = false;
+    }
   };
+}
+function openClientForm() {
+  const d = $("#dlg"); d.className = ""; d.onclose = null;
+  refreshAutofillLists();
+  d.innerHTML = clientFormHtml();
+  d.showModal();
+  wireClientPrefill(d);
+  bindClientCreateForm($("#clientnew"));
 }
 function editContact(c, i) {
   refreshAutofillLists();
