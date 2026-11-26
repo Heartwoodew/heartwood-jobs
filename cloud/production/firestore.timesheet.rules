@@ -9,7 +9,12 @@
 // Workers read and write only their own id. Heartwood admins (Alex, Patrick,
 // or a heartwood profile role admin) read every sheet, and may only flip the
 // sent / sentAt / sentBy flags. Clock stamps (clockOn, clockOff, breakOn,
-// breakOff) cannot be rewritten. A later edit must append one audit map entry.
+// breakOff) cannot be rewritten. A worker may correct start and finish on their
+// own sheet. The first correction stores originalClockOn and originalClockOff;
+// a later correction cannot replace them. That write cannot change job, note,
+// date, status, or the GPS fix. A sent or approved week outside the current
+// pay period cannot be corrected, except by an admin on their own sheet.
+// A later edit must append one audit map entry.
 // Location is one fix map per tap: gps (lat, lng, accuracy) or "no location".
 
 // BEGIN TIMESHEET RULES
@@ -27,7 +32,7 @@
         && id == request.auth.uid + "_" + request.resource.data.weekStart;
     }
     function tsDocOk() {
-      return request.resource.data.keys().hasOnly(["uid", "name", "weekStart", "weekEnd", "days", "entries", "totalHrs", "updatedAt", "updatedAtIso", "lastEntryId", "locationConsentAt", "sent", "sentAt", "sentBy"])
+      return request.resource.data.keys().hasOnly(["uid", "name", "weekStart", "weekEnd", "days", "entries", "totalHrs", "updatedAt", "updatedAtIso", "lastEntryId", "locationConsentAt", "sent", "sentAt", "sentBy", "approved"])
         && request.resource.data.name is string
         && request.resource.data.name.size() > 0
         && request.resource.data.name.size() <= 80
@@ -96,27 +101,63 @@
     }
     // An existing shift: check only what changed. id, source, author, enteredAt and the clock-on stamp never change;
     // a recorded stamp or machine pick is never rewritten or removed; a new stamp is a valid fix taken now (clock shifts only).
-    // Re-validating the whole shift on every tap pushed clock-off after a break past Firestore's 1000-expression limit
-    // (permission-denied, user test 11 Nov 2026).
+    // A clock-time correction is separate: start and finish only, plus the edit audit and the original times.
+    // Job, note, date and the GPS fix stay. The first original is kept. Re-validating the whole shift on every tap
+    // pushed clock-off after a break past Firestore's 1000-expression limit (permission-denied, user test 11 Nov 2026).
+    function tsHm(v) {
+      return v is string && v.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$');
+    }
+    function tsPad2(n) {
+      return n < 10 ? "0" + string(n) : string(n);
+    }
+    function tsToday() {
+      let t = request.time + duration.value(10, 'h');
+      return string(t.year()) + "-" + tsPad2(t.month()) + "-" + tsPad2(t.day());
+    }
+    function tsNowHm() {
+      let t = request.time + duration.value(10, 'h');
+      return tsPad2(t.hours()) + ":" + tsPad2(t.minutes());
+    }
+    // Called only after the punch branch has already failed its key check, so a clock-off does not pay for it.
+    function tsTimeOk(b, a) {
+      let today = tsToday();
+      let nowHm = tsNowHm();
+      let openWeek = today >= resource.data.weekStart && today <= resource.data.weekEnd;
+      let locked = resource.data.get("sent", false) == true || resource.data.get("approved", false) == true;
+      return (a.finish == "" || a.finish > a.start)
+        && (a.date < today || (a.date == today && a.start <= nowHm && (a.finish == "" || a.finish <= nowHm)))
+        && (openWeek || !locked || isAlex() || isPatrick() || (hasProfile() && profile().role == "admin"))
+        && (!("originalClockOn" in b) ? a.originalClockOn == b.start : a.originalClockOn == b.originalClockOn)
+        && (b.finish == ""
+          ? (!("originalClockOff" in a) && !("originalClockOff" in b))
+          : (!("originalClockOff" in b) ? a.originalClockOff == b.finish : a.originalClockOff == b.originalClockOff));
+    }
     function tsEntryNext(b, a) {
       let d = a.diff(b);
       let ch = d.affectedKeys();
       let added = d.addedKeys();
-      return d.removedKeys().size() == 0
-        && ch.hasOnly(["status", "date", "start", "finish", "breakStart", "breakEnd", "note", "job", "clockOff", "breakOn", "breakOff", "enteredByName", "edits", "lastEditId", "machineChoice", "machineId", "machineName"])
-        && !d.changedKeys().hasAny(["clockOff", "breakOn", "breakOff", "machineChoice", "machineId", "machineName"])
-        && (!ch.hasAny(["clockOff", "breakOn", "breakOff"]) || (a.source == "clock"
-          && (!("clockOff" in added) || tsFix(a.clockOff))
-          && (!("breakOn" in added) || tsFix(a.breakOn))
-          && (!("breakOff" in added) || tsFix(a.breakOff))))
-        && (!ch.hasAny(["machineChoice", "machineId", "machineName"]) || tsMachinePick(b, a))
-        && (!("date" in ch) || (a.date is string && a.date.size() == 10))
-        && (!("start" in ch) || (a.start is string && a.start.size() <= 5))
-        && (!("finish" in ch) || (a.finish is string && a.finish.size() <= 5))
-        && (!("note" in ch) || (a.note is string && a.note.size() <= 200))
-        && (!("job" in ch) || (a.job is string && a.job.size() <= 200))
-        && (!("enteredByName" in ch) || (a.enteredByName is string && a.enteredByName.size() > 0 && a.enteredByName.size() <= 80))
-        && (!ch.hasAny(["edits", "lastEditId"]) || (a.edits is map && tsEditOk(b, a)));
+      return d.removedKeys().size() == 0 && (
+        (ch.hasOnly(["status", "finish", "breakStart", "breakEnd", "clockOff", "breakOn", "breakOff", "enteredByName", "edits", "lastEditId", "machineChoice", "machineId", "machineName"])
+          && !("start" in ch)
+          && (!("finish" in ch) || ch.hasAny(["status", "clockOff", "breakOn", "breakOff"]))
+          && !d.changedKeys().hasAny(["clockOff", "breakOn", "breakOff", "machineChoice", "machineId", "machineName"])
+          && (!ch.hasAny(["clockOff", "breakOn", "breakOff"]) || (a.source == "clock"
+            && (!("clockOff" in added) || tsFix(a.clockOff))
+            && (!("breakOn" in added) || tsFix(a.breakOn))
+            && (!("breakOff" in added) || tsFix(a.breakOff))))
+          && (!ch.hasAny(["machineChoice", "machineId", "machineName"]) || tsMachinePick(b, a))
+          && (!("finish" in ch) || (a.finish is string && a.finish.size() <= 5))
+          && (!("enteredByName" in ch) || (a.enteredByName is string && a.enteredByName.size() > 0 && a.enteredByName.size() <= 80))
+          && (!ch.hasAny(["edits", "lastEditId"]) || (a.edits is map && tsEditOk(b, a))))
+        || (ch.hasOnly(["start", "finish", "edits", "lastEditId", "originalClockOn", "originalClockOff"])
+          && (a.start != b.start || a.finish != b.finish)
+          && tsHm(a.start)
+          && (a.finish == "" || tsHm(a.finish))
+          && (b.finish != "" || a.finish == "")
+          && a.edits is map
+          && a.edits.size() == b.edits.size() + 1
+          && tsEditOk(b, a)
+          && tsTimeOk(b, a)));
     }
     function tsFleetReader(tenantId) {
       return signedIn()
@@ -148,6 +189,7 @@
     function tsWorkerCreate(id) {
       return tsMine(id) && tsDocOk()
         && !("sent" in request.resource.data) && !("sentAt" in request.resource.data) && !("sentBy" in request.resource.data)
+        && !("approved" in request.resource.data)
         && (!("locationConsentAt" in request.resource.data) || request.resource.data.locationConsentAt == request.time)
         && (!("entries" in request.resource.data)
           || (request.resource.data.entries.size() == 1
@@ -158,7 +200,7 @@
       return tsMine(id) && tsDocOk()
         && request.resource.data.uid == resource.data.uid
         && request.resource.data.weekStart == resource.data.weekStart
-        && same("sent") && same("sentAt") && same("sentBy")
+        && same("sent") && same("sentAt") && same("sentBy") && same("approved")
         && (!("locationConsentAt" in resource.data) && !("locationConsentAt" in request.resource.data)
           || !("locationConsentAt" in resource.data) && request.resource.data.locationConsentAt == request.time
           || request.resource.data.get("locationConsentAt", null) == resource.data.get("locationConsentAt", null))

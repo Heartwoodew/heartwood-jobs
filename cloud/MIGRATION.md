@@ -1,3 +1,19 @@
+## Staff clock-time corrections (not deployed)
+
+Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production.
+
+A worker can correct clock on and clock off on their own timesheet. The new times count straight away. The first correction stores `originalClockOn` and `originalClockOff`; a later correction does not replace them. Admins see an Edited badge, those original times, and who changed the entry and when. The hours spreadsheet marks the row `Clocked · Edited` (or `Manual · Edited`) and repeats the original times in the note. Crew still do not see prices.
+
+A worker can correct the current pay period, and any earlier period that is not sent and not approved. Clock off must be after clock on. Times cannot be in the future. The correction can change only the time fields and the edit audit. Job, notes, status, and the GPS stamp stay. Another person's sheet stays. An admin can still correct their own sheet after it is sent or approved. Alex can still rewrite a Heartwood timesheet, which is the existing owner rule.
+
+Service worker `callup-shell-v160-clock-adjust`. Main is `callup-shell-v159-help-videos`. Open pull requests are at v156 or below.
+
+After review, and only when the owner says merge:
+
+1. Deploy Firestore rules from `cloud/firestore.production.rules` only. Do not deploy `cloud/emulator/firestore.rules`. `cloud/firebase.json` points Firestore at the emulator file and its predeploy hook still refuses a live deploy. Do not remove that hook.
+2. Deploy hosting with `firebase deploy --only hosting --config cloud/firebase.hosting.json --project heartwood-9f37f`. Phones pick up `callup-shell-v160-clock-adjust`.
+3. No functions deploy. No index deploy. No Storage change. No Stripe change. No backfill. No production data write.
+
 # Cloud storage, tenant isolation, and 3-month operational retention
 
 This branch is not deployed and must not be merged straight to production. It does not create a Firebase project, a Google account, a Blaze upgrade, a Storage bucket, a Cloud Scheduler job, or any secret. It does not change live Firestore data, live rules, Gmail, or Xero.

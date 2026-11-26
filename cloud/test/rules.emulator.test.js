@@ -742,7 +742,8 @@ test("timesheets stay on the worker's own sheet, and clock stamps cannot be rewr
   await assertSucceeds(updateDoc(ref, {
     entries: { entry0001abcd: {
       ...closed, start: "07:00", lastEditId: editId,
-      edits: { [editId]: { at: serverTimestamp(), by: "op1", byName: "Sam", summary: "Start 06:58 → 07:00" } },
+      originalClockOn: closed.start, originalClockOff: closed.finish,
+      edits: { [editId]: { at: serverTimestamp(), by: "op1", byName: "Sam", summary: "Clock on 06:58 → 07:00" } },
     } },
     lastEntryId: "entry0001abcd", updatedAt: serverTimestamp(), updatedAtIso: "2026-11-09T06:00:00.000Z", totalHrs: 7.5,
   }));
@@ -771,7 +772,8 @@ test("timesheets stay on the worker's own sheet, and clock stamps cannot be rewr
   await assertSucceeds(updateDoc(ref, {
     entries: { ...both.entries, [manualId]: {
       ...both.entries[manualId], finish: "16:00", lastEditId: manualEdit,
-      edits: { [manualEdit]: { at: serverTimestamp(), by: "op1", byName: "Sam", summary: "Finish 15:30 → 16:00" } },
+      originalClockOn: both.entries[manualId].start, originalClockOff: both.entries[manualId].finish,
+      edits: { [manualEdit]: { at: serverTimestamp(), by: "op1", byName: "Sam", summary: "Clock off 15:30 → 16:00" } },
     } },
     lastEntryId: manualId, updatedAt: serverTimestamp(), updatedAtIso: "2026-11-10T08:00:00.000Z", totalHrs: 16,
   }));
@@ -860,6 +862,182 @@ test("clock on can record one machine, and fleet reads stay inside the tenant", 
   await assertFails(setDoc(doc(op, "tenants/heartwood/prestarts/new1"), { assetId: "ex1", day: "2026-11-16", signerUid: "op1" }));
   await assertSucceeds(getDoc(doc(db("op2"), "tenants/otherco/fleet/ex2")));
   await assertFails(getDoc(doc(db("op2"), "tenants/heartwood/fleet/ex1")));
+});
+
+function brisbaneDay(now = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Brisbane", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+}
+function addIso(iso, n) {
+  const d = new Date(iso + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+function currentWeek(now = new Date()) {
+  const today = brisbaneDay(now);
+  const d = new Date(today + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+  const weekStart = d.toISOString().slice(0, 10);
+  return { today, weekStart, weekEnd: addIso(weekStart, 6), tomorrow: addIso(today, 1) };
+}
+function pastHm(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Australia/Brisbane", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(now);
+  let h = parts.find(p => p.type === "hour")?.value || "0";
+  if (h === "24") h = "0";
+  const m = +(parts.find(p => p.type === "minute")?.value || "0");
+  const total = (+h * 60) + m;
+  const off = Math.max(1, total - 1);
+  const on = Math.max(0, off - 30);
+  const hm = mins => `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
+  return { on: hm(on), off: hm(off), safe: total >= 2 };
+}
+function clockEntry(id, uid, date, over = {}) {
+  return {
+    id, source: "clock", status: "closed", date, start: "07:00", finish: "15:00",
+    breakStart: "", breakEnd: "", note: "slab", job: "Lot 12",
+    clockOn: { at: Timestamp.fromDate(new Date(date + "T07:00:00+10:00")), fix: "gps", lat: -27.47, lng: 153.025, accuracy: 12 },
+    clockOff: { at: Timestamp.fromDate(new Date(date + "T15:00:00+10:00")), fix: "no location" },
+    enteredBy: uid, enteredByName: "Sam", enteredAt: Timestamp.fromDate(new Date(date + "T07:00:00+10:00")),
+    edits: {}, lastEditId: "", ...over,
+  };
+}
+function sheetBody(uid, weekStart, entry, extra = {}) {
+  const id = entry.id;
+  return {
+    uid, name: "Sam", weekStart, weekEnd: addIso(weekStart, 6), days: {}, totalHrs: 8,
+    updatedAt: new Date(), updatedAtIso: "2026-10-06T01:00:00.000Z", lastEntryId: id,
+    entries: { [id]: entry }, ...extra,
+  };
+}
+function timePatch(entry, uid, patch, editId) {
+  const summary = patch.summary || "Clock on 07:00 → 07:30";
+  const rest = { ...patch };
+  delete rest.summary;
+  return {
+    ...entry, ...rest, lastEditId: editId,
+    edits: { ...(entry.edits || {}), [editId]: { at: serverTimestamp(), by: uid, byName: "Sam", summary } },
+  };
+}
+
+test("a worker can correct their own clock times, and cannot rewrite anything else", async () => {
+  const uid = "op1";
+  const op = db(uid);
+  const id = "entryclockadj1";
+  const pastId = `${uid}_2026-10-05`;
+  const entry = clockEntry(id, uid, "2026-10-06");
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), "timesheets", pastId), sheetBody(uid, "2026-10-05", entry));
+    await setDoc(doc(ctx.firestore(), "users/adm1"), { role: "admin", name: "Ada" });
+  });
+  const ref = doc(op, "timesheets", pastId);
+  const firstId = "editadj000001";
+  const first = timePatch(entry, uid, { start: "07:30", originalClockOn: "07:00", originalClockOff: "15:00", summary: "Clock on 07:00 → 07:30" }, firstId);
+  await assertSucceeds(updateDoc(ref, {
+    updatedAt: serverTimestamp(), updatedAtIso: new Date().toISOString(), lastEntryId: id, totalHrs: 7.5,
+    [`entries.${id}`]: first,
+  }));
+  const saved = (await getDoc(ref)).data().entries[id];
+  assert.equal(saved.start, "07:30");
+  assert.equal(saved.originalClockOn, "07:00");
+  assert.equal(saved.originalClockOff, "15:00");
+  assert.equal(saved.clockOn.lat, -27.47);
+  assert.equal(saved.job, "Lot 12");
+  const secondId = "editadj000002";
+  const second = timePatch(saved, uid, { start: "08:00", summary: "Clock on 07:30 → 08:00" }, secondId);
+  await assertSucceeds(updateDoc(ref, {
+    updatedAt: serverTimestamp(), updatedAtIso: new Date().toISOString(), lastEntryId: id, totalHrs: 7,
+    [`entries.${id}`]: second,
+  }));
+  const kept = (await getDoc(ref)).data().entries[id];
+  assert.equal(kept.originalClockOn, "07:00");
+  assert.equal(kept.start, "08:00");
+  await assertFails(updateDoc(ref, {
+    updatedAt: serverTimestamp(), updatedAtIso: new Date().toISOString(), lastEntryId: id,
+    [`entries.${id}`]: timePatch(kept, uid, { start: "08:15", originalClockOn: "08:00", summary: "replace original" }, "editadj000003"),
+  }));
+  await assertFails(updateDoc(ref, {
+    updatedAt: serverTimestamp(), updatedAtIso: new Date().toISOString(), lastEntryId: id,
+    [`entries.${id}`]: timePatch(kept, uid, { finish: "07:00", summary: "Clock off before clock on" }, "editadj000004"),
+  }));
+  await assertFails(updateDoc(ref, {
+    updatedAt: serverTimestamp(), updatedAtIso: new Date().toISOString(), lastEntryId: id,
+    [`entries.${id}`]: timePatch(kept, uid, { job: "Other site", summary: "Job" }, "editadj000005"),
+  }));
+  await assertFails(updateDoc(ref, {
+    updatedAt: serverTimestamp(), updatedAtIso: new Date().toISOString(), lastEntryId: id,
+    [`entries.${id}`]: timePatch(kept, uid, { note: "changed", summary: "Note" }, "editadj000006"),
+  }));
+  await assertFails(updateDoc(ref, {
+    updatedAt: serverTimestamp(), updatedAtIso: new Date().toISOString(), lastEntryId: id,
+    [`entries.${id}`]: timePatch(kept, uid, { clockOn: { ...kept.clockOn, lat: 0 }, summary: "Move the pin" }, "editadj000007"),
+  }));
+  await assertFails(updateDoc(ref, {
+    updatedAt: serverTimestamp(), updatedAtIso: new Date().toISOString(), lastEntryId: id,
+    [`entries.${id}`]: { ...timePatch(kept, uid, { start: "08:05", summary: "rate" }, "editadj000008"), rate: 40 },
+  }));
+  await assertFails(updateDoc(doc(db("op2"), "timesheets", pastId), {
+    updatedAt: serverTimestamp(), updatedAtIso: new Date().toISOString(), lastEntryId: id,
+    [`entries.${id}`]: timePatch(kept, "op2", { start: "09:00", summary: "Not yours" }, "editadj000009"),
+  }));
+
+  const future = clockEntry("entryfuture001", uid, currentWeek().tomorrow, { start: "07:00", finish: "15:00" });
+  const nowWeek = currentWeek();
+  const futureId = `${uid}_${nowWeek.weekStart}`;
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), "timesheets", futureId), sheetBody(uid, nowWeek.weekStart, future));
+  });
+  await assertFails(updateDoc(doc(op, "timesheets", futureId), {
+    updatedAt: serverTimestamp(), updatedAtIso: new Date().toISOString(), lastEntryId: future.id, totalHrs: 8,
+    [`entries.${future.id}`]: timePatch(future, uid, { start: "07:30", originalClockOn: "07:00", originalClockOff: "15:00", summary: "Future" }, "editfuture0001"),
+  }));
+
+  const sentEntry = clockEntry("entrysent00001", uid, "2026-10-07");
+  const sentDoc = `${uid}_2026-10-12`;
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), "timesheets", sentDoc), sheetBody(uid, "2026-10-12", sentEntry, { sent: true, sentAt: "2026-10-18T00:00:00.000Z", sentBy: "1JKLsoxkQNfkphBBO0vDz2ziEyj2" }));
+    await setDoc(doc(ctx.firestore(), "timesheets", `${uid}_2026-10-19`), sheetBody(uid, "2026-10-19", clockEntry("entryappr00001", uid, "2026-10-20"), { approved: true }));
+  });
+  await assertFails(updateDoc(doc(op, "timesheets", sentDoc), {
+    updatedAt: serverTimestamp(), updatedAtIso: new Date().toISOString(), lastEntryId: sentEntry.id,
+    [`entries.${sentEntry.id}`]: timePatch(sentEntry, uid, { start: "07:30", originalClockOn: "07:00", originalClockOff: "15:00", summary: "Sent week" }, "editsent000001"),
+  }));
+  await assertFails(updateDoc(doc(op, "timesheets", `${uid}_2026-10-19`), {
+    updatedAt: serverTimestamp(), updatedAtIso: new Date().toISOString(), lastEntryId: "entryappr00001",
+    [`entries.entryappr00001`]: timePatch(clockEntry("entryappr00001", uid, "2026-10-20"), uid, { start: "07:30", originalClockOn: "07:00", originalClockOff: "15:00", summary: "Approved week" }, "editappr000001"),
+  }));
+
+  const live = pastHm();
+  if (live.safe && live.on < live.off) {
+    const liveEntry = clockEntry("entrylive00001", uid, nowWeek.today, { start: live.on, finish: live.off });
+    const currentSent = `${uid}_${nowWeek.weekStart}`;
+    await env.withSecurityRulesDisabled(async ctx => {
+      await setDoc(doc(ctx.firestore(), "timesheets", currentSent), sheetBody(uid, nowWeek.weekStart, liveEntry, {
+        sent: true, sentAt: nowWeek.today + "T00:00:00.000Z", sentBy: "1JKLsoxkQNfkphBBO0vDz2ziEyj2",
+      }));
+    });
+    const bumpedMin = (+live.on.slice(0, 2) * 60) + +live.on.slice(3) + 1;
+    const bumped = `${String(Math.floor(bumpedMin / 60)).padStart(2, "0")}:${String(bumpedMin % 60).padStart(2, "0")}`;
+    assert.ok(bumped < live.off);
+    await assertSucceeds(updateDoc(doc(op, "timesheets", currentSent), {
+      updatedAt: serverTimestamp(), updatedAtIso: new Date().toISOString(), lastEntryId: liveEntry.id, totalHrs: 8,
+      [`entries.${liveEntry.id}`]: timePatch(liveEntry, uid, {
+        start: bumped, originalClockOn: live.on, originalClockOff: live.off, summary: "Current week",
+      }, "editlive000001"),
+    }));
+  }
+
+  const adminWeek = "2026-09-07";
+  const adminEntry = clockEntry("entryadmin0001", "adm1", "2026-09-08");
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), "timesheets", `adm1_${adminWeek}`), sheetBody("adm1", adminWeek, adminEntry, { sent: true, sentAt: "2026-09-14T00:00:00.000Z", sentBy: "adm1" }));
+  });
+  await assertSucceeds(updateDoc(doc(db("adm1"), "timesheets", `adm1_${adminWeek}`), {
+    updatedAt: serverTimestamp(), updatedAtIso: new Date().toISOString(), lastEntryId: adminEntry.id, totalHrs: 8,
+    [`entries.${adminEntry.id}`]: timePatch(adminEntry, "adm1", { start: "07:20", originalClockOn: "07:00", originalClockOff: "15:00", summary: "Admin own sheet" }, "editadmin00001"),
+  }));
+  await assertFails(updateDoc(doc(db("adm1"), "timesheets", pastId), {
+    updatedAt: serverTimestamp(), updatedAtIso: new Date().toISOString(), lastEntryId: id,
+    [`entries.${id}`]: timePatch(kept, "adm1", { start: "09:00", summary: "Not this admin" }, "editadmin00002"),
+  }));
 });
 
 const LEAVE_ID = "lv0123456789abcdef";

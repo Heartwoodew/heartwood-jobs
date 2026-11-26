@@ -1,6 +1,6 @@
 // Timesheet hours -> .xlsx for accounts. Pure module (no Firebase). Hours only: no rates, pay or other finance data.
 // Tiny dependency-free xlsx writer (stored zip + SpreadsheetML), so it works offline and on iPhone Safari.
-import { paidShift, shiftHours, sortedEntries } from "./timesheet.js";
+import { entryTimeEdited, paidShift, shiftHours, sortedEntries } from "./timesheet.js";
 import { exportDayLeave } from "./leave.js";
 
 export const ACCOUNTS_TO = "accounts@heartwoodew.com";
@@ -35,6 +35,13 @@ function plainTime(v) {
   if (!m) return "";
   const h = +m[1];
   return `${h % 12 || 12}:${m[2]} ${h < 12 ? "am" : "pm"}`;
+}
+function editedNote(e) {
+  if (!entryTimeEdited(e)) return e.note || "";
+  const original = [];
+  if (e.originalClockOn) original.push(`original clock on ${plainTime(e.originalClockOn)}`);
+  if (e.originalClockOff) original.push(`original clock off ${plainTime(e.originalClockOff)}`);
+  return [e.note || "", "Edited", original.join(", ")].filter(Boolean).join(" · ");
 }
 
 // Machine text is only the choice stored on the shift. Site is a job's address or number
@@ -77,8 +84,8 @@ function shiftFrom(e, jobs, source) {
     breakEnd,
     breakMins: breakStart && breakEnd ? breakMinutes(breakStart, breakEnd) : null,
     hours: r2(shiftHours(e)),
-    source,
-    note: [e.note || "", open ? "Not clocked off" : "", onBreak ? "On break" : ""].filter(Boolean).join(" · "),
+    source: entryTimeEdited(e) ? `${source} · Edited` : source,
+    note: [editedNote(e), open ? "Not clocked off" : "", onBreak ? "On break" : ""].filter(Boolean).join(" · "),
   };
 }
 

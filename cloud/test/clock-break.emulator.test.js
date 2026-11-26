@@ -1,8 +1,9 @@
 // CallUp company staff: clock on, break start, break end, clock off (user test 11 Nov 2026 found clock-off denied after a break).
 import test from "node:test";
+import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { initializeTestEnvironment, assertSucceeds } from "@firebase/rules-unit-testing";
-import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { initializeTestEnvironment, assertSucceeds, assertFails } from "@firebase/rules-unit-testing";
+import { doc, getDoc, setDoc, updateDoc, serverTimestamp, Timestamp } from "firebase/firestore";
 
 let env;
 test.before(async () => {
@@ -108,4 +109,45 @@ test("a worker still cannot rewrite a recorded stamp, remove one, change author 
   await assertFails(put({ ...e, note: "x".repeat(201) }));
   await assertFails(put({ ...e, sneaky: true }));
   await assertFails(put({ ...e, edits: { ed1: { at: serverTimestamp(), by: "someoneElse", byName: "x", summary: "y" } }, lastEditId: "ed1" }));
+});
+
+test("Heartwood staff can correct their own clock times and cannot change anything else", async () => {
+  const uid = "hwOp";
+  const db = env.authenticatedContext(uid).firestore();
+  const week = "2026-10-05";
+  const id = "entryadj00001";
+  const ref = doc(db, `timesheets/${uid}_${week}`);
+  const entry = {
+    id, source: "clock", status: "closed", date: "2026-10-06", start: "07:00", finish: "15:00",
+    breakStart: "", breakEnd: "", note: "", job: "Lot 12",
+    clockOn: { at: Timestamp.fromDate(new Date("2026-10-06T07:00:00+10:00")), fix: "gps", lat: -27.47, lng: 153.025, accuracy: 12 },
+    clockOff: { at: Timestamp.fromDate(new Date("2026-10-06T15:00:00+10:00")), fix: "no location" },
+    enteredBy: uid, enteredByName: uid, enteredAt: Timestamp.fromDate(new Date("2026-10-06T07:00:00+10:00")),
+    edits: {}, lastEditId: "",
+  };
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), `timesheets/${uid}_${week}`), {
+      uid, name: uid, weekStart: week, weekEnd: "2026-10-11", days: {}, totalHrs: 8, companyId: "heartwood",
+      updatedAt: new Date(), updatedAtIso: "2026-10-06T01:00:00.000Z", lastEntryId: id, entries: { [id]: entry },
+    });
+  });
+  const edit = (row, patch, editId) => ({
+    ...row, ...patch, lastEditId: editId,
+    edits: { ...(row.edits || {}), [editId]: { at: serverTimestamp(), by: uid, byName: uid, summary: "Clock on 07:00 → 07:30" } },
+  });
+  const base = { uid, name: uid, weekStart: week, weekEnd: "2026-10-11", companyId: "heartwood", totalHrs: 8, updatedAtIso: new Date().toISOString(), lastEntryId: id };
+  await assertSucceeds(updateDoc(ref, { ...base, updatedAt: serverTimestamp(), [`entries.${id}`]: edit(entry, { start: "07:30", originalClockOn: "07:00", originalClockOff: "15:00" }, "editadj000001") }));
+  const saved = (await getDoc(ref)).data().entries[id];
+  assert.equal(saved.originalClockOn, "07:00");
+  assert.equal(saved.clockOn.lat, -27.47);
+  await assertSucceeds(updateDoc(ref, { ...base, updatedAt: serverTimestamp(), [`entries.${id}`]: edit(saved, { start: "08:00" }, "editadj000002") }));
+  const kept = (await getDoc(ref)).data().entries[id];
+  assert.equal(kept.originalClockOn, "07:00");
+  await assertFails(updateDoc(ref, { ...base, updatedAt: serverTimestamp(), [`entries.${id}`]: edit(kept, { start: "08:10", originalClockOn: "08:00" }, "editadj000003") }));
+  await assertFails(updateDoc(ref, { ...base, updatedAt: serverTimestamp(), [`entries.${id}`]: edit(kept, { finish: "08:00" }, "editadj000004") }));
+  await assertFails(updateDoc(ref, { ...base, updatedAt: serverTimestamp(), [`entries.${id}`]: edit(kept, { job: "Elsewhere" }, "editadj000005") }));
+  await assertFails(updateDoc(ref, { ...base, updatedAt: serverTimestamp(), [`entries.${id}`]: edit(kept, { note: "nope" }, "editadj000006") }));
+  await assertFails(updateDoc(doc(env.authenticatedContext("bravoOp").firestore(), `timesheets/${uid}_${week}`), { ...base, updatedAt: serverTimestamp(), [`entries.${id}`]: edit(kept, { start: "09:00" }, "editadj000007") }));
+  const alex = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";
+  await assertSucceeds(updateDoc(doc(env.authenticatedContext(alex).firestore(), `timesheets/${uid}_${week}`), { name: "Sam from the office" }));
 });

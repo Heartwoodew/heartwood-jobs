@@ -449,7 +449,7 @@ tr.mhead td{background:#eef2f7;font-size:13px;padding:6px 8px}
 .ts-entry .ts-dl{margin-top:6px}
 .ts-when{margin:0 0 4px;font-size:18px;font-weight:700}
 .ts-badge{display:inline-flex;align-items:center;font-size:12px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;border-radius:999px;padding:3px 8px}
-.ts-badge.clock{background:#dcfce7;color:#166534}.ts-badge.manual{background:#ffedd5;color:#9a3412}.ts-badge.week{background:#e2e8f0;color:#334155}
+.ts-badge.clock{background:#dcfce7;color:#166534}.ts-badge.manual{background:#ffedd5;color:#9a3412}.ts-badge.week{background:#e2e8f0;color:#334155}.ts-badge.edited{background:#fef3c7;color:#92400e}
 .ts-loc,.ts-stamp{font-size:14px;line-height:1.35;margin:4px 0}
 .ts-loc a{display:inline-flex;align-items:center;min-height:44px;font-weight:700}
 .ts-man{display:flex;flex-direction:column;gap:8px;background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:12px;margin:0 0 12px}
