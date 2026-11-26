@@ -1,3 +1,16 @@
+## Add a client from New Job (not deployed)
+
+Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production.
+
+On New Job and Edit Job, an admin can choose **+ Add new client** from the client list. The list also offers it when the typed name is not already there, and the sheet opens with that name filled in. The sheet is the same Add client form as the Clients screen: company or client name is required, and contact name, phone, email, address and notes are the same fields. Save uses the same `clients/{id}` write as Clients (`buildClientCreate`, then `setDoc` with merge). The new client is selected on the job. Address, description, date and the other fields already typed stay as they were. Cancel closes the sheet and leaves the job form alone. Crew, supervisors and managers do not see the option. The Clients screen is still admin-only. Firestore rules are unchanged. A client is stored for the company that is open, not another company. Crew still do not see prices.
+
+Service worker `callup-shell-v163-add-client`. Main is `callup-shell-v160-clock-adjust`. Open pull requests include v161 (job requirements) and v162 (clock-on fix).
+
+After review, and only when the owner says merge:
+
+1. No Firestore rules deploy. No functions deploy. No index deploy. No Storage change.
+2. Deploy hosting with `firebase deploy --only hosting --config cloud/firebase.hosting.json --project heartwood-9f37f`. Phones pick up `callup-shell-v163-add-client`.
+
 ## Staff clock-time corrections (not deployed)
 
 Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production.
