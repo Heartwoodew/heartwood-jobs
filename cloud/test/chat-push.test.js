@@ -383,7 +383,7 @@ test("opt-in stays a button press, and iPhone Safari shows the Home Screen hint"
   assert.doesNotMatch(config, /BEGIN PRIVATE|-----BEGIN/);
   assert.equal(vapidReady("BMyCNKMjDvbOQW74GyjS7GlTo-Qe7r203dbshLNIPpuDcaafAuZmq-WSjX7Ptys4ZTXEH1GKy8QhtkNsaD1Zlk8"), true);
 
-  assert.match(sw, /callup-shell-v160-clock-adjust/);
+  assert.match(sw, /callup-shell-v162-clock-on-fix/);
   assert.match(notify, /foregroundPushText\(payload\)/);
   const css = readFileSync(new URL("../../app/styles.css", import.meta.url), "utf8");
   assert.match(css, /\.push-banner\[hidden\]\{display:none !important\}/);

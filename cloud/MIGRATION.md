@@ -1,3 +1,18 @@
+## Clock on fix after Patrick's morning lock-up (not deployed)
+
+Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production.
+
+- Every clock on threw `ReferenceError: SHARE_MIN_MS is not defined` since the crew map fallback change on 24 Nov. The live-location timer used the constant without importing it. It is imported now, and a live-sharing failure can no longer stop or undo a clock punch.
+- The two timesheet reads in a clock punch now give up after 6 seconds and use this phone's copy, so Checking location… cannot sit there on a stalled connection.
+- The "Which machine are you on today?" question takes one tap at a time, uses this phone's copy when there is no signal, queues the answer, and always goes away. Before, a tap on a weak signal could wait with no sign it was taken, and the timesheet does not redraw while that question is on screen.
+
+Service worker `callup-shell-v162-clock-on-fix`. Main is `callup-shell-v160-clock-adjust`. PR 139 uses v161.
+
+After review, and only when the owner says merge:
+
+1. Deploy hosting with `firebase deploy --only hosting --config cloud/firebase.hosting.json --project heartwood-9f37f` from a fresh deploy folder. Phones pick up `callup-shell-v162-clock-on-fix`.
+2. No rules deploy. No functions deploy. No index deploy. No Storage change. No Stripe change. No production data write.
+
 ## Staff clock-time corrections (not deployed)
 
 Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production.

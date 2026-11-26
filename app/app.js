@@ -64,7 +64,7 @@ import {
   paidShift, periodOpenForWorker, prestartStatus, sheetHours, sheetLock, shiftHours, sortedEntries, stampText,
 } from "./features/timesheet.js";
 import {
-  LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, SHARE_FIX_WAIT_MS, SHOW_AFTER_CLOCK_OFF, STALE_MINUTES, canSeeCrewMap, clockOffLocationUpdate,
+  LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, SHARE_FIX_WAIT_MS, SHARE_MIN_MS, SHOW_AFTER_CLOCK_OFF, STALE_MINUTES, canSeeCrewMap, clockOffLocationUpdate,
   companySharesLocation, companyTimeZone, crewListHtml, crewMapModel,
   crewMapNotice, crewPinNote, homeCrewSlot, jobPoint, liveCollectionPath, liveLocationBody, locationRemindBannerHtml, mapFailureStatus, shareIndicator, shouldSendPosition,
 } from "./features/live-location.js";
@@ -214,7 +214,7 @@ let INBOUND_DOMAIN = "inbound.callupapp.com.au";
 let startDesktopInstall = () => {};
 let refreshDesktopBanner = () => {};
 let desktopBannerWouldShow = () => false;
-let SHELL_VERSION = "callup-shell-v160-clock-adjust";
+let SHELL_VERSION = "callup-shell-v162-clock-on-fix";
 let prepareTicket = () => ({ ok: false, reason: "loading" });
 let ticketDialogHtml = () => "";
 let ticketFailureText = () => "The ticket could not be sent. Try again.";
@@ -3483,13 +3483,17 @@ async function tsChooseMachine(choice, asset) {
   const patch = machineChoicePatch(choice, asset);
   const id = ui.tsMachineShift;
   const ws = ui.tsMachineWs || tsWeek();
-  if (!patch || !id) return;
+  if (!patch || !id || ui.tsMachineBusy) return;
+  // While this question is on screen the timesheet does not redraw. Show the tap was taken, and never wait
+  // forever on a weak signal: the answer queues on this phone and the question goes away either way.
+  ui.tsMachineBusy = true;
+  document.querySelectorAll("#tsmachine button").forEach(b => { b.disabled = true; });
   try {
-    const sheet = await tsLoad(ws);
+    const sheet = await tsLoad(ws, { offlineOk: true });
     const prev = sheet && sheet.entries && sheet.entries[id];
-    if (!prev) { toast("You're clocked on. The machine list didn't save."); return; }
-    if (prev.machineChoice) { ui.tsMachineShift = null; tsRerender(); return; }
-    await updateDoc(doc(db, "timesheets", `${me.uid}_${ws}`), {
+    if (prev && prev.machineChoice) { ui.tsMachineShift = null; return; }
+    if (!prev) { ui.tsMachineShift = null; toast("You're clocked on. The machine list didn't save."); return; }
+    const write = updateDoc(doc(db, "timesheets", `${me.uid}_${ws}`), {
       [`entries.${id}.machineChoice`]: patch.machineChoice,
       [`entries.${id}.machineId`]: patch.machineId,
       [`entries.${id}.machineName`]: patch.machineName,
@@ -3497,12 +3501,17 @@ async function tsChooseMachine(choice, asset) {
       updatedAt: serverTimestamp(),
       updatedAtIso: new Date().toISOString(),
     });
+    const r = await queueWrite(write, { id: "timesheet-machine:" + ws + ":" + id, kind: "timesheet", label: "Machine for today" }, "", { announce: false, quietFail: true });
     ui.tsMachineShift = null;
+    if (r && r.queued) toast(SAVED_ON_PHONE);
     if (patch.machineChoice === "asset") tsEnsurePrestarts();
   } catch (err) {
+    ui.tsMachineShift = null;
     toast("You're clocked on. The machine wasn't saved.");
+  } finally {
+    ui.tsMachineBusy = false;
+    tsRerender();
   }
-  tsRerender();
 }
 function tsAdjustForm(existing) {
   const open = existing.source === "clock" && existing.status !== "closed" && !existing.finish;
@@ -4114,10 +4123,14 @@ function bindClaims(A, rerender) {
   A.querySelectorAll("[data-rc-receipt]").forEach(btn => { btn.onclick = () => downloadClaimReceipt(btn.dataset.rcReceipt); });
   A.querySelectorAll("[data-rc-filter]").forEach(btn => { btn.onclick = () => { ui.claimsFilter = btn.dataset.rcFilter; rerender(); }; });
 }
+// A clock punch must not wait on a stalled connection. After this long it uses this phone's copy.
+const TS_PUNCH_READ_MS = 6000;
 async function tsLoad(ws, opts = {}) {
   const ref = doc(db, "timesheets", `${me.uid}_${ws}`);
   try {
-    const snap = await getDoc(ref);
+    const snap = opts.offlineOk
+      ? await withTimeout(getDoc(ref), TS_PUNCH_READ_MS, "timesheet").catch(e => { throw e && e.code === "boot-timeout" ? { code: "unavailable" } : e; })
+      : await getDoc(ref);
     return snap.exists() ? { id: snap.id, ...snap.data() } : null;
   } catch (e) {
     // No signal: a clock punch must still work. Use this phone's copy (the watched week is always cached).
@@ -4273,8 +4286,13 @@ function liveShareStart(entryId, weekStart, firstFix) {
   shareRun = { entryId, weekStart, companyId: myCompanyId(), last: null, watch: null, timer: null, offSent: false };
   ui.liveShare = { clockedOn: true, sharing: "ask" };
   paintShareStatus();
-  if (firstFix) considerShareFix(firstFix);
-  armShareWatch();
+  // Live sharing is extra. A failure here must never stop or undo a clock punch that already saved.
+  try {
+    if (firstFix) considerShareFix(firstFix);
+    armShareWatch();
+  } catch (err) {
+    console.warn("live share", err && (err.message || err));
+  }
 }
 function releaseLiveDoc(companyId) {
   if (!me || !companyId) return;
@@ -4307,8 +4325,10 @@ function noteShareHidden() {
 }
 document.addEventListener("visibilitychange", () => {
   if (!shareRun) return;
-  if (document.hidden) { noteShareHidden(); disarmShareWatch(); }
-  else armShareWatch();
+  try {
+    if (document.hidden) { noteShareHidden(); disarmShareWatch(); }
+    else armShareWatch();
+  } catch (err) { console.warn("live share", err && (err.message || err)); }
 });
 window.addEventListener("pagehide", () => {
   if (!shareRun) return;
@@ -4653,9 +4673,9 @@ async function tsPunch(kind) {
         edits: {}, lastEditId: "",
       };
       const r = await tsWrite(ws, sheet, entries, id, { consent: !(sheet && sheet.locationConsentAt) });
-      liveShareStart(id, ws, fix);
       ui.tsMachineShift = id;
       ui.tsMachineWs = ws;
+      try { liveShareStart(id, ws, fix); } catch (err) { console.warn("live share", err && (err.message || err)); }
       toast((fix.fix === "gps" ? "Clocked on" : "Clocked on · no location") + tsQueuedNote(r));
     } else {
       const e = openClock(entries);

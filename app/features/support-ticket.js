@@ -2,7 +2,7 @@
 // show prices, rates, or another company's records. The screenshot is a private
 // Storage object. Master (the platform owner) lists every ticket.
 
-export const SHELL_VERSION = "callup-shell-v160-clock-adjust";
+export const SHELL_VERSION = "callup-shell-v162-clock-on-fix";
 export const SHOT_MAX_BYTES = 5 * 1024 * 1024;
 export const SHOT_INPUT_MAX = 12 * 1024 * 1024;
 const SHOT_EDGE = 1600;
