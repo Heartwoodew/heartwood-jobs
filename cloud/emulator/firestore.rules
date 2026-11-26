@@ -2782,5 +2782,50 @@ service cloud.firestore {
       allow read, write: if false;
     }
 // END INBOUND FORWARD RULES
+
+    // Phone errors. Same allows as cloud/firestore.production.rules.
+    // A signed-in member of this company may create one record.
+    // Only an admin of this company may read. The client cannot update or delete.
+    match /companies/{companyId}/clientErrors/{errorId} {
+      function clientErrorMember(companyId) {
+        return signedIn()
+          && companyId == callerCompany()
+          && textLen(companyId, 2, 40);
+      }
+      function clientErrorHeartwoodAdmin() {
+        let grant = /databases/$(database)/documents/heartwoodAdmins/$(request.auth.uid);
+        let user = /databases/$(database)/documents/users/$(request.auth.uid);
+        return request.auth.uid in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "38SU5waAy4f9UI9N6JTqDMaYpQg2", "R7t41e54Ykcdk9WPdVZnDd697iI2"]
+          || (exists(grant) && get(grant).data.get("role", "") == "admin"
+            && exists(user) && docCompany(get(user).data) == "heartwood" && get(user).data.get("role", "") == "admin");
+      }
+      function clientErrorAdmin(companyId) {
+        return clientErrorMember(companyId) && (
+          (companyId == "heartwood" && clientErrorHeartwoodAdmin())
+          || (hasProfile() && profile().get("role", "") == "admin")
+          || platformOwner()
+        );
+      }
+      function clientErrorCreate(companyId) {
+        let d = docData();
+        return clientErrorMember(companyId)
+          && errorId.matches('^[A-Za-z0-9]{1,40}$')
+          && d.keys().hasOnly(["createdAt", "uid", "role", "appVersion", "swVersion", "screen", "message", "stack", "userAgent", "online"])
+          && d.createdAt == request.time
+          && d.uid == request.auth.uid
+          && textMax(d.role, 40)
+          && textMax(d.appVersion, 80)
+          && textMax(d.swVersion, 80)
+          && textMax(d.screen, 120)
+          && textLen(d.message, 1, 500)
+          && textMax(d.stack, 2048)
+          && textMax(d.userAgent, 300)
+          && d.online is bool;
+      }
+
+      allow get, list: if clientErrorAdmin(companyId);
+      allow create: if clientErrorCreate(companyId);
+      allow update, delete: if false;
+    }
   }
 }

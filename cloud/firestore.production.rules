@@ -3374,8 +3374,7 @@ service cloud.firestore {
       function clientErrorMember(companyId) {
         return signedIn()
           && companyId == callerCompany()
-          && companyId.size() > 1
-          && companyId.size() <= 40;
+          && textLen(companyId, 2, 40);
       }
       function clientErrorAdmin(companyId) {
         return clientErrorMember(companyId) && (
@@ -3385,19 +3384,19 @@ service cloud.firestore {
         );
       }
       function clientErrorCreate(companyId) {
-        let d = request.resource.data;
+        let d = docData();
         return clientErrorMember(companyId)
           && errorId.matches('^[A-Za-z0-9]{1,40}$')
           && d.keys().hasOnly(["createdAt", "uid", "role", "appVersion", "swVersion", "screen", "message", "stack", "userAgent", "online"])
           && d.createdAt == request.time
           && d.uid == request.auth.uid
-          && d.role is string && d.role.size() <= 40
-          && d.appVersion is string && d.appVersion.size() <= 80
-          && d.swVersion is string && d.swVersion.size() <= 80
-          && d.screen is string && d.screen.size() <= 120
-          && d.message is string && d.message.size() > 0 && d.message.size() <= 500
-          && d.stack is string && d.stack.size() <= 2048
-          && d.userAgent is string && d.userAgent.size() <= 300
+          && textMax(d.role, 40)
+          && textMax(d.appVersion, 80)
+          && textMax(d.swVersion, 80)
+          && textMax(d.screen, 120)
+          && textLen(d.message, 1, 500)
+          && textMax(d.stack, 2048)
+          && textMax(d.userAgent, 300)
           && d.online is bool;
       }
 
