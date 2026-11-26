@@ -139,7 +139,7 @@ test("the job modal still quotes and repeats, and only a pest company can open s
   assert.match(modal, /id="quotethis"/);
   assert.match(modal, /certificatesEnabled\(certificateTrades\(\)\)/);
   assert.match(modal, /<h4>Photos<\/h4>/);
-  assert.match(app, /\["details", "Details"\], \["chat", "Chat"\], \["photos", "Photos"\]/);
+  assert.match(app, /\["details", "Details"\], \["req", "Requirements"\], \["chat", "Chat"\], \["photos", "Photos"\]/);
   const wire = app.slice(app.indexOf("function wireCertificate"), app.indexOf("function editJob"));
   assert.match(wire, /if \(!certificatesEnabled\(certificateTrades\(\)\)\) return;/);
   assert.match(wire, /callCompanyFunction\("sendCertificateEmail"/);

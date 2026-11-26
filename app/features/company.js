@@ -611,7 +611,8 @@ export function companyDetailPatch(current, input) {
 export const COMPANY_EXTRA_KEYS = ["jobPrefix", "accountsName"];
 export const JOB_PREFIX_RE = /^[A-Z0-9]{1,5}$/;
 export const HEARTWOOD_JOB_PREFIX = "HW";
-export const HEARTWOOD_CLIENTS = Object.freeze(["Orbit Homes (Qld) Pty Ltd", "Torsion Built Pty Ltd", "Silkwood Homes", "OJ Pippin Homes", "Envision Homes"]);
+// "Coral Homes" is an alias of the legal name. The job form saves the legal name.
+export const HEARTWOOD_CLIENTS = Object.freeze(["Orbit Homes (Qld) Pty Ltd", "Torsion Built Pty Ltd", "Silkwood Homes", "OJ Pippin Homes", "Envision Homes", "Coral Homes Qld Pty Ltd"]);
 // Neutral sender for app emails from companies other than Heartwood. Replies go to the company's own email.
 export const CALLUP_SENDER = "CallUp <noreply@callupapp.com.au>";
 
