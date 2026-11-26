@@ -59,7 +59,7 @@ test("field crew are prompted only while Take 5s are on, and supervisors can vie
 
 test("the shell caches the Take 5 and performance modules", () => {
   const sw = readFileSync(new URL("../../app/sw.js", import.meta.url), "utf8");
-  assert.match(sw, /callup-shell-v162-clock-on-fix/);
+  assert.match(sw, /callup-shell-v163-add-client/);
   assert.match(sw, /features\/performance\.js/);
   assert.match(sw, /features\/take5\.js/);
   const prod = readFileSync(new URL("../firestore.production.rules", import.meta.url), "utf8");

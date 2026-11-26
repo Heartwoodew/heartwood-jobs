@@ -304,7 +304,7 @@ test("the office tab, the crew tab and the rules are wired, with no prices in th
   assert.match(detail, /No requirements yet|crewRequirementsHtml|mountJobRequirements/);
   assert.match(app, /planRequirementWrite\(seeded/);
   assert.match(sw, /features\/job-requirements\.js/);
-  assert.match(sw, /callup-shell-v162-clock-on-fix/);
+  assert.match(sw, /callup-shell-v163-add-client/);
   const prod = readFileSync(new URL("../firestore.production.rules", import.meta.url), "utf8");
   const emu = readFileSync(new URL("../emulator/firestore.rules", import.meta.url), "utf8");
   const frag = readFileSync(new URL("../production/firestore.requirements.rules", import.meta.url), "utf8");

@@ -47,7 +47,8 @@ import {
   builderSignoff, clientDocId, companyClientNames, companyJobPrefix, companyMailbox, companyStdClients, timesheetMailParts,
   supervisorsPath, docCompanyId, isHeartwoodCompany, buildClientCreate,
 } from "./features/company.js";
-import { adminViewBannerHtml, bootCompanyView, clearedCompanySession, companyHistoryState, historyStepOnEnter, historyStepOnMasterReturn, IN_COMPANY_VIEW_KEY, masterHistoryState, RETURN_MASTER_KEY, takeReturnMasterFlag, urlMarksCompanyView, withCompanyViewParam, clientFormHtml, companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, pausedAdminHtml, pausedOwnerHtml, pausedStaffHtml, referralBoxHtml, signupFieldErrors, signupFormHtml, trialBannerHtml } from "./features/company-ui.js";
+import { adminViewBannerHtml, bootCompanyView, clearedCompanySession, companyHistoryState, historyStepOnEnter, historyStepOnMasterReturn, IN_COMPANY_VIEW_KEY, masterHistoryState, RETURN_MASTER_KEY, takeReturnMasterFlag, urlMarksCompanyView, withCompanyViewParam, clientCreateMessage, clientFormHtml, companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, pausedAdminHtml, pausedOwnerHtml, pausedStaffHtml, referralBoxHtml, signupFieldErrors, signupFormHtml, trialBannerHtml } from "./features/company-ui.js";
+import { canOfferNewClient, clientFieldHtml, clientMenuHtml, clientMenuModel, jobDraftAfterCreate, readJobDraft } from "./features/client-picker.js";
 import { pickDashboardBanner } from "./features/dashboard-banners.js";
 import {
   addTitle, bindTradeSearch, companyTradesDoc, defaultJobCategory, jobCategorySelectHtml, jobTypeMap, normalizeTrade, readTradeList, removeTitle, renameTitle, resolveCompanySetup,
@@ -217,7 +218,7 @@ let INBOUND_DOMAIN = "inbound.callupapp.com.au";
 let startDesktopInstall = () => {};
 let refreshDesktopBanner = () => {};
 let desktopBannerWouldShow = () => false;
-let SHELL_VERSION = "callup-shell-v162-clock-on-fix";
+let SHELL_VERSION = "callup-shell-v163-add-client";
 let isCoralClient = () => false;
 let canonicalClientName = name => String(name || "").trim();
 let planRequirementWrite = () => ({ apply: false });
@@ -6506,7 +6507,7 @@ function editJob(j) {
     <div class="jc-body"><div class="jc-col">
       ${importing ? importBanner(j) : ""}
       <h4>Client &amp; Site</h4>
-      <label>Client<input name="client" ${inputAttrs("client")} value="${esc(j.client)}" required></label>
+      ${clientFieldHtml({ value: j.client || "", canAdd: canOfferNewClient(me) })}
       ${n ? "" : `<div class="supcard" data-sup="${esc(j.id)}"></div>`}
       <label>Job (site) address<input name="address" ${inputAttrs("address")} value="${esc(j.address)}" required></label>
       ${importing ? "" : `<div class="row"><label>Contact name<input name="contactName" maxlength="80" ${inputAttrs("contactName")} value="${esc(j.contactName || j.supervisorName || "")}"></label>
@@ -6557,8 +6558,9 @@ function editJob(j) {
   d.showModal();
   bindDescriptionPicker(d);
   wireClientPrefill(d);
-  loadClients().then(() => { if (document.getElementById("jf")) refreshAutofillLists(); }).catch(() => {});
+  loadClients().then(() => { if (document.getElementById("jf")) { refreshAutofillLists(); refreshOpenClientMenu(); } }).catch(() => {});
   if (!n) jobTabs(d, j);
+  wireJobClientMenu(d);
   if (!n) { rememberJob(j); $("#emailph").onclick = () => emailPhotos(j); const emailJobBtn = $("#emailjob"); if (emailJobBtn) emailJobBtn.onclick = () => { openJobEmail(j).catch(e => toast(e.message || "Couldn't open the email")); }; watchJobPhotos(j); paintPhotoSlots(); wireJobDocuments(d.querySelector("[data-job-docs]"), j); }
   if (!n && $("#cloudexport")) $("#cloudexport").onclick = () => downloadGalleryCopy(j).catch(e => toast(e.message || "Download failed"));
   if (!n) { wireFindPo(j); supervisors(); wireJobReceipts(j); fillSupCard(j); }
@@ -7309,13 +7311,127 @@ function bindClients(A) {
   A.querySelectorAll("[data-ced]").forEach(b => b.onclick = () => { const [id, i] = b.dataset.ced.split(":"); editContact(CLI.find(c => c.id === id), i === "new" ? -1 : +i); });
   const nb = A.querySelector("[data-cnew]"); if (nb) nb.onclick = () => openClientForm();
 }
-function openClientForm() {
-  const d = $("#dlg"); d.className = ""; d.onclose = null;
-  refreshAutofillLists();
-  d.innerHTML = clientFormHtml();
+function clientNamesNow() {
+  const suggested = currentSuggestions().client;
+  return Array.isArray(suggested) && suggested.length ? suggested : CLIENTS.slice();
+}
+function paintJobClientMenu(input) {
+  const menu = input && input.closest(".client-field") && input.closest(".client-field").querySelector("[data-client-menu]");
+  if (!input || !menu) return;
+  const model = clientMenuModel(clientNamesNow(), input.value, { canAdd: input.dataset.clientCombo === "add" && canOfferNewClient(me) });
+  menu.innerHTML = clientMenuHtml(model);
+}
+function refreshOpenClientMenu() {
+  const input = document.querySelector("#jf #jf-client");
+  const menu = input && input.closest(".client-field") && input.closest(".client-field").querySelector("[data-client-menu]");
+  if (!input || !menu || menu.hidden) return;
+  paintJobClientMenu(input);
+}
+function hideJobClientMenu(input) {
+  const menu = input && input.closest(".client-field") && input.closest(".client-field").querySelector("[data-client-menu]");
+  if (menu) menu.hidden = true;
+  if (input) input.setAttribute("aria-expanded", "false");
+}
+function showJobClientMenu(input) {
+  const menu = input && input.closest(".client-field") && input.closest(".client-field").querySelector("[data-client-menu]");
+  if (!menu) return;
+  paintJobClientMenu(input);
+  menu.hidden = false;
+  input.setAttribute("aria-expanded", "true");
+}
+let clientMenuDocBound = false;
+function wireJobClientMenu(root) {
+  const input = root && root.querySelector ? root.querySelector("#jf-client") : null;
+  if (!input || input.dataset.clientBound) return;
+  input.dataset.clientBound = "1";
+  const field = input.closest(".client-field");
+  const menu = field && field.querySelector("[data-client-menu]");
+  if (!menu) return;
+  const dialog = root.closest ? root.closest("dialog") : null;
+  if (dialog && !dialog.dataset.clientCancel) {
+    dialog.dataset.clientCancel = "1";
+    dialog.addEventListener("cancel", ev => {
+      const open = dialog.querySelector("[data-client-menu]");
+      if (open && !open.hidden) {
+        ev.preventDefault();
+        hideJobClientMenu(dialog.querySelector("#jf-client"));
+      }
+    });
+  }
+  input.addEventListener("focus", () => showJobClientMenu(input));
+  input.addEventListener("input", () => showJobClientMenu(input));
+  input.addEventListener("keydown", ev => {
+    if (ev.key === "Escape" && !menu.hidden) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      hideJobClientMenu(input);
+    }
+    if (ev.key === "Enter" && !menu.hidden && input.dataset.clientCombo === "add") {
+      const add = menu.querySelector("[data-add-client]");
+      if (add && !menu.querySelector("[data-client-name]")) {
+        ev.preventDefault();
+        hideJobClientMenu(input);
+        openClientFromJob(add.getAttribute("data-prefill") || "", input.form);
+      }
+    }
+  });
+  menu.addEventListener("pointerdown", ev => {
+    const add = ev.target.closest("[data-add-client]");
+    const pick = ev.target.closest("[data-client-name]");
+    if (!add && !pick) return;
+    ev.preventDefault();
+    if (add) {
+      if (input.dataset.clientCombo !== "add" || !canOfferNewClient(me)) return;
+      const prefill = add.getAttribute("data-prefill") || "";
+      hideJobClientMenu(input);
+      openClientFromJob(prefill, input.form);
+      return;
+    }
+    input.value = pick.getAttribute("data-client-name") || "";
+    hideJobClientMenu(input);
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  if (!clientMenuDocBound) {
+    clientMenuDocBound = true;
+    document.addEventListener("pointerdown", ev => {
+      const openField = document.querySelector("#jf .client-field");
+      if (!openField || openField.contains(ev.target)) return;
+      hideJobClientMenu(openField.querySelector("#jf-client"));
+    });
+  }
+}
+function ensureClientDialog() {
+  let d = document.getElementById("clientdlg");
+  if (!d) {
+    d = document.createElement("dialog");
+    d.id = "clientdlg";
+    document.body.appendChild(d);
+  }
+  return d;
+}
+function openClientFromJob(prefill, jobForm) {
+  if (!canOfferNewClient(me) || !jobForm) return;
+  const d = ensureClientDialog();
+  if (d.open) d.close();
+  d.className = "clientdlg";
+  d.innerHTML = clientFormHtml({ name: String(prefill || "") });
   d.showModal();
   wireClientPrefill(d);
-  const form = $("#clientnew");
+  bindClientCreateForm(d.querySelector("#clientnew"), {
+    onSaved(built) {
+      const next = jobDraftAfterCreate(readJobDraft(jobForm), built && built.data && built.data.name);
+      const input = jobForm.elements.client;
+      if (input) input.value = next.client;
+      d.close();
+      if (input) {
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        input.focus();
+      }
+    },
+  });
+}
+function bindClientCreateForm(form, { onSaved } = {}) {
+  if (!form) return;
   form.onsubmit = async ev => {
     if (ev.submitter?.value === "cancel") return;
     ev.preventDefault();
@@ -7329,16 +7445,18 @@ function openClientForm() {
       notes: form.notes.value,
     });
     form.querySelectorAll("[data-err]").forEach(slot => { slot.hidden = true; slot.textContent = ""; });
-    const err = $("#clienterr");
+    const err = form.querySelector("#clienterr");
     if (!built.ok) {
-      const message = built.reason === "email" ? "Check the email address." : built.reason === "phone" ? "Check the phone number." : "Enter the company or client name.";
-      err.textContent = message;
+      const message = clientCreateMessage(built.reason);
+      if (err) err.textContent = message;
       const slot = form.querySelector(`[data-err="${built.reason === "name" ? "name" : built.reason}"]`);
       if (slot) { slot.hidden = false; slot.textContent = message; }
       const field = form.elements[built.reason] || form.name;
       if (field) { field.setAttribute("aria-invalid", "true"); field.focus(); }
       return;
     }
+    const saveBtn = form.querySelector('button[value="ok"]');
+    if (saveBtn) saveBtn.disabled = true;
     try {
       await setDoc(doc(db, "clients", built.id), { ...built.data, updatedAt: serverTimestamp(), updatedBy: me.uid }, { merge: true });
       rememberEntries({
@@ -7348,12 +7466,27 @@ function openClientForm() {
         email: form.email.value,
         address: form.address.value,
       });
-      d.close();
-      await loadClients(true);
-      renderAdmin();
+      try { await loadClients(true); } catch { /* the client write is already stored */ }
+      if (onSaved) onSaved(built);
+      else {
+        const dlg = form.closest("dialog");
+        if (dlg) dlg.close();
+        renderAdmin();
+      }
       toast("Client saved");
-    } catch (e) { err.textContent = "Not saved: " + (e.code || e.message); }
+    } catch (e) {
+      if (err) err.textContent = "Not saved: " + (e.code || e.message);
+      if (saveBtn) saveBtn.disabled = false;
+    }
   };
+}
+function openClientForm() {
+  const d = $("#dlg"); d.className = ""; d.onclose = null;
+  refreshAutofillLists();
+  d.innerHTML = clientFormHtml();
+  d.showModal();
+  wireClientPrefill(d);
+  bindClientCreateForm($("#clientnew"));
 }
 function editContact(c, i) {
   refreshAutofillLists();

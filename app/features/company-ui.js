@@ -154,12 +154,18 @@ export function signupFieldErrors(input = {}) {
   return errors;
 }
 
-export function clientFormHtml() {
+export function clientCreateMessage(reason) {
+  if (reason === "email") return "Check the email address.";
+  if (reason === "phone") return "Check the phone number.";
+  return "Enter the company or client name.";
+}
+
+export function clientFormHtml({ name = "" } = {}) {
   return `<form method="dialog" id="clientnew" class="jf" novalidate>
     <h2>Add client</h2>
     <p class="sub">The company or client name is required. Contact details are saved with it.</p>
     <p id="clienterr" class="err" role="alert" tabindex="-1"></p>
-    <label>Company / client name <abbr class="req" title="required">*</abbr><input name="name" required maxlength="120" ${inputAttrs("client")}></label>
+    <label>Company / client name <abbr class="req" title="required">*</abbr><input name="name" required maxlength="120" value="${esc(name)}" ${inputAttrs("client")}></label>
     <p class="field-err" data-err="name" hidden></p>
     <label>Contact name<input name="contactName" maxlength="80" ${inputAttrs("contactName")}></label>
     <label>Phone<input name="phone" maxlength="40" ${inputAttrs("phone")}></label>

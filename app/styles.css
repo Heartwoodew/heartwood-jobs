@@ -1345,3 +1345,22 @@ abbr.req{color:#9b2c2c;text-decoration:none;font-weight:700}
 .client-errors li{background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px 10px}
 .client-errors p{margin:6px 0 0;white-space:pre-wrap;word-break:break-word}
 .client-errors pre{white-space:pre-wrap;word-break:break-word;margin:6px 0 0;font:12px/1.35 ui-monospace,monospace;color:#5c4e42;max-height:8em;overflow:auto}
+/* Client list on New Job / Edit Job. The add row is admin only. No prices. */
+.client-field{position:relative;display:block;width:100%}
+.client-field > label{display:block}
+.client-menu{position:absolute;z-index:40;left:0;right:0;top:100%;margin-top:4px;background:#fff;border:1px solid var(--sm-line);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.16);max-height:240px;overflow:auto;padding:4px}
+.client-menu[hidden]{display:none !important}
+.client-opt,.client-add{display:block;width:100%;text-align:left;min-height:44px;padding:10px 12px;border:0;background:#fff;border-radius:6px;font:inherit;color:inherit;cursor:pointer}
+.client-opt:hover,.client-opt:focus,.client-add:hover,.client-add:focus{background:#e7f3fb}
+.client-add{color:var(--sm-blue);font-weight:700}
+.client-menu .client-opt + .client-add{border-top:1px solid var(--sm-line);border-radius:0}
+.client-empty{margin:0;padding:10px 12px;color:var(--sm-mut)}
+dialog.clientdlg{width:min(480px,calc(100vw - 24px));max-height:min(720px,calc(100dvh - 24px));overflow:auto}
+dialog.clientdlg .jf{padding:16px 16px calc(16px + env(safe-area-inset-bottom))}
+@media (max-width:760px){
+  dialog.clientdlg{width:100vw;max-width:100vw;height:100dvh;max-height:100dvh;margin:0;border-radius:0}
+  dialog.clientdlg .btns{flex-direction:column}
+  dialog.clientdlg .btns button{width:100%;min-height:48px;font-size:16px}
+  .client-menu{max-height:min(50vh,320px)}
+  .client-opt,.client-add{min-height:48px;font-size:16px}
+}

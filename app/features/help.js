@@ -27,10 +27,10 @@ const TOPICS = Object.freeze([
   },
   {
     id: "clients",
-    keywords: ["client", "add client", "customer", "contact"],
+    keywords: ["client", "add client", "add a client", "add new client", "customer", "contact"],
     go: "clients",
     goLabel: "Take me to Clients",
-    office: "Open Clients and tap Add client. Enter the company or client name (required), then contact name, phone, email, address and notes if you have them. Save client stores the contact with the client. You can add more contacts on the client card afterwards.",
+    office: "Open Clients and tap Add client, or on New Job open the client list and choose + Add new client. Enter the company or client name (required), then contact name, phone, email, address and notes if you have them. Save client stores the contact with the client. Adding one from a job keeps the rest of that job as you left it. You can add more contacts on the client card afterwards.",
     crew: "Clients are kept by the office. Ask an admin to add a client if a name is missing on your job.",
   },
   {
@@ -38,7 +38,7 @@ const TOPICS = Object.freeze([
     keywords: ["add a job", "add job", "new job", "create a job", "category", "book a job"],
     go: "jobs",
     goLabel: "Take me to Jobs",
-    office: "Open Jobs and tap New Job. Choose a category (it starts blank unless this company is earthworks, which starts on Spoil removal). Categories are grouped by trade, so Plumbing – Other and Earthworks – Other are different. Fill in the client, address and date, then Save Job.",
+    office: "Open Jobs and tap New Job. Choose a category (it starts blank unless this company is earthworks, which starts on Spoil removal). Categories are grouped by trade, so Plumbing – Other and Earthworks – Other are different. Fill in the client, address and date, then Save Job. If the client is not in the list, choose + Add new client. That saves the client for this company only.",
     crew: "Your jobs are on Today and This week. Open a job to see the address, start it, add a note, or add photos. Adding a new job is done in the office.",
   },
   {
