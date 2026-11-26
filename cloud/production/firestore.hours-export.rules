@@ -33,11 +33,11 @@
         && d.totalHours is number && d.totalHours >= 0 && d.totalHours <= 100000
         && d.status == "queued" && d.attempts == 0
         && d.createdBy == request.auth.uid
-        && d.createdByName is string && d.createdByName.size() <= 80
+        &&textMax(d.createdByName, 80)
         && d.createdAt == request.time;
     }
     function hxCreate(id) {
-      let d = request.resource.data;
+      let d = docData();
       return hxAdmin() && hxCaller() != "" && hxShape(d, id) && (
         (hxCaller() == "heartwood"
           && d.keys().hasOnly(["weekStart", "weekEnd", "to", "fileName", "storagePath", "people", "totalHours", "status", "attempts", "createdBy", "createdByName", "createdAt", "companyId", "companyName"])
@@ -47,7 +47,7 @@
         || (hxCaller() != "heartwood"
           && d.keys().hasOnly(["weekStart", "weekEnd", "to", "fileName", "storagePath", "people", "totalHours", "status", "attempts", "createdBy", "createdByName", "createdAt", "companyId", "companyName"])
           && d.companyId == hxCaller()
-          && d.companyName is string && d.companyName.size() > 0 && d.companyName.size() <= 80
+          &&textLen(d.companyName, 1, 80)
           && d.to == hxAccounts()
           && d.to != "accounts@heartwoodew.com"
           && exists(/databases/$(database)/documents/companies/$(hxCaller()))
@@ -56,15 +56,15 @@
     }
     function hxMark() {
       return hxSync()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "attempts", "updatedAt", "sentAt", "messageId", "error", "via"])
-        && request.resource.data.status in ["sending", "sent", "failed"]
-        && request.resource.data.attempts is int
-        && request.resource.data.get("error", "") is string && request.resource.data.get("error", "").size() <= 300
-        && request.resource.data.get("messageId", "") is string && request.resource.data.get("messageId", "").size() <= 100;
+        && docData().diff(prevData()).affectedKeys().hasOnly(["status", "attempts", "updatedAt", "sentAt", "messageId", "error", "via"])
+        && docData().status in ["sending", "sent", "failed"]
+        && docData().attempts is int
+        &&textMax(docData().get("error", ""), 300)
+        &&textMax(docData().get("messageId", ""), 100);
     }
     match /hoursExports/{id} {
-      allow get: if (hxAdmin() && docCompany(resource.data) == hxCaller()) || hxSync();
-      allow list: if hxAdmin() && resource.data.companyId == hxCaller();
+      allow get: if (hxAdmin() && docCompany(prevData()) == hxCaller()) || hxSync();
+      allow list: if hxAdmin() && prevData().companyId == hxCaller();
       allow list: if hxSync();
       allow create: if hxCreate(id);
       allow update: if hxMark();

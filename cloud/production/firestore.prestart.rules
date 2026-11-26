@@ -47,12 +47,9 @@
     }
     function psItem(item) {
       return item.keys().hasOnly(["id", "result", "comment", "critical"])
-        && item.id is string
-        && item.id.size() > 0
-        && item.id.size() <= 40
+        && textLen(item.id, 1, 40)
         && (item.result == "pass" || item.result == "fail" || item.result == "na")
-        && item.comment is string
-        && item.comment.size() <= 500
+        && textMax(item.comment, 500)
         && (item.result != "fail" || item.comment.size() > 0)
         && item.critical is bool;
     }
@@ -65,63 +62,58 @@
     }
     function psTpl(item) {
       return item.keys().hasOnly(["id", "label", "critical"])
-        && item.id is string && item.id.size() > 0 && item.id.size() <= 40
-        && item.label is string && item.label.size() > 0 && item.label.size() <= 60
+        &&textLen(item.id, 1, 40)
+        &&textLen(item.label, 1, 60)
         && item.critical is bool;
     }
     function psCreateOk() {
-      return request.resource.data.keys().hasOnly(["assetId", "assetType", "assetName", "kind", "day", "reading", "readingUnit", "odometer", "items", "signerUid", "signerName", "signedAt", "defect", "doNotOperate", "resolved"])
-        && request.resource.data.assetId is string
-        && request.resource.data.assetId.matches('^[A-Za-z0-9_-]{1,80}$')
-        && (request.resource.data.assetType == "vehicle" || request.resource.data.assetType == "trailer" || request.resource.data.assetType == "plant")
-        && psKindOk(request.resource.data.kind)
-        && request.resource.data.assetName is string
-        && request.resource.data.assetName.size() > 0
-        && request.resource.data.assetName.size() <= 80
-        && request.resource.data.day is string
-        && request.resource.data.day.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
-        && request.resource.data.reading is int
-        && request.resource.data.reading >= 0
-        && request.resource.data.reading <= 10000000
-        && (request.resource.data.readingUnit == "" || request.resource.data.readingUnit == "hours" || request.resource.data.readingUnit == "km")
-        && request.resource.data.odometer is int
-        && request.resource.data.odometer >= 0
-        && request.resource.data.odometer <= 10000000
-        && psItems(request.resource.data.items)
-        && request.resource.data.signerUid == request.auth.uid
-        && request.resource.data.signerName is string
-        && request.resource.data.signerName.size() >= 2
-        && request.resource.data.signerName.size() <= 80
-        && request.resource.data.signedAt == request.time
-        && request.resource.data.defect is bool
-        && request.resource.data.doNotOperate is bool
-        && request.resource.data.resolved == false;
+      return docData().keys().hasOnly(["assetId", "assetType", "assetName", "kind", "day", "reading", "readingUnit", "odometer", "items", "signerUid", "signerName", "signedAt", "defect", "doNotOperate", "resolved"])
+        && docData().assetId is string
+        && docData().assetId.matches('^[A-Za-z0-9_-]{1,80}$')
+        && (docData().assetType == "vehicle" || docData().assetType == "trailer" || docData().assetType == "plant")
+        && psKindOk(docData().kind)
+        && textLen(docData().assetName, 1, 80)
+        && docData().day is string
+        && docData().day.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && docData().reading is int
+        && docData().reading >= 0
+        && docData().reading <= 10000000
+        && (docData().readingUnit == "" || docData().readingUnit == "hours" || docData().readingUnit == "km")
+        && docData().odometer is int
+        && docData().odometer >= 0
+        && docData().odometer <= 10000000
+        && psItems(docData().items)
+        && docData().signerUid == request.auth.uid
+        && textLen(docData().signerName, 2, 80)
+        && docData().signedAt == request.time
+        && docData().defect is bool
+        && docData().doNotOperate is bool
+        && docData().resolved == false;
     }
     function psSame(key) {
-      return request.resource.data[key] == resource.data[key];
+      return docData()[key] == prevData()[key];
     }
     function psResolveOk() {
-      return resource.data.defect == true
-        && resource.data.resolved == false
-        && request.resource.data.resolved == true
-        && request.resource.data.resolvedBy == request.auth.uid
-        && request.resource.data.resolvedNote is string
-        && request.resource.data.resolvedNote.size() <= 500
-        && request.resource.data.resolvedAt == request.time
+      return prevData().defect == true
+        && prevData().resolved == false
+        && docData().resolved == true
+        && docData().resolvedBy == request.auth.uid
+        && textMax(docData().resolvedNote, 500)
+        && docData().resolvedAt == request.time
         && psSame("assetId") && psSame("assetType") && psSame("assetName") && psSame("kind")
         && psSame("day") && psSame("reading") && psSame("readingUnit") && psSame("odometer")
         && psSame("items") && psSame("signerUid") && psSame("signerName")
         && psSame("signedAt") && psSame("defect") && psSame("doNotOperate");
     }
     function psTemplateOk() {
-      return request.resource.data.keys().hasOnly(["items", "updatedAt", "updatedBy"])
-        && request.resource.data.items is list
-        && request.resource.data.items.size() >= 1
-        && request.resource.data.items.size() <= 16
-        && psTpl(request.resource.data.items[0])
-        && psTpl(request.resource.data.items[request.resource.data.items.size() - 1])
-        && request.resource.data.updatedBy == request.auth.uid
-        && request.resource.data.updatedAt == request.time;
+      return docData().keys().hasOnly(["items", "updatedAt", "updatedBy"])
+        && docData().items is list
+        && docData().items.size() >= 1
+        && docData().items.size() <= 16
+        && psTpl(docData().items[0])
+        && psTpl(docData().items[docData().items.size() - 1])
+        && docData().updatedBy == request.auth.uid
+        && docData().updatedAt == request.time;
     }
 
     match /tenants/{tenantId}/prestarts/{id} {

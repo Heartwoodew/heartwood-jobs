@@ -65,7 +65,7 @@ test("money and crew privacy text is unchanged", () => {
   const rules = readFileSync(new URL("../firestore.production.rules", import.meta.url), "utf8");
   assert.match(rules, /function jobMoneyKeys\(\) \{ return \["poAmount", "poAmountBasis", "poAmountSource", "quoteAmount", "poLookupCandidates", "invoiceAmount", "xeroCheck"\]; \}/);
   assert.match(rules, /function syncDeniedJobKeys\(\) \{ return \["invoiceAmount", "xeroCheck"\]; \}/);
-  assert.match(rules, /!veoliaPaidPersonally\(request\.resource\.data\)/);
+  assert.match(rules, /!veoliaPaidPersonally\(docData\(\)\)/);
   assert.match(rules, /Crew \(operators, staff\) never read it/);
   assert.match(rules, /\["status", "log", "loads", "startedAt", "completedAt", "completedBy", "completedByName",\s*"photos", "photosEmailedAt", "photosEmailedCount", "updatedAt", "updatedBy"\]/);
   assert.match(rules, /function companyOpen\(companyId\)/);

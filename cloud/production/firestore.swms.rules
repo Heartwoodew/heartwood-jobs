@@ -29,55 +29,46 @@
       return swmsIsAlex() || swmsIsPatrick() || swmsHasProfile();
     }
     function swmsIdOk() {
-      return request.resource.data.swmsId is string
-        && request.resource.data.swmsId.matches('^(working-near-roads|mobile-plant|working-with-silica|hazardous-substances|electrical)$');
+      return docData().swmsId is string
+        && docData().swmsId.matches('^(working-near-roads|mobile-plant|working-with-silica|hazardous-substances|electrical)$');
     }
     function swmsSigOk() {
-      return request.resource.data.sig is string
-        && request.resource.data.sig.size() >= 32
-        && request.resource.data.sig.size() <= 90000
-        && request.resource.data.sig.matches('^data:image/png;base64,[A-Za-z0-9+/=]+$');
+      return textLen(docData().sig, 32, 90000)
+        && docData().sig.matches('^data:image/png;base64,[A-Za-z0-9+/=]+$');
     }
     function swmsCreateOk() {
       return swmsCanSign()
-        && request.resource.data.keys().hasOnly(["uid", "name", "swmsId", "swmsTitle", "version", "jobId", "jobLabel", "sig", "signedAt", "signedAtMs", "expiresAtMs", "device", "companyId"])
-        && (!("companyId" in request.resource.data) || request.resource.data.companyId == callerCompany())
-        && request.resource.data.uid == request.auth.uid
-        && request.resource.data.name is string
-        && request.resource.data.name.size() >= 2
-        && request.resource.data.name.size() <= 80
+        && docData().keys().hasOnly(["uid", "name", "swmsId", "swmsTitle", "version", "jobId", "jobLabel", "sig", "signedAt", "signedAtMs", "expiresAtMs", "device", "companyId"])
+        && (!("companyId" in docData()) || docData().companyId == callerCompany())
+        && docData().uid == request.auth.uid
+        && textLen(docData().name, 2, 80)
         && swmsIdOk()
-        && request.resource.data.swmsTitle is string
-        && request.resource.data.swmsTitle.size() > 0
-        && request.resource.data.swmsTitle.size() <= 80
-        && request.resource.data.version is string
-        && request.resource.data.version.matches('^20[0-9]{2}-(0[1-9]|1[0-2])$')
-        && request.resource.data.jobId is string
-        && request.resource.data.jobId.size() <= 200
-        && request.resource.data.jobLabel is string
-        && request.resource.data.jobLabel.size() <= 160
+        && textLen(docData().swmsTitle, 1, 80)
+        && docData().version is string
+        && docData().version.matches('^20[0-9]{2}-(0[1-9]|1[0-2])$')
+        && textMax(docData().jobId, 200)
+        && textMax(docData().jobLabel, 160)
         && swmsSigOk()
-        && request.resource.data.signedAt == request.time
-        && request.resource.data.signedAtMs is int
-        && request.resource.data.signedAtMs >= request.time.toMillis() - 300000
-        && request.resource.data.signedAtMs <= request.time.toMillis() + 300000
-        && request.resource.data.expiresAtMs is int
-        && request.resource.data.expiresAtMs >= request.resource.data.signedAtMs + 364 * 24 * 60 * 60 * 1000
-        && request.resource.data.expiresAtMs <= request.resource.data.signedAtMs + 367 * 24 * 60 * 60 * 1000
-        && request.resource.data.device is string
-        && request.resource.data.device.size() <= 200;
+        && docData().signedAt == request.time
+        && docData().signedAtMs is int
+        && docData().signedAtMs >= request.time.toMillis() - 300000
+        && docData().signedAtMs <= request.time.toMillis() + 300000
+        && docData().expiresAtMs is int
+        && docData().expiresAtMs >= docData().signedAtMs + 364 * 24 * 60 * 60 * 1000
+        && docData().expiresAtMs <= docData().signedAtMs + 367 * 24 * 60 * 60 * 1000
+        && textMax(docData().device, 200);
     }
 
     match /swmsSignatures/{id} {
-      allow get: if swmsSignedIn() && resource != null && docCompany(resource.data) == callerCompany()
-        && (resource.data.uid == request.auth.uid || swmsIsAdmin() && callerCompany() == docCompany(resource.data));
-      allow list: if swmsSignedIn() && callerCompany() == "heartwood" && resource.data.uid == request.auth.uid;
-      allow list: if swmsSignedIn() && callerCompany() != "heartwood" && resource.data.uid == request.auth.uid
-        && resource.data.companyId == callerCompany();
+      allow get: if swmsSignedIn() && resource != null && docCompany(prevData()) == callerCompany()
+        && (prevData().uid == request.auth.uid || swmsIsAdmin() && callerCompany() == docCompany(prevData()));
+      allow list: if swmsSignedIn() && callerCompany() == "heartwood" && prevData().uid == request.auth.uid;
+      allow list: if swmsSignedIn() && callerCompany() != "heartwood" && prevData().uid == request.auth.uid
+        && prevData().companyId == callerCompany();
       allow list: if (swmsIsAlex() || swmsIsPatrick() || (swmsHasProfile() && swmsProfile().role == "admin" && callerCompany() == "heartwood"))
-        && resource.data.companyId == "heartwood";
+        && prevData().companyId == "heartwood";
       allow list: if callerCompany() != "heartwood" && swmsHasProfile() && swmsProfile().role == "admin"
-        && resource.data.companyId == callerCompany();
+        && prevData().companyId == callerCompany();
       allow create: if swmsCreateOk();
       allow update, delete: if false;
     }

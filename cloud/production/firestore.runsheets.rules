@@ -38,47 +38,42 @@
     function routeCanRead(sheetId) {
       return routeSignedIn() && routeSheetIdOk(sheetId)
         && (request.auth.uid == routeSheetWorker(sheetId)
-          || (routeIsAdmin() && (resource == null || docCompany(resource.data) == callerCompany())));
+          || (routeIsAdmin() && (resource == null || docCompany(prevData()) == callerCompany())));
     }
     function routeCanWrite(sheetId) {
       return routeIsAdmin() && routeSheetIdOk(sheetId)
-        && request.resource.data.keys().hasOnly([
+        && docData().keys().hasOnly([
           "workerUid", "workerName", "date", "jobIds", "returnToDepot", "status", "depot",
           "method", "provider", "tweaked", "totalMinutes", "totalKm", "currentMinutes", "currentKm",
           "approvedBy", "approvedByName", "approvedAt", "companyId"
         ])
-        && request.resource.data.companyId is string
-        && request.resource.data.companyId == callerCompany()
-        && (resource == null || docCompany(resource.data) == callerCompany())
+        && docData().companyId is string
+        && docData().companyId == callerCompany()
+        && (resource == null || docCompany(prevData()) == callerCompany())
         && routeWorkerCompany(sheetId) == callerCompany()
-        && request.resource.data.approvedBy == request.auth.uid
-        && request.resource.data.date == routeSheetDate(sheetId)
-        && request.resource.data.date is string
-        && request.resource.data.status == "approved"
-        && request.resource.data.depot is string
-        && request.resource.data.depot.size() > 0
-        && request.resource.data.depot.size() <= 200
-        && request.resource.data.returnToDepot is bool
-        && request.resource.data.tweaked is bool
-        && request.resource.data.jobIds is list
-        && request.resource.data.jobIds.size() > 0
-        && request.resource.data.jobIds.size() <= 40
-        && request.resource.data.workerName is string
-        && request.resource.data.workerName.size() <= 80
-        && request.resource.data.approvedByName is string
-        && request.resource.data.approvedByName.size() > 0
-        && request.resource.data.approvedByName.size() <= 80
-        && request.resource.data.approvedAt == request.time
-        && request.resource.data.method in ["exact", "nearest-neighbour-2opt"]
-        && request.resource.data.provider in ["osrm", "ors", "osrm-fallback"]
-        && request.resource.data.totalMinutes is number
-        && request.resource.data.totalMinutes >= 0
-        && request.resource.data.totalKm is number
-        && request.resource.data.totalKm >= 0
-        && request.resource.data.currentMinutes is number
-        && request.resource.data.currentMinutes >= 0
-        && request.resource.data.currentKm is number
-        && request.resource.data.currentKm >= 0;
+        && docData().approvedBy == request.auth.uid
+        && docData().date == routeSheetDate(sheetId)
+        && docData().date is string
+        && docData().status == "approved"
+        && textLen(docData().depot, 1, 200)
+        && docData().returnToDepot is bool
+        && docData().tweaked is bool
+        && docData().jobIds is list
+        && docData().jobIds.size() > 0
+        && docData().jobIds.size() <= 40
+        && textMax(docData().workerName, 80)
+        && textLen(docData().approvedByName, 1, 80)
+        && docData().approvedAt == request.time
+        && docData().method in ["exact", "nearest-neighbour-2opt"]
+        && docData().provider in ["osrm", "ors", "osrm-fallback"]
+        && docData().totalMinutes is number
+        && docData().totalMinutes >= 0
+        && docData().totalKm is number
+        && docData().totalKm >= 0
+        && docData().currentMinutes is number
+        && docData().currentMinutes >= 0
+        && docData().currentKm is number
+        && docData().currentKm >= 0;
     }
 
     match /runSheets/{sheetId} {

@@ -67,15 +67,13 @@
     }
     function chatCanSeeJob(tenantId, jobId) {
       return chatSignedIn()
-        && jobId is string
-        && jobId.size() > 0
-        && jobId.size() <= 200
+        && textLen(jobId, 1, 200)
         && chatJobTenant(jobId) == tenantId
         && ((tenantId == "heartwood" && (chatIsAlex() || chatIsPatrick())) || chatAccountCanSee(tenantId, jobId));
     }
     function chatThreadOk(threadId) {
       return threadId == "staff"
-        || (threadId is string && threadId.size() <= 210 && threadId.matches('^job_[A-Za-z0-9_-]{1,200}$'));
+        || (textMax(threadId, 210) && threadId.matches('^job_[A-Za-z0-9_-]{1,200}$'));
     }
     function chatJobId(threadId) { return threadId[4:threadId.size()]; }
     function chatCanAccess(tenantId, threadId) {
@@ -90,41 +88,33 @@
         chatIsAlex() || chatIsPatrick() || (chatHasProfile() && "role" in chatProfile() && chatProfile().role == "admin")
       );
     }
-    function chatHasPhoto() { return "photoPath" in request.resource.data; }
+    function chatHasPhoto() { return "photoPath" in docData(); }
     function chatPhotoPathOk(tenantId, threadId) {
       return threadId == "staff"
-        ? request.resource.data.photoPath.matches('^tenants/' + tenantId + '/chat/staff/photos/c[A-Za-z0-9]{8,40}$')
-        : request.resource.data.photoPath.matches('^tenants/' + tenantId + '/chat/jobs/' + chatJobId(threadId) + '/photos/c[A-Za-z0-9]{8,40}$');
+        ? docData().photoPath.matches('^tenants/' + tenantId + '/chat/staff/photos/c[A-Za-z0-9]{8,40}$')
+        : docData().photoPath.matches('^tenants/' + tenantId + '/chat/jobs/' + chatJobId(threadId) + '/photos/c[A-Za-z0-9]{8,40}$');
     }
     function chatMessageOk(tenantId, threadId) {
-      return request.resource.data.keys().hasOnly(["senderUid", "senderName", "text", "createdAt", "photoPath", "photoType"])
-        && request.resource.data.senderUid == request.auth.uid
-        && request.resource.data.senderName is string
-        && request.resource.data.senderName.size() > 0
-        && request.resource.data.senderName.size() <= 80
-        && request.resource.data.text is string
-        && request.resource.data.text.size() <= 4000
-        && request.resource.data.createdAt == request.time
-        && (request.resource.data.text.size() > 0 || chatHasPhoto())
+      return docData().keys().hasOnly(["senderUid", "senderName", "text", "createdAt", "photoPath", "photoType"])
+        && docData().senderUid == request.auth.uid
+        && textLen(docData().senderName, 1, 80)
+        && textMax(docData().text, 4000)
+        && docData().createdAt == request.time
+        && (docData().text.size() > 0 || chatHasPhoto())
         && (!chatHasPhoto() || (
-          request.resource.data.photoPath is string
-          && request.resource.data.photoPath.size() > 0
-          && request.resource.data.photoPath.size() <= 300
-          && request.resource.data.photoType is string
-          && request.resource.data.photoType.matches('^image/(jpeg|png|webp|gif)$')
+          textLen(docData().photoPath, 1, 300)
+          && docData().photoType is string
+          && docData().photoType.matches('^image/(jpeg|png|webp|gif)$')
           && chatPhotoPathOk(tenantId, threadId)
         ))
-        && (chatHasPhoto() || !("photoType" in request.resource.data));
+        && (chatHasPhoto() || !("photoType" in docData()));
     }
     function chatHeadOk() {
-      return request.resource.data.keys().hasOnly(["lastAt", "lastSenderUid", "lastSenderName", "preview"])
-        && request.resource.data.lastSenderUid == request.auth.uid
-        && request.resource.data.lastAt == request.time
-        && request.resource.data.lastSenderName is string
-        && request.resource.data.lastSenderName.size() > 0
-        && request.resource.data.lastSenderName.size() <= 80
-        && request.resource.data.preview is string
-        && request.resource.data.preview.size() <= 140;
+      return docData().keys().hasOnly(["lastAt", "lastSenderUid", "lastSenderName", "preview"])
+        && docData().lastSenderUid == request.auth.uid
+        && docData().lastAt == request.time
+        && textLen(docData().lastSenderName, 1, 80)
+        && textMax(docData().preview, 140);
     }
 
     match /tenants/{tenantId}/chats/{threadId} {
@@ -138,7 +128,7 @@
       allow create: if chatCanAccess(tenantId, threadId) && chatMessageOk(tenantId, threadId);
       allow update: if false;
       allow delete: if chatCanAccess(tenantId, threadId)
-        && (resource.data.senderUid == request.auth.uid || chatAdmin(tenantId));
+        && (prevData().senderUid == request.auth.uid || chatAdmin(tenantId));
     }
 
     match /tenants/{tenantId}/chatSeen/{uid}/threads/{threadId} {
@@ -146,8 +136,8 @@
       allow create, update: if chatSignedIn()
         && request.auth.uid == uid
         && chatCanAccess(tenantId, threadId)
-        && request.resource.data.keys().hasOnly(["seenAt"])
-        && request.resource.data.seenAt == request.time;
+        && docData().keys().hasOnly(["seenAt"])
+        && docData().seenAt == request.time;
       allow delete: if false;
     }
 
@@ -163,31 +153,29 @@
           : ((chatHasProfile() || chatIsAlex() || chatIsPatrick()) ? "heartwood" : ""));
     }
     function chatCompanyIdOk(id) {
-      return id is string && id.size() >= 2 && id.size() <= 40 && id.matches('^[a-z0-9][a-z0-9-]{0,39}$');
+      return textLen(id, 2, 40) && id.matches('^[a-z0-9][a-z0-9-]{0,39}$');
     }
     function chatPushOriginOk() {
-      return request.resource.data.origin in [
+      return docData().origin in [
         "https://jobs.heartwoodew.com",
         "https://app.callupapp.com.au",
         "https://callupapp.web.app"
       ];
     }
     function chatTokenOk() {
-      return request.resource.data.keys().hasOnly(["token", "companyId", "origin", "platform", "updatedAt"])
-        && request.resource.data.token is string
-        && request.resource.data.token.size() >= 20
-        && request.resource.data.token.size() <= 4096
-        && chatCompanyIdOk(request.resource.data.companyId)
-        && request.resource.data.companyId == chatTokenCompany()
+      return docData().keys().hasOnly(["token", "companyId", "origin", "platform", "updatedAt"])
+        && textLen(docData().token, 20, 4096)
+        && chatCompanyIdOk(docData().companyId)
+        && docData().companyId == chatTokenCompany()
         && chatPushOriginOk()
-        && request.resource.data.platform == "web"
-        && request.resource.data.updatedAt == request.time;
+        && docData().platform == "web"
+        && docData().updatedAt == request.time;
     }
     function chatPrefsOk() {
-      return request.resource.data.keys().hasOnly(["muteChat", "muteDaily", "muteClockOnReminder"])
-        && request.resource.data.muteChat is bool
-        && request.resource.data.muteDaily is bool
-        && (!("muteClockOnReminder" in request.resource.data) || request.resource.data.muteClockOnReminder is bool);
+      return docData().keys().hasOnly(["muteChat", "muteDaily", "muteClockOnReminder"])
+        && docData().muteChat is bool
+        && docData().muteDaily is bool
+        && (!("muteClockOnReminder" in docData()) || docData().muteClockOnReminder is bool);
     }
     match /users/{uid}/fcmTokens/{tokenId} {
       allow read: if chatSignedIn() && request.auth.uid == uid;
@@ -223,11 +211,11 @@
         && docId == "prefs"
         && chatPrefsOk();
       allow create: if docId == "prefs" && chatClockAdmin()
-        && request.resource.data.keys().hasOnly(["muteClockOnReminder"])
-        && request.resource.data.muteClockOnReminder is bool;
+        && docData().keys().hasOnly(["muteClockOnReminder"])
+        && docData().muteClockOnReminder is bool;
       allow update: if docId == "prefs" && chatClockAdmin()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["muteClockOnReminder"])
-        && request.resource.data.muteClockOnReminder is bool;
+        && docData().diff(prevData()).affectedKeys().hasOnly(["muteClockOnReminder"])
+        && docData().muteClockOnReminder is bool;
       allow delete: if false;
     }
 // END CHAT RULES

@@ -13,108 +13,103 @@
       return rcStaff() && (isAlex() || isPatrick() || (hasProfile() && (profile().role == "admin" || profile().role == "manager")));
     }
     function rcReceiptPath(uid, id) {
-      return request.resource.data.receiptPath == ""
-        || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.pdf"
-        || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.jpg"
-        || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.png"
-        || request.resource.data.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.webp";
+      let next = docData();
+      return next.receiptPath == ""
+        || next.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.pdf"
+        || next.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.jpg"
+        || next.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.png"
+        || next.receiptPath == "reimbursements/" + uid + "/" + id + "/receipt.webp";
     }
     function rcCreate(id) {
       return rcStaff()
         && id.matches('^rc[a-z0-9]{16}$')
-        && request.resource.data.keys().hasOnly(["uid", "name", "date", "amountCents", "supplier", "category", "notes", "paidWith", "jobId", "jobLabel", "receiptPath", "receiptName", "status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "paidAt", "createdAt", "updatedAt", "companyId"])
-        && (!("companyId" in request.resource.data) || request.resource.data.companyId == callerCompany())
-        && request.resource.data.uid == request.auth.uid
-        && request.resource.data.name is string
-        && request.resource.data.name.size() > 0
-        && request.resource.data.name.size() <= 80
-        && request.resource.data.date is string
-        && request.resource.data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
-        && request.resource.data.amountCents is int
-        && request.resource.data.amountCents > 0
-        && request.resource.data.amountCents <= 10000000
-        && request.resource.data.supplier is string
-        && request.resource.data.supplier.size() > 0
-        && request.resource.data.supplier.size() <= 120
-        && (request.resource.data.category == "fuel" || request.resource.data.category == "tip-fees" || request.resource.data.category == "parts" || request.resource.data.category == "tools" || request.resource.data.category == "consumables" || request.resource.data.category == "other")
-        && request.resource.data.notes is string
-        && request.resource.data.notes.size() <= 1000
-        && (request.resource.data.paidWith == "personal-card" || request.resource.data.paidWith == "cash")
-        && request.resource.data.jobId is string
-        && request.resource.data.jobId.matches('^[A-Za-z0-9_-]{0,80}$')
-        && request.resource.data.jobLabel is string
-        && request.resource.data.jobLabel.size() <= 160
+        && docData().keys().hasOnly(["uid", "name", "date", "amountCents", "supplier", "category", "notes", "paidWith", "jobId", "jobLabel", "receiptPath", "receiptName", "status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "paidAt", "createdAt", "updatedAt", "companyId"])
+        && (!("companyId" in docData()) || docData().companyId == callerCompany())
+        && docData().uid == request.auth.uid
+        && textLen(docData().name, 1, 80)
+        && docData().date is string
+        && docData().date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && docData().amountCents is int
+        && docData().amountCents > 0
+        && docData().amountCents <= 10000000
+        && textLen(docData().supplier, 1, 120)
+        && (docData().category == "fuel" || docData().category == "tip-fees" || docData().category == "parts" || docData().category == "tools" || docData().category == "consumables" || docData().category == "other")
+        && textMax(docData().notes, 1000)
+        && (docData().paidWith == "personal-card" || docData().paidWith == "cash")
+        && docData().jobId is string
+        && docData().jobId.matches('^[A-Za-z0-9_-]{0,80}$')
+        && textMax(docData().jobLabel, 160)
         && rcReceiptPath(request.auth.uid, id)
-        && request.resource.data.receiptName is string
-        && request.resource.data.receiptName.size() <= 120
-        && (request.resource.data.receiptPath == ""
-          ? request.resource.data.receiptName == ""
-          : request.resource.data.receiptName.size() > 0)
-        && request.resource.data.status == "submitted"
-        && request.resource.data.decisionNote == ""
-        && request.resource.data.decidedBy == ""
-        && request.resource.data.decidedByName == ""
-        && request.resource.data.decidedAt == null
-        && request.resource.data.paidAt == null
-        && request.resource.data.createdAt == request.time
-        && request.resource.data.updatedAt == request.time;
+        && textMax(docData().receiptName, 120)
+        && (docData().receiptPath == ""
+          ? docData().receiptName == ""
+          : docData().receiptName.size() > 0)
+        && docData().status == "submitted"
+        && docData().decisionNote == ""
+        && docData().decidedBy == ""
+        && docData().decidedByName == ""
+        && docData().decidedAt == null
+        && docData().paidAt == null
+        && docData().createdAt == request.time
+        && docData().updatedAt == request.time;
     }
     function rcStep() {
-      return (resource.data.status == "submitted" && (request.resource.data.status == "approved" || request.resource.data.status == "declined" || request.resource.data.status == "paid"))
-        || (resource.data.status == "approved" && (request.resource.data.status == "paid" || request.resource.data.status == "declined"));
+      let next = docData();
+      let prev = prevData();
+      return (prev.status == "submitted" && (next.status == "approved" || next.status == "declined" || next.status == "paid"))
+        || (prev.status == "approved" && (next.status == "paid" || next.status == "declined"));
     }
     function rcDecision() {
       return rcAdmin()
         && rcStep()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "paidAt", "updatedAt", "hubdocStatus"])
-        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(["hubdocStatus"])
-          || (request.resource.data.status == "paid"
-            && request.resource.data.hubdocStatus == (resource.data.receiptPath == "" ? "no-receipt" : "queued")))
-        && request.resource.data.decisionNote is string
-        && request.resource.data.decisionNote.size() <= 500
-        && request.resource.data.decidedBy == request.auth.uid
-        && request.resource.data.decidedByName is string
-        && request.resource.data.decidedByName.size() > 0
-        && request.resource.data.decidedByName.size() <= 80
-        && request.resource.data.decidedAt == request.time
-        && request.resource.data.updatedAt == request.time
-        && (request.resource.data.status == "paid"
-          ? request.resource.data.paidAt == request.time
-          : request.resource.data.paidAt == null);
+        && docData().diff(prevData()).affectedKeys().hasOnly(["status", "decisionNote", "decidedBy", "decidedByName", "decidedAt", "paidAt", "updatedAt", "hubdocStatus"])
+        && (!docData().diff(prevData()).affectedKeys().hasAny(["hubdocStatus"])
+          || (docData().status == "paid"
+            && docData().hubdocStatus == (prevData().receiptPath == "" ? "no-receipt" : "queued")))
+        && textMax(docData().decisionNote, 500)
+        && docData().decidedBy == request.auth.uid
+        && textLen(docData().decidedByName, 1, 80)
+        && docData().decidedAt == request.time
+        && docData().updatedAt == request.time
+        && (docData().status == "paid"
+          ? docData().paidAt == request.time
+          : docData().paidAt == null);
     }
 
     // Hubdoc filer: the box sync account (tools/hubdoc_filer.py) reads paid claims and records only the Hubdoc
     // send state. It cannot change the claim itself, and only on claims that are already paid.
     function rcSync() { return rcSignedIn() && request.auth.uid == "38SU5waAy4f9UI9N6JTqDMaYpQg2"; }
     function rcHubdoc() {
+      let next = docData();
+      let prev = prevData();
       return rcSync()
-        && resource.data.status == "paid"
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["hubdocStatus", "hubdocAttempts", "hubdocUpdatedAt", "hubdocSentAt", "hubdocMessageId", "hubdocVia", "hubdocError"])
-        && request.resource.data.hubdocStatus in ["sending", "sent", "failed", "no-receipt"]
-        && request.resource.data.get("hubdocAttempts", 0) is int
-        && request.resource.data.get("hubdocError", "") is string
-        && request.resource.data.get("hubdocError", "").size() <= 300
-        && request.resource.data.get("hubdocMessageId", "") is string
-        && request.resource.data.get("hubdocMessageId", "").size() <= 100;
+        && prev.status == "paid"
+        && next.diff(prev).affectedKeys().hasOnly(["hubdocStatus", "hubdocAttempts", "hubdocUpdatedAt", "hubdocSentAt", "hubdocMessageId", "hubdocVia", "hubdocError"])
+        && next.hubdocStatus in ["sending", "sent", "failed", "no-receipt"]
+        && next.get("hubdocAttempts", 0) is int
+        && next.get("hubdocError", "") is string
+        && next.get("hubdocError", "").size() <= 300
+        && next.get("hubdocMessageId", "") is string
+        && next.get("hubdocMessageId", "").size() <= 100;
     }
 
     match /reimbursementClaims/{id} {
-      allow get: if (rcSync() && resource != null && resource.data.status == "paid")
+      allow get: if (rcSync() && resource != null && prevData().status == "paid")
         || (rcStaff() && callerCompany() == "heartwood" && (
           (resource == null && id.matches('^rc[a-z0-9]{16}$'))
-          || (resource != null && docCompany(resource.data) == "heartwood" && (rcAdmin() || resource.data.uid == request.auth.uid))
+          || (resource != null && docCompany(prevData()) == "heartwood" && (rcAdmin() || prevData().uid == request.auth.uid))
         ))
-        || (callerCompany() != "heartwood" && resource != null && resource.data.companyId == callerCompany()
-          && (resource.data.uid == request.auth.uid || (hasProfile() && (profile().role == "admin" || profile().role == "manager"))));
-      allow list: if rcStaff() && callerCompany() == "heartwood" && resource.data.uid == request.auth.uid;
-      allow list: if rcAdmin() && callerCompany() == "heartwood" && resource.data.companyId == "heartwood";
-      allow list: if rcSync() && resource.data.status == "paid";
-      allow list: if callerCompany() != "heartwood" && resource.data.companyId == callerCompany()
-        && (resource.data.uid == request.auth.uid || (hasProfile() && (profile().role == "admin" || profile().role == "manager")));
+        || (callerCompany() != "heartwood" && resource != null && prevData().companyId == callerCompany()
+          && (prevData().uid == request.auth.uid || (hasProfile() && (profile().role == "admin" || profile().role == "manager"))));
+      allow list: if rcStaff() && callerCompany() == "heartwood" && prevData().uid == request.auth.uid;
+      allow list: if rcAdmin() && callerCompany() == "heartwood" && prevData().companyId == "heartwood";
+      allow list: if rcSync() && prevData().status == "paid";
+      allow list: if callerCompany() != "heartwood" && prevData().companyId == callerCompany()
+        && (prevData().uid == request.auth.uid || (hasProfile() && (profile().role == "admin" || profile().role == "manager")));
       allow create: if rcCreate(id) && (
-        callerCompany() == "heartwood" || request.resource.data.companyId == callerCompany()
+        callerCompany() == "heartwood" || docData().companyId == callerCompany()
       );
-      allow update: if (rcDecision() && docCompany(resource.data) == callerCompany()) || rcHubdoc();
+      allow update: if (rcDecision() && docCompany(prevData()) == callerCompany()) || rcHubdoc();
       allow delete: if false;
     }
 // END REIMBURSEMENT CLAIM RULES

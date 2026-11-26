@@ -40,80 +40,80 @@
 
     match /companies/{companyId}/inbound/{docId} {
       allow get: if docId == "config" && inboundOffice(companyId)
-        && (resource == null || resource.data.companyId == companyId);
+        && (resource == null || prevData().companyId == companyId);
       allow list: if false;
       allow create: if docId == "config" && inboundMinter(companyId)
-        && request.resource.data.keys().hasOnly(["companyId", "address", "localPart", "domain", "createdBy", "createdAt"])
-        && request.resource.data.companyId == companyId
-        && inboundLocalOk(companyId, request.resource.data.localPart)
-        && request.resource.data.domain == "inbound.callupapp.com.au"
-        && request.resource.data.address == request.resource.data.localPart + "@inbound.callupapp.com.au"
-        && request.resource.data.createdBy == request.auth.uid
-        && request.resource.data.createdAt == request.time;
+        && docData().keys().hasOnly(["companyId", "address", "localPart", "domain", "createdBy", "createdAt"])
+        && docData().companyId == companyId
+        && inboundLocalOk(companyId, docData().localPart)
+        && docData().domain == "inbound.callupapp.com.au"
+        && docData().address == docData().localPart + "@inbound.callupapp.com.au"
+        && docData().createdBy == request.auth.uid
+        && docData().createdAt == request.time;
       allow update, delete: if false;
     }
     match /companies/{companyId}/inboundMail/{messageId} {
-      allow get: if inboundOffice(companyId) && resource.data.companyId == companyId;
-      allow list: if inboundOffice(companyId) && resource.data.companyId == companyId;
+      allow get: if inboundOffice(companyId) && prevData().companyId == companyId;
+      allow list: if inboundOffice(companyId) && prevData().companyId == companyId;
       allow update: if resource != null
         && inboundOffice(companyId)
-        && resource.data.companyId == companyId
-        && resource.data.kind == "verification"
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["dismissed", "dismissedAt"])
-        && request.resource.data.dismissed == true
-        && request.resource.data.dismissedAt == request.time;
+        && prevData().companyId == companyId
+        && prevData().kind == "verification"
+        && docData().diff(prevData()).affectedKeys().hasOnly(["dismissed", "dismissedAt"])
+        && docData().dismissed == true
+        && docData().dismissedAt == request.time;
       allow create, delete: if false;
     }
     match /companies/{companyId}/jobDrafts/{draftId} {
       function draftTextOk(d) {
-        return d.client is string && d.client.size() <= 120
-          && d.address is string && d.address.size() <= 200
-          && d.notes is string && d.notes.size() <= 800
-          && d.description is string && d.description.size() <= 800
-          && d.po is string && d.po.size() <= 40
-          && d.type is string && d.type.size() <= 40
+        return textMax(d.client, 120)
+          &&textMax(d.address, 200)
+          &&textMax(d.notes, 800)
+          &&textMax(d.description, 800)
+          &&textMax(d.po, 40)
+          &&textMax(d.type, 40)
           && (!("date" in d) || d.date == "" || d.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$'))
-          && (!("supervisorName" in d) || (d.supervisorName is string && d.supervisorName.size() <= 80))
-          && (!("supervisorEmail" in d) || (d.supervisorEmail is string && d.supervisorEmail.size() <= 120))
-          && (!("supervisorPhone" in d) || (d.supervisorPhone is string && d.supervisorPhone.size() <= 40));
+          && (!("supervisorName" in d) || (textMax(d.supervisorName, 80)))
+          && (!("supervisorEmail" in d) || (textMax(d.supervisorEmail, 120)))
+          && (!("supervisorPhone" in d) || (textMax(d.supervisorPhone, 40)));
       }
-      allow get: if inboundOffice(companyId) && resource.data.companyId == companyId;
-      allow list: if inboundOffice(companyId) && resource.data.companyId == companyId;
+      allow get: if inboundOffice(companyId) && prevData().companyId == companyId;
+      allow list: if inboundOffice(companyId) && prevData().companyId == companyId;
       allow update: if resource != null
         && inboundOffice(companyId)
-        && resource.data.companyId == companyId
-        && request.resource.data.companyId == companyId
-        && resource.data.status == "pending"
-        && resource.data.source == "inbound-forward"
-        && request.resource.data.messageId == resource.data.messageId
-        && inboundMoneyFree(request.resource.data)
+        && prevData().companyId == companyId
+        && docData().companyId == companyId
+        && prevData().status == "pending"
+        && prevData().source == "inbound-forward"
+        && docData().messageId == prevData().messageId
+        && inboundMoneyFree(docData())
         && (
-          (request.resource.data.status == "pending"
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["client", "address", "lot", "street", "suburb", "type", "typeLabel", "costCode", "date", "po", "description", "notes", "supervisorName", "supervisorEmail", "supervisorPhone", "updatedAt"])
-            && draftTextOk(request.resource.data))
-          || (request.resource.data.status == "approved"
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["client", "address", "lot", "street", "suburb", "type", "typeLabel", "costCode", "date", "po", "description", "notes", "supervisorName", "supervisorEmail", "supervisorPhone", "updatedAt", "status", "jobId", "approvedBy", "approvedAt"])
-            && draftTextOk(request.resource.data)
-            && request.resource.data.get("jobId", "") is string
-            && request.resource.data.get("jobId", "").matches('^fwd[A-Za-z0-9]{8,40}$')
-            && request.resource.data.approvedBy == request.auth.uid
-            && request.resource.data.approvedAt == request.time)
-          || (request.resource.data.status == "discarded"
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "discardedBy", "discardedAt"])
-            && request.resource.data.discardedBy == request.auth.uid
-            && request.resource.data.discardedAt == request.time)
+          (docData().status == "pending"
+            && docData().diff(prevData()).affectedKeys().hasOnly(["client", "address", "lot", "street", "suburb", "type", "typeLabel", "costCode", "date", "po", "description", "notes", "supervisorName", "supervisorEmail", "supervisorPhone", "updatedAt"])
+            && draftTextOk(docData()))
+          || (docData().status == "approved"
+            && docData().diff(prevData()).affectedKeys().hasOnly(["client", "address", "lot", "street", "suburb", "type", "typeLabel", "costCode", "date", "po", "description", "notes", "supervisorName", "supervisorEmail", "supervisorPhone", "updatedAt", "status", "jobId", "approvedBy", "approvedAt"])
+            && draftTextOk(docData())
+            && docData().get("jobId", "") is string
+            && docData().get("jobId", "").matches('^fwd[A-Za-z0-9]{8,40}$')
+            && docData().approvedBy == request.auth.uid
+            && docData().approvedAt == request.time)
+          || (docData().status == "discarded"
+            && docData().diff(prevData()).affectedKeys().hasOnly(["status", "discardedBy", "discardedAt"])
+            && docData().discardedBy == request.auth.uid
+            && docData().discardedAt == request.time)
         );
       allow create, delete: if false;
     }
     match /inboundRoutes/{localPart} {
       allow read: if false;
       allow create: if signedIn()
-        && inboundMinter(request.resource.data.companyId)
-        && request.resource.data.keys().hasOnly(["companyId", "address", "createdBy", "createdAt"])
-        && inboundLocalOk(request.resource.data.companyId, localPart)
-        && request.resource.data.address == localPart + "@inbound.callupapp.com.au"
-        && request.resource.data.createdBy == request.auth.uid
-        && request.resource.data.createdAt == request.time;
+        && inboundMinter(docData().companyId)
+        && docData().keys().hasOnly(["companyId", "address", "createdBy", "createdAt"])
+        && inboundLocalOk(docData().companyId, localPart)
+        && docData().address == localPart + "@inbound.callupapp.com.au"
+        && docData().createdBy == request.auth.uid
+        && docData().createdAt == request.time;
       allow update, delete: if false;
     }
     match /inboundSeen/{id} {
