@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { DEFAULT_ORG, orgSettings, setActiveCompany } from "../../app/org-settings.js";
 import { parseMigrateArgs, LIVE_PROJECT } from "../scripts/migrate-company-id.mjs";
 import {
-  HEARTWOOD_ACCOUNTS_EMAIL, HEARTWOOD_COMPANY_ID, PAUSE_GRACE_DAYS, TRIAL_DAYS, TRIAL_REMINDER_DAYS, billingHook, buildCompanyCreate,
+  HEARTWOOD_ACCOUNTS_EMAIL, HEARTWOOD_COMPANY_ID, PAUSE_GRACE_DAYS, TRIAL_DAYS, TRIAL_REMINDER_DAYS, abnChecksumOk, billingHook, buildCompanyCreate,
   addressFieldsFromCompany, companyAccess, companyDetailPatch, docCompanyId, filterMaster, friendCodeOk, friendInviteLink, formatCompanyAddress, heartwoodSeed, hoursBrand, isPlatformOwner,
   masterRow, masterTotals, parseCompanyAddress, planCompanyField, scopeRecord, trialEnd, validateCompanyInput,
 } from "../../app/features/company.js";
@@ -37,7 +37,7 @@ test("Heartwood defaults and hours copy stay the same until a company is loaded"
 
 test("another company replaces the Heartwood name but does not become platform owner", () => {
   const input = validateCompanyInput({
-    name: "Acme Civil", legalName: "Acme Civil Pty Ltd", abn: "12 345 678 901",
+    name: "Acme Civil", legalName: "Acme Civil Pty Ltd", abn: "51 824 753 556",
     address: "1 Yard St, Brisbane", phone: "0400 000 001", email: "office@acme.test",
     accountsEmail: "accounts@acme.test", hubdocAddress: "", logoUrl: "",
   });
@@ -53,7 +53,7 @@ test("another company replaces the Heartwood name but does not become platform o
   setActiveCompany({ ...created, companyId: "acme-1" });
   const org = orgSettings();
   assert.equal(org.name, "Acme Civil");
-  assert.equal(org.abn, "12 345 678 901");
+  assert.equal(org.abn, "51 824 753 556");
   assert.equal(hoursBrand(org).accountsEmail, "accounts@acme.test");
   assert.equal(hoursBrand(org).subjectName, "Acme Civil");
   setActiveCompany(null);
@@ -65,7 +65,7 @@ test("another company replaces the Heartwood name but does not become platform o
 test("master rows are account-level and totals ignore job text", () => {
   const now = new Date("2026-11-08T00:00:00Z");
   const trial = masterRow("acme", {
-    name: "Acme Civil", abn: "12 345 678 901", email: "office@acme.test", phone: "0400",
+    name: "Acme Civil", abn: "51 824 753 556", email: "office@acme.test", phone: "0400",
     signedUpAt: "2026-11-01T00:00:00Z", trialEndsAt: "2026-11-15T00:00:00Z",
     plan: "trial", status: "active", staffCount: 2, jobCount: 4, lastActivityAt: "2026-11-07T00:00:00Z",
     client: "should not be copied", invoiceAmount: 500,
@@ -124,7 +124,7 @@ test("migration only adds a missing companyId and never replaces one", () => {
   assert.equal(scopeRecord({ client: "Orbit" }, "acme").companyId, "acme");
   const invite = { name: "Casey Nguyen", role: "operator", email: "casey.nguyen@example.com", tenantId: "heartwood", token: "a".repeat(43) };
   assert.deepEqual(profileFromInvite(invite), { name: "Casey Nguyen", role: "operator", email: "casey.nguyen@example.com", companyId: "heartwood" });
-  const patch = companyDetailPatch({ name: "Acme Civil", legalName: "Acme Civil Pty Ltd", abn: "12 345 678 901", address: "1 Yard St", email: "office@acme.test", accountsEmail: "accounts@acme.test", signoff: "Acme", phone: "", hubdocAddress: "", logoUrl: "" }, { phone: "0400111222" });
+  const patch = companyDetailPatch({ name: "Acme Civil", legalName: "Acme Civil Pty Ltd", abn: "51 824 753 556", address: "1 Yard St", email: "office@acme.test", accountsEmail: "accounts@acme.test", signoff: "Acme", phone: "", hubdocAddress: "", logoUrl: "" }, { phone: "0400111222" });
   assert.equal(patch.ok, true);
   assert.deepEqual(patch.patch, { phone: "0400111222" });
 });
@@ -309,14 +309,14 @@ test("signup stores a street, suburb, state and postcode and keeps one address s
   assert.equal(validateCompanyInput({ ...base, state: "Queensland" }).reason, "state");
   assert.equal(validateCompanyInput({ ...base, postcode: "0800", suburb: "Darwin", state: "NT", street: "1 Smith St" }).value.address, "1 Smith St, Darwin NT 0800");
   const legacy = validateCompanyInput({
-    name: "Acme", legalName: "Acme Pty Ltd", abn: "12 345 678 901", address: "1 Yard St",
+    name: "Acme", legalName: "Acme Pty Ltd", abn: "51 824 753 556", address: "1 Yard St",
     phone: "", email: "office@acme.test", accountsEmail: "accounts@acme.test", hubdocAddress: "", logoUrl: "", signoff: "Acme",
   });
   assert.equal(legacy.ok, true);
   assert.equal(legacy.value.address, "1 Yard St");
   assert.equal(legacy.value.addressParts, undefined);
   const kept = companyDetailPatch(
-    { name: "Acme", legalName: "Acme Pty Ltd", abn: "12 345 678 901", address: "1 Yard St", email: "office@acme.test", accountsEmail: "accounts@acme.test", signoff: "Acme", phone: "", hubdocAddress: "", logoUrl: "" },
+    { name: "Acme", legalName: "Acme Pty Ltd", abn: "51 824 753 556", address: "1 Yard St", email: "office@acme.test", accountsEmail: "accounts@acme.test", signoff: "Acme", phone: "", hubdocAddress: "", logoUrl: "" },
     { street: "1 Yard St", suburb: "", state: "", postcode: "", phone: "0400111222" },
   );
   assert.equal(kept.ok, true);
@@ -330,4 +330,20 @@ test("signup stores a street, suburb, state and postcode and keeps one address s
   const old = companySettingsHtml({ companyId: "acme", name: "Acme", legalName: "Acme", abn: "1", signoff: "Acme", address: "1 Yard St", email: "office@acme.test", accountsEmail: "accounts@acme.test" }, { canEdit: true });
   assert.match(old, /value="1 Yard St"/);
   assert.deepEqual(addressFieldsFromCompany({ address: "1 Yard St" }).suburb, "");
+});
+
+test("an ABN needs 11 digits and a valid checksum", () => {
+  assert.equal(abnChecksumOk("1"), false);
+  assert.equal(abnChecksumOk("123"), false);
+  assert.equal(abnChecksumOk("51 824 753 556"), true);
+  assert.equal(abnChecksumOk("51824753556"), true);
+  assert.equal(abnChecksumOk("31 667 738 098"), true);
+  assert.equal(validateCompanyInput({
+    name: "Acme", legalName: "Acme Pty Ltd", abn: "1", address: "1 Yard St",
+    email: "office@acme.test", accountsEmail: "accounts@acme.test",
+  }).reason, "abn");
+  assert.equal(validateCompanyInput({
+    name: "Acme", legalName: "Acme Pty Ltd", abn: "51 824 753 556", address: "1 Yard St",
+    email: "office@acme.test", accountsEmail: "accounts@acme.test",
+  }).ok, true);
 });

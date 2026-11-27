@@ -4,7 +4,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/fireba
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, signOut, connectAuthEmulator, setPersistence, browserLocalPersistence }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator,
-  collection, doc, getDoc, getDocFromCache, getDocs, getDocsFromCache, query, where, limit, orderBy, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, deleteField, serverTimestamp, arrayUnion, runTransaction, Timestamp,
+  collection, doc, getDoc, getDocFromCache, getDocs, getDocsFromCache, query, where, limit, orderBy, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, deleteField, serverTimestamp, arrayUnion, runTransaction, writeBatch, Timestamp,
   disableNetwork, enableNetwork }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { getStorage, ref as storageRef, uploadBytes, uploadBytesResumable, deleteObject, connectStorageEmulator, listAll, getMetadata, getBlob }
@@ -27,7 +27,7 @@ import {
 import { SWMS, SWMS_EMPTY, SWMS_VERSION, sigMs, sigExp, latestSig, statusOf, swmsSignatureData, buildPlaceholderPdf, companySwms, swmsReminderModel, swmsSignoffOrg } from "./features/swms-sign.js";
 import {
   acceptLoadingHtml, acceptScreenModel, acceptViewHtml, buildInviteDraft, inviteFailureText,
-  newInviteToken, pendingInviteForEmail, staffViewHtml, appOriginFor, invitableRoles, CREW_ROLES,
+  newInviteToken, pendingInviteForEmail, staffViewHtml, appOriginFor, invitableRoles, CREW_ROLES, inviteLockId, dispatchRoster,
   canSendPasswordReset, canRemindLocation, canToggleClockOnReminder, receivesClockOnReminder, forgotPasswordMessage, GOOGLE_ONLY_RESET,
 } from "./features/staff-invites.js";
 import { saveGuard, settleOrQueue } from "./features/pending-write.js";
@@ -43,7 +43,7 @@ import { PRODUCT_NAME, POWERED_BY, clearSavedOrg, orgSettings, saveOrgSettings, 
 import {
   buildCompanyCreate, buildFriendCompany, buildTestCompany, companyAccess, companyDetailPatch, companyIdFromName, demoBundle,
   friendCodeOk, friendInviteLink, hoursBrand, isPlatformOwner, newFriendCode,
-  ownerProfile, scopeRecord, trialEnd, validateCompanyInput, masterRow, CARD_SETUP_LATER,
+  ownerProfile, ownerRecoveryProfile, scopeRecord, trialEnd, validateCompanyInput, masterRow, CARD_SETUP_LATER,
   builderSignoff, clientDocId, companyClientNames, companyJobPrefix, companyMailbox, companyStdClients, timesheetMailParts,
   supervisorsPath, docCompanyId, isHeartwoodCompany, buildClientCreate,
 } from "./features/company.js";
@@ -58,11 +58,11 @@ import {
 import { addPresetRow, jobStepsHtml, jobStepsScopeLabel, mergeIndustryPresets, pestControlOn, presetEditorHtml, readPresetEditor, recurrenceHint, removePresetRow } from "./features/industry-presets.js";
 import { cancelVisitPatch, newSeriesId, planSeries, planStopSeries, recurrenceFromForm, repeatFieldHtml, seriesEndedPatch, shouldStopSeries, skipPatch, stopSeriesConfirmText, stopSeriesResultText, wireRepeatBox } from "./features/recurrence.js";
 import { buildCertificate, bytesToBase64, certificatePanelHtml, certificatesEnabled } from "./features/certificates.js";
-import { acceptLogoValue, compressLogo, isLogoStoragePath, logoFailureText, logoFileOk, logoUploadPlan } from "./features/company-logo.js";
+import { acceptLogoValue, compressLogo, inspectLogoFile, isLogoStoragePath, logoFailureText, logoUploadPlan } from "./features/company-logo.js";
 import {
   accuracyText, assessClockAdjust, brisbaneHM, captureFix, coordText, daysForSheet, editList, entryList, entryTimeEdited, locationConsent,
   locationMap, machineChoicePatch, machinePromptNeeded, machineShiftToResume, mapsHref, needsLocationConsent, newTsId, openClock,
-  paidShift, periodOpenForWorker, prestartStatus, sheetHours, sheetLock, shiftHours, sortedEntries, stampText,
+  paidShift, periodOpenForWorker, prestartStatus, sheetHours, sheetLock, shiftHours, sortedEntries, stampText, clockFailureText,
 } from "./features/timesheet.js";
 import {
   LIVE_LIMIT_NOTE, LIVE_SHARE_TEXT, SHARE_FIX_WAIT_MS, SHARE_MIN_MS, SHOW_AFTER_CLOCK_OFF, STALE_MINUTES, canSeeCrewMap, clockOffLocationUpdate,
@@ -218,10 +218,12 @@ let INBOUND_DOMAIN = "inbound.callupapp.com.au";
 let startDesktopInstall = () => {};
 let refreshDesktopBanner = () => {};
 let desktopBannerWouldShow = () => false;
-let SHELL_VERSION = "callup-shell-v163-add-client";
+let SHELL_VERSION = "callup-shell-v164";
 let isCoralClient = () => false;
 let canonicalClientName = name => String(name || "").trim();
 let planRequirementWrite = () => ({ apply: false });
+let ensureRequirementPlan = async () => ({ ok: false, applied: false });
+let readFileKind = async () => "";
 let commitRequirementPlan = async () => ({ ok: false, applied: false });
 let mountRequirements = () => () => {};
 let tickWriteBody = () => ({});
@@ -272,7 +274,7 @@ function loadFeaturePack() {
     ({ buildOperationalExport, retentionAdminText, retentionView } = retention);
     ({ buildJobEmail, compressImageBlob, deviceCanShareFiles, emailSendPlan, emailSheetHtml, jpegName, mailtoHref, parseEmailRecipients, photoBudget, photosZip, selectEmailAttachments, shareText, suggestRecipient, uniqueNames } = jobEmail);
     ({ buildJobGallery, stampExpiresAfter, galleryExportPhotos, photoSlotHtml, lightboxHtml, photoFailureText } = gallery);
-    ({ decidePhotoEmail } = capture);
+    ({ decidePhotoEmail, readFileKind } = capture);
     ({ mountDocuments, unmountDocuments, openDocumentBlob, canManageDocuments, flushDocumentQueue, sharedQueue } = documents);
     ({ installChatApp } = chatUi);
     ({ installPush } = push);
@@ -288,7 +290,7 @@ function loadFeaturePack() {
     ({ startDesktopInstall, refreshDesktopBanner, desktopBannerWouldShow } = desktop);
     ({ forwardScreenHtml, jobFromDraft, inboundToken, collectSupervisorEmails, normalizeSupervisorEmail, readDraftEdits, INBOUND_DOMAIN } = inbound);
     ({ SHELL_VERSION, prepareTicket, ticketDialogHtml, ticketFailureText, newTicketId, compressTicketShot, screenshotUploadPlan, masterTicketsHtml, ticketPage } = supportTickets);
-    ({ isCoralClient, canonicalClientName, planRequirementWrite, commitRequirementPlan, mountRequirements, tickWriteBody, requirementText, CLEAN_STAGES } = requirements);
+    ({ isCoralClient, canonicalClientName, planRequirementWrite, commitRequirementPlan, ensureRequirementPlan, mountRequirements, tickWriteBody, requirementText, CLEAN_STAGES } = requirements);
     featuresOn = true;
     mountFeatureApps();
   })();
@@ -340,7 +342,10 @@ function queueWrite(writePromise, item, doneToast, opts = {}) {
   }, err => {
     pending = false;
     if (item && item.id) forgetWrite(item.id);
-    if (queued && !opts.quietFail) toast("Not saved: " + ((err && (err.code || err.message)) || "failed"));
+    if (queued && !opts.quietFail) {
+      reportClientError(err, (item && item.kind) || "save");
+      toast(item && item.kind === "timesheet" ? clockFailureText() : "Couldn't save that. Try again or tell your admin.");
+    }
     return { ok: false, err };
   });
   return settleOrQueue(tracked, opts.ms).then(result => {
@@ -803,6 +808,22 @@ async function bootSignedIn(user) {
     ).catch(() => null);
   }
   if (!live()) return;
+  if (!prof && deviceOnline()) {
+    try {
+      const owned = await getDocs(query(collection(db, "companies"), where("ownerUid", "==", user.uid)));
+      const row = owned.docs.find(d => d.id !== "heartwood" && (d.data() || {}).ownerUid === user.uid);
+      if (row) {
+        await setDoc(userRef, ownerRecoveryProfile({
+          email: user.email, displayName: user.displayName, companyId: row.id, company: row.data() || {},
+        }));
+        snap = await getDoc(userRef);
+        prof = snap.exists() ? snap.data() : null;
+      }
+    } catch (err) {
+      console.warn("owner link", err && (err.code || err.message));
+    }
+  }
+  if (!live()) return;
   if (!prof && !users) { renderNoAccess(user); return; }
   const bootstrapAdmin = user.uid === ALEX_UID || user.uid === "R7t41e54Ykcdk9WPdVZnDd697iI2";
   const roleAdmin = !!(prof && prof.role === "admin");
@@ -908,11 +929,8 @@ async function bootSignedIn(user) {
     // When the unscoped users list is denied, still know this company's own staff so legacy (no companyId) Heartwood sheets load.
     if (!users && staffSnap) HOME_UIDS = staffSnap.docs.filter(d => docCompanyId(d.data()) === companyId).map(d => d.id);
     const logins = (staffSnap ? staffSnap.docs : []).map(d => ({ uid: d.id, ...d.data() }))
-      .filter(u => (u.companyId || u.tenantId || "heartwood") === companyId)
-      .filter(u => CREW_ROLES.includes(u.role) || u.role === "supervisor" || u.role === "manager");
-    staff = companyId === "heartwood"
-      ? [{ uid: ALEX_UID, name: "Alex" }, ...logins.filter(u => u.uid !== ALEX_UID)]
-      : logins;
+      .filter(u => (u.companyId || u.tenantId || "heartwood") === companyId);
+    staff = dispatchRoster(logins, companyId, ALEX_UID);
     // Today and tomorrow first, so Home can paint. The full office window follows after that paint.
     let windowJobs = [], staleJobs = [];
     const setJobs = () => { jobs = mergeJobLists(windowJobs, staleJobs).map(withMoney); addNameOnlyStaff(jobs); };
@@ -1641,6 +1659,19 @@ function renderSignup(friendCode = "") {
     });
     accountsEmail.addEventListener("input", () => { accountsEmail.dataset.touched = "1"; });
   }
+  const signupLogo = $("#signup").logoFile;
+  if (signupLogo) signupLogo.addEventListener("change", async () => {
+    const file = signupLogo.files && signupLogo.files[0];
+    const slot = $("#signup").querySelector('[data-err="logo"]');
+    if (!file) { if (slot) { slot.hidden = true; slot.textContent = ""; } return; }
+    const check = await inspectLogoFile(file);
+    if (check.ok) { if (slot) { slot.hidden = true; slot.textContent = ""; } return; }
+    signupLogo.value = "";
+    const message = logoFailureText(check.reason);
+    if (slot) { slot.hidden = false; slot.textContent = message; }
+    const errBox = $("#signuperr");
+    if (errBox) errBox.textContent = message;
+  });
   $("#signup").onsubmit = async ev => {
     ev.preventDefault();
     const f = ev.target;
@@ -1677,12 +1708,19 @@ function renderSignup(friendCode = "") {
       hubdocAddress: f.hubdocAddress.value, logoUrl: "", signoff: f.name.value,
     });
     if (!checked.ok) { err.textContent = companyFailure(checked.reason); return; }
+    const logoFile = f.logoFile && f.logoFile.files && f.logoFile.files[0];
+    if (logoFile) {
+      const logoCheck = await inspectLogoFile(logoFile);
+      if (!logoCheck.ok) { err.textContent = logoFailureText(logoCheck.reason); return; }
+    }
     signingUp = true;
     let cred = null;
     try {
       cred = await createUserWithEmailAndPassword(auth, f.ownerEmail.value.trim(), f.password.value);
       const companyId = companyIdFromName(checked.value.name);
       const signedUpAt = serverTimestamp();
+      const profile = { ...ownerProfile(checked.value, companyId, f.ownerName.value.trim()), email: f.ownerEmail.value.trim().toLowerCase(), jobTitle: "Admin", jobTitleId: trades[0] + ":admin" };
+      const userRef = doc(db, "users", cred.user.uid);
       if (friendCodeOk(friendCode)) {
         await runTransaction(db, async (tx) => {
           const invRef = doc(db, "friendInvites", friendCode);
@@ -1691,28 +1729,31 @@ function renderSignup(friendCode = "") {
           tx.set(doc(db, "companies", companyId), { ...buildFriendCompany(checked.value, {
             companyId, ownerUid: cred.user.uid, signedUpAt, friendInvite: friendCode,
           }), trades, trade: trades[0] });
+          tx.set(userRef, profile);
           tx.update(invRef, { status: "used", usedBy: cred.user.uid, companyId, usedAt: serverTimestamp() });
         });
       } else {
-        await setDoc(doc(db, "companies", companyId), { ...buildCompanyCreate(checked.value, {
+        const batch = writeBatch(db);
+        batch.set(doc(db, "companies", companyId), { ...buildCompanyCreate(checked.value, {
           companyId, ownerUid: cred.user.uid, signedUpAt, trialEndsAt: Timestamp.fromDate(trialEnd(new Date())), lastActivityAt: signedUpAt,
         }), trades, trade: trades[0] });
+        batch.set(userRef, profile);
+        await batch.commit();
       }
-      await setDoc(doc(db, "users", cred.user.uid), { ...ownerProfile(checked.value, companyId, f.ownerName.value.trim()), email: f.ownerEmail.value.trim().toLowerCase(), jobTitle: "Admin", jobTitleId: trades[0] + ":admin" });
       try {
         await setDoc(doc(db, "companyTrades", companyId), { ...companyTradesDoc(companyId, trades, cred.user.uid), updatedAt: serverTimestamp() });
       } catch (err) { console.warn("trade catalog", err && (err.code || err.message)); }
       if (!friendCodeOk(friendCode)) await rememberSignupReferral(companyId);
-      const logoFile = f.logoFile && f.logoFile.files && f.logoFile.files[0];
-      if (logoFile && logoFileOk(logoFile).ok) {
+      if (logoFile) {
         try {
           const plan = logoUploadPlan(companyId, cred.user.uid);
-          if (plan.ok) {
-            const blob = await compressLogo(logoFile);
-            await uploadBytes(storageRef(storage, plan.path), blob, { contentType: plan.contentType, customMetadata: plan.metadata });
-            await updateDoc(doc(db, "companies", companyId), { logoUrl: plan.path });
-          }
-        } catch { /* company is already created; they can add the logo in settings */ }
+          if (!plan.ok) throw Object.assign(new Error("logo"), { code: plan.reason || "upload" });
+          const blob = await compressLogo(logoFile);
+          await uploadBytes(storageRef(storage, plan.path), blob, { contentType: plan.contentType, customMetadata: plan.metadata });
+          await updateDoc(doc(db, "companies", companyId), { logoUrl: plan.path });
+        } catch (logoErr) {
+          err.textContent = logoFailureText((logoErr && logoErr.code) || "compress");
+        }
       }
       signingUp = false;
       const addCard = !friendCodeOk(friendCode) && f.addCard && f.addCard.checked;
@@ -1915,11 +1956,11 @@ function bindSettings(A) {
     };
   };
   if (form.logoFile) {
-    form.logoFile.onchange = () => {
+    form.logoFile.onchange = async () => {
       const file = form.logoFile.files && form.logoFile.files[0];
       if (!file) return;
-      const check = logoFileOk(file);
-      if (!check.ok) { toast(logoFailureText(check.reason)); form.logoFile.value = ""; return; }
+      const check = await inspectLogoFile(file);
+      if (!check.ok) { toast(logoFailureText(check.reason)); form.logoFile.value = ""; pendingLogo = null; return; }
       pendingLogo = file;
       showLogoPreview(URL.createObjectURL(file));
       bindLogoRemove(ensureLogoRemove());
@@ -2701,13 +2742,24 @@ async function queuePlannedPhotos(j, files, plan) {
 }
 async function mirrorJobPhotos(j, files) {
   const at = galleryNow();
+  const accepted = [];
+  for (const file of files || []) {
+    const kind = await readFileKind(file);
+    if (kind !== "image/jpeg" && kind !== "image/png" && kind !== "image/webp" && kind !== "image/gif") {
+      toast("That file isn't a photo. Use a JPEG, PNG, WebP or GIF.");
+      continue;
+    }
+    accepted.push({ file, kind });
+  }
+  if (!accepted.length) return { ok: false, reason: "mime-not-allowed", uploaded: [], skipped: [] };
   let plan = planJobPhotoMirrors({
     membership: cloudMembership(), job: j,
-    files: files.map((f, i) => ({
-      name: f.name, type: f.type || "image/jpeg", size: f.size || 1,
+    files: accepted.map((row, i) => ({
+      name: row.file.name, type: row.kind, size: row.file.size || 1,
       photoId: (`p${i}${Math.random().toString(36).slice(2, 10)}`).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 41),
     })),
   });
+  files = accepted.map(row => row.file);
   if (!plan.ok) { console.warn("cloud photo mirror skipped", (plan.skipped || []).map(s => s.reason).join(",") || "none"); return { ok: false, reason: (plan.skipped || []).map(s => s.reason).join(",") || "none", uploaded: [], skipped: plan.skipped || [] }; }
   plan = stampExpiresAfter(plan, j, at);
   if (!deviceOnline()) {
@@ -3122,7 +3174,7 @@ function receiptDialog(j) {
     <label>Supplier / what it was for<input name="sup" required placeholder="e.g. Bunnings - silt fence" ${inputAttrs("supplier")}></label>
     <label class="ck" id="rpaidbox"><input type="checkbox" name="mine" checked> I paid for this myself (reimburse me)</label>
     <p class="sub" id="rveolianote" hidden>${VEOLIA_PAID_NOTE}</p>
-    <p class="sub" id="rpaidhint">Uncheck if this went on the company account (for example a Remondis tip docket).</p>
+    <p class="sub" id="rpaidhint">${esc(myCompanyId() === "heartwood" ? "Uncheck if this went on the company account (for example a Remondis tip docket)." : "Uncheck if this went on the company account (for example a tip docket).")}</p>
     <p id="rerr" class="err"></p>
     <div class="btns"><button value="cancel" formnovalidate class="sm-btn">Close</button><button value="send" class="sm-btn primary" id="rsend">Upload</button></div>
     <h4>My recent receipts</h4><div id="rmine" class="sub">Loading…</div></form>`;
@@ -4052,8 +4104,9 @@ function bindLeave(A) {
     let certificatePath = "";
     let certificateName = "";
     if (file) {
-      const objectName = certificateObjectName(file.type);
-      const contentType = certificateContentType(file.type);
+      const kind = await readFileKind(file);
+      const objectName = certificateObjectName(kind);
+      const contentType = certificateContentType(kind);
       if (!objectName) { if (err) err.textContent = "Use a photo (JPEG, PNG, WebP) or a PDF."; return; }
       if (file.size > 8 * 1024 * 1024) { if (err) err.textContent = "The certificate must be 8 MB or smaller."; return; }
       certificatePath = certificateStoragePath(me.uid, id, objectName);
@@ -4256,7 +4309,12 @@ async function tsLoad(ws, opts = {}) {
 }
 // A queued punch that the server later refuses must not stay silent.
 function tsLate(write) {
-  return write.catch(e => { toast("Clock time not saved: " + (e.code || e.message)); throw e; });
+  return write.catch(e => {
+    if (e) e.tsTold = true;
+    reportClientError(e, "clock");
+    toast(clockFailureText());
+    throw e;
+  });
 }
 async function tsWrite(ws, sheet, entries, lastEntryId, opts = {}) {
   const days = daysForSheet({ days: (sheet && sheet.days) || {}, entries });
@@ -4818,8 +4876,10 @@ async function tsPunch(kind) {
       ui.tsPrevFor = "";
     }
   } catch (err) {
-    reportClientError(err, "clock");
-    toast("Not saved: " + (err.code || err.message));
+    if (!err || !err.tsTold) {
+      reportClientError(err, "clock");
+      toast(clockFailureText());
+    }
   } finally {
     ui.tsBusy = false;
     tsRerender();
@@ -4891,7 +4951,8 @@ async function tsSaveManual(ev) {
       toast(created && created.queued ? SAVED_ON_PHONE : "Shift saved");
     }
   } catch (err) {
-    toast("Not saved: " + (err.code || err.message));
+    reportClientError(err, "clock");
+    toast(clockFailureText());
   } finally {
     ui.tsBusy = false;
     if (paint) tsRerender();
@@ -5271,13 +5332,8 @@ function watchStaffRoster() {
     const rows = s.docs.map(d => ({ ...d.data(), uid: d.id })).filter(u => docCompanyId(u) === companyId);
     ui.staffLogins = withHeartwoodOwner(rows, companyId);
     ui.staffLoginsErr = "";
-    // Dispatch keeps the same bookable people as before (crew, supervisors, managers, plus Alex at Heartwood).
-    if (me && me.role === "admin") {
-      const bookable = rows.filter(u => CREW_ROLES.includes(u.role) || u.role === "supervisor" || u.role === "manager");
-      staff = companyId === "heartwood"
-        ? [{ uid: ALEX_UID, name: "Alex" }, ...bookable.filter(u => u.uid !== ALEX_UID)]
-        : bookable;
-    }
+    // Dispatch: crew, supervisors, managers, Alex at Heartwood, and the admin at every other company.
+    if (me && me.role === "admin") staff = dispatchRoster(rows, companyId, ALEX_UID);
     watchClockMutes(ui.staffLogins);
     staffRerender();
   }, () => {
@@ -5564,7 +5620,7 @@ async function saveInvite(fields) {
   const payload = { ...draft.invite, createdAt: serverTimestamp(), expiresAt };
   try {
     await runTransaction(db, async tx => {
-      const lockRef = doc(db, "inviteEmails", payload.email);
+      const lockRef = doc(db, "inviteEmails", inviteLockId(payload.tenantId, payload.email));
       const existing = await tx.get(lockRef);
       if (existing.exists() && existing.data().status === "pending") {
         const err = new Error("already-pending");
@@ -5598,7 +5654,7 @@ async function resendInvite(id) {
   const token = newInviteToken();
   await runTransaction(db, async tx => {
     tx.update(doc(db, "invites", id), { token, expiresAt, resentAt: serverTimestamp(), resentBy: me.uid });
-    tx.update(doc(db, "inviteEmails", row.email), { expiresAt, status: "pending" });
+    tx.update(doc(db, "inviteEmails", inviteLockId(row.tenantId || row.companyId, row.email)), { expiresAt, status: "pending" });
   });
 }
 async function cancelInvite(id) {
@@ -5606,7 +5662,7 @@ async function cancelInvite(id) {
   if (!row || row.status !== "pending") return;
   await runTransaction(db, async tx => {
     tx.update(doc(db, "invites", id), { status: "cancelled", cancelledAt: serverTimestamp(), cancelledBy: me.uid });
-    tx.update(doc(db, "inviteEmails", row.email), { status: "cancelled" });
+    tx.update(doc(db, "inviteEmails", inviteLockId(row.tenantId || row.companyId, row.email)), { status: "cancelled" });
   });
 }
 // A form that stays focused blocks the live redraw (so typing isn't wiped). After a successful save, let go of
@@ -6657,13 +6713,15 @@ function editJob(j) {
         write = setDoc(newRef, scopeRecord({ ...sp.job, ...extra, source: importing ? "inbox" : "app", log: [], createdAt: serverTimestamp() }, myCompanyId()));
         if (sp.hasMoney) write = Promise.all([write, jobMoneyWrite(newRef.id, sp.money)]);
         if (importing) write = write.then(() => markInboxImported(j._import.emailId, newRef.id));
-        const seeded = { ...data, ...extra };
-        write = write.then(() => commitRequirementPlan(
-          requirementEnv(),
-          newRef.id,
-          planRequirementWrite(seeded, [], { companyId: myCompanyId(), uid: me.uid }),
-          new Set(),
-        ).catch(err => { console.warn("requirements", err && (err.code || err.message)); }));
+        const seeded = { ...data, ...extra, id: newRef.id, companyId: myCompanyId() };
+        if (deviceOnline()) {
+          write = write.then(() => commitRequirementPlan(
+            requirementEnv(),
+            newRef.id,
+            planRequirementWrite(seeded, [], { companyId: myCompanyId(), uid: me.uid }),
+            new Set(),
+          ).catch(err => { console.warn("requirements", err && (err.code || err.message)); }));
+        }
       } else write = writeJob(j.id, data);
       const r = await settleOrQueue(write);
       if (r.queued) write.catch(e => toast("Job not saved: " + (e.code || e.message)));
@@ -8189,6 +8247,11 @@ function requirementApi(office) {
 function mountJobRequirements(pane, job, office) {
   if (!pane || pane.dataset.reqOn === "1") return ui.stopReq || (() => {});
   pane.dataset.reqOn = "1";
+  if (office && deviceOnline()) {
+    ensureRequirementPlan(requirementEnv(), { ...job, companyId: job.companyId || myCompanyId() }).catch(err => {
+      console.warn("requirements", err && (err.code || err.message));
+    });
+  }
   const stop = mountRequirements(pane, job, requirementApi(office));
   ui.stopReq = stop;
   if (office) {

@@ -76,7 +76,7 @@ test("sign-up marks required fields and reports each missing one", () => {
   }
   const filled = signupFieldErrors({
     ownerName: "Ada", ownerEmail: "ada@example.com", password: "long-enough", trades: ["plumbing"],
-    name: "Ada Plumbing", legalName: "Ada Plumbing Pty Ltd", abn: "12 345 678 901",
+    name: "Ada Plumbing", legalName: "Ada Plumbing Pty Ltd", abn: "51 824 753 556",
     street: "1 Creek St", suburb: "Chuwar", state: "QLD", postcode: "4306",
     email: "office@ada.example", accountsEmail: "",
   });
@@ -169,6 +169,6 @@ test("help answers every role from the knowledge list and hides money from crew"
   const officeAnswer = await askHelp("How do I add a job?", office, async () => ({ enabled: true, reply: "Open Jobs and tap New Job." }));
   assert.equal(officeAnswer.source, "helper");
   assert.equal(helpVisible({ uid: "owner", role: "admin", companyId: "brand-new" }), true);
-  assert.match(sw, /callup-shell-v163-add-client/);
+  assert.match(sw, /callup-shell-v164/);
   assert.match(sw, /features\/help\.js/);
 });

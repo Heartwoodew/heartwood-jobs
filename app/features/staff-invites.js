@@ -8,6 +8,26 @@ export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const INVITE_ROLES = Object.freeze(["labourer", "operator", "supervisor", "manager", "admin"]);
 // Crew roles: same app access (assigned jobs, own timesheet/leave/receipts, prestarts and fleet meter); no dollar amounts.
 export const CREW_ROLES = Object.freeze(["labourer", "operator"]);
+
+// One pending invite per company, not one per email across every company.
+export function inviteLockId(tenantId, email) {
+  const tenant = String(tenantId || "heartwood").trim() || "heartwood";
+  const mail = String(email || "").trim().toLowerCase();
+  return tenant + ":" + mail;
+}
+
+// Crew, supervisors and managers, plus the admin/owner at every company except Heartwood.
+// Heartwood still lists Alex even though he has no profile document.
+export function dispatchRoster(rows, companyId, heartwoodOwnerUid = "1JKLsoxkQNfkphBBO0vDz2ziEyj2") {
+  const id = companyId || "heartwood";
+  const list = (rows || []).filter(person => {
+    if (!person) return false;
+    if (CREW_ROLES.includes(person.role) || person.role === "supervisor" || person.role === "manager") return true;
+    return id !== "heartwood" && person.role === "admin";
+  });
+  if (id !== "heartwood") return list;
+  return [{ uid: heartwoodOwnerUid, name: "Alex" }, ...list.filter(person => person.uid !== heartwoodOwnerUid)];
+}
 // Clock On reminder defaults on for these roles. Admins are office and are not reminded.
 export const CLOCK_ON_ROLES = Object.freeze(["labourer", "operator", "supervisor", "manager"]);
 // Dollar amounts: supervisor, manager and admin. Crew still see the amount on their own receipts and claims.

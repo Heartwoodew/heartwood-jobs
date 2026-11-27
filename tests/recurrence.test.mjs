@@ -283,12 +283,12 @@ test("unticking This job repeats on a live series asks to stop, and a stopped se
   assert.doesNotMatch(help, /skipped visit becomes Unsuccessful|becomes Unsuccessful/);
 });
 
-test("the job modal wires the repeat box and the shell is callup-shell-v163-add-client", () => {
+test("the job modal wires the repeat box and the shell is callup-shell-v164", () => {
   const app = readFileSync(new URL("../app/app.js", import.meta.url), "utf8");
   assert.match(app, /wireRepeatBox\(f,/);
   const css = readFileSync(new URL("../app/styles.css", import.meta.url), "utf8");
   assert.match(css, /\.repeat-box \.repeat-more\[hidden\]\{display:none !important\}/);
   const sw = readFileSync(new URL("../app/sw.js", import.meta.url), "utf8");
-  assert.match(sw, /callup-shell-v163-add-client/);
+  assert.match(sw, /callup-shell-v164/);
   assert.match(sw, /features\/recurrence\.js/);
 });

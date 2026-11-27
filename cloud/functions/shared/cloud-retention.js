@@ -194,6 +194,15 @@ export function retentionView(job, now, extras) {
   };
 }
 
+// CallUp companies do not use Xero. Crew see this note on the photo list.
+export function retentionCrewText(view) {
+  if (!view || !view.expiresOn) return "Photos stay with this job. Deletion is not scheduled.";
+  if (view.state === "held") return `Photo deletion is on hold. The date on file is ${view.expiresOn}. Deletion is not scheduled.`;
+  if (view.state === "purged") return `The cloud copy of these photos was removed. The date was ${view.expiresOn}.`;
+  const soon = view.warning ? " This date is within 14 days." : "";
+  return `Photos on this job are kept until ${view.expiresOn}.${soon} Deletion is not scheduled.`;
+}
+
 export function retentionAdminText(view) {
   if (!view || view.reason === "missing-anchor" || !view.expiresOn) {
     return "Cloud copy: no automatic deletion date (missing completion or activity date). Deletion is not scheduled. Invoices and Xero records are not deleted.";

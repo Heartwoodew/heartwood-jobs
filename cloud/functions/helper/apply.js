@@ -229,7 +229,8 @@ export function firestoreHelperStore(db) {
           createdAt: FieldValue.serverTimestamp(),
           expiresAt,
         });
-        batch.set(db.collection("inviteEmails").doc(action.email), {
+        const tenant = action.tenantId || action.companyId || "heartwood";
+        batch.set(db.collection("inviteEmails").doc(tenant + ":" + String(action.email || "").trim().toLowerCase()), {
           email: action.email,
           status: "pending",
           inviteId: ref.id,

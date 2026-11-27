@@ -382,6 +382,10 @@ service cloud.firestore {
 
       allow get: if platformOwner() || (signedIn() && callerCompany() == companyId);
       allow list: if platformOwner();
+      // Interrupted signup: the auth user owns the company but has no profile yet.
+      // Only that owner can read it, and only to finish the link. A profile blocks this path.
+      allow get: if signedIn() && !hasProfile() && prevData().ownerUid == request.auth.uid;
+      allow list: if signedIn() && !hasProfile() && prevData().ownerUid == request.auth.uid;
       // Box sync account (Hubdoc filer, receipts worker) reads each company's Hubdoc address and test flag.
       allow read: if isSync();
       allow create: if companyOwnerCreate(companyId) || testCompanyCreate(companyId) || friendCompanyCreate(companyId);
@@ -679,8 +683,8 @@ service cloud.firestore {
           && d.tenantId == d.companyId
           &&textLen(d.name, 1, 80)
           &&textMax(d.email, 120)
-          && exists(/databases/$(database)/documents/companies/$(d.companyId))
-          && get(/databases/$(database)/documents/companies/$(d.companyId)).data.ownerUid == request.auth.uid
+          && existsAfter(/databases/$(database)/documents/companies/$(d.companyId))
+          && getAfter(/databases/$(database)/documents/companies/$(d.companyId)).data.ownerUid == request.auth.uid
           && !d.keys().hasAny(["platformOwner", "finance", "customerIds"]);
       }
       function testCompanyId(id) {
@@ -1814,21 +1818,24 @@ service cloud.firestore {
         return next.expiresAt > request.time + duration.value(6, 'd')
           && next.expiresAt < request.time + duration.value(8, 'd');
       }
-      function inviteLockPath(email) { return /databases/$(database)/documents/inviteEmails/$(email); }
+      function inviteLockPath(email) { return /databases/$(database)/documents/inviteEmails/$(docData().tenantId + ":" + email); }
       function inviteLockFree(email) {
-        return !exists(inviteLockPath(email))
-          || get(inviteLockPath(email)).data.status != "pending";
+        let path = inviteLockPath(email);
+        return !exists(path) || get(path).data.status != "pending";
       }
       function inviteLockAgrees(email, inviteId) {
         let next = docData();
-        return existsAfter(inviteLockPath(email))
-          && getAfter(inviteLockPath(email)).data.keys().hasOnly(["email", "status", "inviteId", "expiresAt", "role", "tenantId"])
-          && getAfter(inviteLockPath(email)).data.email == email
-          && getAfter(inviteLockPath(email)).data.inviteId == inviteId
-          && getAfter(inviteLockPath(email)).data.role == next.role
-          && getAfter(inviteLockPath(email)).data.tenantId == next.tenantId
-          && getAfter(inviteLockPath(email)).data.status == next.status
-          && getAfter(inviteLockPath(email)).data.expiresAt == next.expiresAt;
+        let path = inviteLockPath(email);
+        let there = existsAfter(path);
+        let row = there ? getAfter(path).data : {};
+        return there
+          && row.keys().hasOnly(["email", "status", "inviteId", "expiresAt", "role", "tenantId"])
+          && row.email == email
+          && row.inviteId == inviteId
+          && row.role == next.role
+          && row.tenantId == next.tenantId
+          && row.status == next.status
+          && row.expiresAt == next.expiresAt;
       }
       function inviteCreateOk(inviteId) {
         let next = docData();
@@ -1875,7 +1882,7 @@ service cloud.firestore {
         return inviteAdmin()
           && inviteBaseOk()
           && next.keys().hasOnly(["name", "email", "role", "jobTitle", "jobTitleId", "status", "createdBy", "createdAt", "expiresAt", "token", "tenantId", "companyId", "cancelledAt", "cancelledBy", "resentAt", "resentBy"])
-          && (inviteCancelOk(inviteId) || inviteResendOk(inviteId));
+          && (next.status == "cancelled" ? inviteCancelOk(inviteId) : inviteResendOk(inviteId));
       }
 
       // Supervisors never read an admin invite (it carries the sign-up token): their list asks for the three crew/supervisor roles.
@@ -1905,7 +1912,7 @@ service cloud.firestore {
           || (next.role == "manager" && (inviteFullAdmin() || ((signedIn() && hasProfile()) && profile().get("role", "") == "manager")))
           || (next.role == "admin" && inviteFullAdmin());
       }
-      function inviteLockPath(email) { return /databases/$(database)/documents/inviteEmails/$(email); }
+      function inviteLockPath(email) { return /databases/$(database)/documents/inviteEmails/$(docData().tenantId + ":" + email); }
       function invitePath(inviteId) { return /databases/$(database)/documents/invites/$(inviteId); }
       function inviteLockEmailOk(email) {
         let next = docData();
@@ -1928,27 +1935,21 @@ service cloud.firestore {
           && getAfter(invitePath(next.inviteId)).data.expiresAt == next.expiresAt;
       }
       function inviteLockWriteOk(email) {
-        return (
-          !exists(inviteLockPath(email))
-          && docData().status == "pending"
-        ) || (
-          exists(inviteLockPath(email))
-          && get(inviteLockPath(email)).data.status == "pending"
-          && get(inviteLockPath(email)).data.inviteId == docData().inviteId
-          && (docData().status == "pending" || docData().status == "cancelled")
-        ) || (
-          exists(inviteLockPath(email))
-          && get(inviteLockPath(email)).data.status != "pending"
-          && docData().status == "pending"
-        );
+        let path = inviteLockPath(email);
+        let prior = exists(path) ? get(path).data : null;
+        return (prior == null && docData().status == "pending")
+          || (prior != null && prior.status == "pending" && prior.inviteId == docData().inviteId
+            && (docData().status == "pending" || docData().status == "cancelled"))
+          || (prior != null && prior.status != "pending" && docData().status == "pending");
       }
 
-      allow get: if inviteAdmin();
+      allow get: if inviteAdmin() && (resource == null || (email == prevData().tenantId + ":" + prevData().email && prevData().tenantId == inviteCallerTenant()));
       allow list: if false;
       allow create, update: if inviteAdmin()
-        && inviteLockEmailOk(email)
-        && inviteLockPointsAtInvite(email)
-        && inviteLockWriteOk(email);
+        && email == docData().tenantId + ":" + docData().email
+        && inviteLockEmailOk(docData().email)
+        && inviteLockPointsAtInvite(docData().email)
+        && inviteLockWriteOk(docData().email);
       allow delete: if false;
     }
 
@@ -2292,10 +2293,22 @@ service cloud.firestore {
           && docData().updatedAt == request.time
           && textMax(docData().updatedAtIso, 40);
       }
+      // Create still checks membership. Update does not: incStaffOf reads the company billing
+      // record, and a second shift in the week then passes Firestore's 1000-expression cap
+      // (permission-denied). Heartwood updates still call notOtherCompany(), as before.
       function tsCompanyOk() {
         return docData().get("companyId", "heartwood") == "heartwood"
-          ? notOtherCompany()
-          : incStaffOf(docData().companyId);
+          ? (resource == null
+            ? notOtherCompany()
+            : (prevData().get("companyId", "heartwood") == "heartwood"
+              && prevData().uid == request.auth.uid
+              && notOtherCompany()))
+          : (resource == null
+            ? incStaffOf(docData().companyId)
+            : (docData().companyId == prevData().companyId
+              && (prevData().uid == request.auth.uid
+                || (hasProfile() && profile().get("role", "") == "admin"
+                  && profile().get("companyId", "") == prevData().companyId))));
       }
       function tsCompanySent() {
         return prevData().get("companyId", "heartwood") != "heartwood"
@@ -2418,18 +2431,21 @@ service cloud.firestore {
             && tsEditOk(b, a)
             && tsTimeOk(b, a)));
       }
+      // One diff of the entries map. affectedKeys() on that diff, then only the changed
+      // shift. Comparing the whole map with == counted every nested stamp and, with a
+      // company billing read, rejected the second clock-on of the week.
       function tsOneEntry() {
         let after = docData().entries;
         let before = prevData().get("entries", {});
         let key = docData().lastEntryId;
         let d = after.diff(before);
+        let n = d.affectedKeys().size();
         return after is map
           && after.size() <= 40
-          && key is string
           && d.removedKeys().size() == 0
-          && d.affectedKeys().size() == 1
-          && d.affectedKeys().hasOnly([key])
-          && (key in before ? tsEntryNext(before[key], after[key]) : tsEntryNew(after[key]));
+          && (n == 0
+            || (key is string && n == 1 && d.affectedKeys().hasOnly([key])
+              && (key in before ? tsEntryNext(before[key], after[key]) : tsEntryNew(after[key]))));
       }
       function tsWorkerCreate(id) {
         return tsMine(id) && tsDocOk()
@@ -2449,8 +2465,7 @@ service cloud.firestore {
           && (!("locationConsentAt" in prevData()) && !("locationConsentAt" in docData())
             || !("locationConsentAt" in prevData()) && docData().locationConsentAt == request.time
             || docData().get("locationConsentAt", null) == prevData().get("locationConsentAt", null))
-          // Shift change first: comparing the whole entries map is only needed when no shift changed.
-          && (tsOneEntry() || docData().get("entries", {}) == prevData().get("entries", {}));
+          && tsOneEntry();
       }
       function tsSentUpdate() {
         return tsHeartwoodAdmin()

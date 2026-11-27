@@ -1,3 +1,5 @@
+import { readFileKind } from "./photo-capture.js";
+
 // Company logo upload. The file lives in the private Storage bucket at
 // companies/{companyId}/logo/logo.jpg. logoUrl on the company document holds
 // that path, or an older https / icons/ value. This module does not talk to Firebase.
@@ -55,6 +57,15 @@ export function logoFileOk(file) {
   const size = Number(file.size) || 0;
   if (size <= 0 || size > LOGO_SOURCE_MAX_BYTES) return { ok: false, reason: "size" };
   return { ok: true };
+}
+
+// Name and size first, then the real file header. A renamed .png is not a photo.
+export async function inspectLogoFile(file) {
+  const basic = logoFileOk(file);
+  if (!basic.ok) return basic;
+  const kind = await readFileKind(file);
+  if (kind !== "image/jpeg" && kind !== "image/png") return { ok: false, reason: "type" };
+  return { ok: true, kind };
 }
 
 export function logoUploadPlan(companyId, uploaderUid) {

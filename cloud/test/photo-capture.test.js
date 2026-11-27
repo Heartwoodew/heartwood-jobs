@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { decidePhotoEmail } from "../../app/features/photo-capture.js";
+import { decidePhotoEmail, sniffFileKind } from "../../app/features/photo-capture.js";
 
 test("successful job-photo mirror does not open the office email", () => {
   const decision = decidePhotoEmail({
@@ -78,4 +78,15 @@ test("job photo upload gives feedback and falls back fast with no signal (Patric
   assert.match(upload, /task\.cancel\(\)/);
   assert.match(app, /const PHOTO_STALL_MS = \d+/);
   assert.match(app, /Why: \$\{esc\(photoFailText\(o\.saveFail\)\)\}/);
+});
+
+test("image checks use the file header, and a pdf is recognised where certificates allow it", () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]);
+  const pdf = new TextEncoder().encode("%PDF-1.4");
+  const text = new TextEncoder().encode("hello png");
+  assert.equal(sniffFileKind(png), "image/png");
+  assert.equal(sniffFileKind(jpeg), "image/jpeg");
+  assert.equal(sniffFileKind(pdf), "application/pdf");
+  assert.equal(sniffFileKind(text), "");
 });

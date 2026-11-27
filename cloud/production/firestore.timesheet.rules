@@ -170,18 +170,19 @@
     }
     // Clock-off after a break and a machine pick used to hit Firestore's 1000-expression limit (permission-denied):
     // the entries map was diffed three times and compared whole. Diff once and look the shift up once.
+    // One diff of the entries map. affectedKeys() on that diff, then only the changed shift.
     function tsOneEntry() {
       let after = docData().entries;
       let before = prevData().get("entries", {});
       let key = docData().lastEntryId;
       let d = after.diff(before);
+      let n = d.affectedKeys().size();
       return after is map
         && after.size() <= 40
-        && key is string
         && d.removedKeys().size() == 0
-        && d.affectedKeys().size() == 1
-        && d.affectedKeys().hasOnly([key])
-        && (key in before ? tsEntryNext(before[key], after[key]) : tsEntryNew(after[key]));
+        && (n == 0
+          || (key is string && n == 1 && d.affectedKeys().hasOnly([key])
+            && (key in before ? tsEntryNext(before[key], after[key]) : tsEntryNew(after[key]))));
     }
     function tsWorkerCreate(id) {
       return tsMine(id) && tsDocOk()
@@ -201,8 +202,7 @@
         && (!("locationConsentAt" in prevData()) && !("locationConsentAt" in docData())
           || !("locationConsentAt" in prevData()) && docData().locationConsentAt == request.time
           || docData().get("locationConsentAt", null) == prevData().get("locationConsentAt", null))
-        // Shift change first: comparing the whole entries map is only needed when no shift changed.
-        && (tsOneEntry() || docData().get("entries", {}) == prevData().get("entries", {}));
+        && tsOneEntry();
     }
     function tsSentUpdate() {
       return tsHeartwoodAdmin()

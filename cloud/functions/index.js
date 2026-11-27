@@ -85,6 +85,7 @@ import {
   shouldQueueInviteEmail,
   displayStatus,
   profileFromInvite,
+  inviteLockId,
 } from "./shared/staff-invites.js";
 import { adminSendPasswordReset as sendPasswordReset, rateDecision, resetFailureText } from "./password-reset.js";
 import {
@@ -287,8 +288,12 @@ function inviteBackend() {
           role: invite.role,
           expiresAt: invite.expiresAt,
         };
+        const company = invite.tenantId || invite.companyId || "heartwood";
         if (invite.tenantId) lock.tenantId = invite.tenantId;
-        tx.set(db.collection("inviteEmails").doc(invite.email), lock, { merge: true });
+        tx.set(db.collection("inviteEmails").doc(inviteLockId(company, invite.email)), lock, { merge: true });
+        const legacyRef = db.collection("inviteEmails").doc(invite.email);
+        const legacy = await tx.get(legacyRef);
+        if (legacy.exists && (legacy.data() || {}).inviteId === id) tx.set(legacyRef, lock, { merge: true });
         return { ok: true };
       });
     },

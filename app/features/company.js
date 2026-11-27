@@ -155,6 +155,22 @@ export function safeLogo(url, companyId) {
   return acceptLogoValue(url, companyId);
 }
 
+const ABN_WEIGHTS = [10, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19];
+
+export function abnDigits(value) {
+  return String(value || "").replace(/\s+/g, "");
+}
+
+// Australian Business Number: 11 digits, first digit minus 1, weighted sum divisible by 89.
+export function abnChecksumOk(value) {
+  const digits = abnDigits(value);
+  if (!/^[0-9]{11}$/.test(digits)) return false;
+  const nums = digits.split("").map(d => Number(d));
+  nums[0] -= 1;
+  const sum = nums.reduce((total, n, i) => total + n * ABN_WEIGHTS[i], 0);
+  return sum % 89 === 0;
+}
+
 export function validateCompanyInput(input = {}) {
   const name = clip(input.name, 80);
   const legalName = clip(input.legalName || input.name, 120);
@@ -168,8 +184,7 @@ export function validateCompanyInput(input = {}) {
   const addr = resolveAddress(input);
   if (!name) return { ok: false, reason: "name" };
   if (!legalName) return { ok: false, reason: "legalName" };
-  if (!abn) return { ok: false, reason: "abn" };
-  if (abn && !/^[0-9 ]{1,20}$/.test(abn)) return { ok: false, reason: "abn" };
+  if (!abnChecksumOk(abn)) return { ok: false, reason: "abn" };
   if (!addr.ok) return { ok: false, reason: addr.errors[0] };
   if (phone && !/^[0-9+() ./-]{3,40}$/.test(phone)) return { ok: false, reason: "phone" };
   if (!EMAIL_RE.test(email)) return { ok: false, reason: "email" };
@@ -195,7 +210,7 @@ export function companyFieldErrors(input = {}) {
   const errors = [];
   if (!name) errors.push("name");
   if (!legalName) errors.push("legalName");
-  if (!abn || !/^[0-9 ]{1,20}$/.test(abn)) errors.push("abn");
+  if (!abnChecksumOk(abn)) errors.push("abn");
   if (!addr.ok) errors.push(...addr.errors);
   if (phone && !/^[0-9+() ./-]{3,40}$/.test(phone)) errors.push("phone");
   if (!EMAIL_RE.test(email)) errors.push("email");
@@ -362,6 +377,22 @@ export function demoBundle(companyId, { date = "2026-11-10" } = {}) {
         assigned: [], assignedNames: [job.id.endsWith("job1") ? "Sam Taylor" : "Sue Nguyen"],
       },
     })),
+  };
+}
+
+// Finish a signup that wrote the company and never wrote users/{uid}.
+export function ownerRecoveryProfile({ email, displayName, companyId, company } = {}) {
+  const row = company || {};
+  const trade = (Array.isArray(row.trades) && row.trades[0]) || row.trade || "earthworks";
+  const name = clip(displayName || row.name || "Owner", 80) || "Owner";
+  return {
+    name,
+    email: clip(email || row.email || "", 120).toLowerCase(),
+    role: "admin",
+    companyId,
+    tenantId: companyId,
+    jobTitle: "Admin",
+    jobTitleId: trade + ":admin",
   };
 }
 

@@ -53,7 +53,7 @@ test("clients cannot write referredBy, a referral code, or a reward", async () =
 
 test("a new company cannot include referredBy, and a normal signup still can", async () => {
   const input = validateCompanyInput({
-    name: "Delta Diggers", legalName: "Delta Diggers Pty Ltd", abn: "12 345 678 901",
+    name: "Delta Diggers", legalName: "Delta Diggers Pty Ltd", abn: "51 824 753 556",
     address: "1 Test St", phone: "", email: "office@delta.test", accountsEmail: "accounts@delta.test", hubdocAddress: "", logoUrl: "",
   }).value;
   const owner = db("referral-owner");
