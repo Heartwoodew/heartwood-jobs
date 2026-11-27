@@ -88,7 +88,7 @@ try {
   await page.locator("input[name=password]").fill("northside-pass");
   await page.locator("input[name=name]").fill("Northside Plant");
   await page.locator("input[name=legalName]").fill("Northside Plant Pty Ltd");
-  await page.locator("input[name=abn]").fill("12 345 678 901");
+  await page.locator("input[name=abn]").fill("51 824 753 556");
   await page.locator("input[name=address]").fill("88 Depot Rd, Strathpine QLD 4500");
   await page.locator("input[name=phone]").fill("07 3200 4455");
   await page.locator("input[name=email]").fill("office@northside.test");

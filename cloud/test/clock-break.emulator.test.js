@@ -151,3 +151,37 @@ test("Heartwood staff can correct their own clock times and cannot change anythi
   const alex = "1JKLsoxkQNfkphBBO0vDz2ziEyj2";
   await assertSucceeds(updateDoc(doc(env.authenticatedContext(alex).firestore(), `timesheets/${uid}_${week}`), { name: "Sam from the office" }));
 });
+
+test("a real CallUp company can clock a second and third shift, then a later day, and cannot take another sheet", async () => {
+  await env.withSecurityRulesDisabled(async ctx => {
+    const d = ctx.firestore();
+    await setDoc(doc(d, "companies/callupco"), {
+      name: "Callup Co", legalName: "Callup Co", abn: "51 824 753 556", isTest: false, status: "active", plan: "trial",
+      ownerUid: "cuOwn", origin: "signup",
+      trialEndsAt: Timestamp.fromMillis(Date.now() + 10 * 86400000),
+      billing: { provider: null, status: "not-configured", stripeCustomerId: null, stripeSubscriptionId: null },
+    });
+    await setDoc(doc(d, "users/cuOp"), { role: "operator", name: "Cue", email: "cue@example.com", companyId: "callupco", tenantId: "callupco" });
+    await setDoc(doc(d, "users/cuOther"), { role: "operator", name: "Other", email: "other@example.com", companyId: "callupco", tenantId: "callupco" });
+  });
+  const uid = "cuOp";
+  const db = env.authenticatedContext(uid).firestore();
+  const ref = doc(db, `timesheets/${uid}_2026-11-09`);
+  const companyId = "callupco";
+  const on = (id, date, start) => ({
+    id, source: "clock", status: "open", date, start, finish: "", breakStart: "", breakEnd: "", note: "", job: "",
+    clockOn: gps(), enteredBy: uid, enteredByName: uid, enteredAt: serverTimestamp(), edits: {}, lastEditId: "",
+  });
+  const base = (id) => ({ uid, name: uid, weekStart: "2026-11-09", weekEnd: "2026-11-15", updatedAtIso: new Date().toISOString(), lastEntryId: id, companyId });
+  await assertSucceeds(setDoc(ref, { ...base("entcuop00001"), days: { "2026-11-09": { start: "07:00", finish: "", note: "" } }, totalHrs: 0, updatedAt: serverTimestamp(), locationConsentAt: serverTimestamp(), entries: { entcuop00001: on("entcuop00001", "2026-11-09", "07:00") } }));
+  await assertSucceeds(updateDoc(ref, { ...base("entcuop00002"), days: { "2026-11-09": { start: "07:00", finish: "", note: "" }, "2026-11-10": { start: "08:00", finish: "", note: "" } }, totalHrs: 0, updatedAt: serverTimestamp(), ["entries.entcuop00002"]: on("entcuop00002", "2026-11-10", "08:00") }));
+  await assertSucceeds(updateDoc(ref, { ...base("entcuop00003"), days: { "2026-11-11": { start: "09:00", finish: "", note: "" } }, totalHrs: 0, updatedAt: serverTimestamp(), ["entries.entcuop00003"]: on("entcuop00003", "2026-11-11", "09:00") }));
+  const third = (await getDoc(ref)).data().entries.entcuop00003;
+  await assertSucceeds(updateDoc(ref, { ...base("entcuop00003"), days: { "2026-11-11": { start: "09:00", finish: "15:00", note: "" } }, totalHrs: 6, updatedAt: serverTimestamp(), ["entries.entcuop00003"]: { ...third, status: "closed", finish: "15:00", clockOff: gps() } }));
+  await assertSucceeds(updateDoc(ref, { ...base("entcuop00004"), days: { "2026-11-13": { start: "07:30", finish: "", note: "" } }, totalHrs: 6, updatedAt: serverTimestamp(), ["entries.entcuop00004"]: on("entcuop00004", "2026-11-13", "07:30") }));
+  const saved = await getDoc(ref);
+  assert.equal(Object.keys(saved.data().entries).length, 4);
+  const other = env.authenticatedContext("cuOther").firestore();
+  await assertFails(updateDoc(doc(other, ref.path), { ...base("entcuop00004"), name: "Stolen", updatedAt: serverTimestamp() }));
+  await assertFails(updateDoc(ref, { ...base("entcuop00004"), companyId: "heartwood", updatedAt: serverTimestamp() }));
+});

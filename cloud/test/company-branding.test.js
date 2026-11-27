@@ -41,7 +41,7 @@ test("settings extras validate and only patch when given", () => {
   assert.deepEqual(validateCompanyExtras({ jobPrefix: "brv", accountsName: "Nina" }), { ok: true, value: { jobPrefix: "BRV", accountsName: "Nina" } });
   assert.equal(validateCompanyExtras({ jobPrefix: "B-V" }).reason, "jobPrefix");
   assert.equal(validateCompanyExtras({ accountsName: "<b>" }).reason, "accountsName");
-  const cur = { name: "Bravo", legalName: "Bravo Pty Ltd", abn: "12 345 678 901", signoff: "Bravo", logoUrl: "", address: "1 B St", phone: "", email: "office@bravo.test", accountsEmail: "acc@bravo.test", hubdocAddress: "" };
+  const cur = { name: "Bravo", legalName: "Bravo Pty Ltd", abn: "51 824 753 556", signoff: "Bravo", logoUrl: "", address: "1 B St", phone: "", email: "office@bravo.test", accountsEmail: "acc@bravo.test", hubdocAddress: "" };
   const none = companyDetailPatch(cur, { name: "Bravo" });
   assert.ok(none.ok); assert.ok(!("jobPrefix" in none.patch)); assert.ok(!("accountsName" in none.patch));
   const some = companyDetailPatch(cur, { jobPrefix: "brv", accountsName: "Nina" });

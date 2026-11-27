@@ -11,6 +11,8 @@
 // Cost codes are documented in features/inbox-import.js (CORAL_COST_CODE_MAP).
 // This module does not parse Coral email.
 
+import { isHeartwoodCompany } from "./company.js";
+
 export const CORAL_TEMPLATE_ID = "coral-homes";
 export const HEARTWOOD_TEMPLATE_ID = "heartwood-default";
 export const CORAL_CLIENT = "Coral Homes Qld Pty Ltd";
@@ -390,6 +392,8 @@ function cleanLine(text) {
 }
 
 export function chosenTemplate(job, opts = {}) {
+  const companyId = opts.companyId || (job && job.companyId) || "heartwood";
+  if (!isHeartwoodCompany(companyId)) return "";
   if (opts.templateId === CORAL_TEMPLATE_ID || opts.templateId === HEARTWOOD_TEMPLATE_ID) return opts.templateId;
   if (isCoralClient(job && job.client) || isCoralClient(job && job.builder)) return CORAL_TEMPLATE_ID;
   return HEARTWOOD_TEMPLATE_ID;
@@ -454,6 +458,9 @@ export function heartwoodTemplateDoc(companyId) {
 export function planRequirementWrite(job, existingItems, opts = {}) {
   const companyId = opts.companyId || (job && job.companyId) || "heartwood";
   const templateId = chosenTemplate(job, opts);
+  if (!templateId) {
+    return { apply: false, kind: packKind(job), storey: "", cleanStage: "", items: [], deleteIds: [], template: null, meta: null };
+  }
   const storey = detectStorey(job);
   const cleanStage = packKind(job) === "clean" ? detectCleanStage(job) : (CLEAN_STAGES.includes(job && job.cleanStage) ? job.cleanStage : "");
   const built = buildTemplateItems({ ...job, storey, cleanStage }, templateId);
@@ -574,6 +581,16 @@ export async function commitRequirementPlan(env, jobId, plan, existingIds) {
   return { ok: true, applied: true };
 }
 
+// A job saved with no signal never wrote its checklist. The next online open fills it once.
+export async function ensureRequirementPlan(env, job) {
+  if (!env || !job || !job.id) return { ok: false, applied: false };
+  const plan = planRequirementWrite(job, [], { companyId: env.companyId, uid: env.uid });
+  if (!plan.apply) return { ok: true, applied: false };
+  const metaSnap = await env.getDoc(env.doc(env.db, "jobs", job.id, "requirementMeta", "current"));
+  if (metaSnap && metaSnap.exists()) return { ok: true, applied: false };
+  return commitRequirementPlan(env, job.id, plan, new Set());
+}
+
 function sourceLabel(source) {
   if (source === CUSTOM_SOURCE) return "Custom";
   if (source === EMAIL_SOURCE) return "Email";
@@ -608,9 +625,14 @@ export function officeRequirementsHtml({ items, meta, editorName, job } = {}) {
   const groups = grouped(items || []);
   const storey = meta && STOREYS.includes(meta.storey) ? meta.storey : "";
   const stage = meta && CLEAN_STAGES.includes(meta.cleanStage) ? meta.cleanStage : "";
-  const templateId = meta && (meta.templateId === CORAL_TEMPLATE_ID || meta.templateId === HEARTWOOD_TEMPLATE_ID)
+  const companyId = (job && job.companyId) || "heartwood";
+  const heartwoodPacks = isHeartwoodCompany(companyId);
+  const templateId = heartwoodPacks && meta && (meta.templateId === CORAL_TEMPLATE_ID || meta.templateId === HEARTWOOD_TEMPLATE_ID)
     ? meta.templateId
-    : (isCoralClient(job && job.client) ? CORAL_TEMPLATE_ID : HEARTWOOD_TEMPLATE_ID);
+    : (heartwoodPacks && isCoralClient(job && job.client) ? CORAL_TEMPLATE_ID : (heartwoodPacks ? HEARTWOOD_TEMPLATE_ID : ""));
+  const templateOptions = heartwoodPacks
+    ? [["", "No template"], [HEARTWOOD_TEMPLATE_ID, "Heartwood"], [CORAL_TEMPLATE_ID, "Coral Homes"]]
+    : [["", "No template"]];
   const notes = parseNotes(meta && meta.notes);
   const list = groups.length
     ? groups.map(group => `<section class="req-sec"><h3>${esc(group.label)}</h3>${group.items.map(item => {
@@ -630,7 +652,7 @@ export function officeRequirementsHtml({ items, meta, editorName, job } = {}) {
     : "";
   return `<div class="req-office">
     <div class="req-tools">
-      <label>Template<select data-req-template>${optionList([["", "No template"], [HEARTWOOD_TEMPLATE_ID, "Heartwood"], [CORAL_TEMPLATE_ID, "Coral Homes"]], templateId)}</select></label>
+      <label>Template<select data-req-template>${optionList(templateOptions, templateId)}</select></label>
       <label>Storey<select data-req-storey>${optionList([["", "Not set"], ["single", "Single storey"], ["two", "Two storey"]], storey)}</select></label>
       <label>Stage<select data-req-stage>${optionList([["", "Not set"], ...CLEAN_STAGES.map(id => [id, CLEAN_STAGE_LABELS[id]])], stage)}</select></label>
       <button type="button" class="sm-btn primary" data-req-apply>Apply template</button>

@@ -8,7 +8,7 @@ import { ALEX_UID } from "../../app/features/cloud-storage.js";
 import {
   ACCOUNTING_FIELDS, MAX_EXPORT_BYTES, SCHEDULING_APPROVED, addCalendarMonths,
   buildOperationalExport, cancelScheduledDeletion, issueExportGrant, restoreOperationalCopy,
-  retentionAdminText, retentionView, runRetention,
+  retentionAdminText, retentionCrewText, retentionView, runRetention,
 } from "../../app/features/cloud-retention.js";
 import { retentionSweepHandler } from "../functions/lib/retention-run.js";
 import { handlePhotoIntake } from "../functions/lib/photo-intake.js";
@@ -198,6 +198,9 @@ test("admin can cancel before soft-delete and restore during grace; other tenant
   assert.equal(after.purged.length, 0);
   assert.match(retentionAdminText(retentionView(job, BEFORE)), /not scheduled/i);
   assert.match(retentionAdminText(retentionView(job, BEFORE)), /Xero/);
+  const crew = retentionCrewText(retentionView(job, BEFORE));
+  assert.match(crew, /Deletion is not scheduled/);
+  assert.doesNotMatch(crew, /Xero|Remondis/);
 });
 
 test("unlinked quotes and receipts follow their own dates and quote rates stay", () => {

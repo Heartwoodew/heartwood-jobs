@@ -5,7 +5,7 @@
 // The 3-month operational date is guidance. SCHEDULING_APPROVED stays false.
 
 import { jobPhotoPrefix, jobTenantOf, listedJobPhoto, storageErrorCode } from "./cloud-storage.js";
-import { operationalExpiresAfter, retentionAdminText, SCHEDULING_APPROVED } from "./cloud-retention.js";
+import { operationalExpiresAfter, retentionAdminText, retentionCrewText, SCHEDULING_APPROVED } from "./cloud-retention.js";
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -42,7 +42,7 @@ export function buildJobGallery({ membership, job, listing, now } = {}) {
     anchorKind: expiry.anchorKind,
     schedulingApproved: SCHEDULING_APPROVED === true,
     deletionPerformed: false,
-    retentionText: retentionAdminText({
+    retentionText: (membership && membership.tenantId && membership.tenantId !== "heartwood" ? retentionCrewText : retentionAdminText)({
       expiresOn: expiry.expiresAfter,
       state: expiry.state,
       warning: expiry.warning,

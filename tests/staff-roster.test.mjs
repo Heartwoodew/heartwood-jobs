@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mergeStaffRoster, staffViewHtml } from "../app/features/staff-invites.js";
+import { dispatchRoster, inviteLockId, mergeStaffRoster, staffViewHtml } from "../app/features/staff-invites.js";
 
 const NOW = new Date("2026-11-08T02:00:00.000Z");
 const TOKEN = "a".repeat(43);
@@ -120,4 +120,21 @@ test("the staff screen shows status, sent date and details, and does not show ra
   assert.doesNotMatch(active, /data-invite-resend|data-invite-cancel|invite=/);
   assert.doesNotMatch(html, /hourlyRate|\$65|poAmount|900/);
   assert.equal(html.match(/data-staff-email="sam.lee@example.com"/g).length, 1);
+});
+
+test("the invite lock is per company, and the owner is assignable outside Heartwood", () => {
+  assert.equal(inviteLockId("acme", "Sam@Example.com"), "acme:sam@example.com");
+  assert.equal(inviteLockId("bravo", "sam@example.com"), "bravo:sam@example.com");
+  assert.notEqual(inviteLockId("acme", "sam@example.com"), inviteLockId("bravo", "sam@example.com"));
+  const people = [
+    { uid: "own", name: "Owner", role: "admin" },
+    { uid: "op", name: "Sam", role: "operator" },
+    { uid: "sup", name: "Sue", role: "supervisor" },
+  ];
+  const callup = dispatchRoster(people, "acme");
+  assert.deepEqual(callup.map(p => p.uid), ["own", "op", "sup"]);
+  const heartwood = dispatchRoster(people, "heartwood");
+  assert.equal(heartwood[0].name, "Alex");
+  assert.equal(heartwood.some(p => p.uid === "own"), false);
+  assert.equal(heartwood.some(p => p.uid === "op"), true);
 });

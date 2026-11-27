@@ -97,9 +97,9 @@ test("a second company cannot read Heartwood jobs, quotes, receipts, inbox, hour
 // New-user paths (audit 10 Nov 2026): self-signup owner profile, company staff list, company invites.
 import { runTransaction, serverTimestamp, Timestamp } from "firebase/firestore";
 import { buildCompanyCreate, ownerProfile, validateCompanyInput, trialEnd } from "../../app/features/company.js";
-import { buildInviteDraft, newInviteToken } from "../../app/features/staff-invites.js";
+import { buildInviteDraft, inviteLockId, newInviteToken } from "../../app/features/staff-invites.js";
 
-const signupInput = validateCompanyInput({ name: "Delta Diggers", legalName: "Delta Diggers Pty Ltd", abn: "12 345 678 901",
+const signupInput = validateCompanyInput({ name: "Delta Diggers", legalName: "Delta Diggers Pty Ltd", abn: "51 824 753 556",
   address: "1 Test St, Ipswich QLD", phone: "", email: "office@delta.test", accountsEmail: "accounts@delta.test", hubdocAddress: "", logoUrl: "" }).value;
 
 test("self-signup: a new owner creates the company and their own admin profile, then sees their staff", async () => {
@@ -150,7 +150,7 @@ test("self-signup with several trades: the app's exact owner profile (jobTitle, 
 test("signup can store split address parts, and a company with only an address string can still be edited", async () => {
   const owner = env.authenticatedContext("civilowner", { email: "owner@civil.test" }).firestore();
   const checked = validateCompanyInput({
-    name: "Civil Co", legalName: "Civil Co Pty Ltd", abn: "12 345 678 901",
+    name: "Civil Co", legalName: "Civil Co Pty Ltd", abn: "51 824 753 556",
     street: "12 Creek Rd", suburb: "Chuwar", state: "QLD", postcode: "4306",
     phone: "", email: "office@civil.test", accountsEmail: "accounts@civil.test", hubdocAddress: "", logoUrl: "", signoff: "Civil Co",
   });
@@ -176,7 +176,7 @@ test("signup can store split address parts, and a company with only an address s
   }));
   await env.withSecurityRulesDisabled(async ctx => {
     await setDoc(doc(ctx.firestore(), "companies/legacyco"), {
-      name: "Legacy Co", legalName: "Legacy Co Pty Ltd", abn: "12 345 678 901", signoff: "Legacy",
+      name: "Legacy Co", legalName: "Legacy Co Pty Ltd", abn: "51 824 753 556", signoff: "Legacy",
       logoUrl: "", address: "1 Yard St", phone: "", email: "office@legacy.test", accountsEmail: "accounts@legacy.test",
       hubdocAddress: "", ownerUid: "legacyadm", createdBy: "legacyadm", status: "active", plan: "trial", origin: "signup",
       isTest: false, staffCount: 1, jobCount: 0,
@@ -197,7 +197,7 @@ test("a second company's admin can create a staff invite (the app adds companyId
   const expiresAt = Timestamp.fromDate(draft.invite.expiresAt);
   const payload = { ...draft.invite, createdAt: serverTimestamp(), expiresAt };
   await assertSucceeds(runTransaction(bravo, async tx => {
-    const lockRef = doc(bravo, "inviteEmails", payload.email);
+    const lockRef = doc(bravo, "inviteEmails", "bravo:" + payload.email);
     await tx.get(lockRef);
     tx.set(inviteRef, payload);
     tx.set(lockRef, { email: payload.email, status: "pending", inviteId: inviteRef.id, expiresAt, role: payload.role, tenantId: payload.tenantId });
@@ -207,10 +207,48 @@ test("a second company's admin can create a staff invite (the app adds companyId
   const badRef = doc(collection(bravo, "invites"));
   const badExp = Timestamp.fromDate(bad.invite.expiresAt);
   await assertFails(runTransaction(bravo, async tx => {
-    const lockRef = doc(bravo, "inviteEmails", bad.invite.email);
+    const lockRef = doc(bravo, "inviteEmails", "bravo:" + bad.invite.email);
     await tx.get(lockRef);
     tx.set(badRef, { ...bad.invite, companyId: "heartwood", createdAt: serverTimestamp(), expiresAt: badExp });
     tx.set(lockRef, { email: bad.invite.email, status: "pending", inviteId: badRef.id, expiresAt: badExp, role: "operator", tenantId: "bravo" });
+  }));
+});
+
+test("a pending invite in one company does not block or reveal itself to another company", async () => {
+  await env.withSecurityRulesDisabled(async ctx => {
+    const d = ctx.firestore();
+    await setDoc(doc(d, "companies/callupa"), { name: "A", ownerUid: "admA", status: "active", plan: "trial", isTest: false });
+    await setDoc(doc(d, "companies/callupc"), { name: "C", ownerUid: "admC", status: "active", plan: "trial", isTest: false });
+    await setDoc(doc(d, "users/admA"), { role: "admin", name: "Ann", companyId: "callupa", tenantId: "callupa" });
+    await setDoc(doc(d, "users/admC"), { role: "admin", name: "Cam", companyId: "callupc", tenantId: "callupc" });
+  });
+  const email = "shared.person@example.test";
+  const a = db("admA");
+  const c = db("admC");
+  const draftA = buildInviteDraft({ name: "Shared", email, role: "operator", createdBy: "admA", now: new Date(), token: newInviteToken(), tenantId: "callupa" });
+  const expA = Timestamp.fromDate(draftA.invite.expiresAt);
+  await assertSucceeds(runTransaction(a, async tx => {
+    const inviteRef = doc(collection(a, "invites"));
+    const lockRef = doc(a, "inviteEmails", inviteLockId("callupa", email));
+    tx.set(inviteRef, { ...draftA.invite, createdAt: serverTimestamp(), expiresAt: expA });
+    tx.set(lockRef, { email, status: "pending", inviteId: inviteRef.id, expiresAt: expA, role: "operator", tenantId: "callupa" });
+  }));
+  await assertFails(getDoc(doc(c, "inviteEmails", inviteLockId("callupa", email))));
+  const draftC = buildInviteDraft({ name: "Shared", email, role: "operator", createdBy: "admC", now: new Date(), token: newInviteToken(), tenantId: "callupc" });
+  const expC = Timestamp.fromDate(draftC.invite.expiresAt);
+  await assertSucceeds(runTransaction(c, async tx => {
+    const inviteRef = doc(collection(c, "invites"));
+    const lockRef = doc(c, "inviteEmails", inviteLockId("callupc", email));
+    const existing = await tx.get(lockRef);
+    if (existing.exists() && existing.data().status === "pending") throw new Error("already-pending");
+    tx.set(inviteRef, { ...draftC.invite, createdAt: serverTimestamp(), expiresAt: expC });
+    tx.set(lockRef, { email, status: "pending", inviteId: inviteRef.id, expiresAt: expC, role: "operator", tenantId: "callupc" });
+  }));
+  await assertFails(runTransaction(c, async tx => {
+    const inviteRef = doc(collection(c, "invites"));
+    const lockRef = doc(c, "inviteEmails", inviteLockId("callupc", email));
+    tx.set(inviteRef, { ...draftC.invite, token: newInviteToken(), createdAt: serverTimestamp(), expiresAt: expC });
+    tx.set(lockRef, { email, status: "pending", inviteId: inviteRef.id, expiresAt: expC, role: "operator", tenantId: "callupc" });
   }));
 });
 
@@ -279,7 +317,7 @@ test("company clients are scoped; settings accept a job prefix and accounts cont
   await assertFails(getDocs(collection(bravo, "clients")));
   await env.withSecurityRulesDisabled(async ctx => {
     await setDoc(doc(ctx.firestore(), "companies/bravo"), {
-      name: "Bravo", legalName: "Bravo Pty Ltd", abn: "12 345 678 901", signoff: "Bravo", logoUrl: "", address: "1 B St", phone: "", email: "office@bravo.test",
+      name: "Bravo", legalName: "Bravo Pty Ltd", abn: "51 824 753 556", signoff: "Bravo", logoUrl: "", address: "1 B St", phone: "", email: "office@bravo.test",
       accountsEmail: "acc@bravo.test", hubdocAddress: "", ownerUid: BRAVO, createdBy: BRAVO, status: "active", plan: "trial", origin: "signup", isTest: false,
       staffCount: 1, jobCount: 0, billing: { provider: null, status: "not-configured", stripeCustomerId: null, stripeSubscriptionId: null },
     });

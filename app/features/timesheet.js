@@ -3,6 +3,11 @@
 export const TS_LUNCH_MIN = 30;
 export const TS_CONSENT = "Location is captured only when you tap Clock on or Clock off (and Break start or Break end, if you use them). Each tap takes one fix. Heartwood does not track your location in the background. If location is denied or unavailable, the time is still recorded and marked no location.";
 
+// Shown instead of a raw Firestore code such as permission-denied.
+export function clockFailureText() {
+  return "Couldn't save your clock-on. Try again or tell your admin.";
+}
+
 // Heartwood keeps the sentence above. Another company name replaces only that word.
 export function locationConsent(orgName) {
   const who = String(orgName || "").trim();

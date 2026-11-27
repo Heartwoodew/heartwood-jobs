@@ -44,7 +44,7 @@ async function invite(fdb, uid, role, email, tenantId = "heartwood") {
   const expiresAt = Timestamp.fromDate(draft.invite.expiresAt);
   const payload = { ...draft.invite, createdAt: serverTimestamp(), expiresAt };
   await runTransaction(fdb, async tx => {
-    const lockRef = doc(fdb, "inviteEmails", payload.email);
+    const lockRef = doc(fdb, "inviteEmails", payload.tenantId + ":" + payload.email);
     await tx.get(lockRef);
     tx.set(ref, payload);
     tx.set(lockRef, { email: payload.email, status: "pending", inviteId: ref.id, expiresAt, role, tenantId: payload.tenantId });

@@ -3,8 +3,18 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   accuracyText, assessClockAdjust, captureFix, coordText, daysForSheet, entryTimeEdited, machineChoicePatch, machinePromptNeeded, machineShiftToResume, mapsHref,
-  needsLocationConsent, paidShift, periodOpenForWorker, prestartStatus, sheetHours, shiftHours,
+  clockFailureText, needsLocationConsent, paidShift, periodOpenForWorker, prestartStatus, sheetHours, shiftHours,
 } from "../../app/features/timesheet.js";
+
+test("a failed clock-on tells the person in plain words", () => {
+  assert.equal(clockFailureText(), "Couldn't save your clock-on. Try again or tell your admin.");
+  assert.doesNotMatch(clockFailureText(), /permission-denied|PERMISSION_DENIED/);
+  const app = readFileSync(new URL("../../app/app.js", import.meta.url), "utf8");
+  const punch = app.slice(app.indexOf("async function tsPunch("), app.indexOf("async function tsSaveManual("));
+  assert.match(punch, /clockFailureText\(\)/);
+  assert.match(punch, /reportClientError\(err, "clock"\)/);
+  assert.doesNotMatch(punch, /Not saved:/);
+});
 
 test("finished shifts keep the 30-minute lunch unless a break is entered", () => {
   assert.equal(shiftHours({ start: "07:00", finish: "15:30" }), 8);

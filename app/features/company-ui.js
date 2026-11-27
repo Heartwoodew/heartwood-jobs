@@ -34,6 +34,7 @@ export function logoFieldHtml(org = {}, { canEdit = false, signup = false } = {}
     <span class="sub">Optional. JPEG or PNG from your photos or files. We'll resize it. Leave empty to keep the name as text.</span>
     <div class="logopreview"${preview ? "" : " hidden"}>${preview}</div>
     <input type="file" name="logoFile" accept="${LOGO_ACCEPT}"${lock}>
+    ${fieldErr("logo")}
     ${remove}
     <input type="hidden" name="logoUrl" value="${esc(current)}">
   </div>`;
@@ -90,7 +91,7 @@ export function signupFormHtml({ friend = false } = {}) {
     ${fieldErr("name")}
     <label>${req("Legal name")}<input name="legalName" required maxlength="120"></label>
     ${fieldErr("legalName")}
-    <label>${req("ABN")}<span class="sub">Required, including on a trial. Digits, spaces allowed (for example 00 000 000 000). The company record needs an ABN.</span><input name="abn" required maxlength="20" inputmode="numeric" placeholder="00 000 000 000"></label>
+    <label>${req("ABN")}<span class="sub">Required, including on a trial. The company record needs an ABN. 11 digits, spaces allowed (for example 51 824 753 556).</span><input name="abn" required maxlength="20" inputmode="numeric" placeholder="00 000 000 000"></label>
     ${fieldErr("abn")}
     ${addressFieldsHtml({}, { required: true })}
     <label>Phone<span class="sub">Optional.</span><input name="phone" maxlength="40" inputmode="tel"></label>
@@ -147,7 +148,7 @@ export function signupFieldErrors(input = {}) {
   })) {
     const field = code === "hubdoc" ? "hubdocAddress" : code;
     const message = code === "abn"
-      ? "Enter the ABN as digits, with or without spaces. A trial company still needs an ABN."
+      ? "Enter an 11-digit ABN. Spaces are allowed. A trial company still needs an ABN."
       : failureText(code);
     add(field, message);
   }
@@ -506,7 +507,7 @@ export function failureText(code) {
   const map = {
     name: "Enter the company name.",
     legalName: "Enter the legal name.",
-    abn: "Enter the ABN as digits, with or without spaces.",
+    abn: "Enter an 11-digit ABN. Spaces are allowed.",
     address: "Enter the company address.",
     street: "Enter the street address.",
     suburb: "Enter the suburb.",

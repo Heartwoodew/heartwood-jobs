@@ -6,12 +6,12 @@ On New Job and Edit Job, an admin can choose **+ Add new client** from the clien
 
 The Requirements tab (PR 139) and the clock-on fix (PR 140) stay as they are on main. This branch does not edit Firestore rules. Production rules are already over the compiled size limit.
 
-Service worker `callup-shell-v163-add-client`. Main is `callup-shell-v162-clock-on-fix` after PR 139 (`callup-shell-v161-requirements`) and PR 140.
+Service worker `callup-shell-v164`. Main is `callup-shell-v162-clock-on-fix` after PR 139 (`callup-shell-v161-requirements`) and PR 140.
 
 After review, and only when the owner says merge:
 
 1. Build a fresh hosting folder with `bash tools/build-callup-hosting.sh`.
-2. Deploy hosting with `firebase deploy --only hosting --config cloud/firebase.hosting.json --project heartwood-9f37f` from that fresh folder. Phones pick up `callup-shell-v163-add-client`.
+2. Deploy hosting with `firebase deploy --only hosting --config cloud/firebase.hosting.json --project heartwood-9f37f` from that fresh folder. Phones pick up `callup-shell-v164`.
 3. No Firestore rules deploy. No functions deploy. No index deploy. No Storage change.
 
 ## Clock on fix and phone error log (not deployed)

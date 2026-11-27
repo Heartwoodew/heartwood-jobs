@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import {
   CLEAN_STAGES, CORAL_CLIENT, REQUIREMENT_COST_CODES, buildTemplateItems, canonicalClientName,
   coralTemplateDoc, crewRequirementsHtml, detectCleanStage, detectStorey, isCoralClient, isNswJob,
-  isPortMacquarie, itemWriteBody, officeRequirementsHtml, packKind, planRequirementWrite, requirementText,
+  isPortMacquarie, itemWriteBody, officeRequirementsHtml, packKind, planRequirementWrite, requirementText, chosenTemplate,
 } from "../../app/features/job-requirements.js";
 import { CORAL_COST_CODE_MAP, coralCallupHook, parseInboxEmail } from "../../app/features/inbox-import.js";
 import { HEARTWOOD_CLIENTS } from "../../app/features/company.js";
@@ -33,6 +33,23 @@ test("requirement text drops prices, ex GST, tip fees and rates, and keeps ordin
   assert.equal(requirementText("AU$1,200 inc GST tip fees"), "");
   assert.equal(requirementText("separate spoil"), "separate spoil");
   assert.equal(requirementText("Pay $50 ex GST"), "Pay");
+});
+
+test("Heartwood packs stay on Heartwood, and another company starts with no checklist", () => {
+  const heartwood = planRequirementWrite({ client: "Private", type: "clean", companyId: "heartwood" }, [], { companyId: "heartwood", uid: "office" });
+  assert.equal(heartwood.apply, true);
+  assert.equal(heartwood.meta.builder, "Heartwood");
+  assert.ok(heartwood.items.length >= 20);
+  const callup = planRequirementWrite({ client: "Coral Homes", type: "clean", companyId: "acme" }, [], { companyId: "acme", uid: "office" });
+  assert.equal(callup.apply, false);
+  assert.equal(callup.items.length, 0);
+  assert.equal(chosenTemplate({ client: "Coral Homes" }, { companyId: "acme", templateId: "heartwood-default" }), "");
+  const office = officeRequirementsHtml({ items: [], meta: null, job: { companyId: "acme", client: "Private" } });
+  assert.doesNotMatch(office, /Coral Homes/);
+  assert.doesNotMatch(office, />Heartwood</);
+  const home = officeRequirementsHtml({ items: [], meta: null, job: { companyId: "heartwood", client: "Private" } });
+  assert.match(home, /Heartwood/);
+  assert.match(home, /Coral Homes/);
 });
 
 test("Coral Homes is a client, and the short name is an alias of the legal name", () => {
@@ -304,7 +321,7 @@ test("the office tab, the crew tab and the rules are wired, with no prices in th
   assert.match(detail, /No requirements yet|crewRequirementsHtml|mountJobRequirements/);
   assert.match(app, /planRequirementWrite\(seeded/);
   assert.match(sw, /features\/job-requirements\.js/);
-  assert.match(sw, /callup-shell-v163-add-client/);
+  assert.match(sw, /callup-shell-v164/);
   const prod = readFileSync(new URL("../firestore.production.rules", import.meta.url), "utf8");
   const emu = readFileSync(new URL("../emulator/firestore.rules", import.meta.url), "utf8");
   const frag = readFileSync(new URL("../production/firestore.requirements.rules", import.meta.url), "utf8");

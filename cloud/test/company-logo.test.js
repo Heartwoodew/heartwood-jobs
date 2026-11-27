@@ -3,13 +3,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   LOGO_ACCEPT, LOGO_JPEG_QUALITY, LOGO_MAX_BYTES, LOGO_MAX_EDGE, acceptLogoValue,
-  isLogoStoragePath, logoFailureText, logoFileOk, logoStoragePath, logoUploadPlan,
+  inspectLogoFile, isLogoStoragePath, logoFailureText, logoFileOk, logoStoragePath, logoUploadPlan,
 } from "../../app/features/company-logo.js";
 import { companySettingsHtml, failureText, logoFieldHtml, signupFormHtml } from "../../app/features/company-ui.js";
 import { companyDetailPatch, safeLogo, validateCompanyInput } from "../../app/features/company.js";
 
 const BASE = {
-  name: "Acme Civil", legalName: "Acme Civil Pty Ltd", abn: "12 345 678 901",
+  name: "Acme Civil", legalName: "Acme Civil Pty Ltd", abn: "51 824 753 556",
   address: "1 Yard St", phone: "", email: "office@acme.test", accountsEmail: "accounts@acme.test",
   hubdocAddress: "", logoUrl: "", signoff: "Acme", companyId: "acme-1",
 };
@@ -48,6 +48,20 @@ test("logo file checks accept jpeg or png and reject other types or huge sources
     metadata: { purpose: "company-logo", uploaderUid: "owner-1", companyId: "acme-1" },
   });
   assert.equal(logoUploadPlan("", "owner-1").ok, false);
+  assert.match(logoFailureText("type"), /JPEG or PNG/);
+});
+
+test("a renamed text file or a huge png is rejected before upload", async () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+  const text = new TextEncoder().encode("not a png");
+  const file = (name, type, size, bytes) => ({
+    name, type, size,
+    slice() { return { arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) }; },
+  });
+  assert.equal((await inspectLogoFile(file("logo.png", "image/png", 80_000, png))).ok, true);
+  assert.equal((await inspectLogoFile(file("logo.png", "image/png", 80_000, text))).reason, "type");
+  assert.equal((await inspectLogoFile(file("huge.png", "image/png", 77 * 1024 * 1024, png))).reason, "size");
+  assert.match(logoFailureText("size"), /too large/);
   assert.match(logoFailureText("type"), /JPEG or PNG/);
 });
 
@@ -92,6 +106,6 @@ test("settings and signup replace the Logo URL box with a jpeg/png upload, previ
 test("service worker caches the logo module and the bumped shell version", () => {
   const sw = readFileSync(new URL("../../app/sw.js", import.meta.url), "utf8");
 
-  assert.match(sw, /callup-shell-v163-add-client/);
+  assert.match(sw, /callup-shell-v164/);
   assert.match(sw, /features\/company-logo\.js/);
 });
