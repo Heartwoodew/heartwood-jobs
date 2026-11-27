@@ -328,6 +328,45 @@ test("helper invites: labourer cannot invite; supervisor invites a labourer but 
   assert.equal(coAdmin.applied[0].tenantId, "otherco");
 });
 
+test("helper apply writes the invite lock at {company}:{email}", async () => {
+  const { firestoreHelperStore } = await import("../functions/helper/apply.js");
+  const { inviteLockId } = await import("../functions/shared/staff-invites.js");
+  const writes = [];
+  const db = {
+    collection(name) {
+      return {
+        doc(id) {
+          const ref = { path: name + "/" + (id || "auto-id"), id: id || "auto-id" };
+          return ref;
+        },
+      };
+    },
+    batch() {
+      const ops = [];
+      return {
+        set(ref, data) { ops.push({ path: ref.path, id: ref.id, data }); },
+        async commit() { writes.push(...ops); },
+      };
+    },
+  };
+  await firestoreHelperStore(db).apply({
+    type: "invite", name: "Pat", email: "Pat@Example.com", role: "operator",
+    token: "b".repeat(43), tenantId: "otherco", createdBy: "sup1",
+  });
+  const lock = writes.find(row => row.path.startsWith("inviteEmails/"));
+  assert.equal(lock.path, "inviteEmails/" + inviteLockId("otherco", "pat@example.com"));
+  assert.equal(lock.data.email, "Pat@Example.com");
+  assert.equal(lock.data.tenantId, "otherco");
+  assert.equal(lock.data.status, "pending");
+  assert.equal(writes.some(row => row.path === "inviteEmails/pat@example.com"), false);
+  writes.length = 0;
+  await firestoreHelperStore(db).apply({
+    type: "invite", name: "Pat", email: "pat@bravo.test", role: "labourer",
+    token: "c".repeat(43), companyId: "bravo", createdBy: "adm",
+  });
+  assert.equal(writes.find(row => row.path.startsWith("inviteEmails/")).path, "inviteEmails/" + inviteLockId("bravo", "pat@bravo.test"));
+});
+
 test("helper: a Heartwood profile with role admin is an admin only with a heartwoodAdmins grant", async () => {
   const { resolveMembership } = await import("../functions/shared/cloud-storage.js");
   const profile = { name: "Hana", role: "admin", companyId: "heartwood" };

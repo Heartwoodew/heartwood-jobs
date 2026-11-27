@@ -83,10 +83,8 @@ import {
   queueInviteEmail,
   sendViaResend,
   shouldQueueInviteEmail,
-  displayStatus,
-  profileFromInvite,
-  inviteLockId,
 } from "./shared/staff-invites.js";
+import { claimInviteDocument } from "./invite-claim.js";
 import { adminSendPasswordReset as sendPasswordReset, rateDecision, resetFailureText } from "./password-reset.js";
 import {
   remindLocationSharing as sendLocationReminder,
@@ -268,34 +266,7 @@ function inviteBackend() {
       await db.collection("heartwoodAdmins").doc(uid).delete();
     },
     async claimInvite(id, uid, now) {
-      return db.runTransaction(async tx => {
-        const ref = db.collection("invites").doc(id);
-        const snap = await tx.get(ref);
-        if (!snap.exists) return { ok: false, reason: "invalid" };
-        const invite = snap.data() || {};
-        const status = displayStatus(invite, now);
-        if (status !== "pending") return { ok: false, reason: status === "invalid" ? "invalid" : status };
-        if (!profileFromInvite(invite)) return { ok: false, reason: "invalid" };
-        tx.update(ref, {
-          status: "accepted",
-          acceptedUid: uid,
-          acceptedAt: FieldValue.serverTimestamp(),
-        });
-        const lock = {
-          email: invite.email,
-          status: "accepted",
-          inviteId: id,
-          role: invite.role,
-          expiresAt: invite.expiresAt,
-        };
-        const company = invite.tenantId || invite.companyId || "heartwood";
-        if (invite.tenantId) lock.tenantId = invite.tenantId;
-        tx.set(db.collection("inviteEmails").doc(inviteLockId(company, invite.email)), lock, { merge: true });
-        const legacyRef = db.collection("inviteEmails").doc(invite.email);
-        const legacy = await tx.get(legacyRef);
-        if (legacy.exists && (legacy.data() || {}).inviteId === id) tx.set(legacyRef, lock, { merge: true });
-        return { ok: true };
-      });
+      return claimInviteDocument(db, id, uid, now);
     },
   };
 }

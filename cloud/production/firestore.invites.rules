@@ -80,14 +80,15 @@
         && next.expiresAt < request.time + duration.value(8, 'd');
     }
     function inviteLockPath(email) { return /databases/$(database)/documents/inviteEmails/$(docData().tenantId + ":" + email); }
+    function inviteLegacyLockPath(email) { return /databases/$(database)/documents/inviteEmails/$(email); }
     function invitePath(inviteId) { return /databases/$(database)/documents/invites/$(inviteId); }
     function inviteLockFree(email) {
       let path = inviteLockPath(email);
       return !exists(path) || get(path).data.status != "pending";
     }
-    function inviteLockAgrees(email, inviteId) {
+    // A lock agrees when the per-company document does, or the pre-143 inviteEmails/{email} document does.
+    function inviteLockRowAgrees(path, email, inviteId) {
       let next = docData();
-      let path = inviteLockPath(email);
       let there = existsAfter(path);
       let row = there ? getAfter(path).data : {};
       return there
@@ -98,6 +99,10 @@
         && row.tenantId == next.tenantId
         && row.status == next.status
         && row.expiresAt == next.expiresAt;
+    }
+    function inviteLockAgrees(email, inviteId) {
+      return inviteLockRowAgrees(inviteLockPath(email), email, inviteId)
+        || inviteLockRowAgrees(inviteLegacyLockPath(email), email, inviteId);
     }
     function inviteCreateOk(inviteId) {
       let next = docData();
@@ -182,15 +187,27 @@
           && (docData().status == "pending" || docData().status == "cancelled"))
         || (prior != null && prior.status != "pending" && docData().status == "pending");
     }
+    // Pending invites saved before the per-company lock id. Update only; do not create a new email-only lock.
+    function legacyLockUpdate(lockId) {
+      let path = /databases/$(database)/documents/inviteEmails/$(lockId);
+      let prior = exists(path) ? get(path).data : null;
+      return lockId == docData().email
+        && prior != null
+        && prior.status == "pending"
+        && prior.inviteId == docData().inviteId
+        && prior.email == docData().email
+        && prior.tenantId == docData().tenantId
+        && prior.tenantId == inviteCallerTenant()
+        && (docData().status == "pending" || docData().status == "cancelled");
+    }
 
     match /inviteEmails/{lockId} {
-      allow get: if inviteAdmin() && (resource == null || (lockId == prevData().tenantId + ":" + prevData().email && prevData().tenantId == inviteCallerTenant()));
+      allow get: if inviteAdmin() && (resource == null || (prevData().tenantId == inviteCallerTenant() && (lockId == prevData().tenantId + ":" + prevData().email || lockId == prevData().email)));
       allow list: if false;
       allow create, update: if inviteAdmin()
-        && lockId == docData().tenantId + ":" + docData().email
         && inviteLockEmailOk(docData().email)
         && inviteLockPointsAtInvite(docData().email)
-        && inviteLockWriteOk(docData().email);
+        && ((lockId == docData().tenantId + ":" + docData().email && inviteLockWriteOk(docData().email)) || legacyLockUpdate(lockId));
       allow delete: if false;
     }
 
