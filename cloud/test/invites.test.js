@@ -10,7 +10,7 @@ import {
   acceptScreenModel, acceptStaffInvite, acceptViewHtml, buildInviteDraft, buildInviteEmail,
   canManageInvites, displayStatus, inviteEmailConfig, inviteLink, newInviteToken, pendingInviteForEmail,
   planInviteDelivery, previewStaffInvite, profileFromInvite, queueInviteEmail, shouldQueueInviteEmail,
-  staffViewHtml, tokenOk, invitableRoles, inviterMayInvite, INVITE_ROLES, CREW_ROLES, roleLabel,
+  staffViewHtml, tokenOk, invitableRoles, inviterMayInvite, INVITE_ROLES, CREW_ROLES, roleLabel, inviteLockId, inviteLockDocId,
 } from "../../app/features/staff-invites.js";
 
 const NOW = new Date("2026-11-08T02:00:00.000Z");
@@ -274,6 +274,33 @@ test("email stays held unless explicitly enabled, and tests cannot queue a live 
   assert.equal(shouldQueueInviteEmail(invite, { ...invite, status: "cancelled" }), false);
   assert.equal(shouldQueueInviteEmail(invite, { ...invite, role: "admin" }), false);
   assert.equal(shouldQueueInviteEmail(invite, { ...invite, token: "d".repeat(43) }), true);
+});
+
+test("a pending invite from before the per-company lock still uses inviteEmails/{email}", () => {
+  const row = { id: "i1", email: "Pat@Example.com", tenantId: "acme", companyId: "acme" };
+  assert.equal(inviteLockId("acme", row.email), "acme:pat@example.com");
+  assert.equal(inviteLockDocId(row, {
+    next: { exists: false },
+    legacy: { exists: true, inviteId: "i1" },
+  }), "pat@example.com");
+  assert.equal(inviteLockDocId(row, {
+    next: { exists: true, inviteId: "i1" },
+    legacy: { exists: true, inviteId: "older" },
+  }), "acme:pat@example.com");
+  assert.equal(inviteLockDocId({ id: "i2", email: "a@b.co", tenantId: "heartwood" }, {}), "heartwood:a@b.co");
+});
+
+test("accept claim reads every lock before it writes", () => {
+  const claim = readFileSync(new URL("../functions/invite-claim.js", import.meta.url), "utf8");
+  const index = readFileSync(new URL("../functions/index.js", import.meta.url), "utf8");
+  assert.match(index, /claimInviteDocument\(db, id, uid, now\)/);
+  const body = claim.slice(claim.indexOf("return db.runTransaction"));
+  const lastRead = body.lastIndexOf("tx.get(");
+  const firstWrite = Math.min(...["tx.update(", "tx.set("].map(mark => {
+    const at = body.indexOf(mark);
+    return at < 0 ? Number.POSITIVE_INFINITY : at;
+  }));
+  assert.ok(lastRead >= 0 && lastRead < firstWrite, "a lock read sits after a write");
 });
 
 test("invite rules fragment matches the emulator block and does not open mail", () => {

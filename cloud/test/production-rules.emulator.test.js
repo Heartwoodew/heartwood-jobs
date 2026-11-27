@@ -97,7 +97,7 @@ test("a second company cannot read Heartwood jobs, quotes, receipts, inbox, hour
 // New-user paths (audit 10 Nov 2026): self-signup owner profile, company staff list, company invites.
 import { runTransaction, serverTimestamp, Timestamp } from "firebase/firestore";
 import { buildCompanyCreate, ownerProfile, validateCompanyInput, trialEnd } from "../../app/features/company.js";
-import { buildInviteDraft, inviteLockId, newInviteToken } from "../../app/features/staff-invites.js";
+import { buildInviteDraft, inviteLockDocId, inviteLockId, newInviteToken } from "../../app/features/staff-invites.js";
 
 const signupInput = validateCompanyInput({ name: "Delta Diggers", legalName: "Delta Diggers Pty Ltd", abn: "51 824 753 556",
   address: "1 Test St, Ipswich QLD", phone: "", email: "office@delta.test", accountsEmail: "accounts@delta.test", hubdocAddress: "", logoUrl: "" }).value;
@@ -250,6 +250,73 @@ test("a pending invite in one company does not block or reveal itself to another
     tx.set(inviteRef, { ...draftC.invite, token: newInviteToken(), createdAt: serverTimestamp(), expiresAt: expC });
     tx.set(lockRef, { email, status: "pending", inviteId: inviteRef.id, expiresAt: expC, role: "operator", tenantId: "callupc" });
   }));
+});
+
+test("an admin can resend and cancel a pre-change invite lock, and another company cannot see it", async () => {
+  const email = "legacy.person@example.test";
+  const inviteId = "legacy-invite-callupa";
+  const expiresAt = Timestamp.fromMillis(Date.now() + 3 * 24 * 60 * 60 * 1000);
+  await env.withSecurityRulesDisabled(async ctx => {
+    const d = ctx.firestore();
+    await setDoc(doc(d, "users/legacyA"), { role: "admin", name: "Ann", companyId: "callupa", tenantId: "callupa" });
+    await setDoc(doc(d, "users/legacyC"), { role: "admin", name: "Cam", companyId: "callupc", tenantId: "callupc" });
+    await setDoc(doc(d, "invites", inviteId), {
+      name: "Legacy Person", email, role: "operator", status: "pending", createdBy: "legacyA",
+      createdAt: Timestamp.fromMillis(Date.now() - 2 * 24 * 60 * 60 * 1000), expiresAt,
+      token: "a".repeat(43), tenantId: "callupa", companyId: "callupa",
+    });
+    await setDoc(doc(d, "inviteEmails", email), {
+      email, status: "pending", inviteId, expiresAt, role: "operator", tenantId: "callupa",
+    });
+  });
+  const a = db("legacyA");
+  const c = db("legacyC");
+  await assertFails(getDoc(doc(c, "inviteEmails", email)));
+  await assertFails(getDoc(doc(c, "invites", inviteId)));
+  await assertSucceeds(getDoc(doc(a, "inviteEmails", email)));
+  const nextExpiry = Timestamp.fromMillis(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  const resent = "b".repeat(43);
+  await assertSucceeds(runTransaction(a, async tx => {
+    const nextRef = doc(a, "inviteEmails", inviteLockId("callupa", email));
+    const legacyRef = doc(a, "inviteEmails", email);
+    const nextSnap = await tx.get(nextRef);
+    const legacySnap = await tx.get(legacyRef);
+    const chosen = inviteLockDocId({ id: inviteId, email, tenantId: "callupa" }, {
+      next: nextSnap.exists() ? { exists: true, inviteId: nextSnap.data().inviteId } : { exists: false },
+      legacy: legacySnap.exists() ? { exists: true, inviteId: legacySnap.data().inviteId } : { exists: false },
+    });
+    tx.update(doc(a, "invites", inviteId), { token: resent, expiresAt: nextExpiry, resentAt: serverTimestamp(), resentBy: "legacyA" });
+    tx.update(chosen === email ? legacyRef : nextRef, { expiresAt: nextExpiry, status: "pending" });
+  }));
+  const afterResend = await assertSucceeds(getDoc(doc(a, "inviteEmails", email)));
+  assert.equal(afterResend.data().status, "pending");
+  assert.equal(afterResend.data().inviteId, inviteId);
+  await assertFails(getDoc(doc(c, "inviteEmails", email)));
+  await assertFails(runTransaction(c, async tx => {
+    tx.update(doc(c, "invites", inviteId), { status: "cancelled", cancelledAt: serverTimestamp(), cancelledBy: "legacyC" });
+    tx.update(doc(c, "inviteEmails", email), { status: "cancelled" });
+  }));
+  await assertFails(setDoc(doc(a, "inviteEmails", "brand.new@example.test"), {
+    email: "brand.new@example.test", status: "pending", inviteId: "no-such-invite", expiresAt: nextExpiry,
+    role: "operator", tenantId: "callupa",
+  }));
+  await assertSucceeds(runTransaction(a, async tx => {
+    const legacyRef = doc(a, "inviteEmails", email);
+    const nextRef = doc(a, "inviteEmails", inviteLockId("callupa", email));
+    await tx.get(nextRef);
+    const legacySnap = await tx.get(legacyRef);
+    assert.equal(legacySnap.data().inviteId, inviteId);
+    tx.update(doc(a, "invites", inviteId), { status: "cancelled", cancelledAt: serverTimestamp(), cancelledBy: "legacyA" });
+    tx.update(legacyRef, { status: "cancelled" });
+  }));
+  const cancelled = await assertSucceeds(getDoc(doc(a, "invites", inviteId)));
+  assert.equal(cancelled.data().status, "cancelled");
+  assert.equal(cancelled.data().token, resent);
+  const lock = await assertSucceeds(getDoc(doc(a, "inviteEmails", email)));
+  assert.equal(lock.data().status, "cancelled");
+  assert.equal(lock.data().tenantId, "callupa");
+  await assertFails(getDoc(doc(c, "inviteEmails", email)));
+  await assertFails(updateDoc(doc(c, "inviteEmails", email), { status: "pending", tenantId: "callupc" }));
 });
 
 // Multi-company audit batch 2 (10 Nov 2026): incidents per company, company clients, settings extras.

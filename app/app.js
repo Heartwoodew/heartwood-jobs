@@ -27,7 +27,7 @@ import {
 import { SWMS, SWMS_EMPTY, SWMS_VERSION, sigMs, sigExp, latestSig, statusOf, swmsSignatureData, buildPlaceholderPdf, companySwms, swmsReminderModel, swmsSignoffOrg } from "./features/swms-sign.js";
 import {
   acceptLoadingHtml, acceptScreenModel, acceptViewHtml, buildInviteDraft, inviteFailureText,
-  newInviteToken, pendingInviteForEmail, staffViewHtml, appOriginFor, invitableRoles, CREW_ROLES, inviteLockId, dispatchRoster,
+  newInviteToken, pendingInviteForEmail, staffViewHtml, appOriginFor, invitableRoles, CREW_ROLES, inviteLockId, inviteLockDocId, dispatchRoster,
   canSendPasswordReset, canRemindLocation, canToggleClockOnReminder, receivesClockOnReminder, forgotPasswordMessage, GOOGLE_ONLY_RESET,
 } from "./features/staff-invites.js";
 import { saveGuard, settleOrQueue } from "./features/pending-write.js";
@@ -218,7 +218,7 @@ let INBOUND_DOMAIN = "inbound.callupapp.com.au";
 let startDesktopInstall = () => {};
 let refreshDesktopBanner = () => {};
 let desktopBannerWouldShow = () => false;
-let SHELL_VERSION = "callup-shell-v164";
+let SHELL_VERSION = "callup-shell-v165";
 let isCoralClient = () => false;
 let canonicalClientName = name => String(name || "").trim();
 let planRequirementWrite = () => ({ apply: false });
@@ -5646,6 +5646,23 @@ function myInviteRoles() {
   // Heartwood: the app only treats someone as admin when the rules let them list staff (fixed list or a grant).
   return invitableRoles({ uid: me && me.uid, profile: { role }, tenantId: myTenant(), heartwoodAdmin: role === "admin" });
 }
+// Reads both lock shapes before any write. A pending invite from before the per-company lock
+// still lives at inviteEmails/{email}. A newer one lives at inviteEmails/{company}:{email}.
+async function inviteLockRef(tx, row) {
+  const email = String(row.email || "").trim().toLowerCase();
+  const nextRef = doc(db, "inviteEmails", inviteLockId(row.tenantId || row.companyId, email));
+  const nextSnap = await tx.get(nextRef);
+  const next = nextSnap.exists() ? { exists: true, inviteId: nextSnap.data().inviteId } : { exists: false };
+  let legacy = { exists: false };
+  let legacyRef = null;
+  if (!(next.exists && next.inviteId === row.id)) {
+    legacyRef = doc(db, "inviteEmails", email);
+    const legacySnap = await tx.get(legacyRef);
+    legacy = legacySnap.exists() ? { exists: true, inviteId: legacySnap.data().inviteId } : { exists: false };
+  }
+  const chosen = inviteLockDocId(row, { next, legacy });
+  return chosen === email && legacyRef ? legacyRef : nextRef;
+}
 async function resendInvite(id) {
   const row = (ui.invites || []).find(item => item.id === id);
   if (!row || row.status !== "pending") return;
@@ -5653,16 +5670,18 @@ async function resendInvite(id) {
   const expiresAt = Timestamp.fromDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
   const token = newInviteToken();
   await runTransaction(db, async tx => {
+    const lockRef = await inviteLockRef(tx, row);
     tx.update(doc(db, "invites", id), { token, expiresAt, resentAt: serverTimestamp(), resentBy: me.uid });
-    tx.update(doc(db, "inviteEmails", inviteLockId(row.tenantId || row.companyId, row.email)), { expiresAt, status: "pending" });
+    tx.update(lockRef, { expiresAt, status: "pending" });
   });
 }
 async function cancelInvite(id) {
   const row = (ui.invites || []).find(item => item.id === id);
   if (!row || row.status !== "pending") return;
   await runTransaction(db, async tx => {
+    const lockRef = await inviteLockRef(tx, row);
     tx.update(doc(db, "invites", id), { status: "cancelled", cancelledAt: serverTimestamp(), cancelledBy: me.uid });
-    tx.update(doc(db, "inviteEmails", inviteLockId(row.tenantId || row.companyId, row.email)), { status: "cancelled" });
+    tx.update(lockRef, { status: "cancelled" });
   });
 }
 // A form that stays focused blocks the live redraw (so typing isn't wiped). After a successful save, let go of

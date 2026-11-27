@@ -280,7 +280,7 @@ test("the map library is not part of the offline shell", () => {
   const app = read("../../app/app.js");
   const css = read("../../app/styles.css");
 
-  assert.match(sw, /callup-shell-v164/);
+  assert.match(sw, /callup-shell-v165/);
   assert.match(app, /releaseLiveDoc/);
   assert.match(app, /clockOffLocationUpdate/);
   assert.match(app, /SHOW_AFTER_CLOCK_OFF/);

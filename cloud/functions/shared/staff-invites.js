@@ -16,6 +16,19 @@ export function inviteLockId(tenantId, email) {
   return tenant + ":" + mail;
 }
 
+// Which lock document a pending invite still holds.
+// New invites use {tenant}:{email}. Invites saved before that change use inviteEmails/{email}.
+// seen.next and seen.legacy are { exists, inviteId } from reads done before any write.
+export function inviteLockDocId(row, seen) {
+  const email = String(row && row.email || "").trim().toLowerCase();
+  const nextId = inviteLockId(row && (row.tenantId || row.companyId), email);
+  const next = seen && seen.next;
+  if (next && next.exists && next.inviteId === row.id) return nextId;
+  const legacy = seen && seen.legacy;
+  if (legacy && legacy.exists && legacy.inviteId === row.id) return email;
+  return nextId;
+}
+
 // Crew, supervisors and managers, plus the admin/owner at every company except Heartwood.
 // Heartwood still lists Alex even though he has no profile document.
 export function dispatchRoster(rows, companyId, heartwoodOwnerUid = "1JKLsoxkQNfkphBBO0vDz2ziEyj2") {

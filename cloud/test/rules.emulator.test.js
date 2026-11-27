@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { initializeTestEnvironment, assertFails, assertSucceeds } from "@firebase/rules-unit-testing";
 import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, setDoc, updateDoc, serverTimestamp, Timestamp, runTransaction, query, where, orderBy } from "firebase/firestore";
 import { swmsSignatureData } from "../../app/features/swms-sign.js";
+import { inviteLockDocId, inviteLockId } from "../../app/features/staff-invites.js";
 import { itemsFor, prestartPayload, templateSeedDocs } from "../../app/features/prestart.js";
 import { ref, uploadBytes, getBytes, list, listAll, getMetadata, deleteObject } from "firebase/storage";
 
@@ -563,6 +564,78 @@ test("a supervisor can invite, resend and cancel; an operator cannot", async () 
   assert.equal(after.data().status, "cancelled");
   assert.equal(after.data().role, "operator");
   assert.notEqual(after.data().role, "admin");
+});
+
+test("a pre-change invite lock can be resent and cancelled by that company only", async () => {
+  const hwEmail = "old.crew@example.com";
+  const otherEmail = "old.other@example.com";
+  const soon = Timestamp.fromMillis(Date.now() + 3 * 24 * 60 * 60 * 1000);
+  const week = Timestamp.fromMillis(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  await env.withSecurityRulesDisabled(async ctx => {
+    const d = ctx.firestore();
+    await setDoc(doc(d, "invites/legacy-hw"), {
+      name: "Old Crew", email: hwEmail, role: "operator", status: "pending", createdBy: ALEX,
+      createdAt: Timestamp.fromMillis(Date.now() - 86400000), expiresAt: soon, token: "a".repeat(43), tenantId: "heartwood",
+    });
+    await setDoc(doc(d, "inviteEmails", hwEmail), {
+      email: hwEmail, status: "pending", inviteId: "legacy-hw", expiresAt: soon, role: "operator", tenantId: "heartwood",
+    });
+    await setDoc(doc(d, "invites/legacy-other"), {
+      name: "Old Other", email: otherEmail, role: "operator", status: "pending", createdBy: "finOther",
+      createdAt: Timestamp.fromMillis(Date.now() - 86400000), expiresAt: soon, token: "c".repeat(43),
+      tenantId: "otherco", companyId: "otherco",
+    });
+    await setDoc(doc(d, "inviteEmails", otherEmail), {
+      email: otherEmail, status: "pending", inviteId: "legacy-other", expiresAt: soon, role: "operator", tenantId: "otherco",
+    });
+  });
+  const alex = db(ALEX);
+  const other = db("finOther");
+  await assertFails(getDoc(doc(other, "inviteEmails", hwEmail)));
+  await assertFails(getDoc(doc(db("op1"), "inviteEmails", hwEmail)));
+  await assertFails(getDoc(doc(alex, "inviteEmails", otherEmail)));
+  await assertSucceeds(getDoc(doc(alex, "inviteEmails", hwEmail)));
+  await assertSucceeds(getDoc(doc(other, "inviteEmails", otherEmail)));
+  async function resend(user, uid, inviteId, email, tenantId, token) {
+    await runTransaction(user, async tx => {
+      const nextRef = doc(user, "inviteEmails", inviteLockId(tenantId, email));
+      const legacyRef = doc(user, "inviteEmails", email);
+      const nextSnap = await tx.get(nextRef);
+      const legacySnap = await tx.get(legacyRef);
+      const chosen = inviteLockDocId({ id: inviteId, email, tenantId }, {
+        next: nextSnap.exists() ? { exists: true, inviteId: nextSnap.data().inviteId } : { exists: false },
+        legacy: legacySnap.exists() ? { exists: true, inviteId: legacySnap.data().inviteId } : { exists: false },
+      });
+      tx.update(doc(user, "invites", inviteId), { token, expiresAt: week, resentAt: serverTimestamp(), resentBy: uid });
+      tx.update(chosen === email ? legacyRef : nextRef, { expiresAt: week, status: "pending" });
+    });
+  }
+  await assertSucceeds(resend(alex, ALEX, "legacy-hw", hwEmail, "heartwood", "d".repeat(43)));
+  await assertFails(resend(other, "finOther", "legacy-hw", hwEmail, "heartwood", "e".repeat(43)));
+  await assertSucceeds(resend(other, "finOther", "legacy-other", otherEmail, "otherco", "f".repeat(43)));
+  await assertFails(resend(alex, ALEX, "legacy-other", otherEmail, "otherco", "g".repeat(43)));
+  await assertFails(updateDoc(doc(other, "inviteEmails", hwEmail), { status: "cancelled" }));
+  await assertFails(setDoc(doc(alex, "inviteEmails", "brand.new@example.com"), {
+    email: "brand.new@example.com", status: "pending", inviteId: "missing", expiresAt: week, role: "operator", tenantId: "heartwood",
+  }));
+  await assertSucceeds(runTransaction(alex, async tx => {
+    const legacyRef = doc(alex, "inviteEmails", hwEmail);
+    await tx.get(doc(alex, "inviteEmails", inviteLockId("heartwood", hwEmail)));
+    await tx.get(legacyRef);
+    tx.update(doc(alex, "invites/legacy-hw"), { status: "cancelled", cancelledAt: serverTimestamp(), cancelledBy: ALEX });
+    tx.update(legacyRef, { status: "cancelled" });
+  }));
+  await assertFails(runTransaction(alex, async tx => {
+    tx.update(doc(alex, "invites/legacy-other"), { status: "cancelled", cancelledAt: serverTimestamp(), cancelledBy: ALEX });
+    tx.update(doc(alex, "inviteEmails", otherEmail), { status: "cancelled" });
+  }));
+  const hw = await assertSucceeds(getDoc(doc(alex, "invites/legacy-hw")));
+  assert.equal(hw.data().status, "cancelled");
+  const hwLock = await assertSucceeds(getDoc(doc(alex, "inviteEmails", hwEmail)));
+  assert.equal(hwLock.data().status, "cancelled");
+  const kept = await assertSucceeds(getDoc(doc(other, "inviteEmails", otherEmail)));
+  assert.equal(kept.data().status, "pending");
+  assert.equal(kept.data().tenantId, "otherco");
 });
 
 function serviceRecord(uid, extra = {}) {

@@ -1,3 +1,17 @@
+## Invite lock follow-up (not deployed)
+
+Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production.
+
+`acceptStaffInvite` reads the legacy invite lock before it writes. An admin can still cancel or resend a pending invite whose lock is `inviteEmails/{email}` for their own company. Another company cannot read or change that lock. Helper invites still use `inviteEmails/{companyId}:{email}`.
+
+Service worker `callup-shell-v165`.
+
+After review, and only when the owner says merge:
+
+1. Publish `cloud/firestore.production.rules` only. Do not deploy `cloud/emulator/firestore.rules`.
+2. Deploy the function `acceptStaffInvite`. Do not deploy `helperAsk`. Do not change `INVITE_EMAIL_ENABLED`. No Stripe deploy.
+3. Build a fresh hosting folder with `bash tools/build-callup-hosting.sh`, then deploy hosting so phones pick up `callup-shell-v165`.
+
 ## Add a client from New Job (not deployed)
 
 Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production.

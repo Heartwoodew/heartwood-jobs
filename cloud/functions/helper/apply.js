@@ -4,6 +4,7 @@
 import { FieldValue } from "firebase-admin/firestore";
 import { timesheetHours } from "./actions.js";
 import { adminReader } from "./reader.js";
+import { inviteLockId } from "../shared/staff-invites.js";
 
 export function firestoreHelperStore(db) {
   return {
@@ -230,7 +231,7 @@ export function firestoreHelperStore(db) {
           expiresAt,
         });
         const tenant = action.tenantId || action.companyId || "heartwood";
-        batch.set(db.collection("inviteEmails").doc(tenant + ":" + String(action.email || "").trim().toLowerCase()), {
+        batch.set(db.collection("inviteEmails").doc(inviteLockId(tenant, action.email)), {
           email: action.email,
           status: "pending",
           inviteId: ref.id,
