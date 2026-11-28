@@ -380,6 +380,29 @@ export function demoBundle(companyId, { date = "2026-11-10" } = {}) {
   };
 }
 
+// Heartwood's fixed admins: Alex, the box sync user and Patrick (same list as isAdmin() in the rules).
+// Alex has no users/{uid} profile on purpose. He owns TEST companies, so the signup recovery must never run for him.
+export const HEARTWOOD_BOOTSTRAP_UIDS = Object.freeze(["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "38SU5waAy4f9UI9N6JTqDMaYpQg2", "R7t41e54Ykcdk9WPdVZnDd697iI2"]);
+
+export function isHeartwoodBootstrap(uid) {
+  return HEARTWOOD_BOOTSTRAP_UIDS.includes(String(uid || ""));
+}
+
+// Interrupted-signup recovery runs only for an ordinary signed-in user with no profile, online.
+// Never for Heartwood's fixed admins: they own test companies, not an unfinished signup.
+export function ownerRecoveryAllowed({ uid, profile, online } = {}) {
+  if (profile || online === false) return false;
+  if (!uid || isHeartwoodBootstrap(uid)) return false;
+  return true;
+}
+
+// A fixed Heartwood admin whose users/{uid} points at another company (written by the PR 143 recovery)
+// still opens Heartwood: that profile is ignored here. Patrick's Heartwood profile is kept.
+export function bootstrapProfile(uid, profile) {
+  if (!profile || !isHeartwoodBootstrap(uid)) return profile || null;
+  return docCompanyId(profile) === HEARTWOOD_COMPANY_ID ? profile : null;
+}
+
 // Finish a signup that wrote the company and never wrote users/{uid}.
 export function ownerRecoveryProfile({ email, displayName, companyId, company } = {}) {
   const row = company || {};
