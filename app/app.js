@@ -219,7 +219,7 @@ let INBOUND_DOMAIN = "inbound.callupapp.com.au";
 let startDesktopInstall = () => {};
 let refreshDesktopBanner = () => {};
 let desktopBannerWouldShow = () => false;
-let SHELL_VERSION = "callup-shell-v166-hours-mail";
+let SHELL_VERSION = "callup-shell-v167-hours-mail";
 let isCoralClient = () => false;
 let canonicalClientName = name => String(name || "").trim();
 let planRequirementWrite = () => ({ apply: false });

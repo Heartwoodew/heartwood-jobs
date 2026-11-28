@@ -68,7 +68,7 @@ test("app wiring: no 'waiting for the box' wording, no ServiceM8 text in the new
   const app = readFileSync(new URL("../../app/app.js", import.meta.url), "utf8");
   const sw = readFileSync(new URL("../../app/sw.js", import.meta.url), "utf8");
   assert.doesNotMatch(app, /waiting for the box|the box checks every|the box runs it|emails within ~15 min|The box sends them/);
-  assert.match(sw, /const VERSION = "callup-shell-v166-hours-mail"/);
+  assert.match(sw, /const VERSION = "callup-shell-v167-hours-mail"/);
   assert.match(sw, /"features\/queue-health\.js"/);
   assert.match(app, /healthLineHtml\(/);
   assert.match(app, /hoursExportState\(/);

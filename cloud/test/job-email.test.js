@@ -342,6 +342,6 @@ test("addresses are checked, overflow files are named without a public storage l
   assert.match(fn, /Other mail app|jemmail/);
   assert.doesNotMatch(fn, /getDownloadURL|httpsCallable|functions\(/);
   assert.ok(app.split('id="emailjob"').length - 1 >= 2);
-  assert.match(sw, /callup-shell-v166-hours-mail/);
+  assert.match(sw, /callup-shell-v167-hours-mail/);
   assert.match(sw, /features\/job-email\.js/);
 });
