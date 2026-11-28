@@ -43,7 +43,7 @@ import { PRODUCT_NAME, POWERED_BY, clearSavedOrg, orgSettings, saveOrgSettings, 
 import {
   buildCompanyCreate, buildFriendCompany, buildTestCompany, companyAccess, companyDetailPatch, companyIdFromName, demoBundle,
   friendCodeOk, friendInviteLink, hoursBrand, isPlatformOwner, newFriendCode,
-  ownerProfile, ownerRecoveryProfile, scopeRecord, trialEnd, validateCompanyInput, masterRow, CARD_SETUP_LATER,
+  ownerProfile, ownerRecoveryProfile, ownerRecoveryAllowed, bootstrapProfile, scopeRecord, trialEnd, validateCompanyInput, masterRow, CARD_SETUP_LATER,
   builderSignoff, clientDocId, companyClientNames, companyJobPrefix, companyMailbox, companyStdClients, timesheetMailParts,
   supervisorsPath, docCompanyId, isHeartwoodCompany, buildClientCreate,
 } from "./features/company.js";
@@ -218,7 +218,7 @@ let INBOUND_DOMAIN = "inbound.callupapp.com.au";
 let startDesktopInstall = () => {};
 let refreshDesktopBanner = () => {};
 let desktopBannerWouldShow = () => false;
-let SHELL_VERSION = "callup-shell-v165";
+let SHELL_VERSION = "callup-shell-v166";
 let isCoralClient = () => false;
 let canonicalClientName = name => String(name || "").trim();
 let planRequirementWrite = () => ({ apply: false });
@@ -789,7 +789,8 @@ async function bootSignedIn(user) {
     catch { snap = null; }
   }
   if (!live()) return;
-  const prof = snap && snap.exists() ? snap.data() : null;
+  // let, not const: the signup recovery below fills it in. bootstrapProfile drops a non-Heartwood profile for Alex/Patrick.
+  let prof = bootstrapProfile(user.uid, snap && snap.exists() ? snap.data() : null);
   // No signal and no saved profile: stay signed in. Do not show the "no company" screen.
   if (!prof && profileMiss({ online: deviceOnline(), cached: false }).action === "offline-hold") {
     renderOfflineSignedIn(user);
@@ -808,7 +809,7 @@ async function bootSignedIn(user) {
     ).catch(() => null);
   }
   if (!live()) return;
-  if (!prof && deviceOnline()) {
+  if (ownerRecoveryAllowed({ uid: user.uid, profile: prof, online: deviceOnline() })) {
     try {
       const owned = await getDocs(query(collection(db, "companies"), where("ownerUid", "==", user.uid)));
       const row = owned.docs.find(d => d.id !== "heartwood" && (d.data() || {}).ownerUid === user.uid);
@@ -824,8 +825,9 @@ async function bootSignedIn(user) {
     }
   }
   if (!live()) return;
-  if (!prof && !users) { renderNoAccess(user); return; }
+  // Alex and Patrick always open Heartwood, even when the staff list read fails.
   const bootstrapAdmin = user.uid === ALEX_UID || user.uid === "R7t41e54Ykcdk9WPdVZnDd697iI2";
+  if (!prof && !users && !bootstrapAdmin) { renderNoAccess(user); return; }
   const roleAdmin = !!(prof && prof.role === "admin");
   me = users || bootstrapAdmin || roleAdmin
     ? { uid: user.uid, name: (prof && prof.name) || (bootstrapAdmin ? "Alex" : "Admin"), role: "admin", staffRole: prof && prof.role }

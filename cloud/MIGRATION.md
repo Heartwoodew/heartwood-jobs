@@ -1,3 +1,13 @@
+## Alex locked out: "No company yet" (not deployed)
+
+Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production.
+
+PR 143 added a signup recovery to the boot: a signed-in user with no `users/{uid}` profile who owns a company gets an owner profile written for them. Alex has no profile on purpose and owns TEST companies, so on his first boot it wrote `users/{Alex}` with `companyId` set to one of his test companies (role admin), then threw "Assignment to constant variable" (`const prof`). From then on his profile pointed at a test company, and the rules (`notOtherCompany()`, `incProfileCompany()`) also treat him as that company's staff.
+
+This change: the recovery never runs for Alex, Patrick or the box sync user; a non-Heartwood profile for them is ignored at boot; `prof` is `let`; Alex and Patrick never get the "No company yet" card. Service worker `callup-shell-v166`.
+
+After review, and only when the owner says merge: hosting only (GitHub Pages publishes on merge; Firebase Hosting with `--config firebase.hosting.json`). No rules or functions deploy. Separately, with the owner's OK: back up then delete the stray `users/1JKLsoxkQNfkphBBO0vDz2ziEyj2` document if it has a non-Heartwood `companyId`.
+
 ## Invite lock follow-up (not deployed)
 
 Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production.
