@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Hours spreadsheet mailer. Sends nothing itself.
+"""SUPERSEDED (28 Nov 2026): the hoursExportMailer Cloud Function (cloud/functions/hours-export-mail.js) now emails every
+hours export through Resend, with retries, so this routine is only a manual fallback. It skips anything already "sent".
+
+Hours spreadsheet mailer. Sends nothing itself.
 
 Heartwood exports still go only to accounts@heartwoodew.com, with the same subject and body.
 Another company's export goes to that company's accountsEmail (hoursExports.to). It is refused

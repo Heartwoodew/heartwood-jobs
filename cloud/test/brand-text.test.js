@@ -50,6 +50,7 @@ const HEARTWOOD_OK = new Set([
   "https://australia-southeast1-heartwood-9f37f.cloudfunctions.net/stripeWebhook",
   "alex@heartwoodew.com", "accounts@heartwoodew.com", "https://jobs.heartwoodew.com", "https://jobs.heartwoodew.com/app",
   "-Quotes/1.0 (alex@heartwoodew.com)",
+  "Thanks,\nAlex\nHeartwood", // hours spreadsheet email body, Heartwood branch only (hours-export-mail.js); other companies sign with their own name
   "Heartwood", "Heartwood Earthworx", "Heartwood Earthworx Pty Ltd", "Heartwood Jobs",
   "Heartwood Jobs <jobs@heartwoodew.com>", "Heartwood Jobs <noreply@callupapp.com.au>", "You're invited to Heartwood Jobs",
   "Reset your Heartwood Jobs password",

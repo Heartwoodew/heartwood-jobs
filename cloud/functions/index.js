@@ -134,6 +134,9 @@ export { pauseRetentionSweep } from "./pause-retention.js";
 export { sendCustomerQuote, publicQuotePage } from "./quote-public.js";
 export { recurrenceOnSave, recurrenceSweep } from "./recurrence-fn.js";
 export { sendCertificateEmail } from "./certificate-email.js";
+// Weekly hours spreadsheet email (replaces the box routine). hoursExportMailer fires when the office saves an export;
+// hoursExportRetry resends failures every 15 minutes. Same RESEND_API_KEY and INVITE_EMAIL_ENABLED switch as other CallUp mail.
+export { hoursExportMailer, hoursExportRetry } from "./hours-export-mail.js";
 
 const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
 // Resend API key for staff invite email. Always declared so a deploy binds it even if
