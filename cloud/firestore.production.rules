@@ -668,6 +668,18 @@ service cloud.firestore {
       allow delete: if isAdmin() && request.auth.uid != uid;
     }
     match /users/{uid} {
+      // Locked uids (28 Nov 2026): Alex (1JKLsoxk...), Patrick (R7t41e54...) and the box sync user (38SU5waA...) always stay
+      // Heartwood. An old copy of the app once ran the signup recovery and wrote Alex a Yard demo profile, so Patrick's
+      // sheets vanished from his screen. No rule below may create or change a profile for these uids unless it is Heartwood
+      // (companyId heartwood or absent, tenantId heartwood or absent). Deleting is not restricted.
+      function lockedProfileUid(id) {
+        return id in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "R7t41e54Ykcdk9WPdVZnDd697iI2", "38SU5waAy4f9UI9N6JTqDMaYpQg2"];
+      }
+      function lockedProfileOk(id) {
+        let d = docData();
+        return !lockedProfileUid(id)
+          || ((!("companyId" in d) || d.companyId == "heartwood") && (!("tenantId" in d) || d.tenantId == "heartwood"));
+      }
       function companyIdOk(id) {
         return textLen(id, 2, 40) && id.matches('^[a-z0-9][a-z0-9-]{0,39}$');
       }
@@ -707,6 +719,7 @@ service cloud.firestore {
           && docCompany(prevData()) == callerCompany()
           && docCompany(docData()) == callerCompany()
           && docData().get("role", "") == prevData().get("role", "")
+          && lockedProfileOk(uid)
           && docData().diff(prevData()).affectedKeys().hasOnly(["jobTitle", "jobTitleId", "skills"])
           && docData().get("jobTitle", "") is string
           && docData().get("jobTitle", "").size() <= 80
@@ -725,22 +738,23 @@ service cloud.firestore {
       // Admin or manager sets the job title and permission level, up to their own level. Not an admin, unless the editor is an admin.
       allow update: if staffEditOk(uid);
       // Box sync account (routines, staff sync) keeps full access.
-      allow read, write: if isSync();
+      allow read, delete: if isSync();
+      allow create, update: if isSync() && lockedProfileOk(uid);
       // Heartwood admins (Alex, Patrick): Heartwood profiles only. A profile with no companyId/tenantId is Heartwood.
       allow get: if isAdmin() && docCompany(prevData()) == "heartwood";
       allow list: if isAdmin() && prevData().companyId == "heartwood";
       allow get: if heartwoodManager() && docCompany(prevData()) == "heartwood";
       allow list: if heartwoodManager() && prevData().companyId == "heartwood";
-      allow create: if isAdmin() && docCompany(docData()) == "heartwood";
-      allow update: if isAdmin() && docCompany(prevData()) == "heartwood" && docCompany(docData()) == "heartwood";
+      allow create: if isAdmin() && docCompany(docData()) == "heartwood" && lockedProfileOk(uid);
+      allow update: if isAdmin() && docCompany(prevData()) == "heartwood" && docCompany(docData()) == "heartwood" && lockedProfileOk(uid);
       allow delete: if isAdmin() && docCompany(prevData()) == "heartwood";
       // Platform owner (Alex, verified email): TEST companies only (open-as-test session, demo staff reset).
       allow get, delete: if platformOwner() && testCompanyId(docCompany(prevData()));
       allow list: if platformOwner() && sessionCompany() != "" && prevData().companyId == sessionCompany();
-      allow create: if platformOwner() && testCompanyId(docCompany(docData()));
-      allow update: if platformOwner() && testCompanyId(docCompany(prevData())) && docCompany(docData()) == docCompany(prevData());
+      allow create: if platformOwner() && testCompanyId(docCompany(docData())) && lockedProfileOk(uid);
+      allow update: if platformOwner() && testCompanyId(docCompany(prevData())) && docCompany(docData()) == docCompany(prevData()) && lockedProfileOk(uid);
       // CallUp self-signup: the new owner writes their own admin profile for the company they just created.
-      allow create: if signedIn() && request.auth.uid == uid && ownerProfileCreate();
+      allow create: if signedIn() && request.auth.uid == uid && lockedProfileOk(uid) && ownerProfileCreate();
       // Company admins and supervisors (not Heartwood, which uses isAdmin above) read their own company's staff.
       allow get: if companyOffice() && docCompany(prevData()) == callerCompany();
       allow list: if companyOffice() && prevData().companyId == callerCompany();

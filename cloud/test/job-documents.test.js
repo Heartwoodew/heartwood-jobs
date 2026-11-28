@@ -147,7 +147,7 @@ test("production and emulator document rules match, and the shell cache includes
   assert.match(storageProd.toString(), /purpose == "job-document"/);
   assert.match(storageProd.toString(), /25 \* 1024 \* 1024/);
   const sw = readFileSync(new URL("../../app/sw.js", import.meta.url), "utf8");
-  assert.match(sw, /callup-shell-v167-hours-mail/);
+  assert.match(sw, /callup-shell-v168-profile-lock/);
   assert.match(sw, /features\/job-documents\.js/);
   const app = readFileSync(new URL("../../app/app.js", import.meta.url), "utf8");
   assert.match(app, /data-job-docs/);

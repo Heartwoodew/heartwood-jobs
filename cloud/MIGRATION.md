@@ -1,3 +1,13 @@
+## Profile lock: Alex, Patrick and the box sync user stay Heartwood (not deployed)
+
+Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production.
+
+On 28 Nov 2026 an old copy of the app (a cached phone app or tab from before callup-shell-v166) ran the PR 143 signup recovery and wrote Alex a `users/{uid}` profile for the Yard demo test company at 9:35pm, after the first copy had been deleted. That profile pointed the app at the wrong company, so Patrick's timesheet (filed under `heartwood`) did not show.
+
+This change: `firestore.production.rules` and `emulator/firestore.rules` refuse to create or update `users/{uid}` for Alex (`1JKLsoxk...`), Patrick (`R7t41e54...`) and the box sync user (`38SU5waA...`) unless the profile is Heartwood (`companyId` heartwood or absent, `tenantId` heartwood or absent). The check `lockedProfileOk(uid)` is added to the self-signup create, the box sync create/update, Heartwood admin create/update, the platform-owner test-company create/update and the staff-edit update. Reads and deletes are not changed, so a stray profile can still be removed. New emulator test `test/profile-lock.emulator.test.js` (also in `npm run test:emulator`).
+
+Service worker `callup-shell-v168-profile-lock` (hosting). Deploy only when the owner says merge: Firestore rules through an isolated `firestore-deploy/` folder with a dry run first, publishing `cloud/firestore.production.rules` only (never the emulator rules, never rulesets c093559b or a928d062), then hosting from a fresh clone with `bash tools/build-callup-hosting.sh` and `--config cloud/firebase.hosting.json`. No functions deploy.
+
 ## Hours spreadsheet email from the server, and honest queue states (not deployed)
 
 Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production, and no email was sent while building it.

@@ -145,6 +145,6 @@ test("New Job and Edit Job share the picker and the Clients write", () => {
   assert.doesNotMatch(crew.text, /Add new client|\$|GST/);
   assert.match(css, /dialog\.clientdlg/);
   assert.match(css, /max-width:760px\)\{\s*dialog\.clientdlg\{width:100vw/);
-  assert.match(sw, /callup-shell-v167-hours-mail/);
+  assert.match(sw, /callup-shell-v168-profile-lock/);
   assert.match(sw, /features\/client-picker\.js/);
 });
