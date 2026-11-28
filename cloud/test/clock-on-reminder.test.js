@@ -302,7 +302,7 @@ test("the schedule, rules and service worker are wired for a reviewed deploy", (
   assert.doesNotMatch(rules, /match \/clockOnReminders\/\{id\}/);
   assert.match(rules, /match \/dailyJobDigest\/\{id\}/);
   const sw = readFileSync(new URL("../../app/sw.js", import.meta.url), "utf8");
-  assert.match(sw, /callup-shell-v167-hours-mail/);
+  assert.match(sw, /callup-shell-v168-profile-lock/);
   const app = readFileSync(new URL("../../app/app.js", import.meta.url), "utf8");
   assert.match(app, /data-clock-on/);
   assert.match(app, /open=timesheet|kind === "timesheet"/);

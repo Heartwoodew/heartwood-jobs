@@ -404,6 +404,16 @@ service cloud.firestore {
         || ((key in next) && (key in prev) && next[key] == prev[key]);
     }
     match /users/{uid} {
+      // Locked uids (28 Nov 2026): Alex, Patrick and the box sync user always stay Heartwood. Same rule as
+      // firestore.production.rules: no create or update may give them a profile for another company.
+      function lockedProfileUid(id) {
+        return id in ["1JKLsoxkQNfkphBBO0vDz2ziEyj2", "R7t41e54Ykcdk9WPdVZnDd697iI2", "38SU5waAy4f9UI9N6JTqDMaYpQg2"];
+      }
+      function lockedProfileOk(id) {
+        let d = docData();
+        return !lockedProfileUid(id)
+          || ((!("companyId" in d) || d.companyId == "heartwood") && (!("tenantId" in d) || d.tenantId == "heartwood"));
+      }
       allow get: if signedIn() && (
         request.auth.uid == uid
         || platformOwner()
@@ -414,11 +424,12 @@ service cloud.firestore {
       allow list: if signedIn() && callerCompany() != ""
         && prevData().companyId == callerCompany()
         && (isAlex() || isPatrick() || (hasProfile() && (profile().role == "admin" || profile().role == "supervisor" || profile().role == "manager")));
-      allow create: if signedIn() && request.auth.uid == uid && (
+      allow create: if signedIn() && request.auth.uid == uid && lockedProfileOk(uid) && (
         (!docData().keys().hasAny(["tenantId", "role", "customerIds", "finance", "platformOwner", "companyId"]))
         || ownerProfileCreate()
       );
       allow create, update: if platformOwner()
+        && lockedProfileOk(uid)
         && uid.matches('^demo-[a-z0-9-]{1,80}$')
         && docData().keys().hasOnly(["name", "role", "companyId", "tenantId", "demo", "email"])
         && docData().demo == true

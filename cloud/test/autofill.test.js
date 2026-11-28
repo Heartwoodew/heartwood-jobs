@@ -200,8 +200,8 @@ test("autofill rules are the same in the emulator model and the production rules
   assert.doesNotMatch(block, /poAmount|invoiceAmount|amount/);
 });
 
-test("the service worker cache is callup-shell-v167-hours-mail and includes autofill.js", () => {
+test("the service worker cache is callup-shell-v168-profile-lock and includes autofill.js", () => {
   const sw = readFileSync(new URL("../../app/sw.js", import.meta.url), "utf8");
-  assert.match(sw, /callup-shell-v167-hours-mail/);
+  assert.match(sw, /callup-shell-v168-profile-lock/);
   assert.match(sw, /features\/autofill\.js/);
 });
