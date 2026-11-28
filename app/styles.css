@@ -1366,3 +1366,5 @@ dialog.clientdlg .jf{padding:16px 16px calc(16px + env(safe-area-inset-bottom))}
   .client-menu{max-height:min(50vh,320px)}
   .client-opt,.client-add{min-height:48px;font-size:16px}
 }
+.healthline{margin:10px 0;padding:10px 12px;border:1px solid #e0b252;border-left:4px solid #d98e04;border-radius:10px;background:#fff8e6;color:#4a3300;font-size:14px}
+.healthline b{display:block;margin-bottom:4px}.healthline p{margin:4px 0}

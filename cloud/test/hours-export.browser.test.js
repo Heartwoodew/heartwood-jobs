@@ -182,12 +182,12 @@ test("timesheet download and make-and-send work against the emulator", { timeout
     const sent = await sentDownload;
     assert.match(sent.suggestedFilename(), /\.xlsx$/);
     assertDailyBreakdown(readFileSync(await sent.path()).toString("utf8"));
-    await page.locator(".qpill", { hasText: "Queued, emails within ~15 min" }).waitFor({ timeout: 15000 });
+    await page.locator(".qpill", { hasText: "Emailing now" }).waitFor({ timeout: 15000 });
     assert.equal(await page.locator("#hxerr").count(), 0, await page.locator("#hxerr").innerText().catch(() => ""));
     const row = await page.locator(".hx-row").innerText();
     assert.match(row, /Heartwood_Earthworx_hours_2026-11-02_to_2026-11-08\.xlsx/);
     assert.match(row, /14\.5 h/);
-    assert.match(row, /Queued/);
+    assert.match(row, /Emailing now/);
 
     const iosDownload = page.waitForEvent("download");
     const ios = await page.evaluate(async () => {

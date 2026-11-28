@@ -1,3 +1,24 @@
+## Hours spreadsheet email from the server, and honest queue states (not deployed)
+
+Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production, and no email was sent while building it.
+
+Service worker `callup-shell-v167-hours-mail`. An urgent lockout fix is taking `callup-shell-v166`, so this branch uses the next free version. Whoever merges second re-bumps.
+
+What changed:
+- New Cloud Functions `hoursExportMailer` (fires when `hoursExports/{id}` is created) and `hoursExportRetry` (every 15 minutes, resends failures up to 5 attempts). They replace the box routine `tools/hours_export_mailer.py` and the Gmail connector. They send through Resend with the existing `RESEND_API_KEY` secret, to Heartwood's accounts@ mailbox for Heartwood and to the company's own accounts address for everyone else. A test or preview company, a bad address, or Heartwood's mailbox for another company is held and never sent. Nothing sends unless `INVITE_EMAIL_ENABLED` is `true` (it already is in production; this change does not touch it) and `INVITE_EMAIL_ALLOW_TO` limits recipients when set.
+- Each export is claimed in a Firestore transaction and Resend gets a fixed Idempotency-Key, so a retry or a double trigger cannot send twice. The export is marked `sent` (with `messageId`, `via: "resend"`) or `failed` (with the reason).
+- No Firestore rules or Storage rules change. The functions use the Admin SDK.
+- App: queued work now says what is really happening. An hours spreadsheet, a Send to Xero, a Check Xero or a Hubdoc filing that has been waiting too long reads "Not emailed yet" or "Not sent to Xero yet" with what to do by hand. Admins get a "Needs doing by hand" strip on Home. Find PO and Find all POs are switched off (`PO_LOOKUP_AUTOMATIC` in `app/features/queue-health.js`); the job form says to type the PO by hand. PR 36 (Check for jobs) is untouched.
+
+After review, and only when the owner says merge:
+
+1. Firebase login has expired on the box. Run `firebase login --reauth` first (Alex signs in; nobody else pastes a code).
+2. Functions: copy `cloud/functions` into a fresh isolated `functions-deploy/` folder, run `npm ci` there, and deploy only `hoursExportMailer` and `hoursExportRetry` (`firebase deploy --only functions:hoursExportMailer,functions:hoursExportRetry --project heartwood-9f37f`). Do not deploy from `cloud/` with `cloud/firebase.json`. Do not deploy `helperAsk`, Stripe or invite functions. Do not change `INVITE_EMAIL_ENABLED`.
+3. Hosting: build a fresh folder with `bash tools/build-callup-hosting.sh`, then `firebase deploy --only hosting --config firebase.hosting.json --project heartwood-9f37f` so phones pick up `callup-shell-v167-hours-mail`.
+4. Rules: none changed, so no firestore-deploy/ step. (If another merged change touches rules, publish `cloud/firestore.production.rules` only, with a dry run first.)
+5. First check: with Alex's say-so, queue one export from a TEST company or one addressed to a `callup932+` mailbox (set `INVITE_EMAIL_ALLOW_TO=callup932+` temporarily only if Alex agrees), and confirm the status flips to Emailed.
+6. Any hours export left `queued` or `failed` from before the deploy is picked up by the 15 minute sweep, so check Timesheets for old queued rows before deploying and tell accounts if an old week would be sent late.
+
 ## Alex locked out: "No company yet" (not deployed)
 
 Do not deploy from this branch. Do not merge it from the agent. Nothing here writes to production.

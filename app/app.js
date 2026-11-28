@@ -50,6 +50,7 @@ import {
 import { adminViewBannerHtml, bootCompanyView, clearedCompanySession, companyHistoryState, historyStepOnEnter, historyStepOnMasterReturn, IN_COMPANY_VIEW_KEY, masterHistoryState, RETURN_MASTER_KEY, takeReturnMasterFlag, urlMarksCompanyView, withCompanyViewParam, clientCreateMessage, clientFormHtml, companySettingsHtml, failureText as companyFailure, masterDetailHtml, masterPageHtml, pausedAdminHtml, pausedOwnerHtml, pausedStaffHtml, referralBoxHtml, signupFieldErrors, signupFormHtml, trialBannerHtml } from "./features/company-ui.js";
 import { canOfferNewClient, clientFieldHtml, clientMenuHtml, clientMenuModel, jobDraftAfterCreate, readJobDraft } from "./features/client-picker.js";
 import { pickDashboardBanner } from "./features/dashboard-banners.js";
+import { PO_BY_HAND, PO_LOOKUP_AUTOMATIC, agoText, healthItems, healthLineHtml, hoursExportState, poLookupState, xeroCheckState, xeroSendState } from "./features/queue-health.js";
 import {
   addTitle, bindTradeSearch, companyTradesDoc, defaultJobCategory, jobCategorySelectHtml, jobTypeMap, normalizeTrade, readTradeList, removeTitle, renameTitle, resolveCompanySetup,
   sanitizeSkills, sanitizeTitles, sanitizeTradeList, setTitleLevel, skillsEditorHtml,
@@ -218,7 +219,7 @@ let INBOUND_DOMAIN = "inbound.callupapp.com.au";
 let startDesktopInstall = () => {};
 let refreshDesktopBanner = () => {};
 let desktopBannerWouldShow = () => false;
-let SHELL_VERSION = "callup-shell-v166";
+let SHELL_VERSION = "callup-shell-v167-hours-mail";
 let isCoralClient = () => false;
 let canonicalClientName = name => String(name || "").trim();
 let planRequirementWrite = () => ({ apply: false });
@@ -2425,7 +2426,7 @@ function jobsView(all) {
   const cnt = q => open.filter(j => queueOf(j) === q).length;
   const list = open.filter(j => ui.queue === "All" || queueOf(j) === ui.queue)
     .sort((a, b) => ((a.date || "9") + (a.time || "")).localeCompare((b.date || "9") + (b.time || "")));
-  return `<div class="sm-head"><h1>Jobs</h1><span class="headbtns">${canCompanyExport() ? `<button id="jobscsv" class="sm-btn">Download CSV</button>` : ""}${canFindPo() ? `<button id="findall" class="sm-btn" title="Run Find PO on every open and not-yet-invoiced job">🔎 Find all POs</button>` : ""}<button id="new" class="sm-btn primary">+ New Job</button></span></div>${searchBar()}
+  return `<div class="sm-head"><h1>Jobs</h1><span class="headbtns">${canCompanyExport() ? `<button id="jobscsv" class="sm-btn">Download CSV</button>` : ""}${canFindPo() && PO_LOOKUP_AUTOMATIC ? `<button id="findall" class="sm-btn" title="Run Find PO on every open and not-yet-invoiced job">🔎 Find all POs</button>` : ""}<button id="new" class="sm-btn primary">+ New Job</button></span></div>${searchBar()}
     <div class="qtabs"><button data-q="All" class="${ui.queue === "All" ? "on" : ""}">All open <span>${open.length}</span></button>
       ${QUEUES.map(q => `<button data-q="${q}" class="${QCLS[q]} ${ui.queue === q ? "on" : ""}"><span class="qdot ${QCLS[q]}"></span>${q} <span>${cnt(q)}</span></button>`).join("")}</div>
     <div class="filters"><select id="fs"><option value="">All staff</option>${staff.map(s => `<option value="${esc(skey(s))}" ${ui.staffF === skey(s) ? "selected" : ""}>${esc(label(s.name))}</option>`).join("")}<option value="_none" ${ui.staffF === "_none" ? "selected" : ""}>Unallocated</option></select>
@@ -2450,13 +2451,16 @@ function unscheduledView(all) {
       <td>${esc(j.po || "—")}</td><td>${createdOf(j) ? esc(shortDate(createdOf(j))) : "—"}</td>
       <td><button type="button" class="sm-btn primary" data-sched="${j.id}">Schedule</button></td></tr>`).join("") || `<tr><td colspan="7" class="muted pad">Nothing unscheduled – nice.</td></tr>`}</tbody></table>`;
 }
-// ---- Check Xero (Xero users only). Read-only: QUEUES {type:'check'} in xeroQueue; the box worker (tools/xero_queue.py,
-// every 5 min 6am-8pm, or by hand) searches Xero invoices with GET only and writes jobs/{id}.xeroCheck
+// ---- Check Xero (Xero users only). Read-only: QUEUES {type:'check'} in xeroQueue; a Xero worker (not part of the app
+// server yet) searches Xero invoices with GET only and writes jobs/{id}.xeroCheck. A check that has not come back
+// after 30 minutes shows as "didn't finish" and the button comes back (queue-health.js).
 // {checkedAt, status: invoiced/draft/not found/multiple, matches:[{invoiceNumber,status,totalEx,date,amountDue}]}.
 const xcAgo = t => { const ms = Date.now() - new Date(t).getTime(); if (!(ms >= 0)) return ""; const m = Math.round(ms / 60000);
   return m < 1 ? "checked just now" : m < 60 ? `checked ${m} min ago` : m < 1440 ? `checked ${Math.round(m / 60)} h ago` : `checked ${Math.round(m / 1440)} d ago`; };
 const XC_ST = { PAID: "Paid", AUTHORISED: "Awaiting payment", DRAFT: "Draft", SUBMITTED: "Awaiting approval" };
 function xcLabel(j) {
+  const wait = xeroCheckState(j);
+  if (wait && wait.stalled) return `<span class="qpill q-alert" title="${esc(wait.hint)}">${esc(wait.label)}</span>`;
   if (j.xeroCheckPending) return `<span class="qpill xc-wait">Checking…</span>`;
   const x = j.xeroCheck; if (!x) return "";
   const m = x.matches || [], n0 = m[0] || {};
@@ -2467,10 +2471,10 @@ function xcLabel(j) {
   return `<span class="qpill ${cls}" title="${esc(tip)}">${lab}</span> <span class="sub muted xc-ago">${esc(xcAgo(x.checkedAt))}</span>`;
 }
 function xcCell(j) { if (!canXero() || queueOf(j) !== "Completed") return "";
-  return `<div class="xc">${xcLabel(j)} <button type="button" class="sm-btn xero xc-btn" data-xc="${j.id}" ${j.xeroCheckPending ? "disabled" : ""}>${j.xeroCheck ? "Re-check" : "Check Xero"}</button></div>`; }
+  return `<div class="xc">${xcLabel(j)} <button type="button" class="sm-btn xero xc-btn" data-xc="${j.id}" ${j.xeroCheckPending && !(xeroCheckState(j) || {}).stalled ? "disabled" : ""}>${j.xeroCheck ? "Re-check" : "Check Xero"}</button></div>`; }
 async function checkXero(list) {
   if (testCompanyActive()) return holdOutbound("xero", "Xero check was not queued.");
-  if (!canXero()) return; list = list.filter(j => queueOf(j) === "Completed" && !j.xeroCheckPending);
+  if (!canXero()) return; list = list.filter(j => queueOf(j) === "Completed" && (!j.xeroCheckPending || (xeroCheckState(j) || {}).stalled));
   if (!list.length) { toast("Already checking."); return; }
   for (const j of list) {
     try { await addDoc(collection(db, "xeroQueue"), { type: "check", jobId: j.id, status: "queued", by: auth.currentUser.uid, at: serverTimestamp() });
@@ -2478,7 +2482,7 @@ async function checkXero(list) {
     catch (e) { if (e && e.code === "permission-denied") { alert("Check Xero isn't switched on yet (Firestore rules). Nothing was queued."); return; }
       toast("Couldn't queue the Xero check: " + (e.code || e.message)); return; }
   }
-  toast(`Checking ${list.length} job${list.length === 1 ? "" : "s"} in Xero – the box checks every 5 min (6am–8pm).`); renderAdmin();
+  toast(`Asked Xero about ${list.length} job${list.length === 1 ? "" : "s"}. If there's no answer in 30 minutes it shows as not finished.`); renderAdmin();
 }
 function bindXc(root, pool) { root.querySelectorAll("[data-xc]").forEach(b => b.onclick = e => { e.stopPropagation(); e.preventDefault();
   const j = (pool || []).find(x => x.id === b.dataset.xc) || (ui.done || []).find(x => x.id === b.dataset.xc); if (j) checkXero([j]); }); }
@@ -3810,10 +3814,9 @@ function tsAdmin() {
     ${shown.map(p => tsPerson(p, L.find(t => t.uid === p.uid) || null)).join("") || `<p class="sub">Nobody matches that filter.</p>`}`;
 }
 // ---- Hours spreadsheet for accounts: build .xlsx in the browser, store it privately, queue one email.
-// tools/hours_export_mailer.py (box routine, Gmail connector as alex@heartwoodew.com) sends it to accounts@ only.
-const hxStatus = x => x.status === "sent" ? `<span class="qpill q-comp">Emailed ${esc(dmy(String(x.sentAt || "").slice(0, 10)))}</span>`
-  : x.status === "failed" ? `<span class="qpill q-warn" title="${esc(x.error || "")}">Send failed${(x.attempts || 0) >= 5 ? " (gave up)" : ", will retry"}</span>`
-  : x.status === "sending" ? `<span class="qpill">Sending…</span>` : `<span class="qpill">Queued, emails within ~15 min</span>`;
+// The hoursExportMailer Cloud Function (cloud/functions/hours-export-mail.js) emails it through Resend to the company's accounts address.
+const hxStatus = x => { const st = hoursExportState(x);
+  return `<span class="qpill ${st.tone === "ok" ? "q-comp" : st.tone === "warn" ? "q-warn" : ""}" title="${esc(x.error || "")}">${esc(st.label)}</span>${st.hint ? ` <span class="sub">${esc(st.hint)}</span>` : ""}`; };
 function hxPaint() { try { if (typeof ui.tsPaint === "function") ui.tsPaint(); } catch (e) { console.warn("hours paint", e); } }
 function hxErrText(e) { return (e && (e.code || e.message)) || "unknown error"; }
 function hxPanel(ws) {
@@ -3838,6 +3841,7 @@ function hxSubs() {
     ui.hxList = s.docs.slice(0, 20).map(d => ({ id: d.id, ...d.data() }));
     if (ui.hxListErr) { ui.hxListErr = ""; if (!ui.hxBusy) ui.hxErr = ""; }
     if (tsIsAdminSheet() && !ui.tsDirty && !ui.tsEdit) hxPaint();
+    else if (ui.view === "home") renderAdmin();
   }, e => {
     ui.hxListErr = hxErrText(e);
     ui.hxErr = "Hours spreadsheet list not available: " + ui.hxListErr;
@@ -3888,7 +3892,7 @@ async function hxRun(send) {
       people: rep.people.length, totalHours: rep.total, status: "queued", attempts: 0, createdBy: me.uid, createdByName: String(me.name || "").slice(0, 80), createdAt: serverTimestamp(),
       companyId: brand.companyId, companyName: brand.subjectName });
     queued = true;
-    toast("Spreadsheet queued for " + brand.accountsEmail);
+    toast("Emailing the spreadsheet to " + brand.accountsEmail + "…");
   } catch (e) {
     ui.hxErr = "Not queued: " + hxErrText(e) + ". The file is still saved on this device if the download or share sheet opened.";
     toast("Not queued: " + hxErrText(e));
@@ -5222,6 +5226,13 @@ function homePlanFor(list) {
   }
   return map;
 }
+// Admin health strip: things that were handed to a background worker and have not come back (hours spreadsheet email,
+// and for Heartwood only Xero and Find PO). Empty when everything is fine. Never shows a queued item that is still fresh.
+function healthStripHtml(all) {
+  if (!me || me.role !== "admin") return "";
+  const seen = new Set(), pool = [...all, ...(ui.done || [])].filter(j => !seen.has(j.id) && seen.add(j.id));
+  return healthLineHtml(healthItems({ exports: ui.hxList || [], jobs: pool, xero: canXero(), po: canFindPo() && !!(me && me.role === "admin") }), esc);
+}
 function homeBody(all, admin, btns) {
   const { live, today, tomorrow, t0, t1 } = homeLists(all, admin);
   const plan = homePlanFor([...today, ...tomorrow]);
@@ -5238,13 +5249,14 @@ function homeBody(all, admin, btns) {
   const sec = (title, d, js) => `<div class="hsec"><div class="hsec-h">${title} <small>${esc(dayLabel(d))}</small> <span class="cnt">${js.length}</span></div>
     ${js.map(homeRow).join("") || `<p class="muted pad">Nothing booked for ${esc(orgSettings().name)}.</p>`}</div>`;
   return `<div class="home"><div class="hhead"><h1>${greet()}, ${esc(String(me.name || "").split(" ")[0])}</h1><div class="muted">${esc(dayLabel(t0))} · ${esc(orgSettings().name)}</div></div>
-    ${admin ? COMP.adminBannerHtml() : ""}${admin ? cloudExpiryNotice(all) : ""}
+    ${admin ? COMP.adminBannerHtml() : ""}${admin ? healthStripHtml(all) : ""}${admin ? cloudExpiryNotice(all) : ""}
     ${swmsReminderHtml()}${locationNoticeHtml()}${admin ? attentionHtml(all) + homeCrewCard() : `<div class="hbtns opbtns"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button><button class="hbtn" data-go="swms"><span class="ic">📋</span>SWMS</button></div>`}
     <div class="hstats hidden">${stat(today.length, "Today", "q-wo")}${stat(ip, "In progress", "ip", admin ? "q-ip" : "")}${admin ? stat(ready, "Ready to invoice", "q-comp", "invoices") + stat(unal, "Unallocated", "q-uns", "dispatch") + (canImport() && ui.inbox ? stat(inboxUnread(), "Unread builder emails", "q-inbox", "inbox") : "") : stat(tomorrow.length, "Tomorrow", "q-quote")}</div>
     <div class="hbtns hidden"><button class="hbtn inc" data-inc=""><span class="ic">⚠</span>Report incident</button>${btns.map(([go, ic, n]) => `<button class="hbtn" data-go="${go}"><span class="ic">${ic}</span>${n}</button>`).join("")}</div>
     ${sec("Today", t0, byPlan(today))}${sec("Tomorrow", t1, byPlan(tomorrow))}${admin ? "" : myIncidentsHtml()}</div>`;
 }
 function homeView(all) {
+  if (me && me.role === "admin") hxSubs();
   return homeBody(all, true, NAV.filter(x => x[0] !== "home" && !x[3] && (x[0] === "inbox" ? canImport() : (!x[4] || isOwner()))).map(([k, ic, n]) => [k, ic, n]));
 }
 // Invite email status (inviteStatus/{inviteId}, written by inviteEmailWorker; office of that company may get it).
@@ -5926,7 +5938,7 @@ function renderAdmin() {
   if (ui.view === "dispatch" && PHONE.matches) bindMobileDispatch(A, [...jobs, ...(ui.undated || [])]);
   if ($("#optorder")) $("#optorder").onclick = () => ROUTE.open({ date: (PHONE.matches && ui.mday) || todayStr() });
   A.querySelectorAll("[data-cq]").forEach(b => b.onclick = () => { ui.cq = b.dataset.cq; renderAdmin(); });
-  if (ui.view === "completed" && canXero()) { bindXc(A, ui.xcList); if ($("#xcall")) $("#xcall").onclick = () => { const l = ui.xcList.filter(j => !j.xeroCheckPending);
+  if (ui.view === "completed" && canXero()) { bindXc(A, ui.xcList); if ($("#xcall")) $("#xcall").onclick = () => { const l = ui.xcList.filter(j => !j.xeroCheckPending || (xeroCheckState(j) || {}).stalled);
     if (l.length && confirm(`Check ${l.length} completed job${l.length === 1 ? "" : "s"} in Xero?\n\nRead-only: nothing is created or changed in Xero.`)) checkXero(l); }; }
   A.querySelectorAll("[data-q]").forEach(b => b.onclick = () => { ui.queue = b.dataset.q; renderAdmin(); });
   A.querySelectorAll("[data-dv]").forEach(b => b.onclick = () => { ui.dview = b.dataset.dv; ui.wk = 0; renderAdmin(); });
@@ -5938,7 +5950,7 @@ function renderAdmin() {
   if ($("#jobscsv")) $("#jobscsv").onclick = () => downloadJobsCsv(all);
   if ($("#findall")) $("#findall").onclick = async () => {
     try { await setDoc(doc(db, "meta", "findAllPos"), { status: "pending", requestedBy: me.name, requestedAt: new Date().toISOString() });
-      toast("Find all POs queued - the box runs it within 2 min (6am-8pm); each job shows its result"); }
+      toast("Find all POs requested. A job with no answer after 15 minutes needs its PO typed in by hand."); }
     catch (e) { toast("Not queued: " + (e.code || e.message)); } };
   const jq = $("#jq");
   if (jq) {
@@ -6050,7 +6062,7 @@ async function splitJob(j, pick) {
   const kindOf = ls => { const ks = [...new Set(ls.map(x => x.k).filter(Boolean))]; return ks.length === 1 ? ks[0] : (ks[0] || "other"); };
   const newType = kindOf(mv), keepType = kindOf(keep), origType = j.type || keepType;
   const poToNew = newType === origType && keepType !== origType;
-  const hold = new Date(Date.now() + 10 * 60000).toISOString(), at = new Date().toISOString(), lk = canFindPo() ? { poLookupStatus: "pending", poLookupAt: at, poLookupRequestedBy: me.name + " (split)" } : {};
+  const hold = new Date(Date.now() + 10 * 60000).toISOString(), at = new Date().toISOString(), lk = canFindPo() && PO_LOOKUP_AUTOMATIC ? { poLookupStatus: "pending", poLookupAt: at, poLookupRequestedBy: me.name + " (split)" } : {};
   const base = Object.fromEntries(SPLIT_COPY.filter(k => j[k] !== undefined).map(k => [k, j[k]]));
   const nj = scopeRecord({ ...base, type: newType, description: mv.map(x => x.t).join("\n"), po: poToNew ? (j.po || "") : "", source: "app", log: [],
     splitFrom: j.id, splitAt: at, splitBy: me.name, splitHoldUntil: hold, editedInApp: false, ...lk, createdAt: serverTimestamp(), updatedAt: serverTimestamp(), updatedBy: me.uid }, myCompanyId());
@@ -6608,7 +6620,7 @@ function editJob(j) {
       ${j.poAmount != null ? `<p class="hint">PO value $${esc(Number(j.poAmount).toFixed(2))} ex GST${j.poAmountBasis ? " · " + esc(j.poAmountBasis) : ""}${j.poAmountSource ? " · " + esc(j.poAmountSource) : ""}</p>` : ""}
       ${!n && overBy(j, invAmountDefault(j)) ? `<p class="hint"><span class="overpo">Over PO by ${$$(overBy(j, invAmountDefault(j)))}</span> (charged ${$$(invAmountDefault(j))} ex GST)</p>` : ""}
       ${n ? "" : `<div class="row"><button type="button" id="emailsupj" class="btn" title="Opens your email app (nothing is sent automatically)">✉ Email supervisor (PO exceeded)</button></div>`}` : `<input type="hidden" name="poAmount" value="${esc(j.poAmount ?? "")}">`}
-      ${n || !canFindPo() ? "" : `<div class="row"><button type="button" id="findpo" class="btn">🔎 Find PO</button><span id="polk" class="sub">${poLookupHtml(j)}</span></div>`}
+      ${n || !canFindPo() ? "" : PO_LOOKUP_AUTOMATIC ? `<div class="row"><button type="button" id="findpo" class="btn">🔎 Find PO</button><span id="polk" class="sub">${poLookupHtml(j)}</span></div>` : `<div class="row"><span id="polk" class="sub">${poLookupHtml(j) || esc(PO_BY_HAND)}</span></div>`}
     </div><div class="jc-col">
       <h4>Staff Allocation &amp; Schedule</h4>
       <div class="row"><label>Date<input type="date" name="date" value="${esc(j.date)}"></label>
@@ -6846,12 +6858,16 @@ function invDescDefault(j) {        // hwdata.xero_description: "<Task> - <tidy 
 }
 // hwdata.py has no per-m³ / per-load rule (spoil has been priced by hours, e.g. 4 hrs = $2000), so no price is guessed.
 // PO value (poAmount, ex GST, from the builder's PO) pre-fills the price until one is typed (invoiceAmount wins).
-// ---- Find PO: the button flags the job (poLookupStatus 'pending'); the box worker tools/po_lookup.py (cron, 2 min,
-// 6am-8pm) searches saved PO PDFs / Gmail hits and writes the status onto the job doc. The suggestions list
+// ---- Find PO: the button flags the job (poLookupStatus 'pending'); a lookup worker (tools/po_lookup.py, run on a private
+// computer, not an app server) searches saved PO PDFs / Gmail hits and writes the status onto the job doc. While
+// PO_LOOKUP_AUTOMATIC is false (queue-health.js) the buttons are off and the job form says to type the PO by hand;
+// a pending lookup older than 15 minutes also reads as "no automatic answer". The suggestions list
 // (poLookupCandidates, with PO amounts) lives on the office-only jobMoney/{jobId}; a legacy list on the job is a fallback.
 const PO_ST = { "orbit login needed": "🔒 Orbit login needed", pending: "⏳ queued", searching: "🔍 searching", found: "✅ found", choose: "☝️ pick one", "not found": "❌ not found", "needs portal": "🌐 needs Orbit portal" };
 function poLookupHtml(j) {
   if (!j.poLookupStatus) return "";
+  const wait = poLookupState(j);
+  if (wait && wait.stalled) return `<b>${esc(wait.label)}</b> ${esc(wait.hint)}`;
   const cands = (j.poLookupCandidates || []).map((c, i) => `<div class="pocand">${esc(c.po)}${c.kind ? " · " + esc(c.kind) : ""}${canSeeMoney() && c.amount != null ? ` · $${esc(Number(c.amount).toFixed(2))} ex GST` : (c.amount != null ? "" : " · no amount")}${c.confidence ? ` <span class="conf conf-${esc(c.confidence)}">${esc(c.confidence)}</span>` : ""}<div class="sub">Source: ${esc(c.source || "?")}</div>
       ${j.po === c.po && j.poAmount === c.amount ? "" : `<button type="button" class="btn usepo" data-i="${i}">Use this</button>`}</div>`).join("");
   return `<b>${PO_ST[j.poLookupStatus] || esc(j.poLookupStatus)}</b> ${esc(j.poLookupMsg || "")}${j.poLookupAt ? ` <span class="sub">(${esc(String(j.poLookupAt).slice(0, 16).replace("T", " "))})</span>` : ""}${cands}`;
@@ -6873,15 +6889,17 @@ function wireFindPo(j) {
   const unsubMoney = canSeeMoney() ? onSnapshot(doc(db, JOB_MONEY_COLLECTION, j.id), s => { if (s.exists()) MONEY.set(j.id, s.data()); render(); },
     e => console.warn("job money", e.code || e.message)) : () => {};
   $("#dlg").addEventListener("close", () => { unsub(); unsubMoney(); }, { once: true });
-  $("#findpo").onclick = async () => {
+  const findBtn = $("#findpo");
+  if (!findBtn) return;
+  findBtn.onclick = async () => {
     const at = new Date().toISOString();
     let rid = null;
     try { rid = (await addDoc(collection(db, "poLookups"), { jobId: j.id, address: j.address || "", lot: (String(j.address || "").match(/lot\s*(?:no\.?\s*)?(\w+)/i) || [])[1] || "",
       client: j.client || "", type: j.type || "", requestedBy: me.name, requestedByUid: me.uid, status: "pending", createdAt: serverTimestamp() })).id; } catch (e) { /* rules not pasted yet: job flag alone still works */ }
-    try { await updateDoc(doc(db, "jobs", j.id), { poLookupStatus: "pending", poLookupMsg: "waiting for the box (checks every 2 min, 6am-8pm)", poLookupAt: at,
+    try { await updateDoc(doc(db, "jobs", j.id), { poLookupStatus: "pending", poLookupMsg: "searching", poLookupAt: at,
       poLookupRequestedBy: me.name, poLookupCandidates: deleteField(), ...(rid ? { poLookupId: rid } : {}), updatedAt: serverTimestamp(), updatedBy: me.uid });
       if (canSeeMoney()) await jobMoneyWrite(j.id, { poLookupCandidates: [] }).catch(e => console.warn("job money", e.code || e.message));
-      toast("Find PO requested"); }
+      toast("Find PO requested. If there's no answer in 15 minutes, type the PO in by hand."); }
     catch (e) { toast("Not requested: " + (e.code || e.message)); }
   };
 }
@@ -7629,17 +7647,18 @@ ${POWERED_BY}`;
 }
 const xd = s => { const [y, m, d] = s.split("-"); return `${+d}/${m}/${y}`; };     // d/mm/yyyy like hwdata.d_fmt
 const csvCell = v => { v = String(v ?? ""); return /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; };
-// ---- Send to Xero (admin only). The app can't hold Xero keys, so it QUEUES a request in xeroQueue; the box worker
-// (tools/xero_queue.py + the Xero connector) creates a DRAFT invoice (never approved or emailed): contact = builder,
+// ---- Send to Xero (admin only). The app can't hold Xero keys, so it QUEUES a request in xeroQueue; a Xero worker
+// (not part of the app server yet; queue-health.js flags a request that waits over 30 minutes) creates a DRAFT invoice (never approved or emailed): contact = builder,
 // reference = PO, line = invoice description, amount ex GST, account 200, tax OUTPUT (GST on Income), as on invoices 5442/5445.
 // The worker then writes xeroInvoiceId / xeroStatus back to the job and marks it invoiced.
 function xeroPill(j) { const s = j.xeroStatus; if (!s || !canXero()) return "";
-  return `<div class="sub"><span class="qpill ${s === "draft" ? "q-comp" : s === "error" ? "q-alert" : "q-wo"}" title="${esc(j.xeroError || "")}">${s === "draft" ? "Draft in Xero" + (j.xeroInvoiceNo ? " #" + esc(j.xeroInvoiceNo) : "") : s === "error" ? "Xero error" : "Queued for Xero"}</span></div>`; }
+  const wait = xeroSendState(j), late = !!(wait && wait.stalled);
+  return `<div class="sub"><span class="qpill ${s === "draft" ? "q-comp" : s === "error" || late ? "q-alert" : "q-wo"}" title="${esc(late ? wait.hint : j.xeroError || "")}">${s === "draft" ? "Draft in Xero" + (j.xeroInvoiceNo ? " #" + esc(j.xeroInvoiceNo) : "") : s === "error" ? "Xero error" : late ? esc(wait.label) : "Queued for Xero"}</span>${late ? ` <span class="sub">${esc(wait.hint)}</span>` : ""}</div>`; }
 async function sendToXero(list, opts = {}) {
   if (testCompanyActive()) return holdOutbound("xero", "Xero draft was not queued.");
   if (!canXero()) return;
   const bad = list.filter(j => !j.invoiceNo || !(+j.invoiceAmount > 0)), ok = list.filter(j => !bad.includes(j) && !["queued", "draft"].includes(j.xeroStatus));
-  if (!ok.length) { toast(bad.length ? "Those jobs need an invoice number and a price first." : "Already sent to Xero."); return; }
+  if (!ok.length) { toast(bad.length ? "Those jobs need an invoice number and a price first." : list.some(j => (xeroSendState(j) || {}).stalled) ? "Still waiting to go to Xero. Use Download Xero CSV instead." : "Already sent to Xero."); return; }
   if (!opts.skipConfirm && !confirm(`Create ${ok.length} DRAFT invoice${ok.length === 1 ? "" : "s"} in Xero?\n\nThey are not approved or emailed. Check and approve them in Xero.`)) return;
   for (const j of ok) {
     const req = { jobId: j.id, invoiceNo: String(j.invoiceNo), contact: invContact(j), reference: isRealPo(j.po) ? j.po : "", description: j.invoiceDescription || invDescDefault(j),
@@ -7745,8 +7764,8 @@ function invoicesView() {
   const acts = ui.inv === "removed" ? `<span class="sub">Removed jobs are kept but never invoiced or exported. Restore puts a job back on Ready to invoice.</span>` : ui.inv === "ready"
     ? `<button id="inum" class="sm-btn primary${canXero() ? " xero" : ""}" ${sel.length ? "" : "disabled"}">${canXero() ? `Send to Xero (${sel.length})` : `Assign invoice numbers &amp; download invoice CSV (${sel.length})`}</button>`
     : `<button id="icsv" class="sm-btn" ${sel.length ? "" : "disabled"}>Download ${canXero() ? "Xero" : "invoice"} CSV (${sel.length})</button>
-       ${ui.inv === "numbered" ? `<button id="imark" class="sm-btn primary" ${sel.length ? "" : "disabled"}>Mark invoiced (${sel.length})</button>${canXero() ? ` <button id="ixero" class="sm-btn xero" title="Creates DRAFT invoices in Xero (not approved, not emailed). The box sends them within a few minutes." ${sel.length ? "" : "disabled"}>Send to Xero as draft (${sel.length})</button>` : ""}` : ""}`;
-  return `<div class="sm-head"><h1>Invoices</h1>${canFindPo() ? `<button id="findall" class="sm-btn" title="Run Find PO on every open and not-yet-invoiced job">🔎 Find all POs</button>` : ""}<span class="sub">Next invoice number: <b id="inext">${nextInvoiceGuess()}</b></span></div>
+       ${ui.inv === "numbered" ? `<button id="imark" class="sm-btn primary" ${sel.length ? "" : "disabled"}>Mark invoiced (${sel.length})</button>${canXero() ? ` <button id="ixero" class="sm-btn xero" title="Creates DRAFT invoices in Xero (not approved, not emailed). If one is still waiting after 30 minutes it says so, and you can use Download Xero CSV." ${sel.length ? "" : "disabled"}>Send to Xero as draft (${sel.length})</button>` : ""}` : ""}`;
+  return `<div class="sm-head"><h1>Invoices</h1>${canFindPo() && PO_LOOKUP_AUTOMATIC ? `<button id="findall" class="sm-btn" title="Run Find PO on every open and not-yet-invoiced job">🔎 Find all POs</button>` : ""}<span class="sub">Next invoice number: <b id="inext">${nextInvoiceGuess()}</b></span></div>
     ${searchBar()}${strip}
     <div class="qtabs">${tab("ready", "Ready to invoice", ready)}${tab("numbered", canXero() ? "Invoiced (numbered, import into Xero)" : "Invoiced (numbered)", numbered)}${tab("recent", "Recent (last 30 days)", recent)}${tab("removed", "Removed", removed)}</div>
     <div class="filters">${acts}<label class="ck sub"><input type="checkbox" id="iall"> select all</label>

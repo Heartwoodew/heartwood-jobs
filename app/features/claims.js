@@ -114,12 +114,21 @@ export function claimDecisionBody({ from, status, note, uid, name, receiptPath }
   if (status === "declined" && !decisionNote) return { ok: false, reason: "Add a note saying why it was declined." };
   if (!uid || !clean(name, 80)) return { ok: false, reason: "Sign in again." };
   const data = { status, decisionNote, decidedBy: uid, decidedByName: clean(name, 80) };
-  // Paid claims go to Hubdoc: the box filer (tools/hubdoc_filer.py) emails the receipt once, or records "no-receipt".
+  // Paid claims go to Hubdoc: a Hubdoc filing worker (not part of the app server yet) emails the receipt once, or the claim records "no-receipt".
   if (status === "paid") data.hubdocStatus = receiptPath ? "queued" : "no-receipt";
   return { ok: true, data };
 }
 
 export const HUBDOC_LABEL = Object.freeze({ queued: "Hubdoc: queued", sending: "Hubdoc: sending", sent: "Hubdoc: sent", failed: "Hubdoc: failed, will retry", "no-receipt": "Hubdoc: no receipt" });
+
+/** Label for the Hubdoc pill. A receipt still waiting a day after it was paid says so, so nobody assumes it was filed. */
+export function hubdocLabel(row = {}, nowMs = Date.now()) {
+  const st = hubdocState(row);
+  if (!st) return "";
+  const paid = row.paidAt && typeof row.paidAt.toMillis === "function" ? row.paidAt.toMillis() : Date.parse(String(row.paidAt || ""));
+  if ((st === "queued" || st === "sending" || st === "failed") && Number.isFinite(paid) && nowMs - paid > 24 * 3600 * 1000) return "Hubdoc: not filed yet, add the receipt to Hubdoc yourself";
+  return HUBDOC_LABEL[st];
+}
 
 /** Hubdoc state for a paid claim. Paid claims from before this change with no marker count as queued. */
 export function hubdocState(row = {}) {
@@ -184,7 +193,7 @@ export function claimsScreenHtml({ claims, uid, isAdmin, jobs, today, error, fil
       : "";
     return `<article class="lv-card rc-card rc-${esc(st)}"><h3>${admin ? esc(row.name || "Staff") + " · " : ""}${esc(money(row.amountCents))} · ${esc(row.supplier || "")}</h3>
       <p>${esc(row.date || "")} · ${esc(meta)}</p>${row.notes ? `<p>${esc(row.notes)}</p>` : ""}
-      <p class="qpill">${esc(CLAIM_STATUS[st] || st)}</p>${admin && hubdocState(row) ? `<p class="qpill rc-hubdoc rc-hubdoc-${esc(hubdocState(row))}" title="${esc(row.hubdocError || "")}">${esc(HUBDOC_LABEL[hubdocState(row)])}${row.hubdocSentAt ? " " + esc(String(row.hubdocSentAt).slice(0, 10)) : ""}</p>` : ""}${note}${file}${actions}</article>`;
+      <p class="qpill">${esc(CLAIM_STATUS[st] || st)}</p>${admin && hubdocState(row) ? `<p class="qpill rc-hubdoc rc-hubdoc-${esc(hubdocState(row))}" title="${esc(row.hubdocError || "")}">${esc(hubdocLabel(row))}${row.hubdocSentAt ? " " + esc(String(row.hubdocSentAt).slice(0, 10)) : ""}</p>` : ""}${note}${file}${actions}</article>`;
   };
   const mine = sortClaims(rows.filter(row => row.uid === uid));
   const mineHtml = `<h2>Your claims</h2>${mine.map(row => card(row, false)).join("") || `<p class="sub">You have no claims yet.</p>`}`;
